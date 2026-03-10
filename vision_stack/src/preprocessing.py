@@ -17,7 +17,7 @@ def equalize(im: np.ndarray) -> np.ndarray:
 
 
 def gaussian_blur(im: np.ndarray) -> np.ndarray:
-    return cv.GaussianBlur(im, (5, 5), 0)
+    return cv.GaussianBlur(im, (11, 11), 0)
 
 
 def roi_crop(
