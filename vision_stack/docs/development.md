@@ -13,8 +13,6 @@
 
 ## Development Roadmap
 
-> *Build and validate incrementally*
-
 ```
 Stage 1: Camera Capture Validation
   - GStreamer pipeline confirmed working at 640x480 @ 30 FPS
