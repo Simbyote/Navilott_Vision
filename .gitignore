@@ -1,6 +1,19 @@
+# Images
 /sample_img/
 **/sample_img/
 sample_img/
 /sample_img
-
 *.jpg
+
+# Templates
+/temp/
+**/temp/
+temp/
+
+# Python
+/__pycache__/
+**/__pycache__/
+__pycache__/
+*.pyc
+
+*.npz
