@@ -374,6 +374,24 @@ Phase 3 then performs temporal filtering, lane center estimation, and navigation
 
 ---
 
+## Zero 2 W Frame Budget
+
+| Stage | Time (ms) |
+|---|---|
+| Capture + buffer load | ~1-2 |
+| Preprocess | ~3-5 |
+| ROI crop | <1 |
+| Color + Geometry branch | ~8-12 (???) |
+| Feature fusion | ~1-2 |
+| Perspective transform | ~3-5 |
+| Output packaging | <1 |
+| Phase 3 filtering | ~3-5 |
+|---|---|
+| Total estimate |~20-26 (at 640x480) |
+
+Summary is ok, but considering thermal throttling under a sustained load, remaining headroom drops
+significantly. Consider alternatives to save on frame budget.
+
 ## Summary
 
 Phase 2 converts a raw camera frame into structured perception outputs using six stages:

@@ -196,6 +196,7 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     sign_h = H
 
     # --- Slicing (views, no copy) ------------------------------------------
+    # Adding a copy would cost memory but would prevent cross-stage mutations (considered)
     lane_roi    = frame[lane_y : lane_y + lane_h,  lane_x : lane_x + lane_w]
     traffic_roi = frame[tl_y   : tl_y   + tl_h,   tl_x   : tl_x   + tl_w ]
     sign_roi    = frame[sign_y : sign_y + sign_h,  sign_x : sign_x + sign_w]

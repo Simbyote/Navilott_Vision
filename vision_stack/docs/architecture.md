@@ -215,13 +215,24 @@ Three approaches are available if contention becomes a measured problem:
 
 ---
 
+#### Core Allocation
+
+Core 0 — OS, drivers, libcamera, GStreamer
+Core 1 — Vision pipeline (Phase 2 heavy work)
+Core 2 — Phase 3 filtering + navigation signal output
+Core 3 — Motor control loop
+
+---
+
 ### Option 2: Time-Slicing (Second approach, simple)
 
 ```
+
 +------------------+     +------------------+     +------------------+
 |  Perception      | --> |  Navigation      | --> |  Perception      | --> ...
 |  (one frame)     |     |  (one decision)  |     |  (next frame)    |
 +------------------+     +------------------+     +------------------+
+
 ```
 
 - Single process, fully sequential, zero concurrency overhead
@@ -286,12 +297,14 @@ specific detections only — not as a full replacement of the pipeline.
 Zero 2 W within the latency budget. TensorFlow lite would replace the object detection segment of the pipeline:
 
 ```
+
 Classical CV pipeline (lanes, edges)        ← keep as-is
         +
 TFLite model (stop signs, traffic lights)   ← targeted replacement only
         |
         v
 Feature Fusion (Phase 2) — unchanged
+
 ```
 
 **Constraints to be aware of:**
@@ -334,7 +347,8 @@ still introduces network jitter that will show up as navigation instability.
 ### Escalation Summary
 
 ```
-Start here
+
+Starting Point
     |
     v
 [Alternative 1] Classical CV  ──── works? ──── DONE
@@ -347,4 +361,5 @@ Start here
     v
 [Alternative 3] External AI offload  ──── high risk, document failure modes,
                                     define fallback behavior before deploying
+
 ```
