@@ -66,8 +66,8 @@ PWM.
 │                                     │
 │  Perception  →  Decision Logic      │
 │  (Phases 1–3)   (lane offset,       │
-│                  heading error,      │
-│                  traffic state)      │
+│                  heading error,     │
+│                  traffic state)     │
 └──────────────────┬──────────────────┘
                    │  UART (9600–115200 baud)
                    │  Packet: [START | type | value | checksum | END]
@@ -109,14 +109,14 @@ Types:
 
 ### Comparison Summary
 
-| Criterion              | Option A: Pi Only         | Option B: Pi + MCU         |
-|------------------------|---------------------------|----------------------------|
-| Motor timing accuracy  | Best-effort (OS scheduler) | Hardware-guaranteed       |
+| Criterion              | Option A: Pi Only          | Option B: Pi + MCU         |
+|------------------------|----------------------------|----------------------------|
+| Motor timing accuracy  | Best-effort (OS scheduler) | Hardware-guaranteed        |
 | PID loop rate          | ~100–200 Hz realistic (Pi) | Up to 1 kHz (MCU)          |
-| Fault isolation        | No                        | Yes                        |
-| Additional cost        | None                      | ~$2–5                      |
-| Wiring complexity      | None                      | +1 UART connection         |
-| Recommended for        | Prototype / demo only     | Competition / reliability  |
+| Fault isolation        | No                         | Yes                        |
+| Additional cost        | None                       | ~$2–5                      |
+| Wiring complexity      | None                       | +1 UART connection         |
+| Recommended for        | Prototype / demo only      | Competition / reliability  |
 
 **Note:** Option B is recommended for real-world applications.
 
@@ -152,7 +152,7 @@ MCU receives packet → PID update → PWM output
         ▼
 Motor response
 ─────────────────────────────────────
-Total Pi budget:   ~19–27 ms  ✓ (target ≤ 33.3 ms)
+Total Pi budget:   ~19–27 ms   (target ≤ 33.3 ms)
 MCU PID loop:      1 kHz independent of Pi cycle
 ```
 
@@ -170,7 +170,7 @@ pigpio DMA PWM output
         ▼
 Motor response
 ─────────────────────────────────────
-Total budget:   ~21–30 ms  ✓ on average
+Total budget:   ~21–30 ms   on average
 Jitter risk:    OS scheduler can add 5–20 ms unpredictably
 ```
 

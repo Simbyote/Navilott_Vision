@@ -78,24 +78,28 @@ One row per processed frame, written to a CSV file for offline analysis:
 timestamp_ms, frame_id, capture_time_ms, preprocess_time_ms, feature_extract_time_ms,
 detection_time_ms, fusion_time_ms, phase3_time_ms, total_frame_time_ms,
 cpu_percent, mem_usage_mb, lane_offset, heading_error, traffic_state,
-detections_count, confidence_mean, confidence_variance, output_jitter_ms
+detections_count, confidence_mean, confidence_variance, output_jitter_ms,
+yaw_rate, lateral_accel, wheel_speed, servo_angle_actual, servo_angle_commanded, servo_delta
 ```
 
 ### Sample Row
 
 ```csv
-1712345678123, 00420, 1.2, 3.8, 9.1, 4.3, 1.1, 2.2, 21.7, 58.3, 134, -0.12, 2.4, go, 2, 0.87, 0.03, 1.1
+1712345678123, 00420, 1.2, 3.8, 9.1, 4.3, 1.1, 2.2, 21.7, 58.3, 134, -0.12, 2.4, go, 2, 0.87, 0.03, 1.1, 4.2, 0.31, 0.63, 12.5, 13.0, 0.5
 ```
 
 ### Log Analysis
 
-| Field                 | Warning Threshold    | Likely Cause                                          |
-|-----------------------|----------------------|-------------------------------------------------------|
-| `total_frame_time_ms` | > 33.3 ms            | Pipeline stage overrun — check per-stage timings      |
-| `cpu_percent`         | > 70% sustained      | Contention — consider CPU mitigation options          |
-| `mem_usage_mb`        | > 400 MB             | Memory pressure — profile buffer allocations          |
-| `confidence_variance` | > 0.15 across frames | Unstable detection — re-tune thresholds or HSV ranges |
-| `output_jitter_ms`    | > 5 ms               | Temporal filtering insufficient — widen window        |
+| Field                 | Warning Threshold    | Likely Cause                                                     |
+|-----------------------|----------------------|------------------------------------------------------------------|
+| `total_frame_time_ms` | > 33.3 ms            | Pipeline stage overrun — check per-stage timings                 |
+| `cpu_percent`         | > 70% sustained      | Contention — consider CPU mitigation options                     |
+| `mem_usage_mb`        | > 400 MB             | Memory pressure — profile buffer allocations                     |
+| `confidence_variance` | > 0.15 across frames | Unstable detection — re-tune thresholds or HSV ranges            |
+| `output_jitter_ms`    | > 5 ms               | Temporal filtering insufficient — widen window                   |
+| `servo_delta`         | > 5° sustained       | Mechanical binding, servo saturation, or feedback miscalibration |
+| `yaw_rate`            | > 90 deg/s           | Excessive speed or sharp turn                                    |
+| `lateral_accel`       | > 2 m/s²             | Wheel slip or surface irregularity                               |
 
 ### Log Rotation
 
@@ -107,15 +111,18 @@ detections_count, confidence_mean, confidence_variance, output_jitter_ms
 
 ## Failure Mode Analysis
 
-| Failure            | Cause                           | Behavior                        | Mitigation                                                             |
-|--------------------|---------------------------------|---------------------------------|------------------------------------------------------------------------|
-| Camera feed stall  | libcamera / driver crash        | Perception halts entirely       | Watchdog monitors frame timestamps. Reinitialize `cv2.VideoCapture`    |
-| CPU overload       | Heavy frame processing          | Frame drops, timing violations  | Drop to 320×240 or 15 FPS; profile which stage is the bottleneck first |
-| Lighting variation | HSV thresholds out of range     | Traffic light misclassification | Pre-tune HSV ranges under actual lighting. Add histogram equalization  |
-| Motion blur        | Robot speed too high            | Lane detection unstable         | Increase shutter speed via libcamera exposure controls                 |
-| Dropped frames     | appsink drop policy             | Perception jitter               | Reduce frame rate to 15-25 FPS                                         |
-| Homography error   | Camera shifted/surface not flat | Incorrect lateral offset        | Re-run homography calibration                                          |
-| False positives    | Confidence threshold too low    | Erratic navigation commands     | Raise confidence threshold; widen temporal filter window from N to N+2 |
-| UART packet loss   | Noise or baud rate mismatch     | MCU acts on stale data          | Validate checksum on MCU side                                          |
-| RAM exhaustion     | Too many simultaneous buffers   | Python OOM crash                | Profile memory early. Enforce in-place OpenCV operations.              |
-| TFLite timeout     | Model too large for ROI input   | Latency budget exceeded         | Reduce input resolution to ROI crop only; switch to smaller model      |
+| Failure            | Cause                           | Behavior                           | Mitigation                                                             |
+|--------------------|---------------------------------|------------------------------------|------------------------------------------------------------------------|
+| Camera feed stall  | libcamera / driver crash        | Perception halts entirely          | Watchdog monitors frame timestamps. Reinitialize `cv2.VideoCapture`    |
+| CPU overload       | Heavy frame processing          | Frame drops, timing violations     | Drop to 320×240 or 15 FPS; profile which stage is the bottleneck first |
+| Lighting variation | HSV thresholds out of range     | Traffic light misclassification    | Pre-tune HSV ranges under actual lighting. Add histogram equalization  |
+| Motion blur        | Robot speed too high            | Lane detection unstable            | Increase shutter speed via libcamera exposure controls                 |
+| Dropped frames     | appsink drop policy             | Perception jitter                  | Reduce frame rate to 15-25 FPS                                         |
+| Homography error   | Camera shifted/surface not flat | Incorrect lateral offset           | Re-run homography calibration                                          |
+| False positives    | Confidence threshold too low    | Erratic navigation commands        | Raise confidence threshold; widen temporal filter window from N to N+2 |
+| UART packet loss   | Noise or baud rate mismatch     | MCU acts on stale data             | Validate checksum on MCU side                                          |
+| RAM exhaustion     | Too many simultaneous buffers   | Python OOM crash                   | Profile memory early. Enforce in-place OpenCV operations.              |
+| TFLite timeout     | Model too large for ROI input   | Latency budget exceeded            | Reduce input resolution to ROI crop only; switch to smaller model      |
+| IMU read timeout   | I²C bus contention or fault     | stale `yaw_rate` / `lateral_accel` | Detect missed reads by comparing IMU timestamp to frame timestamp      |
+| Encoder stall      | GPIO interrupt miss under load  | `wheel_speed` reads zero wrong     | Run encoder counter in dedicated high-priority thread (`os.nice(-5)`)  |
+| Servo feedback loss | Feedback wire fault            | `servo_delta` grows unbounded      | Clamp `servo_delta` warning threshold                                  |

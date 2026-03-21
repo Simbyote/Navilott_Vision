@@ -235,22 +235,72 @@ Detection Objects (from Phase 2)
 └──────────┬──────────────┘
            │
            ▼
-┌─────────────────────────┐
-│  State Estimation       │  ← compute final navigation features
-│  (Actionable Commands)  │    converts pixel data → nav signals
-└──────────┬──────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│  State Estimation                                           │
+│  (Actionable Commands)                                      │
+│                                                             │
+│  Vision estimates (from above)    ──────────────────────┐   │
+│  Encoder odometry (speed, dist)   ──────────────────┐   │   │
+│  Servo rotational feedback        ──────────────┐   ├───┴───┤
+│  IMU (yaw rate, accel)            ──────────┐   ├───┘       │
+│                                             └───┘   Fused   │
+│                                                    Estimate │
+└──────────┬──────────────────────────────────────────────────┘
            │
            ▼
    Validated Navigation Signals
 ```
 
+### Sensor Inputs to State Estimation
+
+Three hardware sensor streams feed directly into State Estimation alongside the vision-derived detections. They do not replace any existing stage — they augment the final estimation step only.
+
+#### Encoder — Odometry Metrics
+
+The encoder is sampled each frame cycle and provides distance-domain context to corroborate vision-derived position estimates.
+
+| Metric              | Description                                    | Units | Role in Estimation                                                             |
+|---------------------|------------------------------------------------|-------|--------------------------------------------------------------------------------|
+| `wheel_speed`       | Instantaneous linear velocity                  | m/s   | Scales motion tracking vectors; sanity-checks lane offset rate of change       |
+| `distance_traveled` | Cumulative odometric distance since last reset | m     | Dead-reckoning fallback when vision detections fall below confidence threshold |
+
+**Sampling note (Pi-only):** The encoder is read via GPIO interrupt or polling in the same Python process. Attach the counter to a high-priority thread (`os.nice(-5)`) to minimize missed pulses under perception load. Timestamps must align with the frame `timestamp_ms` used throughout the pipeline.
+
+#### Servo — Rotational Feedback
+
+The servo reports its actual achieved shaft angle, closing the loop between commanded heading and physical steering response.
+
+| Metric                  | Description                                 | Units   | Role in Estimation                                                        |
+|-------------------------|---------------------------------------------|---------|---------------------------------------------------------------------------|
+| `servo_angle_actual`    | Measured shaft position from servo feedback | degrees | Compared against `heading_error` command to detect mechanical lag or slip |
+| `servo_angle_commanded` | Last angle written to the servo             | degrees | Retained in state for delta computation each cycle                        |
+
+The difference `servo_angle_commanded − servo_angle_actual` is the **actuation error** (`servo_delta`). If this delta exceeds a defined threshold across consecutive frames, State Estimation flags a degraded steering condition — reflected in the status field of the navigation signal packet.
+
+#### IMU — Inertial Sensing
+
+The IMU feeds directly into State Estimation as a high-rate, vision-independent source of heading rate and lateral disturbance.
+
+| Metric          | Description                                  | Units | Role in Estimation                                                               |
+|-----------------|----------------------------------------------|-------|----------------------------------------------------------------------------------|
+| `yaw_rate`      | Angular velocity about the vertical axis     | deg/s | Integrates between frames to propagate heading estimate when vision is degraded  |
+| `lateral_accel` | Linear acceleration along the robot's X axis | m/s²  | Cross-checks unexpected lateral movement (e.g. wheel slip, surface irregularity) |
+
+**Integration note:** The IMU operates at a rate higher than the 30 FPS camera loop (typically 100–200 Hz on common I²C parts). Within each frame cycle, the IMU driver accumulates samples and presents the **mean `yaw_rate`** and **peak `lateral_accel`** for that frame window to State Estimation. This avoids per-sample processing burden on the main loop.
+
+**Pi-only timing caveat:** I²C polling on the Pi is not interrupt-driven in Python. Budget ~0.5–1 ms for an I²C burst read per frame. This is within the existing frame budget headroom documented in `phase2_pipeline.md`.
+
+---
+
 ### State Estimation Outputs
 
-| Feature             | Description                                |
-|---------------------|--------------------------------------------|
-| Lane offset         | Lateral distance from lane center          |
-| Heading error       | Angular deviation from target heading      |
-| Traffic light state | Current signal: stop / proceed / caution   |
+The sensor inputs above augment the final state estimation step.
+
+| Feature         | Description                              | Primary Source         | Augmented By                                       |
+|-----------------|------------------------------------------|------------------------|----------------------------------------------------|
+| `lane_offset`   | Lateral distance from lane center        | Vision (homography)    | Encoder dead-reckoning when confidence < threshold |
+| `heading_error` | Angular deviation from target heading    | Vision (lane geometry) | IMU yaw rate integration; servo actuation error    |
+| `traffic_state` | Current signal: stop / proceed / caution | Vision (color branch)  | — (vision-only; no inertial equivalent)            |
 
 ### Validated Navigation Signal Packet
 
@@ -261,6 +311,12 @@ Detection Objects (from Phase 2)
 │  │ Validated        │ Status        │ │
 │  │ Coordinates      │               │ │
 │  ├──────────────────┴───────────────┤ │
+│  │ Inertial State                   │ │
+│  │   yaw_rate       (deg/s)         │ │
+│  │   lateral_accel  (m/s²)          │ │
+│  │   wheel_speed    (m/s)           │ │
+│  │   servo_delta    (degrees)       │ │
+│  ├──────────────────────────────────┤ │
 │  │ Global Timestamp                 │ │
 │  └──────────────────────────────────┘ │
 └───────────────────────────────────────┘
@@ -270,4 +326,7 @@ Final perception outputs are packed into a structured format for navigation:
 
 - validated coordinates
 - object status
-- global timestamp.
+- inertial state (`yaw_rate`, `lateral_accel`, `wheel_speed`, `servo_delta`)
+- global timestamp
+
+`servo_delta` = `servo_angle_commanded − servo_angle_actual`, carried as a diagnostic field each cycle.

@@ -46,7 +46,7 @@ on an MCU or that everything runs on the Pi:
 │  Perception + Decision Logic    │
 │ Motor Drivers + PID Steering    │
 └─────────────────────────────────┘
-```
+```   
 
 Reasons to split the architecture between an MCU and the Pi would be to ensure that real-time motor control
 is never stalled by the perception workload made on the Pi. However, alternatives suggest a workaround may be
@@ -73,13 +73,11 @@ processing.
 
 ## Estimated Memory Budget
 
-> *All figures are approximate.*
-
 ### Single Process Footprint
 
 | Component                          | Estimated Usage  |
 |------------------------------------|------------------|
-| Camera frame (640×480 BGR)         | ≈ 0.92 MB        |
+| Camera frame (640×480 YUV)         | ≈ 0.92 MB        |
 | Working frame buffers              | ≈ 2.8 MB         |
 | Edge detection buffers             | ≈ 1.0 MB         |
 | HSV masks                          | ≈ 1.0 MB         |
@@ -151,11 +149,11 @@ most recent frame.
 
 ```
                     +------------------------------------------------------+
-                    |           Raspberry Pi Zero 2 W                     |
-  +----------+ CSI  |  +----------+  BGR  +----------+  detections        |
-  |  IMX219  |-----▶|  | Phase 1  |------▶| Phase 2  |-------------+      |
-  |  Sensor  |      |  | Camera   | frames| Vision   |             |      |
-  +----------+      |  | Acquis.  |       | Percept. |             v      |
+                    |           Raspberry Pi Zero 2 W                      |
+  +----------+ CSI  |  +----------+  YUV  +----------+  detections         |
+  |  IMX219  |----▶|  | Phase 1  |------▶| Phase 2  |-------------+       |
+  |  Sensor  |      |  | Camera   | frames| Vision   |             |       |
+  +----------+      |  | Acquis.  |       | Percept. |             v       |
                     |  +----------+       +----------+       +----------+  |
                     |                                        | Phase 3  |  |
                     |  Ring buffer (1 frame max)             | Nav Sig. |  |

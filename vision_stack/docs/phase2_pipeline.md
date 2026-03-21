@@ -91,11 +91,11 @@ The frame is partitioned into three regions of interest (ROIs) before branching.
 
 ### ROI Layout
 
-| ROI | Frame Region | Purpose |
-|---|---|---|
-| `lane_roi` | lower half of frame | lane boundary detection |
-| `traffic_roi` | top-center region | traffic light detection |
-| `sign_roi` | right half of frame | stop sign detection |
+| ROI           | Frame Region        | Purpose                 |
+|---------------|---------------------|-------------------------|
+| `lane_roi`    | lower half of frame | lane boundary detection |
+| `traffic_roi` | top-center region   | traffic light detection |
+| `sign_roi`    | right half of frame | stop sign detection     |
 
 ### Visualization
 
@@ -253,7 +253,7 @@ Combines results from the color branch and geometry branch into a unified detect
 
 ### Responsibilities
 
-- Normalise detection formats
+- Normalize detection formats
 - Resolve conflicts within each detection class
 - Compute bounding box centroids
 
@@ -272,11 +272,11 @@ Position is the centroid of the bounding box.
 
 ### Conflict Resolution Rules
 
-| Class | Rule |
-|---|---|
-| `traffic_light` | Only one color may exist per frame — keep highest confidence candidate |
-| `lane_boundary` | All candidates are kept — multiple lane boundaries are valid |
-| `stop_sign` | Only the strongest candidate is kept — keep highest confidence |
+| Class           | Rule                                                                      |
+|-----------------|---------------------------------------------------------------------------|
+| `traffic_light` | Only one color may exist per frame. Keep the highest confidence candidate |
+| `lane_boundary` | All candidates are kept. Multiple lane boundaries are valid               |
+| `stop_sign`     | Only the strongest candidate is kept. Keep the highest confidence         |
 
 ---
 
@@ -376,20 +376,20 @@ Phase 3 then performs temporal filtering, lane center estimation, and navigation
 
 ## Zero 2 W Frame Budget
 
-| Stage | Time (ms) |
-|---|---|
-| Capture + buffer load | ~1-2 |
-| Preprocess | ~3-5 |
-| ROI crop | <1 |
-| Color + Geometry branch | ~8-12 (???) |
-| Feature fusion | ~1-2 |
-| Perspective transform | ~3-5 |
-| Output packaging | <1 |
-| Phase 3 filtering | ~3-5 |
-|---|---|
-| Total estimate |~20-26 (at 640x480) |
+| Stage                   | Time (ms)           |
+|-------------------------|---------------------|
+| Capture + buffer load   | ~1-2                |
+| Preprocess              | ~3-5                |
+| ROI crop                | <1                  |
+| Color + Geometry branch | ~8-12               |
+| Feature fusion          | ~1-2                |
+| Perspective transform   | ~3-5                |
+| Output packaging        | <1                  |
+| Phase 3 filtering       | ~3-5                |
+|-------------------------|---------------------|
+| Total estimate          | ~20-26 (at 640x480) |
 
-Summary is ok, but considering thermal throttling under a sustained load, remaining headroom drops
+Considering thermal throttling under a sustained load, remaining headroom drops
 significantly. Consider alternatives to save on frame budget.
 
 ## Summary
