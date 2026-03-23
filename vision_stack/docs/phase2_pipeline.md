@@ -17,7 +17,7 @@ Preprocess
    ▼
 ROI Crop
    │
-   ├──────── Color Branch ──── TrafficLightCandidates ──┐
+   ├──────── Color Branch ──── TrafficLightCandidates  ──┐
    │                                                     │
    └──────── Geometry Branch ── LaneCandidates ──────────┤
                                 SignCandidates ──────────┤
