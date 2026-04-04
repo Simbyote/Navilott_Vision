@@ -422,6 +422,10 @@ def run_phase2_on_frame(
     )
     times["package_phase2_output"] = (time.time() - t) * 1000
 
+    if frame_id % 30 == 0:
+        breakdown = "  ".join(f"{k}={v:.1f}ms" for k, v in times.items())
+        print(f"[timing] {breakdown}  total={sum(times.values()):.1f}ms")
+
     return output
 
 
