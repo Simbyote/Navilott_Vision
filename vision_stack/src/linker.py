@@ -85,7 +85,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 # [1] Preprocessing
-from preprocess import preprocess_frame, load_calibration
+from preprocess import preprocess_frame, load_calibration, build_undistort_maps
 
 # [2] ROI cropping
 from roi_crop import crop_rois, draw_roi_overlay, ROICropResult
@@ -151,6 +151,8 @@ class PipelineConfig:
     gaussian_sigma:             Passed to preprocess_frame.
     """
     camera_matrix:       np.ndarray
+    undistort_map1: np.ndarray
+    undistort_map2: np.ndarray
     dist_coeffs:         np.ndarray
     hsv_ranges:          HSVRanges
     homography:          Optional[HomographyData]
@@ -196,6 +198,8 @@ def load_pipeline_config() -> PipelineConfig:
         camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA)
         print(f"[CONFIG] Camera calibration loaded from {CALIBRATION_CAMERA}")
 
+    map1, map2 = build_undistort_maps(camera_matrix, dist_coeffs, image_size=(640, 480))
+
     # --- HSV ranges ----------------------------------------------
     if not os.path.exists(CALIBRATION_HSV):
         print(
@@ -223,6 +227,8 @@ def load_pipeline_config() -> PipelineConfig:
 
     return PipelineConfig(
         camera_matrix        = camera_matrix,
+        undistort_map1       = map1,
+        undistort_map2       = map2,
         dist_coeffs          = dist_coeffs,
         hsv_ranges           = hsv_ranges,
         homography           = homography,
@@ -276,6 +282,7 @@ def run_phase2_on_frame(
         dist_coeffs          = cfg.dist_coeffs,
         gaussian_kernel_size = cfg.gaussian_kernel_size,
         gaussian_sigma       = cfg.gaussian_sigma,
+        undistort_maps       = (cfg.undistort_map1, cfg.undistort_map2),
     )
     times["preprocess"] = (time.time() - t) * 1000
 
@@ -410,7 +417,7 @@ def run_phase2_on_frame(
 
     # -----------------------------------------------------------------------
     # [7] PHASE 2 OUTPUT PACKAGING
-    #     package_phase2_output → Phase2Output
+    #     package_phase2_output → Phase2Output  
     #     Input:  detections from [5], transformed_coords from [6]
     # -----------------------------------------------------------------------
     t = time.time()

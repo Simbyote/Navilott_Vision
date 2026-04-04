@@ -89,7 +89,7 @@ Failure cases
 
 import cv2
 import numpy as np
-
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Core substage
@@ -101,6 +101,7 @@ def preprocess_frame(
     dist_coeffs: np.ndarray,
     gaussian_kernel_size: tuple = (5, 5),
     gaussian_sigma: float = 0.0,
+    undistort_maps: Optional[tuple] = None,
 ) -> np.ndarray:
     """
     Apply undistortion → histogram equalization → Gaussian blur to one BGR frame.
@@ -137,7 +138,11 @@ def preprocess_frame(
 
     # --- Step 1: Undistortion -----------------------------------------------
     # cv2.undistort allocates a new output buffer; input frame is not modified.
-    undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
+    if undistort_maps is not None:
+        map1, map2 = undistort_maps
+        undistorted = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
+    else:
+        undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
 
     # --- Step 2: Histogram equalization (YCrCb, Y channel only) -------------
     # Convert to YCrCb so equalization acts only on luma (Y).
@@ -172,6 +177,25 @@ def load_calibration(npz_path: str) -> tuple:
     camera_matrix = data["camera_matrix"].astype(np.float64)
     dist_coeffs   = data["dist_coeffs"].astype(np.float64)
     return camera_matrix, dist_coeffs
+
+def build_undistort_maps(
+    camera_matrix: np.ndarray,
+    dist_coeffs: np.ndarray,
+    image_size: tuple,          # (W, H)
+) -> tuple:
+    """
+    Precompute undistortion maps for cv2.remap.
+    Call once at startup, reuse every frame.
+    Returns (map1, map2) — pass both to remap_undistort().
+    """
+    new_camera_matrix, _ = cv2.getOptimalNewCameraMatrix(
+        camera_matrix, dist_coeffs, image_size, alpha=1
+    )
+    map1, map2 = cv2.initUndistortRectifyMap(
+        camera_matrix, dist_coeffs, None,
+        new_camera_matrix, image_size, cv2.CV_16SC2
+    )
+    return map1, map2
 
 
 # ---------------------------------------------------------------------------
