@@ -74,6 +74,7 @@ import sys
 import time
 import cv2
 import numpy as np
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -262,11 +263,13 @@ def run_phase2_on_frame(
     -------
     Phase2Output — the Phase 2 → Phase 3 handoff object
     """
+    times = {}
 
     # -----------------------------------------------------------------------
     # [1] PREPROCESSING
     #     preprocess_frame → conditioned BGR frame
     # -----------------------------------------------------------------------
+    t = time.time()
     conditioned = preprocess_frame(
         frame                = frame,
         camera_matrix        = cfg.camera_matrix,
@@ -274,6 +277,7 @@ def run_phase2_on_frame(
         gaussian_kernel_size = cfg.gaussian_kernel_size,
         gaussian_sigma       = cfg.gaussian_sigma,
     )
+    times["preprocess"] = (time.time() - t) * 1000
 
     if debug_dir:
         cv2.imwrite(os.path.join(debug_dir, f"{stem}_s1_preprocessed.png"), conditioned)
@@ -285,7 +289,9 @@ def run_phase2_on_frame(
     # Notes: ROI cropping can be moved one stage up to save time and memory later on
     #        May be more favorable (considered)
     # -----------------------------------------------------------------------
+    t = time.time()
     roi_result: ROICropResult = crop_rois(conditioned, frame_id=frame_id)
+    times["roi_crop"] = (time.time() - t) * 1000
 
     if debug_dir:
         overlay = draw_roi_overlay(conditioned, roi_result)
@@ -302,6 +308,7 @@ def run_phase2_on_frame(
     #     extract_traffic_light_candidates → traffic_candidates, debug_masks
     #     Input:  roi_result.traffic_roi
     # -----------------------------------------------------------------------
+    t = time.time()
     traffic_candidates, color_debug = extract_traffic_light_candidates(
         roi          = roi_result.traffic_roi,
         hsv_ranges   = cfg.hsv_ranges,
@@ -309,6 +316,7 @@ def run_phase2_on_frame(
         frame_id     = frame_id,
         timestamp_ms = timestamp_ms,
     )
+    times["color_branch"] = (time.time() - t) * 1000
 
     if debug_dir:
         # HSV H-channel false-color map
@@ -326,6 +334,7 @@ def run_phase2_on_frame(
     #     run_geometry_branch → GeometryBranchResult, lane_debug, sign_debug
     #     Input:  roi_result.lane_roi, roi_result.sign_roi
     # -----------------------------------------------------------------------
+    t = time.time()
     geo_result, lane_debug, sign_debug = run_geometry_branch(
         lane_roi     = roi_result.lane_roi,
         sign_roi     = roi_result.sign_roi,
@@ -335,6 +344,7 @@ def run_phase2_on_frame(
         frame_id     = frame_id,
         timestamp_ms = timestamp_ms,
     )
+    times["geometry_branch"] = (time.time() - t) * 1000
 
     if debug_dir:
         for key, img in lane_debug.items():
@@ -347,6 +357,7 @@ def run_phase2_on_frame(
     #     fuse_detections → detections: list[DetectionObject], debug_summary
     #     Input:  candidates from [3] and [4]
     # -----------------------------------------------------------------------
+    t = time.time()
     source_rois = SourceROIInfo(
         lane_shape    = roi_result.lane_roi.shape[:2],
         traffic_shape = roi_result.traffic_roi.shape[:2],
@@ -361,6 +372,7 @@ def run_phase2_on_frame(
         timestamp_ms       = timestamp_ms,
         source_rois        = source_rois,
     )
+    times["feature_fusion"] = (time.time() - t) * 1000
 
     if debug_dir and fusion_summary.get("log"):
         log_path = os.path.join(debug_dir, f"{stem}_s5_fusion_log.txt")
@@ -372,6 +384,7 @@ def run_phase2_on_frame(
     #     warp_lane_roi → WarpResult → TransformedCoords
     #     Input:  roi_result.lane_roi (must copy: warpPerspective needs contiguous array)
     # -----------------------------------------------------------------------
+    t = time.time()
     transformed_coords: Optional[TransformedCoords] = None
 
     if cfg.homography is not None:
@@ -393,18 +406,21 @@ def run_phase2_on_frame(
                 os.path.join(debug_dir, f"{stem}_s6_warped_lane.png"),
                 warp_result.warped_image,
             )
+    times["perspective_transform"] = (time.time() - t) * 1000
 
     # -----------------------------------------------------------------------
     # [7] PHASE 2 OUTPUT PACKAGING
     #     package_phase2_output → Phase2Output
     #     Input:  detections from [5], transformed_coords from [6]
     # -----------------------------------------------------------------------
+    t = time.time()
     output: Phase2Output = package_phase2_output(
         detections         = detections,
         transformed_coords = transformed_coords,
         frame_id           = frame_id,
         timestamp_ms       = timestamp_ms,
     )
+    times["package_phase2_output"] = (time.time() - t) * 1000
 
     return output
 
