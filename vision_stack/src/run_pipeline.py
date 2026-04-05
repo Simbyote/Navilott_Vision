@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--max-frames", type=int,   default=None)
     parser.add_argument("--debug-dir",  type=str,   default=None,
                         help="Write debug images here (slow — omit for timing runs)")
+    parser.add_argument("--width",  type=int, default=640)
+    parser.add_argument("--height", type=int, default=480)
     args = parser.parse_args()
 
     try:
@@ -45,6 +47,7 @@ def main():
     src = FakeCapture(
         image_dirs = SAMPLE_DIRS,
         target_fps = args.fps,
+        resize_to  = (args.width, args.height),
         loop       = True,
         max_frames = args.max_frames,
     )

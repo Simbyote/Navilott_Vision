@@ -138,6 +138,7 @@ def preprocess_frame(
 
     # --- Step 1: Undistortion -----------------------------------------------
     # cv2.undistort allocates a new output buffer; input frame is not modified.
+
     if undistort_maps is not None:
         map1, map2 = undistort_maps
         undistorted = cv2.remap(frame, map1, map2, interpolation=cv2.INTER_LINEAR)
