@@ -3,7 +3,7 @@ import time
 
 pipeline = (
     "libcamerasrc ! "
-    "video/x-raw,colorimetry=bt709,width=640,height=480,framerate=30/1 ! "
+    "video/x-raw,colorimetry=bt709,width=480,height=360,framerate=20/1 ! "
     "videoconvert ! "
     "appsink drop=true max-buffers=1 sync=false"
 )
@@ -14,9 +14,12 @@ if not cap.isOpened():
     print("Failed to open camera pipeline")
     raise SystemExit(1)
 
+# Writer initialization 
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+out = cv2.VideoWriter('output.mp4', fourcc, 30.0, (640, 480))
+
 count = 0
 start = time.time()
-last_report = start
 duration = 60  # seconds
 
 try:
@@ -26,6 +29,7 @@ try:
             print("Frame read failed")
             break
 
+        out.write(frame)          # save each frame
         count += 1
         now = time.time()
 
@@ -42,3 +46,5 @@ except KeyboardInterrupt:
 
 finally:
     cap.release()
+    out.release()                 # Flush and close the file
+    print("Saved to output.mp4")
