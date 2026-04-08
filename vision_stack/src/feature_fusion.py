@@ -481,16 +481,16 @@ if __name__ == "__main__":
       sN/results/fusion_fN_summary.txt   — debug summary text
       sN/results/fusion_fN_overlay.png   — bounding box overlay on blank canvas
 
-    When real ROI images are available in sN/results/, the harness loads
+    When real ROI images are available in trackT3/results/, the harness loads
     the first available *_roi_traffic.png, *_roi_lane.png, *_roi_sign.png
     as canvases for the overlay. Falls back to a blank canvas if not found.
 
-    Output directory: vision_stack/sample_img/duckietown/s1/results/
-    (all mock frames written to s1 only; they are not image-specific)
+    Output directory: vision_stack/frames/trackT3/results/
+    (all mock frames written to trackT3 only; they are not image-specific)
     """
     import os
 
-    OUTPUT_DIR = "vision_stack/sample_img/duckietown/s1/results"
+    OUTPUT_DIR = "vision_stack/frames/trackT3/results"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # ------------------------------------------------------------------

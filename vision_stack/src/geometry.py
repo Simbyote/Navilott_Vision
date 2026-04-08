@@ -187,10 +187,10 @@ class LaneContourFilter:
     heading. Use min(w/h, h/w) to test elongation regardless of orientation.
     A square blob has min(w/h, h/w) = 1.0 and is rejected by min_aspect < 1.0.
     """
-    min_area:   float = 100.0
+    min_area:   float = 30.0
     max_area:   float = 20000.0
     min_aspect: float = 2.0    # elongation threshold: long side / short side ≥ 2
-    ref_area:   float = 3000.0
+    ref_area:   float = 2000.0
 
 
 @dataclass
@@ -202,7 +202,7 @@ class SignContourFilter:
     max_area       : maximum contour area (px²)
     min_vertices   : approxPolyDP vertex count lower bound
     max_vertices   : approxPolyDP vertex count upper bound
-                     8-gon should produce 6–10 depending on epsilon
+                     8-gon should produce 6-10 depending on epsilon
     min_solidity   : contour_area / convex_hull_area — octagon is convex
     epsilon_factor : approxPolyDP epsilon = epsilon_factor * arc_length
                      smaller = more vertices retained; larger = fewer
@@ -568,11 +568,9 @@ if __name__ == "__main__":
     import os
 
     SAMPLE_DIRS = [
-        "vision_stack/sample_img/duckietown/s1",
-        "vision_stack/sample_img/duckietown/s2",
-        "vision_stack/sample_img/duckietown/s3",
-        "vision_stack/sample_img/duckietown/s4",
-        "vision_stack/sample_img/duckietown/s5",
+        "vision_stack/frames/trackT3",
+        "vision_stack/frames/trackT4",
+        "vision_stack/frames/trackT5"
     ]
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 

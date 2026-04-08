@@ -209,7 +209,7 @@ if __name__ == "__main__":
 
     Loads every .jpg / .png from each of the five sample image directories,
     runs preprocess_frame(), and writes four debug images per input into
-    vision_stack/sample_img/duckietown/sN/results/
+    vision_stack/frames/trackT1/results/
 
     MISSING DEPENDENCY: calibration/camera_matrix.npz must exist before
     running. If it does not exist, the harness falls back to running Steps 2
@@ -217,26 +217,29 @@ if __name__ == "__main__":
     for development convenience only — undistortion is required in production.
 
     Directory structure:
-        vision_stack/sample_img/duckietown/s1/
-        vision_stack/sample_img/duckietown/s2/
-        vision_stack/sample_img/duckietown/s3/
-        vision_stack/sample_img/duckietown/s4/
-        vision_stack/sample_img/duckietown/s5/
+    vision_stack/
+        frames/
+            trackT1/
+                img001.jpg
+                img002.jpg
+                ...
+                results/
+                    img001_1_original.png
+                    img001_2_undistorted.png
+                    ...
     """
     import os
     import sys
 
     SAMPLE_DIRS = [
-        "vision_stack/sample_img/duckietown/s1",
-        "vision_stack/sample_img/duckietown/s2",
-        "vision_stack/sample_img/duckietown/s3",
-        "vision_stack/sample_img/duckietown/s4",
-        "vision_stack/sample_img/duckietown/s5",
+        "vision_stack/frames/trackT3",
+        "vision_stack/frames/trackT4",
+        "vision_stack/frames/trackT5"
     ]
     CALIBRATION_PATH = "vision_stack/calibration/camera_matrix.npz"
     GAUSSIAN_KERNEL  = (5, 5)
     GAUSSIAN_SIGMA   = 0.0
-    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
+    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     # --- Load calibration (or warn and skip undistortion) -------------------
     camera_matrix = None

@@ -2,7 +2,7 @@ import cv2
 import os
 import argparse
 
-def decompose(video_path, output_dir="frames", fmt="jpg", every_n=1):
+def decompose(video_path, output_dir, fmt="jpg", every_n=1):
     os.makedirs(output_dir, exist_ok=True)
 
     cap = cv2.VideoCapture(video_path)

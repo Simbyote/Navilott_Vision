@@ -441,13 +441,11 @@ def run_phase2_on_frame(
 # ---------------------------------------------------------------------------
 
 SAMPLE_DIRS = [
-    "vision_stack/sample_img/duckietown/s1",
-    "vision_stack/sample_img/duckietown/s2",
-    "vision_stack/sample_img/duckietown/s3",
-    "vision_stack/sample_img/duckietown/s4",
-    "vision_stack/sample_img/duckietown/s5",
+    "vision_stack/frames/trackT3",
+    "vision_stack/frames/trackT4",
+    "vision_stack/frames/trackT5"
 ]
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
+IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
 if __name__ == "__main__":

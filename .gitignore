@@ -15,3 +15,15 @@ temp/
 **/__pycache__/
 __pycache__/
 *.pyc
+
+/video/
+**/video/
+video/
+/video
+*.avi
+
+/results/
+**/results/
+results/
+/results
+*.png

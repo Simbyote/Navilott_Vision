@@ -11,7 +11,7 @@ Usage:
     from fake_capture import FakeCapture
 
     src = FakeCapture(
-        image_dirs=["vision_stack/sample_img/duckietown/s1"],
+        image_dirs=["vision_stack/frames/"],
         target_fps=30,
         resize_to=(640, 480),   # match real capture resolution
         loop=True,
@@ -38,8 +38,8 @@ class FakeCapture:
     def __init__(
         self,
         image_dirs: list,
-        target_fps: float = 30.0,
-        resize_to: tuple = (640, 480),  # (W, H)
+        target_fps: float = 20.0,
+        resize_to: tuple = (480, 360),  # (W, H)
         loop: bool = True,
         max_frames: Optional[int] = None,         # None for infinite, or a positive integer to limit total frames
     ):

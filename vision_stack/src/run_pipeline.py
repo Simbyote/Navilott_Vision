@@ -14,28 +14,25 @@ import time
 import sys
 import json
 
-
 from fake_capture import FakeCapture
 from linker import load_pipeline_config, run_phase2_on_frame
 
 SAMPLE_DIRS = [
-    "vision_stack/sample_img/duckietown/s1",
-    "vision_stack/sample_img/duckietown/s2",
-    "vision_stack/sample_img/duckietown/s3",
-    "vision_stack/sample_img/duckietown/s4",
-    "vision_stack/sample_img/duckietown/s5",
+    "vision_stack/frames/trackT3",
+    "vision_stack/frames/trackT4",
+    "vision_stack/frames/trackT5"
 ]
 
 STATUS_FILE = "/tmp/autobot_status.json"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fps",        type=float, default=30.0)
+    parser.add_argument("--fps",        type=float, default=20.0)
     parser.add_argument("--max-frames", type=int,   default=None)
     parser.add_argument("--debug-dir",  type=str,   default=None,
                         help="Write debug images here (slow — omit for timing runs)")
-    parser.add_argument("--width",  type=int, default=640)
-    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--width",  type=int, default=480)
+    parser.add_argument("--height", type=int, default=360)
     args = parser.parse_args()
 
     try:
@@ -72,10 +69,10 @@ def main():
             ms       = (t1 - t0) * 1000
             frame_times.append(ms)
 
-            if frame_id % 30 == 0:
+            if frame_id % 20 == 0:
                 elapsed  = t1 - t_start
                 avg_fps  = round(count / elapsed, 1) if count > 0 else 0.0
-                avg_ms   = sum(frame_times[-30:]) / len(frame_times[-30:])
+                avg_ms   = sum(frame_times[-20:]) / len(frame_times[-20:])
                 n_det    = output.detection_count
                 print(f"[frame {frame_id:05d}]  "
                       f"pipeline={avg_ms:.1f}ms avg  "

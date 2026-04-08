@@ -416,14 +416,13 @@ if __name__ == "__main__":
     import sys
 
     SAMPLE_DIRS = [
-        "vision_stack/sample_img/duckietown/s1",
-        "vision_stack/sample_img/duckietown/s2",
-        "vision_stack/sample_img/duckietown/s3",
-        "vision_stack/sample_img/duckietown/s4",
-        "vision_stack/sample_img/duckietown/s5",
+        "vision_stack/frames/trackT3",
+        "vision_stack/frames/trackT4",
+        "vision_stack/frames/trackT5"
     ]
     HSV_RANGES_PATH  = "vision_stack/calibration/hsv_ranges.json"
-    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
+    HSV_DUMMY_PATH   = "vision_stack/dummy/dummy_hsv_ranges.json"  # for unit test scaffolding
+    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     # --- Load calibrated HSV ranges (hard requirement) ----------------------
     if not os.path.exists(HSV_RANGES_PATH):
@@ -433,14 +432,19 @@ if __name__ == "__main__":
             "Run the interactive trackbar tuning tool under actual course lighting\n"
             "and save the result to calibration/hsv_ranges.json."
         )
-        sys.exit(1)
-
-    try:
-        hsv_ranges = load_hsv_ranges(HSV_RANGES_PATH)
-        print(f"[INFO] HSV ranges loaded from {HSV_RANGES_PATH}")
-    except (KeyError, json.JSONDecodeError) as e:
-        print(f"[ERROR] Failed to parse {HSV_RANGES_PATH}: {e}")
-        sys.exit(1)
+        try:
+            hsv_ranges = load_hsv_ranges(HSV_DUMMY_PATH)
+            print(f"[WARNING] Using dummy HSV ranges from {HSV_DUMMY_PATH} — not valid for real detection!")
+        except (FileNotFoundError, KeyError, json.JSONDecodeError) as e:
+            print(f"[ERROR] Failed to load dummy HSV ranges from {HSV_DUMMY_PATH}: {e}")
+            sys.exit(1)
+    else:
+        try:
+            hsv_ranges = load_hsv_ranges(HSV_RANGES_PATH)
+            print(f"[INFO] HSV ranges loaded from {HSV_RANGES_PATH}")
+        except (KeyError, json.JSONDecodeError) as e:
+            print(f"[ERROR] Failed to parse {HSV_RANGES_PATH}: {e}")
+            sys.exit(1)
 
     blob_filter = BlobFilter()   # placeholder defaults — tune for production
 
