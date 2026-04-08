@@ -37,8 +37,8 @@ def decompose(video_path, output_dir="frames", fmt="jpg", every_n=1):
     print(f"Done. Saved {saved} frames to '{output_dir}/'")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Decompose an mp4 into frames.")
-    parser.add_argument("video",      help="Path to input .mp4 file")
+    parser = argparse.ArgumentParser(description="Decompose an avi into frames.")
+    parser.add_argument("video",      help="Path to input .avi file")
     parser.add_argument("-o",         dest="output_dir", default="frames",  help="Output directory (default: frames/)")
     parser.add_argument("-f",         dest="fmt",        default="jpg",     help="Image format: jpg or png (default: jpg)")
     parser.add_argument("-n",         dest="every_n",    default=1, type=int, help="Save every Nth frame (default: 1)")

@@ -5,6 +5,7 @@ pipeline = (
     "libcamerasrc ! "
     "video/x-raw,colorimetry=bt709,width=480,height=360,framerate=20/1 ! "
     "videoconvert ! "
+    "videoflip method=rotate-180 ! "
     "appsink drop=true max-buffers=1 sync=false"
 )
 
