@@ -15,8 +15,8 @@ if not cap.isOpened():
     raise SystemExit(1)
 
 # Writer initialization 
-fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-out = cv2.VideoWriter('output.mp4', fourcc, 30.0, (640, 480))
+fourcc = cv2.VideoWriter_fourcc(*'XVID')
+out = cv2.VideoWriter('output.avi', fourcc, 20.0, (480, 360))
 
 count = 0
 start = time.time()
@@ -47,4 +47,4 @@ except KeyboardInterrupt:
 finally:
     cap.release()
     out.release()                 # Flush and close the file
-    print("Saved to output.mp4")
+    print("Saved to output.avi")
