@@ -168,7 +168,7 @@ class CannyParams:
     threshold2    : upper hysteresis threshold
     aperture_size : Sobel kernel size (3, 5, or 7 only)
     """
-    threshold1:    float = 50.0
+    threshold1:    float = 10.0
     threshold2:    float = 150.0
     aperture_size: int   = 3
 
@@ -181,16 +181,23 @@ class LaneContourFilter:
     min_area     : minimum bounding-box area (px²) — rejects dust and noise
     max_area     : maximum bounding-box area (px²) — rejects full-frame blobs
     min_aspect   : min(w/h, h/w) lower bound — lane lines are elongated
+    max_aspect   : min(w/h, h/w) upper bound — rejects extreme aspect ratios
     ref_area     : area treated as confidence = 1.0 at expected detection range
+    max_roi_span : fraction of ROI a contour may span in its elongated axis
+    min_intensity: minimum average intensity (0-255) within contour — rejects dark blobs
 
     min_aspect logic: lane lines may be horizontal or vertical depending on
     heading. Use min(w/h, h/w) to test elongation regardless of orientation.
     A square blob has min(w/h, h/w) = 1.0 and is rejected by min_aspect < 1.0.
     """
-    min_area:   float = 30.0
-    max_area:   float = 20000.0
-    min_aspect: float = 2.0    # elongation threshold: long side / short side ≥ 2
-    ref_area:   float = 2000.0
+    min_area:   float = 0.0     # anything > 0.0 results in consistent missing lane lines 
+    max_area:   float = 300.0   # anything < 300.0 loses some horizontal lane lines
+    min_aspect: float = 8.0     # 8.0 is a good point that detects most important lane lines
+    max_aspect:   float = 10.0  # affects the confidence score by a small margin
+    ref_area:   float = 2000.0  # low references gives back strong confidence scores for even small contours
+    max_roi_span: float = 1.0   # anything < 1.0 results in some consistent rejection of edge lane lines
+    min_intensity: float = 80.0
+
 
 
 @dataclass
@@ -279,16 +286,45 @@ def _extract_contours(edges: np.ndarray):
 # Lane boundary extraction
 # ---------------------------------------------------------------------------
 
-def _lane_confidence(area: float, f: LaneContourFilter) -> float:
-    denom = max(f.ref_area - f.min_area, 1.0)
-    return _clamp((area - f.min_area) / denom, 0.0, 1.0)
+def _lane_confidence(area: float, elongation: float, bbox: tuple,
+                     roi_h: int, f: LaneContourFilter) -> float:
+    # How far above the minimum elongation threshold — stronger lane shape = higher score
+    elong_score = _clamp(
+        (elongation - f.min_aspect) / max(f.max_aspect - f.min_aspect, 1.0),
+        0.0, 1.0
+    )
+    # Size signal — normalized against expected detection area
+    area_score = _clamp(area / max(f.ref_area, 1.0), 0.0, 1.0)
 
+    # Vertical proximity — contours near the bottom of the lane ROI are closer to camera
+    x, y, w, h = bbox
+    proximity_score = _clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
+
+    return round(0.50 * elong_score + 0.30 * area_score + 0.20 * proximity_score, 4)
+
+
+def _mean_contour_intensity(gray: np.ndarray, contour: np.ndarray) -> float:
+    """Returns mean pixel intensity within the contour's bounding mask."""
+    x, y, w, h = cv2.boundingRect(contour)
+    # Clamp to image bounds
+    x1, y1 = max(x, 0), max(y, 0)
+    x2, y2 = min(x + w, gray.shape[1]), min(y + h, gray.shape[0])
+    if x2 <= x1 or y2 <= y1:
+        return 0.0
+    roi_patch = gray[y1:y2, x1:x2]
+    mask = np.zeros(roi_patch.shape, dtype=np.uint8)
+    shifted = contour - np.array([[[x1, y1]]])
+    cv2.drawContours(mask, [shifted], -1, 255, thickness=cv2.FILLED)
+    pixels = roi_patch[mask == 255]
+    return float(np.mean(pixels)) if len(pixels) > 0 else 0.0
 
 def _extract_lane_candidates(
     contours,
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
+    roi_shape: tuple,
+    gray: np.ndarray,
 ) -> List[LaneCandidate]:
     """
     Filter contours to lane-boundary candidates.
@@ -296,8 +332,12 @@ def _extract_lane_candidates(
     Elongation test: a lane line is long relative to its width.
     min(w/h, h/w) < 1/min_aspect rejects compact blobs regardless of
     which dimension is larger.
+
+    Span test: rejects contours that stretch across most of the ROI
+    in their elongated axis — catches seams between road segments.
     """
     candidates = []
+    roi_h, roi_w = roi_shape    # NEW
 
     for contour in contours:
         area = cv2.contourArea(contour)
@@ -308,12 +348,32 @@ def _extract_lane_candidates(
         if h == 0 or w == 0:
             continue
 
-        # Elongation: accept if longer dimension is at least min_aspect × shorter
-        elongation = max(w, h) / max(min(w, h), 1)
+        if len(contour) < 5:
+            continue
+
+        # Accept if longer dimension is at least min_aspect × shorter
+        _, (rect_w, rect_h), _ = cv2.minAreaRect(contour)
+        long_side  = max(rect_w, rect_h)
+        short_side = max(min(rect_w, rect_h), 1.0)
+        elongation = long_side / short_side
+
         if elongation < lane_filter.min_aspect:
             continue
 
-        confidence = _lane_confidence(area, lane_filter)
+        # NEW — Span rejection: seams run edge-to-edge in their long axis
+        horizontal = rect_w >= rect_h
+        if horizontal and (w / roi_w) > lane_filter.max_roi_span:
+            continue
+        if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
+            continue
+
+        # Reject dark contours — seams are dark gaps, lane tape is bright
+        mean_intensity = _mean_contour_intensity(gray, contour)
+        if mean_intensity < lane_filter.min_intensity:
+            continue
+
+        # Composite confidence score based on area and elongation
+        confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, lane_filter)
 
         candidates.append(LaneCandidate(
             label        = "lane_boundary",
@@ -346,8 +406,10 @@ def extract_lane_candidates(
     edges    = _run_canny(gray, canny_params)
     contours = _extract_contours(edges)
 
-    candidates = _extract_lane_candidates(contours, lane_filter, frame_id, timestamp_ms)
-
+    candidates = _extract_lane_candidates(
+        contours, lane_filter, frame_id, timestamp_ms,
+        roi_shape=lane_roi.shape[:2], gray = gray
+    )
     # Debug overlays (computed only when harness requests them)
     contour_overlay  = cv2.cvtColor(gray.copy(), cv2.COLOR_GRAY2BGR)
     accepted_overlay = lane_roi.copy()
