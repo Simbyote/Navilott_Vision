@@ -15,7 +15,7 @@ import sys
 import json
 
 from fake_capture import FakeCapture
-from linker import load_pipeline_config, run_phase2_on_frame
+from vision_stack.src.main_linker import load_pipeline_config, run_phase2_on_frame
 
 SAMPLE_DIRS = [
     "vision_stack/frames/trackT3",
