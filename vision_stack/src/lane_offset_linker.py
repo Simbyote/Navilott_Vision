@@ -3,7 +3,7 @@ phase2_linker_s1s6.py
 =====================
 Phase 2 Pipeline — Stages 1 through 6.
 
-Adds Stage 6 (lane offset estimation) to the S1–S5 chain.
+Adds Stage 6 (lane offset estimation) to the S1-S5 chain.
 Stage 7 (output packaging) remains stubbed.
 
 Stage 6 replaces the perspective transform with a direct pixel-based
@@ -20,7 +20,6 @@ To use as a module:
   # result.lane_offset  → LaneOffsetResult, ready for Phase 3
   # result.detections   → list[DetectionObject], carried forward to Stage 7
 """
-
 import os
 import sys
 import time
@@ -33,7 +32,7 @@ from typing import Optional, List
 # Stage imports
 # ---------------------------------------------------------------------------
 
-from preprocess import preprocess_frame, load_calibration, build_undistort_maps
+from preprocess import preprocess_frame
 from roi_crop import crop_rois, draw_roi_overlay, ROICropResult
 from color_branch import (
     extract_traffic_light_candidates,
@@ -60,11 +59,8 @@ from lane_offset import compute_lane_offset, LaneOffsetResult   # Stage 6
 # Calibration file paths
 # ---------------------------------------------------------------------------
 
-CALIBRATION_CAMERA       = "vision_stack/calibration/camera_matrix.npz"
 CALIBRATION_HSV          = "vision_stack/calibration/hsv_ranges.json"
-CALIBRATION_CAMERA_DUMMY = "vision_stack/dummy/dummy_camera_matrix.npz"
 CALIBRATION_HSV_DUMMY    = "vision_stack/dummy/dummy_hsv_ranges.json"
-
 
 # ---------------------------------------------------------------------------
 # Config
@@ -73,17 +69,13 @@ CALIBRATION_HSV_DUMMY    = "vision_stack/dummy/dummy_hsv_ranges.json"
 @dataclass
 class S1S6Config:
     """
-    Calibration data and tunable parameters for Stages 1–6.
+    Calibration data and tunable parameters for Stages 1-6.
 
     lane_offset_conf_threshold : minimum candidate confidence for Stage 6.
         Candidates below this are excluded from offset anchor selection.
         Default 0.30 gates out the low-confidence noise tail. Lower if the
         robot loses lane center in frames where best candidates sit ~0.25.
     """
-    camera_matrix:             np.ndarray
-    dist_coeffs:               np.ndarray
-    undistort_map1:            np.ndarray
-    undistort_map2:            np.ndarray
     hsv_ranges:                HSVRanges
     blob_filter:               BlobFilter
     canny_params:              CannyParams
@@ -95,18 +87,6 @@ class S1S6Config:
 
 
 def load_config() -> S1S6Config:
-    if os.path.exists(CALIBRATION_CAMERA):
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA)
-        print(f"[CONFIG] Camera calibration loaded from {CALIBRATION_CAMERA}")
-    else:
-        print(
-            f"[CONFIG] WARNING: {CALIBRATION_CAMERA} not found. "
-            "Using dummy calibration — undistortion is a no-op."
-        )
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA_DUMMY)
-
-    map1, map2 = build_undistort_maps(camera_matrix, dist_coeffs, image_size=(640, 480))
-
     if os.path.exists(CALIBRATION_HSV):
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV)
         print(f"[CONFIG] HSV ranges loaded from {CALIBRATION_HSV}")
@@ -118,10 +98,6 @@ def load_config() -> S1S6Config:
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV_DUMMY)
 
     return S1S6Config(
-        camera_matrix        = camera_matrix,
-        dist_coeffs          = dist_coeffs,
-        undistort_map1       = map1,
-        undistort_map2       = map2,
         hsv_ranges           = hsv_ranges,
         blob_filter          = BlobFilter(),
         canny_params         = CannyParams(),
@@ -140,7 +116,7 @@ def load_config() -> S1S6Config:
 @dataclass
 class S1S6Result:
     """
-    Output of the S1–S6 pipeline.
+    Output of the S1-S6 pipeline.
 
     Phase 3 consumes:
         lane_offset   — primary steering error signal
@@ -196,11 +172,8 @@ def run_s1_to_s6(
     t = time.time()
     conditioned = preprocess_frame(
         frame                = frame,
-        camera_matrix        = cfg.camera_matrix,
-        dist_coeffs          = cfg.dist_coeffs,
         gaussian_kernel_size = cfg.gaussian_kernel_size,
         gaussian_sigma       = cfg.gaussian_sigma,
-        undistort_maps       = (cfg.undistort_map1, cfg.undistort_map2),
     )
     times["s1_preprocess"] = (time.time() - t) * 1000
 

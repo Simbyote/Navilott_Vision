@@ -1,33 +1,27 @@
 """
 feature_fusion.py
-=================
-Feature Fusion & Labelling — Vision Perception Phase (Phase 2, Step 5 of 7)
 
-Collects all candidates from the color branch (traffic lights) and geometry
-branch (lane boundaries, stop sign) into a single unified detection list
-per frame. Assigns final type labels and resolves multi-candidate conflicts
-within each detection class. Produces the Detection Object schema that is
-the documented output contract of Phase 2.
+Feature Fusion Stage
 
-Purpose
--------
-The color branch and geometry branch run independently and produce candidates
-in their own ROI coordinate spaces. Fusion has three responsibilities:
 
-  1. Normalise representation — convert all branch-specific candidate types
-     into the single Detection Object schema defined by Phase 2. This
-     decouples Phase 3 from knowing anything about branch internals.
+Purpose:
+    The color branch and geometry branch run independently and produce candidates
+    in their own ROI coordinate spaces. Fusion has three responsibilities:
 
-  2. Per-class conflict resolution — each detection class (traffic_light,
-     lane_boundary, stop_sign) may produce multiple candidates in a single
-     frame. Fusion selects or aggregates within each class according to
-     explicit rules. Candidates from different classes are never merged.
+    1. Normalize representation — convert all branch-specific candidate types
+        into the single Detection Object schema defined by Phase 2. This
+        decouples Phase 3 from knowing anything about branch internals.
 
-  3. Assign position where available — lane_boundary candidates carry
-     bounding box centroids as (x, y) in ROI pixel coords. traffic_light
-     and stop_sign likewise. Position is recorded but is still in ROI-
-     relative coordinates at this stage; perspective transformation
-     (Step 6) converts lane positions to metric coordinates later.
+    2. Per-class conflict resolution — each detection class (traffic_light,
+        lane_boundary, stop_sign) may produce multiple candidates in a single
+        frame. Fusion selects or aggregates within each class according to
+        explicit rules. Candidates from different classes are never merged.
+
+    3. Assign position where available — lane_boundary candidates carry
+        bounding box centroids as (x, y) in ROI pixel coords. traffic_light
+        and stop_sign likewise. Position is recorded but is still in ROI-
+        relative coordinates at this stage; perspective transformation
+        (Step 6) converts lane positions to metric coordinates later.
 
 Nothing is discarded silently. Any candidate that does not survive conflict
 resolution is logged in the debug summary. Temporal filtering, navigation
@@ -177,100 +171,135 @@ import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-
-# ---------------------------------------------------------------------------
-# Supporting types
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Output Dataclasses
+# =============================================================================
 
 @dataclass
 class SourceROIInfo:
     """
-    Holds ROI shapes needed to contextualise position values.
-    Not used for computation at this stage — stored for debug reference.
+    Holds ROI shapes needed to contextualize position values
+
+    lane_shape: shape of the lane ROI (H, W)
+    traffic_shape: shape of the traffic ROI (H, W)
+    sign_shape: shape of the sign ROI (H, W)
     """
-    lane_shape:    tuple   # (H, W) of lane ROI
-    traffic_shape: tuple   # (H, W) of traffic-light ROI
-    sign_shape:    tuple   # (H, W) of sign ROI
+    lane_shape: tuple
+    traffic_shape: tuple
+    sign_shape: tuple
 
 
 @dataclass
 class DetectionObject:
     """
-    Phase 2 output contract object.
+    A single detection in Phase 2 output
 
-    Public fields (forwarded to Phase 3):
-        type, position, confidence, timestamp
-
-    Internal debug fields (not forwarded to Phase 3):
-        bounding_box, label_detail
+    type: candidate type accepted by the detection system
+    position: xy coordinates of the centroid of the detection's bounding box
+    confidence: detection confidence
+    timestamp: time at which the detection was made
+    bounding_box: (x, y, w, h) of the detection's bounding box
+    label_detail: original .label field from the candidate
     """
-    # --- Phase 2 contract fields -------------------------------------------
-    type:       str    # "traffic_light" | "stop_sign" | "lane_boundary"
-    position:   dict   # {"x": float, "y": float} — centroid in ROI px coords
-    confidence: float  # [0.0, 1.0]
-    timestamp:  int    # timestamp_ms
-
-    # --- Internal debug fields (do not forward to Phase 3) -----------------
-    bounding_box:  tuple  # (x, y, w, h) — ROI pixel coords
-    label_detail:  str    # original sub-label from candidate
-
-
-# ---------------------------------------------------------------------------
-# Stub candidate types for use when upstream modules are not imported
-# These mirror exactly the fields consumed by fusion.
-# In production, import TrafficLightCandidate, LaneCandidate, SignCandidate
-# directly from color_branch and geometry_branch.
-# ---------------------------------------------------------------------------
+    type: str
+    position: dict
+    confidence: float
+    timestamp: int
+    bounding_box: tuple
+    label_detail: str
 
 @dataclass
 class _TrafficLightCandidate:
-    label:        str
-    bbox:         tuple
-    confidence:   float
-    frame_id:     int
+    """
+    Traffic light candidate
+
+    label: traffic light color
+    bbox: (x, y, w, h) of the candidate's bounding box
+    confidence: detection confidence
+    frame_id: frame identifier
+    timestamp_ms: time at which the detection was made
+    """
+    label: str
+    bbox: tuple
+    confidence: float
+    frame_id: int
     timestamp_ms: int
 
 @dataclass
 class _LaneCandidate:
-    label:        str
-    bbox:         tuple
-    contour:      object
-    confidence:   float
-    frame_id:     int
+    """
+    Lane boundary candidate
+    
+    label: lane boundary type
+    bbox: (x, y, w, h) of the candidate's bounding box
+    contour: lane boundary contour
+    confidence: detection confidence
+    frame_id: frame identifier
+    timestamp_ms: time at which the detection was made
+    """
+    label: str
+    bbox: tuple
+    contour: object
+    confidence: float
+    frame_id: int
     timestamp_ms: int
 
 @dataclass
 class _SignCandidate:
-    label:        str
-    bbox:         tuple
-    contour:      object
+    """
+    Stop sign candidate
+
+    label: stop sign type
+    bbox: (x, y, w, h) of the candidate's bounding box
+    contour: stop sign contour
+    vertex_count: number of vertices in the contour
+    confidence: detection confidence
+    frame_id: frame identifier
+    timestamp_ms: time at which the detection was made
+    """
+    label: str
+    bbox: tuple
+    contour: object
     vertex_count: int
-    confidence:   float
-    frame_id:     int
+    confidence: float
+    frame_id: int
     timestamp_ms: int
 
+# =============================================================================
+# Utility functions
+# ============================================================================
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-def _centroid(bbox: tuple) -> dict:
-    """Compute bounding box centroid. Guards against zero-size bbox."""
+def _centroid(
+        bbox: tuple
+    ) -> dict:
+    """
+    Purpose:
+        Compute bounding box centroid. Guards against zero-size bbox.
+    """
     x, y, w, h = bbox
     cx = float(x) + float(w) / 2.0 if w > 0 else float(x)
     cy = float(y) + float(h) / 2.0 if h > 0 else float(y)
     return {"x": round(cx, 2), "y": round(cy, 2)}
 
 
-def _valid_confidence(c: float) -> bool:
+def _valid_confidence(
+        c: float
+    ) -> bool:
+    """
+    Purpose:
+        Guard against invalid confidence values
+    """
     return 0.0 <= c <= 1.0
 
 
-def _best_candidate(candidates: list, log: list, class_name: str):
+def _best_candidate(
+        candidates: list, 
+        log: list, 
+        class_name: str
+    ):
     """
-    Return the single highest-confidence candidate from the list.
-    Discards candidates with invalid confidence and logs them.
-    Returns None if no valid candidates remain.
+    Purpose:
+        Select the best candidate from a list of candidates
     """
     valid = []
     for cand in candidates:
@@ -287,9 +316,9 @@ def _best_candidate(candidates: list, log: list, class_name: str):
     return max(valid, key=lambda c: c.confidence)
 
 
-# ---------------------------------------------------------------------------
-# Core substage
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Feature Fusion
+# ============================================================================
 
 def fuse_detections(
     traffic_candidates: list,
@@ -300,23 +329,20 @@ def fuse_detections(
     source_rois:        Optional[SourceROIInfo] = None,
 ) -> tuple:
     """
-    Fuse candidates from color and geometry branches into unified DetectionObjects.
+    Purpose:
+        Fuse candidates from color and geometry branches into unified DetectionObjects
 
-    Parameters
-    ----------
-    traffic_candidates : list[TrafficLightCandidate]
-    lane_candidates    : list[LaneCandidate]
-    sign_candidates    : list[SignCandidate]
-    frame_id           : authoritative frame identifier for this fusion call
-    timestamp_ms       : authoritative timestamp for this fusion call
-    source_rois        : optional SourceROIInfo for context; None is accepted
+    Inputs:
+        traffic_candidates : list[TrafficLightCandidate]
+        lane_candidates    : list[LaneCandidate]
+        sign_candidates    : list[SignCandidate]
+        frame_id           : authoritative frame identifier for this fusion call
+        timestamp_ms       : authoritative timestamp for this fusion call
+        source_rois        : optional SourceROIInfo for context; None is accepted
 
-    Returns
-    -------
-    (detections, debug_summary)
-
-    detections    : list[DetectionObject]
-    debug_summary : dict — "frame_id", "timestamp_ms", "counts", "discarded", "log"
+    Outputs:
+        detections    : list[DetectionObject]
+        debug_summary : dict — "frame_id", "timestamp_ms", "counts", "discarded", "log"
     """
     log        = []
     detections = []
@@ -327,9 +353,10 @@ def fuse_detections(
             "(0.0, 0.0) for all detections."
         )
 
-    # -----------------------------------------------------------------------
-    # TRAFFIC LIGHT  (Rule TL-1, TL-2)
-    # -----------------------------------------------------------------------
+    # ========================================================================
+    # Traffic Light  (Rule TL-1, TL-2)
+    # Determine best traffic light candidate, if any, and log discards
+    # =======================================================================
     best_tl = _best_candidate(traffic_candidates, log, "traffic_light")
 
     if best_tl is not None:
@@ -350,9 +377,10 @@ def fuse_detections(
             label_detail = best_tl.label,
         ))
 
-    # -----------------------------------------------------------------------
-    # LANE BOUNDARY  (Rule LB-1, LB-2)
-    # -----------------------------------------------------------------------
+    # ========================================================================
+    # Lane Boundary  (Rule LB-1, LB-2)
+    # Determine best lane boundary candidate, if any, and log discards
+    # =======================================================================
     valid_lanes = [c for c in lane_candidates if _valid_confidence(c.confidence)]
     invalid_lanes = [c for c in lane_candidates if not _valid_confidence(c.confidence)]
 
@@ -374,9 +402,10 @@ def fuse_detections(
             label_detail = c.label,
         ))
 
-    # -----------------------------------------------------------------------
-    # STOP SIGN  (Rule SS-1, SS-2)
-    # -----------------------------------------------------------------------
+    # ========================================================================
+    # Stop Sign  (Rule SS-1, SS-2)
+    # Determine best stop sign candidate, if any, and log discards
+    # ========================================================================
     best_sign = _best_candidate(sign_candidates, log, "stop_sign")
 
     if best_sign is not None:
@@ -396,9 +425,9 @@ def fuse_detections(
             label_detail = best_sign.label,
         ))
 
-    # -----------------------------------------------------------------------
-    # Debug summary
-    # -----------------------------------------------------------------------
+    # ========================================================================
+    # Debug Results
+    # ========================================================================
     type_counts = {}
     for d in detections:
         type_counts[d.type] = type_counts.get(d.type, 0) + 1
@@ -416,9 +445,9 @@ def fuse_detections(
     return detections, debug_summary
 
 
-# ---------------------------------------------------------------------------
-# Debug overlay
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Debug Visualization
+# =============================================================================
 
 _TYPE_COLORS = {
     "traffic_light": (255,  0,  0),   # blue
@@ -433,15 +462,9 @@ def draw_fusion_overlay(
     title: str = "",
 ) -> np.ndarray:
     """
-    Draw bounding boxes, type labels, and confidence scores on a copy of canvas.
-    Uses bounding_box (internal debug field) — not forwarded to Phase 3.
-
-    canvas should be a BGR image large enough to contain the bounding box
-    coordinates in the detections. When detections come from different ROIs
-    (lane, traffic, sign) with independent coordinate spaces, this overlay is
-    meaningful only if canvas is the corresponding ROI image for each detection.
-    For a combined visualisation, the caller must offset bbox coords to source
-    frame coordinates before calling this function.
+    Purpose:
+        Draw bounding boxes, type labels, and confidence scores on a copy of canvas
+        Uses bounding_box for debugging purposes
     """
     vis = canvas.copy()
     for d in detections:
@@ -461,57 +484,69 @@ def draw_fusion_overlay(
     return vis
 
 
-# ---------------------------------------------------------------------------
-# Test harness
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Testing
+# ============================================================================
 
 if __name__ == "__main__":
     """
-    Standalone test harness using mocked branch outputs.
+    Standalone Test
 
-    Mocked inputs cover:
+    Mocks an expected result from frames
       - Frame with all three detection types present
-      - Frame with conflicting traffic-light colors (TL-1 suppression)
-      - Frame with multiple stop-sign candidates (SS-1 suppression)
+      - Frame with conflicting traffic-light colors (TL-1 suppressions)
+      - Frame with multiple stop-sign candidates (SS-1 suppressions)
       - Frame with multiple lane boundaries (LB-1 all forwarded)
       - Frame with no candidates (empty output)
       - Frame with an invalid confidence value (F2 discard)
 
     Each mock frame produces:
-      sN/results/fusion_fN_summary.txt   — debug summary text
-      sN/results/fusion_fN_overlay.png   — bounding box overlay on blank canvas
+      - *_roi_traffic.png
+      - *_roi_lane.png
+      - *_roi_sign.png
 
-    When real ROI images are available in trackT3/results/, the harness loads
-    the first available *_roi_traffic.png, *_roi_lane.png, *_roi_sign.png
-    as canvases for the overlay. Falls back to a blank canvas if not found.
+    Output directory: 
+        vision_stack/frames/mock/results/
 
-    Output directory: vision_stack/frames/trackT3/results/
-    (all mock frames written to trackT3 only; they are not image-specific)
+    Note:
+        When real ROI images are available in trackT3/results/, the harness loads
+        the first available *_roi_traffic.png, *_roi_lane.png, *_roi_sign.png
+        as canvases for the overlay.
+        Otherwise, it falls back to a blank canvas
     """
     import os
 
-    OUTPUT_DIR = "vision_stack/frames/trackT3/results"
+    OUTPUT_DIR = "vision_stack/frames/mock/results"
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # ------------------------------------------------------------------
+    # =============================================================================
     # Mock candidate factory helpers
-    # ------------------------------------------------------------------
+    # =============================================================================
     def _tl(label, bbox, conf, fid=0, ts=1000):
+        """
+        Mock traffic light candidate
+        """
         return _TrafficLightCandidate(label=label, bbox=bbox, confidence=conf,
                                       frame_id=fid, timestamp_ms=ts)
 
     def _lane(bbox, conf, fid=0, ts=1000):
+        """
+        Mock lane boundary candidate
+        """
         return _LaneCandidate(label="lane_boundary", bbox=bbox, contour=None,
                                confidence=conf, frame_id=fid, timestamp_ms=ts)
 
     def _sign(bbox, conf, verts=8, fid=0, ts=1000):
+        """
+        Mock stop sign candidate
+        """
         return _SignCandidate(label="stop_sign", bbox=bbox, contour=None,
                                vertex_count=verts, confidence=conf,
                                frame_id=fid, timestamp_ms=ts)
 
-    # ------------------------------------------------------------------
-    # Mock frame definitions
-    # ------------------------------------------------------------------
+    # =============================================================================
+    # Mock Frames
+    # =============================================================================
     mock_frames = [
         {
             "name":     "f0_all_present",
@@ -561,9 +596,9 @@ if __name__ == "__main__":
         },
     ]
 
-    # ------------------------------------------------------------------
+    # =============================================================================
     # Try to find a real ROI image for canvas; fall back to blank
-    # ------------------------------------------------------------------
+    # =============================================================================
     def _load_canvas(results_dir, suffix, fallback_shape=(240, 320, 3)):
         if os.path.isdir(results_dir):
             for f in sorted(os.listdir(results_dir)):
@@ -575,9 +610,9 @@ if __name__ == "__main__":
 
     canvas = _load_canvas(OUTPUT_DIR, "_roi_lane.png")
 
-    # ------------------------------------------------------------------
-    # Run mock frames
-    # ------------------------------------------------------------------
+    # =============================================================================
+    # Run Mock Frames
+    # =============================================================================
     for i, frame in enumerate(mock_frames):
         ts_ms = int(time.time() * 1000) + i * 33
 
@@ -594,7 +629,7 @@ if __name__ == "__main__":
             ),
         )
 
-        # Debug summary text
+        # Debug summary
         txt_path = os.path.join(OUTPUT_DIR, f"fusion_{frame['name']}_summary.txt")
         with open(txt_path, "w") as f:
             f.write(f"Frame:      {summary['frame_id']}\n")
@@ -614,7 +649,7 @@ if __name__ == "__main__":
             for entry in summary["log"]:
                 f.write(f"  {entry}\n")
 
-        # Overlay visualisation
+        # Overlay visualization
         vis = draw_fusion_overlay(canvas, detections, title=frame["name"])
         img_path = os.path.join(OUTPUT_DIR, f"fusion_{frame['name']}_overlay.png")
         cv2.imwrite(img_path, vis)

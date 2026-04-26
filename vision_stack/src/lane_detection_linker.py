@@ -37,7 +37,7 @@ from typing import Optional, List
 # Stage imports
 # ---------------------------------------------------------------------------
 
-from preprocess import preprocess_frame, load_calibration, build_undistort_maps
+from preprocess import preprocess_frame
 from roi_crop import crop_rois, draw_roi_overlay, ROICropResult
 from color_branch import (
     extract_traffic_light_candidates,
@@ -77,15 +77,11 @@ CALIBRATION_HSV_DUMMY    = "vision_stack/dummy/dummy_hsv_ranges.json"
 @dataclass
 class S1S5Config:
     """
-    Calibration data and tunable parameters for Stages 1–5.
+    Calibration data and tunable parameters for Stages 1-5.
 
     Stages 6 and 7 have no config here — they are not yet connected.
     When they are added, extend this dataclass rather than creating a new one.
     """
-    camera_matrix:        np.ndarray
-    dist_coeffs:          np.ndarray
-    undistort_map1:       np.ndarray
-    undistort_map2:       np.ndarray
     hsv_ranges:           HSVRanges
     blob_filter:          BlobFilter
     canny_params:         CannyParams
@@ -102,18 +98,6 @@ def load_config() -> S1S5Config:
     Falls back to dummy calibration files if real ones are not present.
     Homography is intentionally not loaded here — Stage 6 is not connected.
     """
-    if os.path.exists(CALIBRATION_CAMERA):
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA)
-        print(f"[CONFIG] Camera calibration loaded from {CALIBRATION_CAMERA}")
-    else:
-        print(
-            f"[CONFIG] WARNING: {CALIBRATION_CAMERA} not found. "
-            "Using dummy calibration — undistortion is a no-op."
-        )
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA_DUMMY)
-
-    map1, map2 = build_undistort_maps(camera_matrix, dist_coeffs, image_size=(640, 480))
-
     if os.path.exists(CALIBRATION_HSV):
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV)
         print(f"[CONFIG] HSV ranges loaded from {CALIBRATION_HSV}")
@@ -125,10 +109,6 @@ def load_config() -> S1S5Config:
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV_DUMMY)
 
     return S1S5Config(
-        camera_matrix        = camera_matrix,
-        dist_coeffs          = dist_coeffs,
-        undistort_map1       = map1,
-        undistort_map2       = map2,
         hsv_ranges           = hsv_ranges,
         blob_filter          = BlobFilter(),
         canny_params         = CannyParams(),
@@ -146,7 +126,7 @@ def load_config() -> S1S5Config:
 @dataclass
 class S1S5Result:
     """
-    Output of the S1–S5 pipeline.
+    Output of the S1-S5 pipeline.
 
     detections and roi_result are the inputs Stage 6 will need.
     Everything else is timing and debug data.
@@ -204,11 +184,8 @@ def run_s1_to_s5(
     t = time.time()
     conditioned = preprocess_frame(
         frame                = frame,
-        camera_matrix        = cfg.camera_matrix,
-        dist_coeffs          = cfg.dist_coeffs,
         gaussian_kernel_size = cfg.gaussian_kernel_size,
         gaussian_sigma       = cfg.gaussian_sigma,
-        undistort_maps       = (cfg.undistort_map1, cfg.undistort_map2),
     )
     times["s1_preprocess"] = (time.time() - t) * 1000
 

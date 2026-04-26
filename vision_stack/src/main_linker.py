@@ -85,7 +85,7 @@ from typing import Optional
 # ---------------------------------------------------------------------------
 
 # [1] Preprocessing
-from preprocess import preprocess_frame, load_calibration, build_undistort_maps
+from preprocess import preprocess_frame
 
 # [2] ROI cropping
 from roi_crop import crop_rois, draw_roi_overlay, ROICropResult
@@ -150,10 +150,6 @@ class PipelineConfig:
     gaussian_kernel_size:       Passed to preprocess_frame.
     gaussian_sigma:             Passed to preprocess_frame.
     """
-    camera_matrix:       np.ndarray
-    undistort_map1: np.ndarray
-    undistort_map2: np.ndarray
-    dist_coeffs:         np.ndarray
     hsv_ranges:          HSVRanges
     homography:          Optional[HomographyData]
     blob_filter:         BlobFilter
@@ -187,19 +183,6 @@ def load_pipeline_config() -> PipelineConfig:
 
     Returns PipelineConfig.
     """
-    # --- Camera intrinsics ---------------------------------------
-    if not os.path.exists(CALIBRATION_CAMERA):
-        print(
-            f"[CONFIG] WARNING: camera_matrix.npz not found at {CALIBRATION_CAMERA}. "
-            "Loading dummy calibration — undistortion will be a no-op."
-        )
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA_DUMMY)
-    else:
-        camera_matrix, dist_coeffs = load_calibration(CALIBRATION_CAMERA)
-        print(f"[CONFIG] Camera calibration loaded from {CALIBRATION_CAMERA}")
-
-    map1, map2 = build_undistort_maps(camera_matrix, dist_coeffs, image_size=(640, 480))
-
     # --- HSV ranges ----------------------------------------------
     if not os.path.exists(CALIBRATION_HSV):
         print(
@@ -226,10 +209,6 @@ def load_pipeline_config() -> PipelineConfig:
         )
 
     return PipelineConfig(
-        camera_matrix        = camera_matrix,
-        undistort_map1       = map1,
-        undistort_map2       = map2,
-        dist_coeffs          = dist_coeffs,
         hsv_ranges           = hsv_ranges,
         homography           = homography,
         blob_filter          = BlobFilter(),          # tune for production
@@ -278,11 +257,8 @@ def run_phase2_on_frame(
     t = time.time()
     conditioned = preprocess_frame(
         frame                = frame,
-        camera_matrix        = cfg.camera_matrix,
-        dist_coeffs          = cfg.dist_coeffs,
         gaussian_kernel_size = cfg.gaussian_kernel_size,
         gaussian_sigma       = cfg.gaussian_sigma,
-        undistort_maps       = (cfg.undistort_map1, cfg.undistort_map2),
     )
     times["preprocess"] = (time.time() - t) * 1000
 

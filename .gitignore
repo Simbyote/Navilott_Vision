@@ -22,6 +22,9 @@ video/
 /video
 *.avi
 
+/mock/
+**/mock/
+mock/
 /results/
 **/results/
 results/

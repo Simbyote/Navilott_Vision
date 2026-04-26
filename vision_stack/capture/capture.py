@@ -1,6 +1,13 @@
 import cv2
 import time
 
+"""
+    color space: YUV
+    Resolution: 480x360
+    Frame rate: 20 fps
+    Camera: IMX219
+    Buffers: 1
+"""
 pipeline = (
     "libcamerasrc ! "
     "video/x-raw,colorimetry=bt709,width=480,height=360,framerate=20/1 ! "
@@ -8,6 +15,8 @@ pipeline = (
     "videoflip method=rotate-180 ! "
     "appsink drop=true max-buffers=1 sync=false"
 )
+
+FRAME_RATE = 20
 
 cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
@@ -17,7 +26,7 @@ if not cap.isOpened():
 
 # Writer initialization 
 fourcc = cv2.VideoWriter_fourcc(*'XVID')
-out = cv2.VideoWriter('output.avi', fourcc, 20.0, (480, 360))
+out = cv2.VideoWriter('output.avi', fourcc, FRAME_RATE, (480, 360))
 
 count = 0
 start = time.time()
@@ -34,7 +43,7 @@ try:
         count += 1
         now = time.time()
 
-        if count % 30 == 0:
+        if count % FRAME_RATE == 0:
             elapsed = now - start
             fps = count / elapsed if elapsed > 0 else 0.0
             print(f"frames={count} fps={fps:.2f} shape={frame.shape}")
