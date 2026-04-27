@@ -3,172 +3,112 @@ feature_fusion.py
 
 Feature Fusion Stage
 
-
 Purpose:
     The color branch and geometry branch run independently and produce candidates
     in their own ROI coordinate spaces. Fusion has three responsibilities:
 
-    1. Normalize representation — convert all branch-specific candidate types
-        into the single Detection Object schema defined by Phase 2. This
-        decouples Phase 3 from knowing anything about branch internals.
+    1. Normalize representation: 
+        convert all branch-specific candidate types into the single Detection 
+        Object schema defined by Phase 2
 
-    2. Per-class conflict resolution — each detection class (traffic_light,
-        lane_boundary, stop_sign) may produce multiple candidates in a single
-        frame. Fusion selects or aggregates within each class according to
-        explicit rules. Candidates from different classes are never merged.
+    2. Per-class conflict resolution: 
+        each detection class could produce multiple candidates in a single
+        frame
+        fusion resolves conflicts between candidates of the same class according
+        to the rules defined below, and logs any discards or suppressions in
+        the debug summary
 
-    3. Assign position where available — lane_boundary candidates carry
-        bounding box centroids as (x, y) in ROI pixel coords. traffic_light
-        and stop_sign likewise. Position is recorded but is still in ROI-
-        relative coordinates at this stage; perspective transformation
-        (Step 6) converts lane positions to metric coordinates later.
+    3. Assign position where available: 
+        lane_boundary candidates carry bounding box centroids as (x, y) in 
+        ROI pixel coords. traffic_light and stop_sign likewise
 
-Nothing is discarded silently. Any candidate that does not survive conflict
-resolution is logged in the debug summary. Temporal filtering, navigation
-decisions, and perspective transformation are all downstream — not here.
+Any candidate that does not survive conflict resolution is logged in the debug summary
 
-Documented Phase 2 output contract (from pipeline.md)
-------------------------------------------------------
-{
-  "type":       "traffic_light | stop_sign | lane_boundary",
-  "position":   { "x": float, "y": float },
-  "confidence": float,
-  "timestamp":  int
-}
+Notes:
+    position is the centroid of the winning candidate's bounding box in ROI
+    pixel coordinates
 
-position is the centroid of the winning candidate's bounding box in ROI
-pixel coordinates (integer values stored as float). It is NOT yet in metric
-world coordinates — that conversion is the role of Step 6 (perspective
-transformation). At this stage, position is a valid intermediate output
-field, not debug-only data.
+    bounding_box is retained in the DetectionObject as an internal debug field
+    it is used only for the overlay visualization in this substage
 
-bounding_box is retained in the DetectionObject as an internal debug field.
-It is not part of the documented Phase 2 output contract and must not be
-forwarded to Phase 3 as a navigation input. It is used only for the overlay
-visualisation in this substage.
-
-Input contract
---------------
+Inputs:
   traffic_candidates : list[TrafficLightCandidate]
-      From color_branch.extract_traffic_light_candidates().
-      Fields used: label, bbox, confidence, frame_id, timestamp_ms
-      May be empty.
+      From color_branch.extract_traffic_light_candidates()
+      Fields used: 
+        label, bbox, confidence, frame_id, timestamp_ms
+      can be empty
 
   lane_candidates : list[LaneCandidate]
-      From geometry_branch.extract_lane_candidates().
-      Fields used: label, bbox, confidence, frame_id, timestamp_ms
-      May be empty.
+      From geometry_branch.extract_lane_candidates()
+      Fields used: 
+        label, bbox, confidence, frame_id, timestamp_ms
+      can be empty
 
   sign_candidates : list[SignCandidate]
-      From geometry_branch.extract_sign_candidates().
+      From geometry_branch.extract_sign_candidates()
       Fields used: label, bbox, confidence, vertex_count, frame_id, timestamp_ms
-      May be empty.
+      Can be empty
 
   frame_id : int
-      From capture loop. Used if candidate lists are empty (no frame_id
-      available from candidates directly).
+    from capture loop
+    used if candidate lists are empty
 
   timestamp_ms : int
-      From capture loop. Same fallback purpose.
+      from capture loop. Same fallback purpose
 
-  source_rois : SourceROIInfo  (optional)
-      Holds the shape of each ROI so that bounding-box centroids can be
-      computed correctly. If None, position fields are set to (0.0, 0.0)
-      and a warning is emitted. This is a debug degradation, not a crash.
+  source_rois : SourceROIInfo 
+      holds the shape of each ROI so that bounding-box centroids can be
+      computed correctly
 
-Output contract
----------------
+Outputs:
   list[DetectionObject]
 
   Each DetectionObject:
-      .type         str    — "traffic_light" | "stop_sign" | "lane_boundary"
-      .position     dict   — {"x": float, "y": float} — centroid in ROI px coords
-      .confidence   float  — [0.0, 1.0]
-      .timestamp    int    — timestamp_ms
+      .type: "traffic_light" | "stop_sign" | "lane_boundary"
+      .position: {"x": float, "y": float}; centroid in ROI px coords
+      .confidence: [0.0, 1.0]
+      .timestamp: timestamp_ms
 
-      .bounding_box tuple  — (x, y, w, h) INTERNAL DEBUG ONLY.
-                             Not forwarded to Phase 3. Used for overlay only.
-      .label_detail str    — sub-label from candidate ("red"|"yellow"|"green"
-                             for traffic_light; "lane_boundary"; "stop_sign")
-                             INTERNAL DEBUG ONLY.
+      .bounding_box (x, y, w, h) 
+            DEBUGGING ONLY
+      .label_detail: sub-label from candidate 
+            ("red"|"yellow"|"green" for traffic_light; "lane_boundary"; "stop_sign")
+            DEBUGGING ONLY
 
   The list contains at most one DetectionObject per class per frame:
-      - at most 1 traffic_light  (highest confidence among red/yellow/green)
-      - at most N lane_boundary  (all accepted lane candidates are kept;
-                                  no within-class suppression for lane lines
-                                  since multiple boundaries are valid)
-      - at most 1 stop_sign      (highest confidence)
+      - at most N lane_boundary
+      - at most 1 traffic_light
+      - at most 1 stop_sign
 
-  Empty list is a valid output (no detections this frame).
+  Empty list implies no detections
 
-Fusion logic rules
-------------------
+Fusion logic rules:
   TRAFFIC LIGHT
-    Rule TL-1: If candidates of multiple colors survive blob filtering in the
-               same frame, retain only the highest-confidence candidate.
-               Rationale: only one light can be active. Multiple surviving
-               color blobs indicate a false positive in at least one mask.
-    Rule TL-2: If confidence < 0.0 (malformed input), discard silently and
-               log in summary.
+    Rule TL-1: if candidates of multiple colors survive blob filtering in the
+               same frame, retain only the highest-confidence candidate
+               
+    Rule TL-2: if confidence < 0.0 due to a malformed input, discard and log in summary
 
   LANE BOUNDARY
     Rule LB-1: All lane candidates that survived the geometry branch filter
-               are forwarded. No within-class suppression. Multiple parallel
-               lane lines are a valid detection state.
-    Rule LB-2: Sort by confidence descending before emission so Phase 3
-               receives them in priority order.
+               are forwarded
+
+    Rule LB-2: Sort by confidence descending order, prioritizing higher-confidence first
 
   STOP SIGN
     Rule SS-1: If multiple sign candidates exist, retain only the
-               highest-confidence candidate.
-               Rationale: only one stop sign is expected at course exit.
-    Rule SS-2: If confidence < 0.0, discard and log.
+               highest-confidence candidate
+               
+    Rule SS-2: If confidence < 0.0, discard and log
 
-Labelling rules
----------------
-  - type field maps directly from candidate class:
-      TrafficLightCandidate  → "traffic_light"
-      LaneCandidate          → "lane_boundary"
-      SignCandidate          → "stop_sign"
-  - label_detail is the original .label field from the candidate (kept
-    internally for debug; Phase 3 consumes .type only).
-  - position is computed as bounding box centroid:
-      x = bbox_x + bbox_w / 2.0
-      y = bbox_y + bbox_h / 2.0
-  - timestamp is taken from the winning candidate's .timestamp_ms field.
-    If all candidate lists are empty, falls back to the timestamp_ms argument.
-
-Failure cases
--------------
-  F1 — All three candidate lists are empty:
-       Returns empty list. Valid output. Phase 3 handles no-detection frames.
-
-  F2 — Candidate with negative or >1.0 confidence:
-       Discarded with a log entry. Does not raise; pipeline continues.
-
-  F3 — source_rois is None:
-       position fields default to (0.0, 0.0). Warning printed. Not a crash.
-       The overlay visualisation will still draw bounding boxes correctly
-       (bbox is taken directly from the candidate).
-
-  F4 — frame_id mismatch across candidate lists:
-       Candidates from different lists may carry different frame_ids if the
-       pipeline branched asynchronously. fusion uses the frame_id argument
-       as the authoritative frame identifier for the output; candidate
-       frame_ids are not cross-checked here. That is Phase 3's concern.
-
-  F5 — Candidate bbox contains zero-width or zero-height:
-       Centroid computation is guarded; position falls back to (bbox_x, bbox_y).
-
-  F6 — More than one candidate per class with identical confidence:
-       The first candidate in the sorted order is selected. No tiebreaker
-       beyond sort stability is defined at this stage.
+timestamp is taken from the winning candidate's .timestamp_ms field
+If all candidate lists are empty, falls back to the timestamp_ms argument
 """
 
 import cv2
 import numpy as np
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 # =============================================================================
@@ -336,8 +276,8 @@ def fuse_detections(
         traffic_candidates : list[TrafficLightCandidate]
         lane_candidates    : list[LaneCandidate]
         sign_candidates    : list[SignCandidate]
-        frame_id           : authoritative frame identifier for this fusion call
-        timestamp_ms       : authoritative timestamp for this fusion call
+        frame_id           : frame identifier for this fusion call
+        timestamp_ms       : timestamp for this fusion call
         source_rois        : optional SourceROIInfo for context; None is accepted
 
     Outputs:
