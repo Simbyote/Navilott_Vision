@@ -17,7 +17,7 @@ Preprocess
    ▼
 ROI Crop
    │
-   ├──────── Color Branch ──── TrafficLightCandidates  ──┐
+   ├──────── Color Branch ──── TrafficLightCandidates ──┐
    │                                                     │
    └──────── Geometry Branch ── LaneCandidates ──────────┤
                                 SignCandidates ──────────┤
@@ -27,7 +27,7 @@ ROI Crop
                                                   DetectionObjects
                                                          │
                                                          ▼
-                                              Perspective Transform
+                                               Lane Offset Estimation
                                                          │
                                                          ▼
                                                   Phase2Output
@@ -47,22 +47,16 @@ Preprocessing conditions the raw camera frame before any spatial analysis occurs
 
 ### Operations
 
-#### Lens Undistortion
-
-Removes optical distortion introduced by the camera lens.
-
-```
-frame → undistorted_frame
-```
-
 #### Histogram Equalization
 
 Equalization is performed in YCrCb space so that intensity contrast improves while color information remains intact.
 
 ```
+YUV → BGR
 BGR → YCrCb
 equalize(Y channel)
 YCrCb → BGR
+BGR → YUV
 ```
 
 #### Gaussian Blur
@@ -78,7 +72,7 @@ GaussianBlur(kernel=(5,5))
 ```
 np.ndarray (H, W, 3)
 dtype: uint8
-color: BGR
+color: YUV
 ```
 
 ---
@@ -139,7 +133,7 @@ Detects traffic light states using HSV color segmentation.
 ### Pipeline
 
 ```
-BGR ROI
+YUV ROI
   ↓
 HSV conversion
   ↓
@@ -193,7 +187,7 @@ Detects lane boundaries and stop sign shapes using contour geometry.
 ### Pipeline
 
 ```
-BGR ROI
+YUV ROI
   ↓
 Grayscale conversion
   ↓
@@ -280,65 +274,64 @@ Position is the centroid of the bounding box.
 
 ---
 
-## Stage 5 — Perspective Transformation
+## Stage 5 — Lane Offset Estimation
 
-**File:** `perspective_transform.py`
+Computes the robot's normalized lateral offset from lane center using the
+pixel x-positions of lane boundary candidates produced by feature fusion
 
-Converts camera perspective coordinates into bird's-eye view coordinates using a homography matrix.
+### Computation
 
-### Why This Is Necessary
-
-In perspective space, parallel lines converge and pixel distances vary with depth. After homography, parallel lines remain parallel and pixel distance becomes uniform. This allows accurate lateral distance measurements.
-
-### Transformation Modes
-
-#### Mode A — Image Warp
+Lane boundary candidates are filtered to those meeting the confidence
+threshold. The highest-confidence left and right anchors are selected by
+x-position. Lane center is their midpoint. Offset is normalized to the lane
+half-width:
 
 ```
-warpPerspective(lane_roi)
+    lane_center = (left_x + right_x) / 2.0
+    offset      = (lane_center − frame_center) / (lane_width_px / 2.0)
+    offset      = clamp(offset, −1.0, +1.0)
 ```
 
-Produces a top-down lane image.
+A positive offset means the robot is left of lane center. A negative offset
+means the robot is right of lane center
+
+### Detection Modes
+
+| Mode             | Condition                                      | Offset source                        |
+|------------------|------------------------------------------------|--------------------------------------|
+| `two_boundary`   | Left and right anchors detected                | Midpoint formula above               |
+| `left_only`      | Only left boundary detected                    | Inferred from left anchor position   |
+| `right_only`     | Only right boundary detected                   | Inferred from right anchor position  |
+| `width_rejected` | Boundary span below `min_lane_width_px`        | Midpoint used; anchors discarded     |
+| `none`           | No candidates above confidence threshold       | offset = 0.0; Phase 3 uses fallback  |
+
+Phase 3 reads `mode` to determine whether to trust `offset` directly or
+substitute a dead-reckoned estimate from EMA and IMU integration.
+
+### Output
 
 ```
-WarpResult
-    warped_image
-    homography
-    source_shape
+LaneOffsetResult
+    offset           float    normalized [−1.0, +1.0]; 0.0 = centered
+    left_x           float?   pixel x of left boundary anchor; None if absent
+    right_x          float?   pixel x of right boundary anchor; None if absent
+    lane_width_px    float?   pixel distance between anchors; None if not two_boundary
+    confidence       float    mean confidence of anchor candidates
+    boundary_count   int      total lane_boundary detections this frame
+    mode             str      detection mode (see table above)
+    frame_id         int
+    timestamp        int
 ```
-
-#### Mode B — Point Transform
-
-Transforms individual points instead of the entire image.
-
-```
-transform_points(points)
-```
-
-```
-PointTransformResult
-    transformed_points
-    source_points
-    homography
-```
-
----
-
-## Stage 6 — Phase 2 Output Packaging
-
-**File:** `phase2_output.py`
-
-Final stage of Phase 2. No computation occurs here. This stage packages all detection outputs into a single container.
 
 ### Output Object
 
 ```
 Phase2Output
-    detections
-    transformed_coords
-    frame_id
-    timestamp_ms
-    detection_count
+    detections       list[DetectionObject]
+    lane_offset      LaneOffsetResult
+    frame_id         int
+    timestamp_ms     int
+    detection_count  int
 ```
 
 ### Detection List
@@ -349,58 +342,61 @@ list[DetectionObject]
 
 May be empty if no detections occur in a frame.
 
-### Transformed Coordinates
+### Lane Offset
 
-Optional structure containing bird's-eye information.
+The `lane_offset` field carries the `LaneOffsetResult` from Stage 5. It is
+always populated — if no boundary candidates were detected, `mode` will be
+`"none"` and `offset` will be `0.0`. Phase 3 must check `mode` before
+using `offset` as a steering signal.
 
-```
-TransformedCoords
-    warped_image
-    transformed_points
-    source_points
-    output_width
-    output_height
-```
+### Phase 2 -> Phase 3 Interface
 
-At least one of `warped_image` or `transformed_points` must be non-`None`.
+The final output handed to navigation is `Phase2Output`, which provides
+structured detections, a lane offset estimate, and frame metadata.
+
+Phase 3 reads `lane_offset.offset` directly as the steering error signal
+into the PID controller. Before using the value, Phase 3 checks
+`lane_offset.mode` — if `mode` is `"none"` or `"width_rejected"`, the
+offset is unreliable and Phase 3 substitutes a dead-reckoned estimate
+from the exponential moving average and IMU yaw integration.
+
+Phase 3 then performs temporal filtering, confidence thresholding, and
+navigation state estimation.
+
+### Zero 2 W Frame Budget
+
+Operating point: 480×360 @ 20 FPS (50 ms budget)
+
+| Stage                     | Time (ms) |
+|---------------------------|-----------|
+| Capture + buffer load     | ~1–2      |
+| Preprocess                | ~5        |
+| ROI crop                  | <1        |
+| Color branch              | ~4        |
+| Geometry branch           | ~8        |
+| Feature fusion            | ~2        |
+| Lane offset estimation    | <1        |
+| Output packaging          | <1        |
+| Phase 3 filtering         | ~3        |
+|---------------------------|-----------|
+| Total estimate            | ~24 ms    |
+
+Headroom against the 50 ms budget is approximately 26 ms under normal
+conditions. Histogram equalization dominates when enabled (~35 ms
+additional) and is the highest-impact toggle for recovering frame budget.
+The geometry branch (Canny + contour extraction) is the largest fixed cost
+at approximately 8 ms and is the correct target if further reduction is
+needed without disabling equalization.
 
 ---
-
-## Phase 2 → Phase 3 Interface
-
-The final output handed to navigation is `Phase2Output`, which provides structured detections, optional bird's-eye geometry, and frame metadata.
-
-Phase 3 then performs temporal filtering, lane center estimation, and navigation control.
-
----
-
-## Zero 2 W Frame Budget
-
-| Stage                   | Time (ms)           |
-|-------------------------|---------------------|
-| Capture + buffer load   | ~1-2                |
-| Preprocess              | ~3-5                |
-| ROI crop                | <1                  |
-| Color + Geometry branch | ~8-12               |
-| Feature fusion          | ~1-2                |
-| Perspective transform   | ~3-5                |
-| Output packaging        | <1                  |
-| Phase 3 filtering       | ~3-5                |
-|-------------------------|---------------------|
-| Total estimate          | ~20-26 (at 640x480) |
-
-Considering thermal throttling under a sustained load, remaining headroom drops
-significantly. Consider alternatives to save on frame budget.
 
 ## Summary
 
 Phase 2 converts a raw camera frame into structured perception outputs using six stages:
 
-1. **Image conditioning** — undistortion, equalization, blur
-2. **Region-of-interest segmentation** — three ROIs for parallel processing
-3. **Parallel feature detection** — color branch (HSV) and geometry branch (Canny + contours)
-4. **Feature fusion** — conflict resolution and schema normalisation
-5. **Perspective transformation** — homography to bird's-eye coordinates
+1. **Image conditioning** - equalization, blur
+2. **Region-of-interest segmentation** - three ROIs for parallel processing
+3. **Parallel feature detection** - color branch (HSV) and geometry branch (Canny + contours)
+4. **Feature fusion** - conflict resolution and schema normalization
+5. **Lane offset estimation** - lateral offset from lane center
 6. **Output packaging** — single container handed to Phase 3
-
-The pipeline is deterministic, modular, and designed for predictable runtime behavior on resource-constrained hardware.

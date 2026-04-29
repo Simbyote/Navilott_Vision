@@ -537,7 +537,7 @@ if __name__ == "__main__":
     ]
 
     # =============================================================================
-    # Try to find a real ROI image for canvas; fall back to blank
+    # Try to find a real ROI image for canvas - fall back to blank
     # =============================================================================
     def _load_canvas(results_dir, suffix, fallback_shape=(240, 320, 3)):
         if os.path.isdir(results_dir):

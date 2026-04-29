@@ -149,7 +149,7 @@ def run_s1_to_s6(
     stem:         str           = "frame",
 ) -> S1S6Result:
     """
-    Run Stages 1–6 on a single BGR frame.
+    Run Stages 1-6 on a single BGR frame.
 
     Parameters
     ----------

@@ -324,7 +324,6 @@ SAMPLE_DIRS = [
 ]
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
-
 if __name__ == "__main__":
     try:
         cfg = load_config()
