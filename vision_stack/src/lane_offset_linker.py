@@ -1,17 +1,19 @@
 """
-phase2_linker_s1s6.py
-=====================
+lane_offset_linker.py
+
 Phase 2 Pipeline — Stages 1 through 6.
 
 Adds Stage 6 (lane offset estimation) to the S1-S5 chain.
 Stage 7 (output packaging) remains stubbed.
 
 Stage 6 replaces the perspective transform with a direct pixel-based
-lateral offset computation. No homography or calibration file required.
+lateral offset computation
+
+@TODO: Add the final output packaging stage (Phase2Output) and connect it to the Phase 3 entry point.
 
 Usage
 -----
-  python phase2_linker_s1s6.py
+  python lane_offset_linker.py
 
 To use as a module:
   from phase2_linker_s1s6 import load_config, run_s1_to_s6
@@ -55,26 +57,30 @@ from feature_fusion import (
 from lane_offset import compute_lane_offset, LaneOffsetResult   # Stage 6
 
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Calibration file paths
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 CALIBRATION_HSV          = "vision_stack/calibration/hsv_ranges.json"
 CALIBRATION_HSV_DUMMY    = "vision_stack/dummy/dummy_hsv_ranges.json"
 
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Config
-# ---------------------------------------------------------------------------
+# =============================================================================
 
 @dataclass
 class S1S6Config:
     """
-    Calibration data and tunable parameters for Stages 1-6.
+    Calibration data and tunable parameters for Stages 1-6
 
-    lane_offset_conf_threshold : minimum candidate confidence for Stage 6.
-        Candidates below this are excluded from offset anchor selection.
-        Default 0.30 gates out the low-confidence noise tail. Lower if the
-        robot loses lane center in frames where best candidates sit ~0.25.
+    hsv_ranges: HSVRanges for color branch masks
+    blob_filter: BlobFilter parameters for color branch candidate extraction
+    canny_params: CannyParams for geometry branch edge detection
+    lane_filter: LaneContourFilter parameters for geometry branch lane contour filtering
+    sign_filter: SignContourFilter parameters for geometry branch sign contour filtering
+    gaussian_kernel_size: kernel size for initial Gaussian blur in Stage 1
+    gaussian_sigma: sigma for initial Gaussian blur in Stage 1
+    lane_offset_conf_threshold: confidence threshold for including detections in lane offset computation
     """
     hsv_ranges:                HSVRanges
     blob_filter:               BlobFilter
@@ -84,7 +90,6 @@ class S1S6Config:
     gaussian_kernel_size:      tuple = (5, 5)
     gaussian_sigma:            float = 0.0
     lane_offset_conf_threshold: float = 0.30
-
 
 def load_config() -> S1S6Config:
     if os.path.exists(CALIBRATION_HSV):
@@ -108,38 +113,34 @@ def load_config() -> S1S6Config:
         lane_offset_conf_threshold = 0.30,
     )
 
-
-# ---------------------------------------------------------------------------
-# Result container
-# ---------------------------------------------------------------------------
+# =============================================================================
+# Result Container
+# =============================================================================
 
 @dataclass
 class S1S6Result:
     """
     Output of the S1-S6 pipeline.
 
-    Phase 3 consumes:
-        lane_offset   — primary steering error signal
-        detections    — full detection list (traffic light, stop sign pass-through)
-        frame_id, timestamp_ms
-
-    Stage 7 (output packaging) receives:
-        detections + lane_offset + frame_id + timestamp_ms
-        → Phase2Output (not yet connected)
+    detections: list of DetectionObject from feature fusion
+    lane_offset: LaneOffsetResult from Stage 6
+    roi_result: ROICropResult from Stage 2
+    frame_id: frame identifier from capture loop
+    timestamp_ms: timestamp from capture loop
+    times: dict of stage execution times in milliseconds
+    fusion_log: optional list of log entries from feature fusion stage
     """
     detections:   List[DetectionObject]
-    lane_offset:  LaneOffsetResult        # Stage 6 output — Phase 3 entry point
-    roi_result:   ROICropResult           # retained for debug overlay use
+    lane_offset:  LaneOffsetResult
+    roi_result:   ROICropResult
     frame_id:     int
     timestamp_ms: int
     times:        dict
     fusion_log:   List[str]
 
-
-# ---------------------------------------------------------------------------
+# =============================================================================
 # Per-frame executor
-# ---------------------------------------------------------------------------
-
+# =============================================================================
 def run_s1_to_s6(
     frame:        np.ndarray,
     frame_id:     int,
@@ -149,26 +150,25 @@ def run_s1_to_s6(
     stem:         str           = "frame",
 ) -> S1S6Result:
     """
-    Run Stages 1-6 on a single BGR frame.
+    Purpose:
+        Run Stages 1-6 on a single YUV frame
 
-    Parameters
-    ----------
-    frame        : uint8 BGR from Phase 1 (or loaded from disk for dataset runs)
-    frame_id     : monotonic frame counter
-    timestamp_ms : capture timestamp in milliseconds
-    cfg          : S1S6Config from load_config()
-    debug_dir    : if set, write debug images here; None disables all disk writes
-    stem         : filename stem for debug outputs
+    Inputs:
+        frame: uint8 YUV from Phase 1
+        frame_id: monotonic frame counter
+        timestamp_ms: capture timestamp in milliseconds
+        cfg: S1S6Config from load_config()
+        debug_dir: if set, write debug images here; None disables all disk writes
+        stem: filename stem for debug outputs
 
-    Returns
-    -------
-    S1S6Result
+    Output:
+        S1S6Result
     """
     times = {}
 
-    # -------------------------------------------------------------------
-    # Stage 1 — Preprocessing
-    # -------------------------------------------------------------------
+    # =============================================================================
+    # Stage 1: Preprocessing
+    # =============================================================================
     t = time.time()
     conditioned = preprocess_frame(
         frame                = frame,
@@ -180,9 +180,9 @@ def run_s1_to_s6(
     if debug_dir:
         cv2.imwrite(os.path.join(debug_dir, f"{stem}_s1_preprocessed.png"), conditioned)
 
-    # -------------------------------------------------------------------
-    # Stage 2 — ROI Crop
-    # -------------------------------------------------------------------
+    # =============================================================================
+    # Stage 2: ROI Crop
+    # =============================================================================
     t = time.time()
     roi_result: ROICropResult = crop_rois(conditioned, frame_id=frame_id)
     times["s2_roi_crop"] = (time.time() - t) * 1000
@@ -199,9 +199,9 @@ def run_s1_to_s6(
         cv2.imwrite(os.path.join(debug_dir, f"{stem}_s2_roi_sign.png"),
                     roi_result.sign_roi.copy())
 
-    # -------------------------------------------------------------------
-    # Stage 3 — Color Branch
-    # -------------------------------------------------------------------
+    # ============================================================================
+    # Stage 3: Color Branch
+    # ============================================================================
     t = time.time()
     traffic_candidates, color_debug = extract_traffic_light_candidates(
         roi          = roi_result.traffic_roi,
@@ -228,9 +228,9 @@ def run_s1_to_s6(
             draw_color_candidates(roi_result.traffic_roi, traffic_candidates),
         )
 
-    # -------------------------------------------------------------------
-    # Stage 4 — Geometry Branch
-    # -------------------------------------------------------------------
+    # ============================================================================
+    # Stage 4: Geometry Branch
+    # ============================================================================
     t = time.time()
     geo_result, lane_debug, sign_debug = run_geometry_branch(
         lane_roi     = roi_result.lane_roi,
@@ -249,9 +249,9 @@ def run_s1_to_s6(
         for key, img in sign_debug.items():
             cv2.imwrite(os.path.join(debug_dir, f"{stem}_s4_gb_sign_{key}.png"), img)
 
-    # -------------------------------------------------------------------
-    # Stage 5 — Feature Fusion
-    # -------------------------------------------------------------------
+    # =============================================================================
+    # Stage 5: Feature Fusion
+    # =============================================================================
     t = time.time()
     detections, fusion_summary = fuse_detections(
         traffic_candidates = traffic_candidates,
@@ -271,11 +271,11 @@ def run_s1_to_s6(
         with open(os.path.join(debug_dir, f"{stem}_s5_fusion_log.txt"), "w") as f:
             f.write("\n".join(fusion_summary["log"]))
 
-    # -------------------------------------------------------------------
-    # Stage 6 — Lane Offset Estimation
-    # frame_width is the lane ROI width, not the full frame width,
-    # because position.x values from fusion are in lane ROI coordinates.
-    # -------------------------------------------------------------------
+    # =============================================================================
+    # Stage 6: Lane Offset Estimation
+    # frame_width is the lane ROI width
+    # position.x values from fusion are in lane ROI coordinates
+    # ==============================================================================
     t = time.time()
     lane_roi_width = roi_result.lane_roi.shape[1]
     lane_offset: LaneOffsetResult = compute_lane_offset(
@@ -287,18 +287,17 @@ def run_s1_to_s6(
     )
     times["s6_lane_offset"] = (time.time() - t) * 1000
 
-    # -------------------------------------------------------------------
-    # Stage 7 — NOT YET CONNECTED
+    # =============================================================================
+    # Stage 7: NOT YET CONNECTED
     #
-    # Stage 7 stub: phase2_out.package_phase2_output(
-    #     detections, lane_offset, frame_id, timestamp_ms
-    # ) → Phase2Output
-    # -------------------------------------------------------------------
+    # Stage 7 stub: phase2_out.package_phase2_output
+    # (detections, lane_offset, frame_id, timestamp_ms) -> Phase2Output
+    # =============================================================================
 
-    if frame_id % 30 == 0:
+    if frame_id % 20 == 0:
         breakdown = "  ".join(f"{k}={v:.1f}ms" for k, v in times.items())
         total     = sum(times.values())
-        flag      = " *** OVER BUDGET ***" if total > 33.3 else ""
+        flag      = " *** OVER BUDGET ***" if total > 50.0 else ""
         print(f"[timing] frame={frame_id:04d}  {breakdown}  total={total:.1f}ms{flag}")
 
     return S1S6Result(
@@ -311,10 +310,9 @@ def run_s1_to_s6(
         fusion_log   = fusion_summary.get("log", []),
     )
 
-
-# ---------------------------------------------------------------------------
+# ==============================================================================
 # Dataset runner
-# ---------------------------------------------------------------------------
+# ==============================================================================
 
 SAMPLE_DIRS = [
     "vision_stack/frames/trackT3",

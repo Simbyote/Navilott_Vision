@@ -276,6 +276,8 @@ Position is the centroid of the bounding box.
 
 ## Stage 5 — Lane Offset Estimation
 
+**File:** `lane_offset.py`
+
 Computes the robot's normalized lateral offset from lane center using the
 pixel x-positions of lane boundary candidates produced by feature fusion
 
