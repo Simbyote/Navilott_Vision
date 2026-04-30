@@ -144,7 +144,7 @@ def _to_grayscale(
     ) -> np.ndarray:
     """
     Purpose:
-        Convert YUV image to grayscale
+        Convert image to grayscale
     """
     roi_bgr = cv2.cvtColor(roi, cv2.COLOR_YUV2BGR)
     return cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
