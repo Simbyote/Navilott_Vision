@@ -1,8 +1,5 @@
 # Vision Processing Pipeline — Phase 2
 
-> **Document version:** v2 (current implementation)
-> Previous version (homography-based perspective transform, BGR frame format) archived as `phase2_pipeline_v1.md`.
-
 This document describes the Phase 2 perception pipeline used in the Navilott vision system. Phase 2 converts a raw camera frame into structured detections and geometric information for use by the navigation system in Phase 3.
 
 The pipeline is implemented as a series of deterministic processing stages with explicit input/output contracts.
@@ -137,8 +134,6 @@ Detects traffic light states using HSV color segmentation.
 
 ```
 YUV ROI
-  ↓
-BGR conversion
   ↓
 HSV conversion
   ↓

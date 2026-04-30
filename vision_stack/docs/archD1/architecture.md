@@ -43,8 +43,7 @@ PWM.
 
 **Implementation notes:**
 
-- Use `pigpio` daemon instead of `RPi.GPIO`. It drives PWM via DMA, which is significantly more timing-stable than software PWM
-from Python.
+- Use `pigpio` daemon instead of `RPi.GPIO`. It drives PWM via DMA, which is significantly more timing-stable than software PWM from Python.
 - Run the PID loop in a dedicated high-priority Python thread, separated from the perception loop.
 - Set the perception thread and motor thread to different `os.nice()` priorities to reduce scheduler contention.
 - Accept that motor timing will not be deterministic — Linux scheduler preemption can introduce 5–20 ms hiccups under CPU load.
@@ -102,9 +101,9 @@ Types:
 | Factor               | Impact                                                                                                                                |
 |----------------------|---------------------------------------------------------------------------------------------------------------------------------------|
 | Linux is not an RTOS | The Pi OS scheduler can preempt any Python thread with no timing guarantee. A PID loop in Python can jitter by 5–20 ms unpredictably. |
-| Hardware PWM on MCU  | MCU generates PWM signals in dedicated hardware timers with zero CPU cost and zero jitter.                                            |
+| Hardware PWM on MCU  | MCU generates PWM signals in dedicated hardware timers — zero CPU cost, zero jitter.                                                  |
 | Perception isolation | Motor control failures cannot crash the perception process, and vice versa.                                                           |
-| Cost                 | STM32F103  ~$2–3. Arduino Nano ~$3–5. Negligible addition to BOM?                                                                     |
+| Cost                 | STM32F103 ("Blue Pill") ~$2–3. Arduino Nano ~$3–5. Negligible addition to BOM.                                                        |
 
 ---
 
@@ -125,43 +124,25 @@ Types:
 
 ## Control Loop Timing
 
-End-to-end timing from frame capture to motor command output. Operating point: 480×360 @ ~20 FPS (50 ms budget per frame).
+End-to-end timing from frame capture to motor command output. All stages must complete within the 33.3 ms frame budget.
 
-### Option A: Pi Only
-
-```
-Frame capture → Preprocessing → Feature Extraction → Detection → Fusion → Lane Offset → State Estimation
-        │  ~26 ms (same as above)
-        ▼
-Python PID loop (same process or high-priority thread)
-        │  ~1–2 ms
-        ▼
-pigpio DMA PWM output
-        │  ~1 ms
-        ▼
-Motor response
-─────────────────────────────────────
-Total budget:   ~28 ms  ✓ on average against 50 ms budget
-Jitter risk:    OS scheduler can add 5–20 ms unpredictably
-```
-
-### Option B: Pi + MCU
+### Option A: Pi + MCU
 
 ```
 Frame capture (GStreamer appsink)
         │  ~1–2 ms
         ▼
-Preprocessing (YCrCb histogram equalization &  Gaussian blur; undistortion optional)
-        │  ~8 ms
+Preprocessing (undistortion, equalization, ROI crop)
+        │  ~3–5 ms
         ▼
 Feature Extraction (HSV threshold + Canny + contours)
-        │  ~28 ms
+        │  ~8–12 ms
         ▼
-Detection & Feature Fusion + Lane Offset Estimation
-        │  ~3 ms
+Detection & Feature Fusion
+        │  ~3–5 ms
         ▼
 Phase 3 Filtering & State Estimation
-        │  ~3 ms
+        │  ~2–3 ms
         ▼
 UART packet transmission (~20 bytes @ 115200 baud)
         │  ~2 ms
@@ -171,13 +152,30 @@ MCU receives packet → PID update → PWM output
         ▼
 Motor response
 ─────────────────────────────────────
-Total Pi budget:   ~48 ms (target ≤ 50 ms at ~20 FPS)
+Total Pi budget:   ~19–27 ms   (target ≤ 33.3 ms)
 MCU PID loop:      1 kHz independent of Pi cycle
 ```
 
-> **Note:** Histogram equalization dominates preprocessing (~5 ms). If undistortion is enabled it adds additional overhead and must be evaluated against the frame budget before committing.
+### Option B: Pi Only
 
-**Key difference:** In Option A the Pi PID loop runs at 1 kHz regardless of frame rate. In Option B, the MCU PID loop runs at 1 kHz regardless of frame rate.
+```
+Frame capture → Preprocessing → Feature Extraction → Detection → Fusion → State Estimation
+        │  ~19–27 ms (same as above)
+        ▼
+Python PID loop (same process or high-priority thread)
+        │  ~1–2 ms
+        ▼
+pigpio DMA PWM output
+        │  ~1 ms
+        ▼
+Motor response
+─────────────────────────────────────
+Total budget:   ~21–30 ms   on average
+Jitter risk:    OS scheduler can add 5–20 ms unpredictably
+```
+
+**Key difference:** In Option A the MCU PID loop runs at 1 kHz continuously regardless of Pi frame rate. In Option B, motor updates only happen when the Pi completes a
+full perception cycle.
 
 ---
 
@@ -212,7 +210,7 @@ Three approaches are available if contention becomes a measured problem:
 ```
 
 - True parallel execution across Pi's 4 cores
-- IPC overhead (Unix socket or `multiprocessing.Queue`) is ~0.1–0.5 ms per packet. This is negligible against the 50 ms budget
+- IPC overhead (Unix socket or `multiprocessing.Queue`) is ~0.1–0.5 ms per packet. This is negligible against 33.3 ms budget
 - **Caveat:** Two Python + OpenCV interpreter instances may consume 160–240 MB RAM combined. On 512 MB this needs to be profiled before committing to this approach.
 
 ---
@@ -256,12 +254,12 @@ In this configuration CPU contention becomes largely a non-issue and no software
 
 ### When should mitigation be applied?
 
-Profile before restructuring. Run the full pipeline under the CPU & Memory Observation benchmark (see [Benchmark & Testing Reference](development.md#benchmark--testing-reference)) with both perception and navigation active. If average CPU stays below 70% and per-frame timing stays under 50 ms, no mitigation is needed.
+Profile before restructuring. Run the full pipeline under the CPU & Memory Observation benchmark (see [Benchmark & Testing Reference](development.md#benchmark--testing-reference)) with both perception and navigation active. If average CPU stays below 70% and per-frame timing stays under 33.3 ms, no mitigation is needed.
 
 | Observation                         | Action                                         |
 |-------------------------------------|------------------------------------------------|
 | Avg CPU < 70%, no timing violations | No change needed                               |
-| Occasional spikes > 50 ms           | Try Option 2 (time-slicing) first              |
+| Occasional spikes > 33.3 ms         | Try Option 2 (time-slicing) first              |
 | Consistent timing violations        | Try Option 1 (separate processes), profile RAM |
 | RAM pressure + timing violations    | Adopt Pi + Pico (Option 3)                     |
 
@@ -278,13 +276,13 @@ manage on a constrained autonomous system.
 
 ### Alternative 1: Classical CV (Current Target Approach)
 
-The pipeline as documented is: HSV thresholding, Canny edge detection, contour extraction, pixel-based lane offset estimation. Runs entirely on-device with no external dependencies.
+The pipeline as documented — HSV thresholding, Canny edge detection, contour extraction, homography. Runs entirely on-device with no external dependencies.
 
 **Note:** Most failure modes in classical CV are tuning problems, not fundamental capability limits:
 
-- Poor detection under varied lighting: tune HSV ranges per lighting condition, add histogram equalization
-- Fragile contour detection: adjust Canny thresholds, add morphological operations (dilation/erosion) to clean up edges
-- High false positive rate: tighten ROI crop, add blob size filtering, increase confidence threshold in Phase 3
+- Poor detection under varied lighting → tune HSV ranges per lighting condition, add histogram equalization
+- Fragile contour detection → adjust Canny thresholds, add morphological operations (dilation/erosion) to clean up edges
+- High false positive rate → tighten ROI crop, add blob size filtering, increase confidence threshold in Phase 3
 
 RAM usage is low and latency is predictable. This is the correct solution for this hardware class if it can be made to work.
 
@@ -300,9 +298,9 @@ Zero 2 W within the latency budget. TensorFlow lite would replace the object det
 
 ```
 
-Classical CV pipeline (lanes, edges)        <- keep as-is
+Classical CV pipeline (lanes, edges)        ← keep as-is
         +
-TFLite model (stop signs, traffic lights)   <- targeted replacement only
+TFLite model (stop signs, traffic lights)   ← targeted replacement only
         |
         v
 Feature Fusion (Phase 2) — unchanged

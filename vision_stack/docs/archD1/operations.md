@@ -18,16 +18,14 @@
 
 Calibration files should be version-controlled alongside source code. If a threshold change breaks detection, you need to be able to roll back.
 
-### Step 1 — Camera Intrinsic Calibration *(Optional)*
+### Step 1 — Camera Intrinsic Calibration
 
-Generates the camera matrix and distortion coefficients for the undistortion step in Phase 2.
-
-> **Status:** The IMX219 exhibits modest barrel distortion. Because the pipeline uses pixel-based (non-metric) lateral offset, undistortion has limited practical benefit in the center lane ROI. Run a comparative test — pipeline output with and without undistortion on the same course frames — before deciding whether to enable this step in production. If the comparison shows no measurable improvement in offset stability, skip undistortion to recover the per-frame compute cost.
+Generates the camera matrix and distortion coefficients used by the undistortion stage in Phase 2.
 
 1. Print or display a checkerboard calibration pattern (recommended: 9×6 inner corners)
 2. Capture 20–30 images of the pattern at varied angles, distances, and positions across the frame
 3. Run OpenCV `calibrateCamera()` to compute the camera matrix and distortion coefficients
-4. Save output to `calibration/camera_matrix.npz` — loaded at pipeline startup if undistortion is enabled
+4. Save output to `calibration/camera_matrix.npz` — loaded at pipeline startup
 5. Re-run if the lens, sensor, or camera mount is physically moved
 
 ### Step 2 — HSV Range Tuning
@@ -40,9 +38,7 @@ Determines the H/S/V min/max thresholds for traffic light color detection.
 4. Save tuned ranges to `calibration/hsv_ranges.json`
 5. Document the lighting condition alongside the ranges — indoor fluorescent and outdoor daylight will need different values
 
-### Step 3 — Homography Calibration *(Archived — Reference Only)*
-
-> **Status:** The perspective transform stage was removed from the active pipeline. Lateral offset is now computed via pixel-based estimation directly from lane boundary x-positions (see `lane_offset.py`). This step is preserved for reference in case homography is re-introduced for a future metric-space feature (e.g. stop line distance estimation).
+### Step 3 — Homography Calibration
 
 Generates the perspective transform matrix used to convert the camera view into a bird's-eye coordinate system.
 
@@ -96,7 +92,7 @@ yaw_rate, lateral_accel, wheel_speed, servo_angle_actual, servo_angle_commanded,
 
 | Field                 | Warning Threshold    | Likely Cause                                                     |
 |-----------------------|----------------------|------------------------------------------------------------------|
-| `total_frame_time_ms` | > 50 ms              | Pipeline stage overrun — check per-stage timings                 |
+| `total_frame_time_ms` | > 33.3 ms            | Pipeline stage overrun — check per-stage timings                 |
 | `cpu_percent`         | > 70% sustained      | Contention — consider CPU mitigation options                     |
 | `mem_usage_mb`        | > 400 MB             | Memory pressure — profile buffer allocations                     |
 | `confidence_variance` | > 0.15 across frames | Unstable detection — re-tune thresholds or HSV ranges            |
@@ -122,7 +118,7 @@ yaw_rate, lateral_accel, wheel_speed, servo_angle_actual, servo_angle_commanded,
 | Lighting variation | HSV thresholds out of range     | Traffic light misclassification    | Pre-tune HSV ranges under actual lighting. Add histogram equalization  |
 | Motion blur        | Robot speed too high            | Lane detection unstable            | Increase shutter speed via libcamera exposure controls                 |
 | Dropped frames     | appsink drop policy             | Perception jitter                  | Reduce frame rate to 15-25 FPS                                         |
-| Lane offset spike  | Camera mount offset; artifact-driven clamp | Erratic offset output              | Check `min_lane_width_px` gate; verify camera mount alignment          |
+| Homography error   | Camera shifted/surface not flat | Incorrect lateral offset           | Re-run homography calibration                                          |
 | False positives    | Confidence threshold too low    | Erratic navigation commands        | Raise confidence threshold; widen temporal filter window from N to N+2 |
 | UART packet loss   | Noise or baud rate mismatch     | MCU acts on stale data             | Validate checksum on MCU side                                          |
 | RAM exhaustion     | Too many simultaneous buffers   | Python OOM crash                   | Profile memory early. Enforce in-place OpenCV operations.              |

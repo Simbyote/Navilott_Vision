@@ -15,10 +15,10 @@
 
 ```
 Stage 1: Camera Capture Validation
-  - GStreamer pipeline confirmed working at 480x360 @ ~20 FPS
+  - GStreamer pipeline confirmed working at 640x480 @ 30 FPS
   - Frame timestamps verified
   - Benchmark: Baseline Single-Stage (capture only)
-  - Pass criteria: sustained ~20 FPS, < 10 ms capture time
+  - Pass criteria: sustained 30 FPS, < 10 ms capture time
 
 Stage 2: Preprocessing Benchmarks
   - Undistortion + histogram equalization applied per frame
@@ -28,9 +28,9 @@ Stage 2: Preprocessing Benchmarks
 
 Stage 3: Lane Detection
   - ROI crop + Canny + contour extraction
-  - Lateral offset computed via pixel-based estimation (LaneOffsetResult)
+  - Lateral offset computed via homography
   - Benchmark: Detection Stability (lanes)
-  - Pass criteria: stable normalized offset on static course frame; mode != "none" when lane visible
+  - Pass criteria: stable offset on static course frame
 
 Stage 4: Traffic Light Detection
   - HSV thresholding + blob filtering
@@ -47,7 +47,7 @@ Stage 6: Feature Fusion + Phase 3 Filtering
   - Both branches merged, temporal filtering active
   - Confidence thresholding tuned
   - Benchmark: Full pipeline CPU & Memory Observation
-  - Pass criteria: total frame time < 50 ms, CPU < 70%
+  - Pass criteria: total frame time < 33.3 ms, CPU < 70%
 
 Stage 7: Navigation Output
   - Validated packet formatted and transmitted (UART or GPIO)
@@ -68,12 +68,12 @@ Stage 8: System Integration
 
 ### Testing Parameters
 
-| Parameter        | Value / Options                                                           |
-|------------------|---------------------------------------------------------------------------|
-| Resolution       | 320×240 (stress relief), **480×360** (operating point), 640×480 (upper bound) |
-| Frame rate       | 15 FPS (relaxed), **~20 FPS** (operating point), 30 FPS (upper bound)    |
-| Print interval   | Every 30 frames                                                           |
-| Test duration    | 30 sec (quick), 60 sec (stable), 5–10 min (thermal/long-run)              |
+| Parameter        | Value / Options                                                         |
+|------------------|-------------------------------------------------------------------------|
+| Resolution       | 320×240 (stress relief), **640×480** (standard), 1280×720 (upper bound) |
+| Frame rate       | 15 FPS (relaxed), **30 FPS** (standard), 60 FPS (aggressive)            |
+| Print interval   | Every 30 frames                                                         |
+| Test duration    | 30 sec (quick), 60 sec (stable), 5–10 min (thermal/long-run)            |
 
 ### Benchmark Catalog
 
