@@ -4,6 +4,7 @@
 sample_img/
 /sample_img
 *.jpg
+*.png
 
 # Templates
 /temp/
@@ -16,12 +17,14 @@ temp/
 __pycache__/
 *.pyc
 
+# Videos
 /video/
 **/video/
 video/
 /video
 *.avi
 
+# Mock and results
 /mock/
 **/mock/
 mock/
@@ -29,4 +32,4 @@ mock/
 **/results/
 results/
 /results
-*.png
+*.txt

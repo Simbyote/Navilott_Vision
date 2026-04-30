@@ -47,7 +47,7 @@ class CannyParams:  # Edge Detection
     aperture_size: Sobel kernel size (3, 5, or 7)
     """
     threshold1:    float = 10.0
-    threshold2:    float = 150.0
+    threshold2:    float = 160.0
     aperture_size: int   = 3
 
 @dataclass
@@ -88,7 +88,7 @@ class SignContourFilter:    # Stop Sign
     """
     min_area:      float = 200.0
     max_area:      float = 30000.0
-    min_vertices:  int   = 6
+    min_vertices:  int   = 8
     max_vertices:  int   = 10
     min_solidity:  float = 0.80
     epsilon_factor: float = 0.03

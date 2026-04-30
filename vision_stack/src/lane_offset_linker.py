@@ -55,6 +55,7 @@ from feature_fusion import (
     DetectionObject,
 )
 from lane_offset import compute_lane_offset, LaneOffsetResult   # Stage 6
+from phase2_out import package_phase2_output  # Stage 7 stub
 
 
 # =============================================================================
@@ -110,7 +111,7 @@ def load_config() -> S1S6Config:
         sign_filter          = SignContourFilter(),
         gaussian_kernel_size = (5, 5),
         gaussian_sigma       = 0.0,
-        lane_offset_conf_threshold = 0.30,
+        lane_offset_conf_threshold = 0.50,
     )
 
 # =============================================================================
@@ -294,10 +295,13 @@ def run_s1_to_s6(
     # (detections, lane_offset, frame_id, timestamp_ms) -> Phase2Output
     # =============================================================================
 
-    if frame_id % 20 == 0:
+    TARGET_FPS = 20          # the current operating point
+    FRAME_BUDGET_MS = (1.0 / TARGET_FPS) * 1000
+
+    if frame_id % TARGET_FPS == 0:
         breakdown = "  ".join(f"{k}={v:.1f}ms" for k, v in times.items())
         total     = sum(times.values())
-        flag      = " *** OVER BUDGET ***" if total > 50.0 else ""
+        flag      = " *** OVER BUDGET ***" if total > FRAME_BUDGET_MS else ""
         print(f"[timing] frame={frame_id:04d}  {breakdown}  total={total:.1f}ms{flag}")
 
     return S1S6Result(
