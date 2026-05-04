@@ -94,6 +94,9 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 # Minimum lane width in pixels for two-boundary mode
 MIN_LANE_WIDTH_PX = 150.0
 
+# Offset of the camera
+OFFSET_TRIM   = 0.0   # meters
+
 # =============================================================================
 # Motor Control Parameters
 # =============================================================================
@@ -540,7 +543,7 @@ def main() -> None:
             if nav_packet.drive_state == "stop":
                 _drive(0.0, 0.0)
             else:
-                error      = nav_packet.lane_offset
+                error      = nav_packet.lane_offset + OFFSET_TRIM
                 derivative = error - _last_error
                 correction = (error * KP) + (derivative * KD)
                 _drive(BASE_SPEED - correction, BASE_SPEED + correction)
