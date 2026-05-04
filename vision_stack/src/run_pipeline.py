@@ -43,6 +43,7 @@ import pigpio
 sys.path.insert(0, "vision_stack/src")
 
 from system import System
+from imu import IMUReader, IMUFrame
 from preprocess import preprocess_frame
 from roi_crop import crop_rois
 from color_branch import (
@@ -299,25 +300,13 @@ def _build_p3_input(
 # Sensor stub  TODO: replace with real pigpio/IMU reads
 # =============================================================================
 
-def _read_sensors() -> SensorSample:
-    """
-    Purpose:
-        Returns a SensorSample for the current frame window.
-
-    All fields are None until the hardware interface is wired up.
-    Replace each None with the corresponding pigpio/MPU-6050 read.
-
-    TODO:
-        wheel_speed: encoder tick delta / dt
-        distance_traveled: cumulative encoder ticks -> metres
-        yaw_rate: MPU-6050 gyro Z (deg/s)
-        lateral_accel: MPU-6050 accel Y (m/s²)
-    """
+def _read_sensors(imu: IMUReader) -> SensorSample:
+    frame = imu.snapshot()
     return SensorSample(
-        wheel_speed = None,         # TODO: encoder
-        distance_traveled = None,   # TODO: encoder
-        yaw_rate = None,            # TODO: MPU-6050
-        lateral_accel = None,       # TODO: MPU-6050
+        wheel_speed       = None,
+        distance_traveled = None,
+        yaw_rate          = frame.mean_yaw_rate_dps  if frame.valid else None,
+        lateral_accel     = frame.peak_lateral_accel if frame.valid else None,
     )
 
 
@@ -338,6 +327,12 @@ def main() -> None:
 
     # Capture run-start wall time — everything below is timed from here
     t_run_start = time.perf_counter()
+
+    # ==========================================================================
+    # Startup: IMU
+    # ==========================================================================    
+    imu = IMUReader(address=0x68, rate_hz=100.0)
+    imu.start()
 
     # ==========================================================================
     # Startup: calibration, stage configs, Phase 3 processor
@@ -474,8 +469,8 @@ def main() -> None:
             # Phase 3: Navigation Signal Processing
             # =================================================================
 
-            # Read sensors (NOTE: currently returns dummy sample with all None fields)
-            sensor_sample = _read_sensors()
+            # Read sensors
+            sensor_sample = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
             p3_detections = _adapt_detections_for_p3(p2_out.detections)
@@ -543,6 +538,7 @@ def main() -> None:
         _drive(0.0, 0.0)
         pi.write(_stby, 0)
         pi.stop()
+        imu.stop()
         cap.release()
         if out_writer is not None:
             out_writer.release()

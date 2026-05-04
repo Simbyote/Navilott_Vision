@@ -138,10 +138,10 @@ class System:
         Call this every frame; the throttle absorbs the rate mismatch.
 
         Inputs:
-            elapsed_s: seconds since t_run_start (from time.perf_counter())
+            elapsed_s: seconds since t_run_start
         """
         now = time.monotonic()
-        if now - self._last_display_update < _DISPLAY_UPDATE_INTERVAL_S:
+        if now - self._last_display_update < 1.0:   # update at 1 Hz
             return
         self._last_display_update = now
 
