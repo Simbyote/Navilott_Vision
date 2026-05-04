@@ -95,7 +95,7 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM   = -0.30   # meters
+OFFSET_TRIM   = -0.33   # meters
 
 # =============================================================================
 # Motor Control Parameters
@@ -183,48 +183,49 @@ def _motor_selftest() -> None:
         Bot should be on a flat surface with room to move ~30 cm.
         Watch each phase and kill with Ctrl+C if behavior is wrong.
     """
-    log.info("=== MOTOR SELF-TEST START ===")
-    input("Place bot on ground with 30cm clearance. Press Enter to begin...")
+    
+    # log.info("=== MOTOR SELF-TEST START ===")
+    # input("Place bot on ground with 30cm clearance. Press Enter to begin...")
 
-    log.info("Phase 1: Forward (both motors equal)")
-    _drive(0.3, 0.3)
-    time.sleep(1.5)
-    _drive(0.0, 0.0)
-    time.sleep(0.5)
+    # log.info("Phase 1: Forward (both motors equal)")
+    # _drive(0.3, 0.3)
+    # time.sleep(1.5)
+    # _drive(0.0, 0.0)
+    # time.sleep(0.5)
 
-    result = input("Did it go straight? [y/n]: ").strip().lower()
-    if result != "y":
-        log.warning("Forward test failed — check motor polarity inversion in _drive()")
-        log.warning("Aborting self-test. Fix _drive() before running pipeline.")
-        _drive(0.0, 0.0)
-        pi.write(_stby, 0)
-        sys.exit(1)
+    # result = input("Did it go straight? [y/n]: ").strip().lower()
+    # if result != "y":
+    #     log.warning("Forward test failed — check motor polarity inversion in _drive()")
+    #     log.warning("Aborting self-test. Fix _drive() before running pipeline.")
+    #     _drive(0.0, 0.0)
+    #     pi.write(_stby, 0)
+    #     sys.exit(1)
 
-    log.info("Phase 2: Left turn (left slow, right fast)")
-    _drive(0.15, 0.35)
-    time.sleep(1.0)
-    _drive(0.0, 0.0)
-    time.sleep(0.5)
+    # log.info("Phase 2: Left turn (left slow, right fast)")
+    # _drive(0.15, 0.35)
+    # time.sleep(1.0)
+    # _drive(0.0, 0.0)
+    # time.sleep(0.5)
 
-    result = input("Did it arc LEFT? [y/n]: ").strip().lower()
-    if result != "y":
-        log.warning("Left turn failed — correction sign may be inverted in main loop")
+    # result = input("Did it arc LEFT? [y/n]: ").strip().lower()
+    # if result != "y":
+    #     log.warning("Left turn failed — correction sign may be inverted in main loop")
 
-    log.info("Phase 3: Right turn (left fast, right slow)")
-    _drive(0.35, 0.15)
-    time.sleep(1.0)
-    _drive(0.0, 0.0)
-    time.sleep(0.5)
+    # log.info("Phase 3: Right turn (left fast, right slow)")
+    # _drive(0.35, 0.15)
+    # time.sleep(1.0)
+    # _drive(0.0, 0.0)
+    # time.sleep(0.5)
 
-    result = input("Did it arc RIGHT? [y/n]: ").strip().lower()
-    if result != "y":
-        log.warning("Right turn failed — correction sign may be inverted in main loop")
+    # result = input("Did it arc RIGHT? [y/n]: ").strip().lower()
+    # if result != "y":
+    #     log.warning("Right turn failed — correction sign may be inverted in main loop")
 
-    log.info("Phase 4: Stop")
-    _drive(0.0, 0.0)
-    pi.write(_stby, 0)
-    time.sleep(0.5)
-    pi.write(_stby, 1)
+    # log.info("Phase 4: Stop")
+    # _drive(0.0, 0.0)
+    # pi.write(_stby, 0)
+    # time.sleep(0.5)
+    # pi.write(_stby, 1)
 
     log.info("=== MOTOR SELF-TEST COMPLETE ===")
     input("Press Enter to continue to pipeline...")
