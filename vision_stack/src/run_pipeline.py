@@ -95,7 +95,7 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM   = 0.0   # meters
+OFFSET_TRIM   = -0.12   # meters
 
 # =============================================================================
 # Motor Control Parameters
