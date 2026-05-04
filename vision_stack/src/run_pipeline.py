@@ -42,25 +42,26 @@ import pigpio
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
-from preprocess   import preprocess_frame
-from roi_crop     import crop_rois
+from system import System
+from preprocess import preprocess_frame
+from roi_crop import crop_rois
 from color_branch import (
     extract_traffic_light_candidates,
     HSVRanges, BlobFilter,
     load_hsv_ranges,
 )
-from geometry     import (
+from geometry import (
     run_geometry_branch,
     CannyParams, LaneContourFilter, SignContourFilter,
 )
 from feature_fusion import fuse_detections, SourceROIInfo
-from lane_offset    import compute_lane_offset
-from phase2_out     import package_phase2_output
-from estimation     import (
+from lane_offset import compute_lane_offset
+from phase2_out import package_phase2_output
+from estimation import (
     Phase3Processor, Phase3Config,
     SensorSample,
     DetectionObject as P3DetectionObject,
-    Phase2Output    as P3Phase2Output,
+    Phase2Output as P3Phase2Output,
 )
 
 # =============================================================================
@@ -325,7 +326,18 @@ def _read_sensors() -> SensorSample:
 # =============================================================================
 
 def main() -> None:
+    # ==========================================================================
+    # Initial Startup
+    # ==========================================================================
+    log.info("Starting Navilott Pipeline")
 
+    # Button & countdown
+    s = System()
+    s.wait_for_start()
+    s.run_countdown()
+
+    # Capture run-start wall time — everything below is timed from here
+    t_run_start = time.perf_counter()
 
     # ==========================================================================
     # Startup: calibration, stage configs, Phase 3 processor
@@ -490,6 +502,8 @@ def main() -> None:
             t_frame_end    = time.perf_counter()
             frame_time_ms  = (t_frame_end - t_frame_start) * 1000.0
 
+            s.update_display(t_frame_end - t_run_start)
+
             if frame_time_ms > LOOP_BUDGET_MS:
                 log.warning(
                     "Frame %d: budget exceeded  %.1f ms  (budget %.1f ms)",
@@ -532,7 +546,11 @@ def main() -> None:
         cap.release()
         if out_writer is not None:
             out_writer.release()
-            log.info("Debug video saved -> output.avi")
+
+        elapsed_s = time.perf_counter() - t_run_start
+        s.show_final_time(elapsed_s)   # freeze final time on display
+        time.sleep(5.0)
+        s.cleanup()
         log.info("Pipeline shutdown complete.")
 
 
