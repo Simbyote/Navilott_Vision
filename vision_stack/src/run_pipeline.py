@@ -35,7 +35,7 @@ import logging
 # =============================================================================
 import cv2
 import numpy as np
-from gpiozero import PWMOutputDevice, DigitalOutputDevice
+import pigpio
 
 # =============================================================================
 # Pipeline modules
@@ -118,39 +118,46 @@ log = logging.getLogger("pipeline")
 # Hardware Setup
 # =============================================================================
 
+pi = pigpio.pi()
+
 # Motor A (Left) — TB6612 AIN side
-_ain1 = DigitalOutputDevice(27)
-_ain2 = DigitalOutputDevice(22)
-_pwma = PWMOutputDevice(12)
+_ain1 = 27
+_ain2 = 22
+_pwma = 12
 # Motor B (Right) — TB6612 BIN side
-_bin1 = DigitalOutputDevice(24)
-_bin2 = DigitalOutputDevice(25)
-_pwmb = PWMOutputDevice(13)
-_stby = DigitalOutputDevice(23)
+_bin1 = 24
+_bin2 = 25
+_pwmb = 13
+_stby = 23
+
+pi.set_mode(_ain1, pigpio.OUTPUT)
+pi.set_mode(_ain2, pigpio.OUTPUT)
+pi.set_mode(_bin1, pigpio.OUTPUT)
+pi.set_mode(_bin2, pigpio.OUTPUT)
+pi.set_mode(_stby, pigpio.OUTPUT)
 
 
 def _drive(left_speed: float, right_speed: float) -> None:
     """
     Purpose:
-        Apply differential drive command to both motors.
+        Drive the robot with specified left and right motor speeds 
+        using the TB6612 motor driver
 
     Inputs:
-        left_speed:  target speed for left motor  [-1.0, +1.0]
-        right_speed: target speed for right motor [-1.0, +1.0]
-
-    Notes:
-        Negative values reverse the motor direction.
-        Values are clamped to [0.0, 1.0] before writing to PWM.
+        left_speed: [-1.0, 1.0]
+        right_speed: [-1.0, 1.0]
     """
-    _stby.on()
-    # Left motor
-    _pwma.value = max(0.0, min(1.0, abs(left_speed)))
-    _ain1.value = left_speed > 0
-    _ain2.value = left_speed < 0
-    # Right motor
-    _pwmb.value = max(0.0, min(1.0, abs(right_speed)))
-    _bin1.value = right_speed > 0
-    _bin2.value = right_speed < 0
+    pi.write(_stby, 1)
+    # Left
+    spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 255)
+    pi.hardware_PWM(_pwma, 1000, spd_l * 3921)  # pigpio uses 0–1000000 duty cycle
+    pi.write(_ain1, 1 if left_speed > 0 else 0)
+    pi.write(_ain2, 1 if left_speed < 0 else 0)
+    # Right
+    spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 255)
+    pi.hardware_PWM(_pwmb, 1000, spd_r * 3921)
+    pi.write(_bin1, 1 if right_speed > 0 else 0)
+    pi.write(_bin2, 1 if right_speed < 0 else 0)
 
 # =============================================================================
 # GStreamer pipeline string
