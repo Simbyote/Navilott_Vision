@@ -35,6 +35,7 @@ import logging
 # =============================================================================
 import cv2
 import numpy as np
+from gpiozero import PWMOutputDevice, DigitalOutputDevice
 
 # =============================================================================
 # Pipeline modules
@@ -94,6 +95,16 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # =============================================================================
+# Motor Control Parameters
+# =============================================================================
+
+BASE_SPEED = 0.45   # Constant forward speed (0.0 to 1.0)
+KP         = 0.40   # Proportional gain
+KD         = 0.05   # Derivative gain — smooths correction jitter
+
+_last_error: float = 0.0
+
+# =============================================================================
 # Logging
 # =============================================================================
 logging.basicConfig(
@@ -102,6 +113,44 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 log = logging.getLogger("pipeline")
+
+# =============================================================================
+# Hardware Setup
+# =============================================================================
+
+# Motor A (Left) — TB6612 AIN side
+_ain1 = DigitalOutputDevice(27)
+_ain2 = DigitalOutputDevice(22)
+_pwma = PWMOutputDevice(12)
+# Motor B (Right) — TB6612 BIN side
+_bin1 = DigitalOutputDevice(24)
+_bin2 = DigitalOutputDevice(25)
+_pwmb = PWMOutputDevice(13)
+_stby = DigitalOutputDevice(23)
+
+
+def _drive(left_speed: float, right_speed: float) -> None:
+    """
+    Purpose:
+        Apply differential drive command to both motors.
+
+    Inputs:
+        left_speed:  target speed for left motor  [-1.0, +1.0]
+        right_speed: target speed for right motor [-1.0, +1.0]
+
+    Notes:
+        Negative values reverse the motor direction.
+        Values are clamped to [0.0, 1.0] before writing to PWM.
+    """
+    _stby.on()
+    # Left motor
+    _pwma.value = max(0.0, min(1.0, abs(left_speed)))
+    _ain1.value = left_speed > 0
+    _ain2.value = left_speed < 0
+    # Right motor
+    _pwmb.value = max(0.0, min(1.0, abs(right_speed)))
+    _bin1.value = right_speed > 0
+    _bin2.value = right_speed < 0
 
 # =============================================================================
 # GStreamer pipeline string
@@ -406,6 +455,20 @@ def main() -> None:
             nav_packet    = p3_processor.process(p3_input, sensor_sample)
 
             # =================================================================
+            # Motor Control
+            # =================================================================
+            global _last_error
+
+            if nav_packet.drive_state == "stop":
+                _drive(0.0, 0.0)
+            else:
+                error      = nav_packet.lane_offset
+                derivative = error - _last_error
+                correction = (error * KP) + (derivative * KD)
+                _drive(BASE_SPEED + correction, BASE_SPEED - correction)
+                _last_error = error
+
+            # =================================================================
             # Timing check
             # =================================================================
             t_frame_end    = time.perf_counter()
@@ -447,6 +510,8 @@ def main() -> None:
         log.info("Stopped by user after %d frames.", frame_id)
 
     finally:
+        _drive(0.0, 0.0)
+        _stby.off()
         cap.release()
         if out_writer is not None:
             out_writer.release()
@@ -509,7 +574,6 @@ def _draw_debug_overlay(
     cv2.line(vis, (bar_mid, bar_y), (bar_mid + bar_len, bar_y), state_color, 3)
 
     return vis
-
 
 # =============================================================================
 # Entry point

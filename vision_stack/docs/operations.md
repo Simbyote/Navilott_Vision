@@ -122,7 +122,7 @@ yaw_rate, lateral_accel, wheel_speed, servo_angle_actual, servo_angle_commanded,
 | Lighting variation | HSV thresholds out of range     | Traffic light misclassification    | Pre-tune HSV ranges under actual lighting. Add histogram equalization  |
 | Motion blur        | Robot speed too high            | Lane detection unstable            | Increase shutter speed via libcamera exposure controls                 |
 | Dropped frames     | appsink drop policy             | Perception jitter                  | Reduce frame rate to 15-25 FPS                                         |
-| Lane offset spike  | Camera mount offset; artifact-driven clamp | Erratic offset output              | Check `min_lane_width_px` gate; verify camera mount alignment          |
+| Lane offset spike  | Camera mount offset             | Erratic offset output              | Check `min_lane_width_px` gate; verify camera mount alignment          |
 | False positives    | Confidence threshold too low    | Erratic navigation commands        | Raise confidence threshold; widen temporal filter window from N to N+2 |
 | UART packet loss   | Noise or baud rate mismatch     | MCU acts on stale data             | Validate checksum on MCU side                                          |
 | RAM exhaustion     | Too many simultaneous buffers   | Python OOM crash                   | Profile memory early. Enforce in-place OpenCV operations.              |
