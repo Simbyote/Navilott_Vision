@@ -166,70 +166,6 @@ def _drive(
     pi.write(_bin1, 1 if right_speed > 0 else 0)
     pi.write(_bin2, 1 if right_speed < 0 else 0)
 
-def _motor_selftest() -> None:
-    """
-    Purpose:
-        Runs a short motor validation sequence before the main loop.
-        Confirms both motors spin in the expected direction and that
-        differential drive correction works as intended.
-
-    Sequence:
-        1. Forward       — both motors forward, should move straight
-        2. Left turn     — left slow, right fast, should arc left
-        3. Right turn    — left fast, right slow, should arc right
-        4. Stop          — all stop, verify no coast
-
-    Notes:
-        Bot should be on a flat surface with room to move ~30 cm.
-        Watch each phase and kill with Ctrl+C if behavior is wrong.
-    """
-    
-    # log.info("=== MOTOR SELF-TEST START ===")
-    # input("Place bot on ground with 30cm clearance. Press Enter to begin...")
-
-    # log.info("Phase 1: Forward (both motors equal)")
-    # _drive(0.3, 0.3)
-    # time.sleep(1.5)
-    # _drive(0.0, 0.0)
-    # time.sleep(0.5)
-
-    # result = input("Did it go straight? [y/n]: ").strip().lower()
-    # if result != "y":
-    #     log.warning("Forward test failed — check motor polarity inversion in _drive()")
-    #     log.warning("Aborting self-test. Fix _drive() before running pipeline.")
-    #     _drive(0.0, 0.0)
-    #     pi.write(_stby, 0)
-    #     sys.exit(1)
-
-    # log.info("Phase 2: Left turn (left slow, right fast)")
-    # _drive(0.15, 0.35)
-    # time.sleep(1.0)
-    # _drive(0.0, 0.0)
-    # time.sleep(0.5)
-
-    # result = input("Did it arc LEFT? [y/n]: ").strip().lower()
-    # if result != "y":
-    #     log.warning("Left turn failed — correction sign may be inverted in main loop")
-
-    # log.info("Phase 3: Right turn (left fast, right slow)")
-    # _drive(0.35, 0.15)
-    # time.sleep(1.0)
-    # _drive(0.0, 0.0)
-    # time.sleep(0.5)
-
-    # result = input("Did it arc RIGHT? [y/n]: ").strip().lower()
-    # if result != "y":
-    #     log.warning("Right turn failed — correction sign may be inverted in main loop")
-
-    # log.info("Phase 4: Stop")
-    # _drive(0.0, 0.0)
-    # pi.write(_stby, 0)
-    # time.sleep(0.5)
-    # pi.write(_stby, 1)
-
-    log.info("=== MOTOR SELF-TEST COMPLETE ===")
-    input("Press Enter to continue to pipeline...")
-
 # =============================================================================
 # GStreamer pipeline string
 # =============================================================================
@@ -389,9 +325,7 @@ def _read_sensors() -> SensorSample:
 # =============================================================================
 
 def main() -> None:
-    # Motor Test:
-    _motor_selftest()
-    time.sleep(5)
+
 
     # ==========================================================================
     # Startup: calibration, stage configs, Phase 3 processor
