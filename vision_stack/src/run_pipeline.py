@@ -318,6 +318,10 @@ def _read_sensors() -> SensorSample:
 # =============================================================================
 
 def main() -> None:
+    # Motor Test:
+    _drive(0.3, 0.3)
+    time.sleep(5)
+
     # ==========================================================================
     # Startup: calibration, stage configs, Phase 3 processor
     # ==========================================================================
@@ -518,7 +522,8 @@ def main() -> None:
 
     finally:
         _drive(0.0, 0.0)
-        _stby.off()
+        pi.write(_stby, 0)
+        pi.stop()
         cap.release()
         if out_writer is not None:
             out_writer.release()
