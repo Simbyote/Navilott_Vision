@@ -121,13 +121,13 @@ log = logging.getLogger("pipeline")
 pi = pigpio.pi()
 
 # Motor A (Left) — TB6612 AIN side
-_ain1 = 27
-_ain2 = 22
-_pwma = 12
+_ain1 = 24
+_ain2 = 25
+_pwma = 13
 # Motor B (Right) — TB6612 BIN side
-_bin1 = 24
-_bin2 = 25
-_pwmb = 13
+_bin1 = 22
+_bin2 = 27
+_pwmb = 12
 _stby = 23
 
 pi.set_mode(_ain1, pigpio.OUTPUT)
