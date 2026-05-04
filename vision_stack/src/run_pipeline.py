@@ -543,7 +543,7 @@ def main() -> None:
                 error      = nav_packet.lane_offset
                 derivative = error - _last_error
                 correction = (error * KP) + (derivative * KD)
-                _drive(BASE_SPEED + correction, BASE_SPEED - correction)
+                _drive(BASE_SPEED - correction, BASE_SPEED + correction)
                 _last_error = error
 
             # =================================================================
