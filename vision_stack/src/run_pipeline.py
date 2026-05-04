@@ -300,14 +300,15 @@ def _build_p3_input(
 # Sensor stub  TODO: replace with real pigpio/IMU reads
 # =============================================================================
 
-def _read_sensors(imu: IMUReader) -> SensorSample:
+def _read_sensors(imu: IMUReader) -> tuple[SensorSample, IMUFrame]:
     frame = imu.snapshot()
-    return SensorSample(
+    sample = SensorSample(
         wheel_speed       = None,
         distance_traveled = None,
         yaw_rate          = frame.mean_yaw_rate_dps  if frame.valid else None,
         lateral_accel     = frame.peak_lateral_accel if frame.valid else None,
     )
+    return sample, frame
 
 
 # =============================================================================
@@ -470,7 +471,7 @@ def main() -> None:
             # =================================================================
 
             # Read sensors
-            sensor_sample = _read_sensors(imu)
+            sensor_sample, imu_frame = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
             p3_detections = _adapt_detections_for_p3(p2_out.detections)
@@ -510,7 +511,7 @@ def main() -> None:
             # =================================================================
             log.info(
                 "f=%04d  t=%.1fms  offset=%+.4f  head=%+.2f°  drive=%-7s  "
-                "stop_sign=%s  lane_mode=%s",
+                "stop_sign=%s  lane_mode=%s  imu_n=%d  yaw=%+.1f°/s",
                 frame_id,
                 frame_time_ms,
                 nav_packet.lane_offset,
@@ -518,6 +519,8 @@ def main() -> None:
                 nav_packet.drive_state,
                 "T" if nav_packet.stop_sign_detected else "F",
                 lane_offset_result.mode,
+                imu_frame.sample_count,
+                imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
             )
 
             # =================================================================
