@@ -137,7 +137,10 @@ pi.set_mode(_bin2, pigpio.OUTPUT)
 pi.set_mode(_stby, pigpio.OUTPUT)
 
 
-def _drive(left_speed: float, right_speed: float) -> None:
+def _drive(
+        left_speed: float, 
+        right_speed: float
+    ) -> None:
     """
     Purpose:
         Drive the robot with specified left and right motor speeds 
@@ -147,15 +150,16 @@ def _drive(left_speed: float, right_speed: float) -> None:
         left_speed: [-1.0, 1.0]
         right_speed: [-1.0, 1.0]
     """
+    right_speed = -right_speed  # invert if right motor is wired backward
     pi.write(_stby, 1)
     # Left
-    spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 255)
-    pi.hardware_PWM(_pwma, 1000, spd_l * 3921)  # pigpio uses 0–1000000 duty cycle
+    spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
+    pi.hardware_PWM(_pwma, 1000, spd_l)
     pi.write(_ain1, 1 if left_speed > 0 else 0)
     pi.write(_ain2, 1 if left_speed < 0 else 0)
     # Right
-    spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 255)
-    pi.hardware_PWM(_pwmb, 1000, spd_r * 3921)
+    spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
+    pi.hardware_PWM(_pwmb, 1000, spd_r)
     pi.write(_bin1, 1 if right_speed > 0 else 0)
     pi.write(_bin2, 1 if right_speed < 0 else 0)
 
