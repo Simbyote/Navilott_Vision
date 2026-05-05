@@ -97,7 +97,7 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM   = -0.31   # meters
+OFFSET_TRIM   = -0.33   # meters
 
 # =============================================================================
 # Motor Control Parameters
@@ -155,7 +155,7 @@ def _drive(
         left_speed: [-1.0, 1.0]
         right_speed: [-1.0, 1.0]
     """
-    right_speed = -right_speed  # invert if right motor is wired backward
+    right_speed = -right_speed  # invert if right motor
     pi.write(_stby, 1)
     # Left
     spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
@@ -276,7 +276,6 @@ def _adapt_detections_for_p3(p2_detections) -> list:
         ))
     return adapted
 
-
 def _build_p3_input(
         p2_out, 
         detections_p3
@@ -387,7 +386,7 @@ def main() -> None:
             t_frame_start = time.perf_counter()
 
             # =================================================================
-            # Phase 1 — Capture
+            # Phase 1: Capture
             # =================================================================
             ret, frame_bgr = cap.read()
             if not ret or frame_bgr is None:
@@ -507,7 +506,7 @@ def main() -> None:
                 )
 
             # =================================================================
-            # Navigation packet log
+            # Navigation Packet Log
             # =================================================================
             log.info(
                 "f=%04d  t=%.1fms  offset=%+.4f  head=%+.2f°  drive=%-7s  "
@@ -524,7 +523,7 @@ def main() -> None:
             )
 
             # =================================================================
-            # Optional debug video
+            # Optional Debug Video
             # =================================================================
             if out_writer is not None:
                 _overlay = _draw_debug_overlay(
@@ -552,9 +551,8 @@ def main() -> None:
         s.cleanup()
         log.info("Pipeline shutdown complete.")
 
-
 # =============================================================================
-# Debug overlay helper  (used to SAVE VIDEO)
+# Debug Overlay Helper (SAVE VIDEO)
 # =============================================================================
 
 def _draw_debug_overlay(
