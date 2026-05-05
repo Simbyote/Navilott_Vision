@@ -180,7 +180,7 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     # Lane: lower half
     lane_x = 0
     lane_y = H // 2
-    lane_w = W
+    lane_w = W // 6
     lane_h = H - H // 2
 
     # Traffic light: top-center half
