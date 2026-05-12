@@ -13,12 +13,12 @@ Concurrency model: Time-slicing (single-threaded)
     Navigation update rate is tied to the camera frame rate
 
 Architecture:
-    Phase 1 ->  Phase 2  ->  Phase 3  ->  EstimationPacket (Navigation)
-    capture     preprocess                EMA temporal filter
-                roi_crop                  motion consistency
-                color_branch              confidence threshold
-                geometry_branch           dead-reckoning fallback
-                feature_fusion            IMU heading integration
+    Phase 1 -> Phase 2 -> Phase 3 -> EstimationPacket (Navigation)
+    capture -> preprocess EMA temporal filter
+                roi_crop motion consistency
+                color_branch:confidence threshold
+                geometry_branch: dead-reckoning fallback
+                feature_fusion:IMU heading integration
                 lane_offset
                 phase2_out
 """
@@ -31,14 +31,14 @@ import time
 import logging
 
 # =============================================================================
-# Third-party
+# Third-Party
 # =============================================================================
 import cv2
 import numpy as np
 import pigpio
 
 # =============================================================================
-# Pipeline modules
+# Pipeline Modules
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
@@ -66,9 +66,8 @@ from estimation import (
 )
 
 # =============================================================================
-# PIPELINE CONFIGURATION
+# Configuration Parameters
 # =============================================================================
-
 # Capture resolution
 FRAME_WIDTH = 480
 FRAME_HEIGHT = 360
@@ -97,15 +96,14 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM   = -0.32   # meters
+OFFSET_TRIM = -0.32   # meters
 
 # =============================================================================
 # Motor Control Parameters
 # =============================================================================
-
 BASE_SPEED = 0.45   # Constant forward speed (0.0 to 1.0)
-KP         = 0.40   # Proportional gain
-KD         = 0.05   # Derivative gain — smooths correction jitter
+KP = 0.40   # Proportional gain
+KD = 0.05   # Derivative gain;smooths correction jitter
 
 _last_error: float = 0.0
 
@@ -122,7 +120,6 @@ log = logging.getLogger("pipeline")
 # =============================================================================
 # Hardware Setup
 # =============================================================================
-
 pi = pigpio.pi()
 
 # Motor A (Left) — TB6612 AIN side
@@ -171,7 +168,6 @@ def _drive(
 # =============================================================================
 # GStreamer pipeline string
 # =============================================================================
-
 def _build_gst_pipeline(
         width: int, 
         height: int, 
@@ -206,9 +202,8 @@ def _build_gst_pipeline(
     )
 
 # =============================================================================
-# Calibration loaders
+# Calibration Loaders
 # =============================================================================
-
 def _load_hsv(
         path: str, 
         dummy_path: str
@@ -219,7 +214,7 @@ def _load_hsv(
 
     Inputs:
         path: path to calibration file
-        dummy_path: path to dummy calibration file    
+        dummy_path: path to dummy calibration file
     Outputs:
         HSVRanges dataclass instance with loaded or dummy values
     """
@@ -242,9 +237,8 @@ def _load_hsv(
 
 
 # =============================================================================
-# Phase 2 -> Phase 3 adapter
+# Phase 2 -> Phase 3 Adapter
 # =============================================================================
-
 def _adapt_detections_for_p3(p2_detections) -> list:
     """
     Purpose:
@@ -256,13 +250,13 @@ def _adapt_detections_for_p3(p2_detections) -> list:
 
     Outputs:
         list of estimation.DetectionObject:
-        feature_fusion.DetectionObject ->  estimation.DetectionObject
-            .type          -> .type
-            .label_detail  -> .label
+        feature_fusion.DetectionObject -> estimation.DetectionObject
+            .type -> .type
+            .label_detail -> .label
             .position["x"] -> .position_x
             .position["y"] -> .position_y
-            .confidence    -> .confidence
-            .timestamp     -> .timestamp
+            .confidence -> .confidence
+            .timestamp -> .timestamp
     """
     adapted = []
     for d in p2_detections:
@@ -286,7 +280,7 @@ def _build_p3_input(
     Inputs:
         p2_out: Phase2Output from Phase 2, used for frame_id and timestamp
         detections_p3: list of estimation.DetectionObject adapted from Phase 2 detections
-    Outputs:     
+    Outputs:
         P3Phase2Output with detections and metadata for Phase 3 processing
     """
     return P3Phase2Output(
@@ -296,24 +290,22 @@ def _build_p3_input(
     )
 
 # =============================================================================
-# Sensor stub  TODO: replace with real pigpio/IMU reads
+# IMU Reader @TODO Integrate encoder data
 # =============================================================================
 
 def _read_sensors(imu: IMUReader) -> tuple[SensorSample, IMUFrame]:
     frame = imu.snapshot()
     sample = SensorSample(
-        wheel_speed       = None,
+        wheel_speed = None,
         distance_traveled = None,
-        yaw_rate          = frame.mean_yaw_rate_dps  if frame.valid else None,
-        lateral_accel     = frame.peak_lateral_accel if frame.valid else None,
+        yaw_rate = frame.mean_yaw_rate_dps if frame.valid else None,
+        lateral_accel = frame.peak_lateral_accel if frame.valid else None,
     )
     return sample, frame
-
 
 # =============================================================================
 # Main loop
 # =============================================================================
-
 def main() -> None:
     # ==========================================================================
     # Initial Startup
@@ -330,7 +322,7 @@ def main() -> None:
 
     # ==========================================================================
     # Startup: IMU
-    # ==========================================================================    
+    # ==========================================================================
     imu = IMUReader(address=0x68, rate_hz=100.0)
     imu.start()
 
@@ -373,7 +365,7 @@ def main() -> None:
     # Optional debug video writer
     out_writer = None
     if SAVE_VIDEO:
-        fourcc     = cv2.VideoWriter_fourcc(*"XVID")
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
         out_writer = cv2.VideoWriter("output.avi", fourcc, FPS, (FRAME_WIDTH, FRAME_HEIGHT))
         log.info("Debug video writer opened -> output.avi")
 
@@ -403,8 +395,8 @@ def main() -> None:
             # preprocess_frame() expects YUV in, returns YUV out.
             # capture.py / GStreamer hands us BGR from videoconvert, so we
             # convert before and after to satisfy the stage contract.
-            frame_yuv      = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV)
-            preprocessed   = preprocess_frame(frame_yuv)               # -> YUV
+            frame_yuv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV)
+            preprocessed = preprocess_frame(frame_yuv)               # -> YUV
             preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_YUV2BGR)
 
             # Step 2: ROI crop returns NumPy views (no copy)
@@ -413,69 +405,68 @@ def main() -> None:
             # Step 3a: Color branch traffic light candidates
             # roi_crop produces BGR views; color_branch expects BGR
             tl_candidates, _tl_debug = extract_traffic_light_candidates(
-                roi          = roi_result.traffic_roi.copy(),   # copy: branch modifies internally
-                hsv_ranges   = hsv_ranges,
-                blob_filter  = blob_filter,
-                frame_id     = frame_id,
+                roi = roi_result.traffic_roi.copy(),   # copy: branch modifies internally
+                hsv_ranges = hsv_ranges,
+                blob_filter = blob_filter,
+                frame_id = frame_id,
                 timestamp_ms = timestamp_ms,
             )
 
             # Step 3b: Geometry branch lane + stop sign candidates
             # geometry.py _to_grayscale() internally handles BGR -> gray
             geo_result, _lane_debug, _sign_debug = run_geometry_branch(
-                lane_roi     = roi_result.lane_roi.copy(),
-                sign_roi     = roi_result.sign_roi.copy(),
+                lane_roi = roi_result.lane_roi.copy(),
+                sign_roi = roi_result.sign_roi.copy(),
                 canny_params = canny_params,
-                lane_filter  = lane_filter,
-                sign_filter  = sign_filter,
-                frame_id     = frame_id,
+                lane_filter = lane_filter,
+                sign_filter = sign_filter,
+                frame_id = frame_id,
                 timestamp_ms = timestamp_ms,
             )
 
             # Step 4: Feature fusion normalize and resolve conflicts
             source_rois = SourceROIInfo(
-                lane_shape    = roi_result.lane_roi.shape[:2],
+                lane_shape = roi_result.lane_roi.shape[:2],
                 traffic_shape = roi_result.traffic_roi.shape[:2],
-                sign_shape    = roi_result.sign_roi.shape[:2],
+                sign_shape = roi_result.sign_roi.shape[:2],
             )
             detections, _fusion_summary = fuse_detections(
                 traffic_candidates = tl_candidates,
-                lane_candidates    = geo_result.lane_candidates,
-                sign_candidates    = geo_result.sign_candidates,
-                frame_id           = frame_id,
-                timestamp_ms       = timestamp_ms,
-                source_rois        = source_rois,
+                lane_candidates = geo_result.lane_candidates,
+                sign_candidates = geo_result.sign_candidates,
+                frame_id = frame_id,
+                timestamp_ms = timestamp_ms,
+                source_rois = source_rois,
             )
 
             # Step 5: Lane offset estimation
             lane_boundary_dets = [d for d in detections if d.type == "lane_boundary"]
             lane_offset_result = compute_lane_offset(
-                detections        = lane_boundary_dets,
-                frame_width       = roi_result.lane_roi.shape[1],
-                frame_id          = frame_id,
-                timestamp         = timestamp_ms,
-                conf_threshold    = LANE_CONF_THRESHOLD,
+                detections = lane_boundary_dets,
+                frame_width = roi_result.lane_roi.shape[1],
+                frame_id = frame_id,
+                timestamp = timestamp_ms,
+                conf_threshold = LANE_CONF_THRESHOLD,
                 min_lane_width_px = MIN_LANE_WIDTH_PX,
             )
 
             # Step 6: Package Phase 2 output
             p2_out = package_phase2_output(
-                detections         = detections,
-                frame_id           = frame_id,
-                timestamp_ms       = timestamp_ms,
+                detections = detections,
+                frame_id = frame_id,
+                timestamp_ms = timestamp_ms,
             )
 
             # =================================================================
             # Phase 3: Navigation Signal Processing
             # =================================================================
-
             # Read sensors
             sensor_sample, imu_frame = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
             p3_detections = _adapt_detections_for_p3(p2_out.detections)
-            p3_input      = _build_p3_input(p2_out, p3_detections)
-            nav_packet    = p3_processor.process(p3_input, sensor_sample)
+            p3_input = _build_p3_input(p2_out, p3_detections)
+            nav_packet = p3_processor.process(p3_input, sensor_sample)
 
             # =================================================================
             # Motor Control
@@ -485,7 +476,7 @@ def main() -> None:
             if nav_packet.drive_state == "stop":
                 _drive(0.0, 0.0)
             else:
-                error      = nav_packet.lane_offset + OFFSET_TRIM
+                error = nav_packet.lane_offset + OFFSET_TRIM
                 derivative = error - _last_error
                 correction = (error * KP) + (derivative * KD)
                 _drive(BASE_SPEED - correction, BASE_SPEED + correction)
@@ -494,14 +485,14 @@ def main() -> None:
             # =================================================================
             # Timing check
             # =================================================================
-            t_frame_end    = time.perf_counter()
-            frame_time_ms  = (t_frame_end - t_frame_start) * 1000.0
+            t_frame_end = time.perf_counter()
+            frame_time_ms = (t_frame_end - t_frame_start) * 1000.0
 
             s.update_display(t_frame_end - t_run_start)
 
             if frame_time_ms > LOOP_BUDGET_MS:
                 log.warning(
-                    "Frame %d: budget exceeded  %.1f ms  (budget %.1f ms)",
+                    "Frame %d: budget exceeded %.1f ms (budget %.1f ms)",
                     frame_id, frame_time_ms, LOOP_BUDGET_MS,
                 )
 
@@ -509,8 +500,8 @@ def main() -> None:
             # Navigation Packet Log
             # =================================================================
             log.info(
-                "f=%04d  t=%.1fms  offset=%+.4f  head=%+.2f°  drive=%-7s  "
-                "stop_sign=%s  lane_mode=%s  imu_n=%d  yaw=%+.1f°/s",
+                "f=%04d t=%.1fms offset=%+.4f head=%+.2f° drive=%-7s "
+                "stop_sign=%s lane_mode=%s imu_n=%d yaw=%+.1f°/s",
                 frame_id,
                 frame_time_ms,
                 nav_packet.lane_offset,
@@ -554,7 +545,6 @@ def main() -> None:
 # =============================================================================
 # Debug Overlay Helper (SAVE VIDEO)
 # =============================================================================
-
 def _draw_debug_overlay(
         frame_bgr, 
         nav_packet, 
@@ -584,22 +574,22 @@ def _draw_debug_overlay(
 
     # Drive state color
     state_color = {
-        "go":      (0, 200, 0),
+        "go": (0, 200, 0),
         "caution": (0, 180, 220),
-        "stop":    (0, 0, 220),
+        "stop": (0, 0, 220),
     }.get(nav_packet.drive_state, (200, 200, 200))
 
     hud_text = (
-        f"off={nav_packet.lane_offset:+.3f}  "
-        f"head={nav_packet.heading_error:+.1f}deg  "
-        f"[{nav_packet.drive_state.upper()}]  "
-        f"{frame_time_ms:.1f}ms  mode={lane_result.mode}"
+        f"off={nav_packet.lane_offset:+.3f}"
+        f"head={nav_packet.heading_error:+.1f}deg"
+        f"[{nav_packet.drive_state.upper()}]"
+        f"{frame_time_ms:.1f}ms mode={lane_result.mode}"
     )
     cv2.putText(vis, hud_text, (6, 26),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.48, state_color, 1, cv2.LINE_AA)
 
     # Offset bar at bottom of frame
-    bar_y   = H - 10
+    bar_y = H - 10
     bar_mid = W // 2
     bar_len = int(nav_packet.lane_offset * bar_mid)
     cv2.line(vis, (bar_mid, bar_y - 4), (bar_mid, bar_y + 4), (180, 180, 180), 1)
@@ -608,8 +598,7 @@ def _draw_debug_overlay(
     return vis
 
 # =============================================================================
-# Entry point
+# Main Entry Point
 # =============================================================================
-
 if __name__ == "__main__":
     main()

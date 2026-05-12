@@ -31,76 +31,6 @@ Notes:
     bounding_box is retained in the DetectionObject as an internal debug field
     it is used only for the overlay visualization in this substage
 
-Inputs:
-  traffic_candidates : list[TrafficLightCandidate]
-      From color_branch.extract_traffic_light_candidates()
-      Fields used: 
-        label, bbox, confidence, frame_id, timestamp_ms
-      can be empty
-
-  lane_candidates : list[LaneCandidate]
-      From geometry_branch.extract_lane_candidates()
-      Fields used: 
-        label, bbox, confidence, frame_id, timestamp_ms
-      can be empty
-
-  sign_candidates : list[SignCandidate]
-      From geometry_branch.extract_sign_candidates()
-      Fields used: label, bbox, confidence, vertex_count, frame_id, timestamp_ms
-      Can be empty
-
-  frame_id : int
-    from capture loop
-    used if candidate lists are empty
-
-  timestamp_ms : int
-      from capture loop. Same fallback purpose
-
-  source_rois : SourceROIInfo 
-      holds the shape of each ROI so that bounding-box centroids can be
-      computed correctly
-
-Outputs:
-  list[DetectionObject]
-
-  Each DetectionObject:
-      .type: "traffic_light" | "stop_sign" | "lane_boundary"
-      .position: {"x": float, "y": float}; centroid in ROI px coords
-      .confidence: [0.0, 1.0]
-      .timestamp: timestamp_ms
-
-      .bounding_box (x, y, w, h) 
-            DEBUGGING ONLY
-      .label_detail: sub-label from candidate 
-            ("red"|"yellow"|"green" for traffic_light; "lane_boundary"; "stop_sign")
-            DEBUGGING ONLY
-
-  The list contains at most one DetectionObject per class per frame:
-      - at most N lane_boundary
-      - at most 1 traffic_light
-      - at most 1 stop_sign
-
-  Empty list implies no detections
-
-Fusion logic rules:
-  TRAFFIC LIGHT
-    Rule TL-1: if candidates of multiple colors survive blob filtering in the
-               same frame, retain only the highest-confidence candidate
-               
-    Rule TL-2: if confidence < 0.0 due to a malformed input, discard and log in summary
-
-  LANE BOUNDARY
-    Rule LB-1: All lane candidates that survived the geometry branch filter
-               are forwarded
-
-    Rule LB-2: Sort by confidence descending order, prioritizing higher-confidence first
-
-  STOP SIGN
-    Rule SS-1: If multiple sign candidates exist, retain only the
-               highest-confidence candidate
-               
-    Rule SS-2: If confidence < 0.0, discard and log
-
 timestamp is taken from the winning candidate's .timestamp_ms field
 If all candidate lists are empty, falls back to the timestamp_ms argument
 """
@@ -114,7 +44,6 @@ from typing import List, Optional
 # =============================================================================
 # Output Dataclasses
 # =============================================================================
-
 @dataclass
 class SourceROIInfo:
     """
@@ -206,9 +135,8 @@ class _SignCandidate:
     timestamp_ms: int
 
 # =============================================================================
-# Utility functions
+# Utility Functions
 # ============================================================================
-
 def _centroid(
         bbox: tuple
     ) -> dict:
@@ -262,29 +190,29 @@ def _best_candidate(
 
 def fuse_detections(
     traffic_candidates: list,
-    lane_candidates:    list,
-    sign_candidates:    list,
-    frame_id:           int = 0,
-    timestamp_ms:       int = 0,
-    source_rois:        Optional[SourceROIInfo] = None,
+    lane_candidates: list,
+    sign_candidates: list,
+    frame_id: int = 0,
+    timestamp_ms: int = 0,
+    source_rois: Optional[SourceROIInfo] = None,
 ) -> tuple:
     """
     Purpose:
         Fuse candidates from color and geometry branches into unified DetectionObjects
 
     Inputs:
-        traffic_candidates : list[TrafficLightCandidate]
-        lane_candidates    : list[LaneCandidate]
-        sign_candidates    : list[SignCandidate]
-        frame_id           : frame identifier for this fusion call
-        timestamp_ms       : timestamp for this fusion call
-        source_rois        : optional SourceROIInfo for context; None is accepted
+        traffic_candidates: list[TrafficLightCandidate]
+        lane_candidates: list[LaneCandidate]
+        sign_candidates: list[SignCandidate]
+        frame_id: frame identifier for this fusion call
+        timestamp_ms: timestamp for this fusion call
+        source_rois: optional SourceROIInfo for context; None is accepted
 
     Outputs:
-        detections    : list[DetectionObject]
+        detections : list[DetectionObject]
         debug_summary : dict — "frame_id", "timestamp_ms", "counts", "discarded", "log"
     """
-    log        = []
+    log = []
     detections = []
 
     if source_rois is None:
@@ -294,7 +222,7 @@ def fuse_detections(
         )
 
     # ========================================================================
-    # Traffic Light  (Rule TL-1, TL-2)
+    # Traffic Light Fusion
     # Determine best traffic light candidate, if any, and log discards
     # =======================================================================
     best_tl = _best_candidate(traffic_candidates, log, "traffic_light")
@@ -318,7 +246,7 @@ def fuse_detections(
         ))
 
     # ========================================================================
-    # Lane Boundary  (Rule LB-1, LB-2)
+    # Lane Boundary Fusion
     # Determine best lane boundary candidate, if any, and log discards
     # =======================================================================
     valid_lanes = [c for c in lane_candidates if _valid_confidence(c.confidence)]
@@ -334,16 +262,16 @@ def fuse_detections(
     for c in sorted(valid_lanes, key=lambda x: x.confidence, reverse=True):
         pos = _centroid(c.bbox) if source_rois is not None else {"x": 0.0, "y": 0.0}
         detections.append(DetectionObject(
-            type         = "lane_boundary",
-            position     = pos,
-            confidence   = c.confidence,
-            timestamp    = c.timestamp_ms,
+            type = "lane_boundary",
+            position = pos,
+            confidence = c.confidence,
+            timestamp = c.timestamp_ms,
             bounding_box = c.bbox,
             label_detail = c.label,
         ))
 
     # ========================================================================
-    # Stop Sign  (Rule SS-1, SS-2)
+    # Stop Sign Fusion
     # Determine best stop sign candidate, if any, and log discards
     # ========================================================================
     best_sign = _best_candidate(sign_candidates, log, "stop_sign")
@@ -357,10 +285,10 @@ def fuse_detections(
                 )
         pos = _centroid(best_sign.bbox) if source_rois is not None else {"x": 0.0, "y": 0.0}
         detections.append(DetectionObject(
-            type         = "stop_sign",
-            position     = pos,
-            confidence   = best_sign.confidence,
-            timestamp    = best_sign.timestamp_ms,
+            type = "stop_sign",
+            position = pos,
+            confidence = best_sign.confidence,
+            timestamp = best_sign.timestamp_ms,
             bounding_box = best_sign.bbox,
             label_detail = best_sign.label,
         ))
@@ -373,28 +301,25 @@ def fuse_detections(
         type_counts[d.type] = type_counts.get(d.type, 0) + 1
 
     debug_summary = {
-        "frame_id":     frame_id,
+        "frame_id": frame_id,
         "timestamp_ms": timestamp_ms,
-        "counts":       type_counts,
-        "total":        len(detections),
-        "discarded":    sum(1 for entry in log if "[DISCARD]" in entry),
-        "suppressed":   sum(1 for entry in log if "[SUPPRESSED]" in entry),
-        "log":          log,
+        "counts": type_counts,
+        "total": len(detections),
+        "discarded": sum(1 for entry in log if "[DISCARD]" in entry),
+        "suppressed": sum(1 for entry in log if "[SUPPRESSED]" in entry),
+        "log": log,
     }
 
     return detections, debug_summary
 
-
 # =============================================================================
 # Debug Visualization
 # =============================================================================
-
 _TYPE_COLORS = {
     "traffic_light": (255,  0,  0),   # blue
     "lane_boundary": (0,  255,  0),   # green
     "stop_sign":     (0,    0, 255),  # red
 }
-
 
 def draw_fusion_overlay(
     canvas: np.ndarray,
@@ -427,10 +352,9 @@ def draw_fusion_overlay(
 # =============================================================================
 # Testing
 # ============================================================================
-
 if __name__ == "__main__":
     """
-    Standalone Test
+    Standalone Test (feature_fusion)
 
     Mocks an expected result from frames
       - Frame with all three detection types present
@@ -460,25 +384,28 @@ if __name__ == "__main__":
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # =============================================================================
-    # Mock candidate factory helpers
+    # Mock Object Generators
     # =============================================================================
     def _tl(label, bbox, conf, fid=0, ts=1000):
         """
-        Mock traffic light candidate
+        Purpose:
+            Mock traffic light candidate
         """
         return _TrafficLightCandidate(label=label, bbox=bbox, confidence=conf,
                                       frame_id=fid, timestamp_ms=ts)
 
     def _lane(bbox, conf, fid=0, ts=1000):
         """
-        Mock lane boundary candidate
+        Purpose:
+            Mock lane boundary candidate
         """
         return _LaneCandidate(label="lane_boundary", bbox=bbox, contour=None,
                                confidence=conf, frame_id=fid, timestamp_ms=ts)
 
     def _sign(bbox, conf, verts=8, fid=0, ts=1000):
         """
-        Mock stop sign candidate
+        Purpose:
+            Mock stop sign candidate
         """
         return _SignCandidate(label="stop_sign", bbox=bbox, contour=None,
                                vertex_count=verts, confidence=conf,
@@ -489,57 +416,58 @@ if __name__ == "__main__":
     # =============================================================================
     mock_frames = [
         {
-            "name":     "f0_all_present",
-            "traffic":  [_tl("green", (20, 10, 30, 30), 0.85)],
-            "lanes":    [_lane((0, 50, 15, 120), 0.72), _lane((180, 50, 15, 120), 0.68)],
-            "signs":    [_sign((60, 20, 80, 80), 0.78)],
+            "name": "f0_all_present",
+            "traffic": [_tl("green", (20, 10, 30, 30), 0.85)],
+            "lanes": [_lane((0, 50, 15, 120), 0.72), _lane((180, 50, 15, 120), 0.68)],
+            "signs": [_sign((60, 20, 80, 80), 0.78)],
         },
         {
-            "name":     "f1_tl_conflict",
-            "traffic":  [
-                _tl("red",   (20, 10, 30, 30), 0.91),
+            "name": "f1_tl_conflict",
+            "traffic": [
+                _tl("red", (20, 10, 30, 30), 0.91),
                 _tl("green", (22, 12, 28, 28), 0.55),   # suppressed by TL-1
             ],
-            "lanes":    [_lane((5, 50, 12, 100), 0.60)],
-            "signs":    [],
+            "lanes": [_lane((5, 50, 12, 100), 0.60)],
+            "signs": [],
         },
         {
-            "name":     "f2_multi_sign",
-            "traffic":  [],
-            "lanes":    [],
-            "signs":    [
+            "name": "f2_multi_sign",
+            "traffic": [],
+            "lanes": [],
+            "signs": [
                 _sign((60, 20, 80, 80), 0.82),
                 _sign((55, 18, 85, 85), 0.44),   # suppressed by SS-1
             ],
         },
         {
-            "name":     "f3_multi_lane",
-            "traffic":  [_tl("yellow", (20, 10, 30, 30), 0.70)],
-            "lanes":    [
-                _lane((0,   50, 14, 110), 0.88),
+            "name": "f3_multi_lane",
+            "traffic": [_tl("yellow", (20, 10, 30, 30), 0.70)],
+            "lanes": [
+                _lane((0, 50, 14, 110), 0.88),
                 _lane((186, 50, 14, 110), 0.79),
-                _lane((90,  60, 20,  40), 0.45),
+                _lane((90, 60, 20, 40), 0.45),
             ],
-            "signs":    [],
+            "signs": [],
         },
         {
-            "name":     "f4_no_candidates",
-            "traffic":  [],
-            "lanes":    [],
-            "signs":    [],
+            "name": "f4_no_candidates",
+            "traffic": [],
+            "lanes": [],
+            "signs": [],
         },
         {
-            "name":     "f5_invalid_confidence",
-            "traffic":  [_tl("red", (20, 10, 30, 30), -0.5)],   # F2: discarded
-            "lanes":    [_lane((0, 50, 14, 110), 1.3)],          # F2: discarded
-            "signs":    [_sign((60, 20, 80, 80), 0.65)],
+            "name": "f5_invalid_confidence",
+            "traffic": [_tl("red", (20, 10, 30, 30), -0.5)],   # F2: discarded
+            "lanes": [_lane((0, 50, 14, 110), 1.3)],          # F2: discarded
+            "signs": [_sign((60, 20, 80, 80), 0.65)],
         },
     ]
 
-    # =============================================================================
-    # Try to find a real ROI image for canvas - fall back to blank
-    # =============================================================================
     def _load_canvas(results_dir, suffix, fallback_shape=(240, 320, 3)):
+        """
+        Purpose:
+            Try to load real ROI image from trackT3/results/
+        """
         if os.path.isdir(results_dir):
             for f in sorted(os.listdir(results_dir)):
                 if f.endswith(suffix):
@@ -558,36 +486,36 @@ if __name__ == "__main__":
 
         detections, summary = fuse_detections(
             traffic_candidates = frame["traffic"],
-            lane_candidates    = frame["lanes"],
-            sign_candidates    = frame["signs"],
-            frame_id           = i,
-            timestamp_ms       = ts_ms,
-            source_rois        = SourceROIInfo(
-                lane_shape    = (canvas.shape[0], canvas.shape[1]),
+            lane_candidates = frame["lanes"],
+            sign_candidates = frame["signs"],
+            frame_id = i,
+            timestamp_ms = ts_ms,
+            source_rois = SourceROIInfo(
+                lane_shape = (canvas.shape[0], canvas.shape[1]),
                 traffic_shape = (canvas.shape[0] // 2, canvas.shape[1]),
-                sign_shape    = (canvas.shape[0], canvas.shape[1] // 2),
+                sign_shape = (canvas.shape[0], canvas.shape[1] // 2),
             ),
         )
 
         # Debug summary
         txt_path = os.path.join(OUTPUT_DIR, f"fusion_{frame['name']}_summary.txt")
         with open(txt_path, "w") as f:
-            f.write(f"Frame:      {summary['frame_id']}\n")
-            f.write(f"Timestamp:  {summary['timestamp_ms']}\n")
-            f.write(f"Total out:  {summary['total']}\n")
-            f.write(f"Counts:     {summary['counts']}\n")
-            f.write(f"Discarded:  {summary['discarded']}\n")
+            f.write(f"Frame: {summary['frame_id']}\n")
+            f.write(f"Timestamp: {summary['timestamp_ms']}\n")
+            f.write(f"Total out: {summary['total']}\n")
+            f.write(f"Counts: {summary['counts']}\n")
+            f.write(f"Discarded: {summary['discarded']}\n")
             f.write(f"Suppressed: {summary['suppressed']}\n")
             f.write("\nDetections:\n")
             for d in detections:
                 f.write(
-                    f"  type={d.type:<16} label={d.label_detail:<12} "
-                    f"conf={d.confidence:.4f}  pos={d.position}  "
+                    f"type={d.type:<16} label={d.label_detail:<12} "
+                    f"conf={d.confidence:.4f} pos={d.position}"
                     f"bbox={d.bounding_box}\n"
                 )
             f.write("\nLog:\n")
             for entry in summary["log"]:
-                f.write(f"  {entry}\n")
+                f.write(f"{entry}\n")
 
         # Overlay visualization
         vis = draw_fusion_overlay(canvas, detections, title=frame["name"])
@@ -596,11 +524,11 @@ if __name__ == "__main__":
 
         count_str = ", ".join(f"{k}={v}" for k, v in summary["counts"].items()) or "none"
         print(
-            f"[OK] {frame['name']}  detections=[{count_str}]  "
-            f"discarded={summary['discarded']}  suppressed={summary['suppressed']}"
+            f"[OK] {frame['name']} detections=[{count_str}]"
+            f"discarded={summary['discarded']} suppressed={summary['suppressed']}"
         )
         if summary["log"]:
             for entry in summary["log"]:
-                print(f"      {entry}")
+                print(f"{entry}")
 
     print(f"\nOutputs written to {OUTPUT_DIR}")

@@ -29,22 +29,22 @@ Purpose:
 
 Inputs:
     frame : np.ndarray
-        Shape  : (H, W, 3)
-        Dtype  : uint8
-        Color  : YUV  (aligned with capture.py output)
-        Source : one frame from the GStreamer ring buffer
+        Shape: (H, W, 3)
+        Dtype: uint8
+        Color: YUV (aligned with capture.py output)
+        Source: one frame from the GStreamer ring buffer
 
-    gaussian_kernel_size : tuple[int, int]  (default (5, 5))
+    gaussian_kernel_size : tuple[int, int] (default (5, 5))
         Can only be odd positive integers; Larger values blur more aggressively
 
-    gaussian_sigma : float  (default 0.0)
+    gaussian_sigma: float (default 0.0)
         When 0.0, OpenCV computes sigma from kernel size automatically
 
 Outputs
     Returns : np.ndarray
-        Shape  : (H, W, 3)
-        Dtype  : uint8
-        Color  : YUV  (aligned with capture.py output)
+        Shape: (H, W, 3)
+        Dtype: uint8
+        Color: YUV (aligned with capture.py output)
     The returned array is a new allocation
 """
 def preprocess_frame(
@@ -89,36 +89,28 @@ def preprocess_frame(
 # =============================================================================
 if __name__ == "__main__":
     """
-    Standalone test (static dataset):
+    Standalone test (preprocessing):
 
     Purpose:
         Loads every .jpg / .png from the dataset directory, runs preprocess_frame(), 
         and writes four debug images per input into vision_stack/frames/trackT1/results/
 
-    Directory structure:
-        vision_stack/
-            frames/
-                trackT1/
-                    img001.jpg
-                    img002.jpg
-                    ...
-                    results/
-                        img001_1_original.png
-                        img001_2_undistorted.png
-                        ...
+    Outputs per image -> vision_stack/frames/trackT*/results/:
+      stem_1_equalized.png: equalized YUV frame
+      stem_2_blurred.png: blurred equalized YUV frame
     """
     SAMPLE_DIRS = [
         "vision_stack/frames/trackT3",
         "vision_stack/frames/trackT4",
         "vision_stack/frames/trackT5"
     ]
-    GAUSSIAN_KERNEL  = (5, 5)
-    GAUSSIAN_SIGMA   = 0.0
+    GAUSSIAN_KERNEL = (5, 5)
+    GAUSSIAN_SIGMA = 0.0
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     # Tracks processing progress
     total_processed = 0
-    total_failed    = 0
+    total_failed = 0
 
     # Organize directory structure
     for sample_dir in SAMPLE_DIRS:
@@ -141,7 +133,7 @@ if __name__ == "__main__":
         # Load each image, run the preprocessing pipeline, and write debug images to check quality
         for filename in image_files:
             img_path = os.path.join(sample_dir, filename)
-            stem     = os.path.splitext(filename)[0]
+            stem = os.path.splitext(filename)[0]
 
             original = cv2.imread(img_path)
             if original is None:

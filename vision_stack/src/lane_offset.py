@@ -7,7 +7,7 @@ Purpose:
     Compute the lateral offset of the robot from the lane center using pixel positions of lane
     boundary candidates from feature fusion
 
-Offset convention:
+Offsets:
     0.0: robot is centered between detected boundaries
    -1.0: robot is at the left boundary
    +1.0: robot is at the right boundary
@@ -48,11 +48,11 @@ class LaneOffsetResult:
     timestamp: int
 
 def compute_lane_offset(
-    detections:       List[DetectionObject],
-    frame_width:      int,
-    frame_id:         int,
-    timestamp:        int,
-    conf_threshold:   float = 0.30,
+    detections: List[DetectionObject],
+    frame_width: int,
+    frame_id: int,
+    timestamp: int,
+    conf_threshold: float = 0.30,
     min_lane_width_px: float = 150.0,
 ) -> LaneOffsetResult:
     """
@@ -68,7 +68,7 @@ def compute_lane_offset(
         min_lane_width_px: minimum pixel distance between lane boundaries
 
     Output:
-        LaneOffsetResult  : final lane offset estimate
+        LaneOffsetResult : final lane offset estimate
     """
     frame_center = frame_width / 2.0
 
@@ -92,10 +92,10 @@ def compute_lane_offset(
     # Sort candidates by x position
     lanes_by_x = sorted(lanes, key=lambda d: d.position["x"])
 
-    left  = lanes_by_x[0]
+    left = lanes_by_x[0]
     right = lanes_by_x[-1]
 
-    left_x  = left.position["x"]
+    left_x = left.position["x"]
     right_x = right.position["x"]
 
     # =========================================================================
@@ -104,10 +104,10 @@ def compute_lane_offset(
     if left is right:
         if left_x < frame_center:   # Detected boundary is on the left
             offset = (frame_center - left_x) / frame_center
-            mode   = "left_only"
+            mode = "left_only"
         else:                       # Detected boundary is on the right
             offset = (frame_center - right_x) / frame_center
-            mode   = "right_only"
+            mode = "right_only"
 
         # Return only the applicable boundary anchor
         return LaneOffsetResult(
@@ -125,12 +125,12 @@ def compute_lane_offset(
     # ==========================================================================
     # Two boundary detections - checking width
     # ==========================================================================
-    lane_center    = (left_x + right_x) / 2.0
-    lane_width_px  = right_x - left_x
+    lane_center = (left_x + right_x) / 2.0
+    lane_width_px = right_x - left_x
 
     # Ensure the lane detected is as wide as expected
     if lane_width_px < min_lane_width_px:
-        mid_x  = (left_x + right_x) / 2.0
+        mid_x = (left_x + right_x) / 2.0
         offset = (frame_center - mid_x) / frame_center
         offset = max(-1.0, min(1.0, offset))
 
@@ -149,9 +149,9 @@ def compute_lane_offset(
     # Two boundary detections - computing offset
     # ======================================================t====================
     lane_center = (left_x + right_x) / 2.0
-    offset      = (lane_center - frame_center) / (lane_width_px / 2.0)
-    offset      = max(-1.0, min(1.0, offset))
-    mean_conf   = (left.confidence + right.confidence) / 2.0
+    offset = (lane_center - frame_center) / (lane_width_px / 2.0)
+    offset = max(-1.0, min(1.0, offset))
+    mean_conf = (left.confidence + right.confidence) / 2.0
 
     # Return the average of the two anchors
     return LaneOffsetResult(

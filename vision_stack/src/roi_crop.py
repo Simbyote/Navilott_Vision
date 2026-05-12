@@ -1,58 +1,29 @@
 """
 roi_crop.py
-===========
-ROI Cropping substage — Vision Perception Phase (Phase 2, Step 2 of 7)
 
-Purpose
--------
-Partitions the preprocessed BGR frame into three spatially distinct regions
-before the pipeline splits into parallel branches. Cropping serves two goals:
+ROI Cropping Stage
 
-  1. Reduce the pixel area each downstream operation must process. Canny, HSV
-     thresholding, and contour extraction all scale with pixel count. Feeding
-     only the relevant region of the frame to each branch cuts their cost
-     proportionally.
+Purpose:
+    Partitions the preprocessed YUV (or BGR) frame into three spatially distinct regions
+    before the pipeline splits into parallel branches. Cropping serves two goals:
 
-  2. Eliminate irrelevant regions from each branch's input. Lane detection has
-     no use for the sky. Traffic light detection has no use for the road
-     surface. Sign detection has no use for the left lane. Restricting input
-     reduces false positive rate before any threshold is applied.
+    1. Reduce the pixel area each downstream operation must process
+       Canny, HSV thresholding, and contour extraction all scale with pixel count
+       Feeding only the relevant region of the frame to each branch cuts their cost
+       proportionally
 
-No detection, conversion, or analysis of any kind is performed here.
+    2. Eliminate irrelevant regions from each branch's input
+       Lane detection has no use for the sky 
+       Traffic light detection has no use for the road surface 
+       Sign detection has no use for the left lane 
+       Restricting input reduces false positive rate before any threshold is applied
 
-Input contract
---------------
-  frame : np.ndarray
-      Shape  : (H, W, 3)
-      Dtype  : uint8
-      Color  : BGR
-      Source : output of preprocess_frame() — undistorted, equalized, blurred
 
-  frame_id : int
-      Monotonically increasing frame counter from the capture loop.
-      Carried into each ROIResult for downstream traceability.
+Each ROI array is a NumPy slice of the input frame
+All coordinates are computed deterministically from (H, W) = frame.shape[:2]
 
-Output contract
----------------
-  Returns : ROICropResult (dataclass)
-      .lane_roi         np.ndarray  (H//2, W, 3)         uint8 BGR
-      .traffic_roi      np.ndarray  (H//2, W//2, 3)      uint8 BGR
-      .sign_roi         np.ndarray  (H, W//2, 3)         uint8 BGR
-      .lane_rect        (x, y, w, h) pixel coords in source frame
-      .traffic_rect     (x, y, w, h) pixel coords in source frame
-      .sign_rect        (x, y, w, h) pixel coords in source frame
-      .frame_id         int         copied from input
-      .source_shape     (H, W)      original frame dimensions
-
-  Each ROI array is a NumPy view (slice) of the input frame — no copy is made.
-  The caller must not modify the input frame while any ROI array is live.
-  If a copy is needed (e.g. for writing to disk), call .copy() explicitly.
-
-ROI coordinate definitions
---------------------------
-All coordinates are computed deterministically from (H, W) = frame.shape[:2].
-
-  Lane ROI — lower half of frame
+===========================================================
+  Lane ROI: lower half of frame
   ┌──────────────────────────────┐  y=0
   │                              │
   │         (discarded)          │  y=H//2 - 1
@@ -63,13 +34,14 @@ All coordinates are computed deterministically from (H, W) = frame.shape[:2].
   └──────────────────────────────┘
     x=0                       x=W-1
 
-    x  = 0
-    y  = H // 2
-    w  = W
-    h  = H - H // 2      (handles odd H correctly)
-    slice: frame[H//2 : H,  0 : W]
+    x = 0
+    y = H // 2
+    w = W
+    h = H - H // 2
+    slice: frame[H//2 : H, 0 : W]
 
-  Traffic Light ROI — top-center half of frame
+===========================================================
+  Traffic Light ROI: top-center half of frame
   ┌────┬──────────────┬────┐  y=0
   │    │              │    │
   │disc│  traffic_roi │disc│
@@ -79,13 +51,14 @@ All coordinates are computed deterministically from (H, W) = frame.shape[:2].
   └────────────────────────┘
     x=0  x=W//4        x=3*W//4  x=W-1
 
-    x  = W // 4
-    y  = 0
-    w  = W - 2*(W//4)   (= W//2 for even W; correct for odd W)
-    h  = H // 2
-    slice: frame[0 : H//2,  W//4 : W//4 + w]
+    x = W // 4
+    y = 0
+    w = W - 2*(W//4)
+    h = H // 2
+    slice: frame[0 : H//2, W//4 : W//4 + w]
 
-  Sign ROI — right half of full frame height
+===========================================================
+  Sign ROI: right half of full frame height
   ┌──────────┬──────────┐  y=0
   │          │          │
   │(discarded│ sign_roi │
@@ -94,73 +67,58 @@ All coordinates are computed deterministically from (H, W) = frame.shape[:2].
   └──────────┴──────────┘
     x=0    x=W//2     x=W-1
 
-    x  = W // 2
-    y  = 0
-    w  = W - W // 2    (handles odd W correctly)
-    h  = H
-    slice: frame[0 : H,  W//2 : W]
-
-Failure cases
--------------
-  F1 — frame is None:
-       Raises ValueError before any slicing occurs.
-
-  F2 — frame is not (H, W, 3) uint8 BGR:
-       Wrong dtype or wrong number of channels produces silently wrong ROIs
-       downstream. Asserted at function entry.
-
-  F3 — frame dimensions too small:
-       If W < 4 or H < 2, integer division produces zero-size or negative
-       slices. Minimum usable input is (2, 4, 3). Asserted at entry.
-
-  F4 — caller modifies frame while ROI views are live:
-       ROIs are NumPy views, not copies. Writes to the source frame after
-       crop_rois() returns will silently corrupt ROI data. The caller owns
-       this contract — this function cannot enforce it.
-
-  F5 — frame_id not provided or negative:
-       Accepted as-is; no semantic validation. Convention: 0-indexed, monotonic.
+    x = W // 2
+    y = 0
+    w = W - W // 2
+    h = H
+    slice: frame[0 : H, W//2 : W]
 """
-
 import cv2
 import numpy as np
 from dataclasses import dataclass
 
-
-# ---------------------------------------------------------------------------
-# Result container
-# ---------------------------------------------------------------------------
-
+# ============================================================================
+# Result Container
+# ============================================================================
 @dataclass
 class ROICropResult:
-    lane_roi:     np.ndarray   # (H//2,         W,     3) uint8 BGR — view
-    traffic_roi:  np.ndarray   # (H//2,         W//2,  3) uint8 BGR — view
-    sign_roi:     np.ndarray   # (H,            W//2,  3) uint8 BGR — view
-    lane_rect:    tuple        # (x, y, w, h) in source frame pixels
-    traffic_rect: tuple        # (x, y, w, h) in source frame pixels
-    sign_rect:    tuple        # (x, y, w, h) in source frame pixels
-    frame_id:     int          # from caller
-    source_shape: tuple        # (H, W) of input frame
+    """
+    Container for the results of the ROI cropping stage
+    
+    lane_roi: lower half of frame
+    traffic_roi: top-center half of frame
+    sign_roi: right half of frame
+    lane_rect: tuple (x, y, w, h) in source frame pixels
+    traffic_rect: tuple (x, y, w, h) in source frame pixels
+    sign_rect: tuple (x, y, w, h) in source frame pixels
+    frame_id: integer identifier carried from the capture loop
+    source_shape: tuple (H, W) of input frame
+    """
+    lane_roi: np.ndarray
+    traffic_roi: np.ndarray
+    sign_roi: np.ndarray
+    lane_rect: tuple
+    traffic_rect: tuple
+    sign_rect: tuple
+    frame_id: int
+    source_shape: tuple
 
-
-# ---------------------------------------------------------------------------
-# Core substage
-# ---------------------------------------------------------------------------
-
+# ============================================================================
+# Core Function
+# ============================================================================
 def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     """
-    Partition one preprocessed BGR frame into three ROIs.
+    Purpose:
+        Partition one preprocessed BGR frame into three ROIs
 
-    Parameters
-    ----------
-    frame    : uint8 BGR ndarray, shape (H, W, 3)
-    frame_id : integer identifier carried from the capture loop
+    Inputs:
+        frame: uint8 YUV ndarray, shape (H, W, 3)
+        frame_id: integer identifier carried from the capture loop
 
-    Returns
-    -------
-    ROICropResult  (see module docstring for full field specification)
+    Outputs:
+        ROICropResult
     """
-    # --- Guard: input validation -------------------------------------------
+    # Guard and input validation
     if frame is None:
         raise ValueError("crop_rois: received None frame")
     if frame.dtype != np.uint8:
@@ -176,7 +134,7 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
             "Minimum usable size is (2, 4)."
         )
 
-    # --- Coordinate computation --------------------------------------------
+    # Coordinate Computation
     # Lane: lower half
     lane_x = 0
     lane_y = H // 2
@@ -195,73 +153,73 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     sign_w = W - W // 2
     sign_h = H
 
-    # --- Slicing (views, no copy) ------------------------------------------
+    # Slicing
     # Adding a copy would cost memory but would prevent cross-stage mutations (considered)
-    lane_roi    = frame[lane_y : lane_y + lane_h,  lane_x : lane_x + lane_w]
-    traffic_roi = frame[tl_y   : tl_y   + tl_h,   tl_x   : tl_x   + tl_w ]
-    sign_roi    = frame[sign_y : sign_y + sign_h,  sign_x : sign_x + sign_w]
+    lane_roi = frame[lane_y: lane_y + lane_h, lane_x: lane_x + lane_w]
+    traffic_roi = frame[tl_y: tl_y + tl_h, tl_x: tl_x + tl_w ]
+    sign_roi = frame[sign_y: sign_y + sign_h, sign_x: sign_x + sign_w]
 
     return ROICropResult(
-        lane_roi     = lane_roi,
-        traffic_roi  = traffic_roi,
-        sign_roi     = sign_roi,
-        lane_rect    = (lane_x,  lane_y,  lane_w,  lane_h),
-        traffic_rect = (tl_x,    tl_y,    tl_w,    tl_h),
-        sign_rect    = (sign_x,  sign_y,  sign_w,  sign_h),
-        frame_id     = frame_id,
+        lane_roi = lane_roi,
+        traffic_roi = traffic_roi,
+        sign_roi = sign_roi,
+        lane_rect = (lane_x, lane_y, lane_w, lane_h),
+        traffic_rect = (tl_x, tl_y, tl_w, tl_h),
+        sign_rect = (sign_x, sign_y, sign_w, sign_h),
+        frame_id = frame_id,
         source_shape = (H, W),
     )
 
-
-# ---------------------------------------------------------------------------
-# Debug overlay helper
-# ---------------------------------------------------------------------------
-
-# BGR colors for each ROI rectangle drawn on the overlay image
-_LANE_COLOR    = (0,   255,   0)   # green
-_TRAFFIC_COLOR = (255,   0,   0)   # blue
-_SIGN_COLOR    = (0,     0, 255)   # red
+# ============================================================================
+# Debug Visualization
+# ============================================================================
+# Global colors for each ROI rectangle drawn on the overlay image
+_LANE_COLOR = (0, 255, 0)   # green
+_TRAFFIC_COLOR = (255, 0, 0)   # blue
+_SIGN_COLOR = (0, 0, 255)   # red
 _RECT_THICKNESS = 2
-
 
 def draw_roi_overlay(frame: np.ndarray, result: ROICropResult) -> np.ndarray:
     """
-    Return a copy of frame with the three ROI rectangles drawn on it.
-    Does not modify the input frame.
-    Labels: 'lane' (green), 'traffic' (blue), 'sign' (red).
+    Purpose:
+        Return a copy of frame with the three ROI rectangles drawn on it
     """
     overlay = frame.copy()
 
     def _draw(rect, color, label):
+        """
+        Purpose:
+            Draw a rectangle on overlay
+        """
         x, y, w, h = rect
         cv2.rectangle(overlay, (x, y), (x + w - 1, y + h - 1), color, _RECT_THICKNESS)
         cv2.putText(overlay, label, (x + 4, y + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
 
-    _draw(result.lane_rect,    _LANE_COLOR,    "lane")
+    _draw(result.lane_rect, _LANE_COLOR, "lane")
     _draw(result.traffic_rect, _TRAFFIC_COLOR, "traffic")
-    _draw(result.sign_rect,    _SIGN_COLOR,    "sign")
+    _draw(result.sign_rect, _SIGN_COLOR, "sign")
 
     return overlay
 
-
-# ---------------------------------------------------------------------------
-# Test harness
-# ---------------------------------------------------------------------------
-
+# ============================================================================
+# Test
+# ============================================================================
 if __name__ == "__main__":
     """
-    Standalone test harness.
+    Standalone Test (roi_crop):
 
-    Loads every .jpg / .png from s1-s5, runs crop_rois(), and writes four
-    debug images per input into vision_stack/sample_img/duckietown/sN/results/
+    Purpose:
+        Run the ROI cropping on a set of sample images from the course
 
-      stem_roi_overlay.png   — original frame with three ROI rectangles
-      stem_roi_lane.png      — lane ROI crop
-      stem_roi_traffic.png   — traffic light ROI crop
-      stem_roi_sign.png      — sign ROI crop
+    Inputs: 
+        Original images from dataset
 
-    Coordinate definitions are printed once per unique image resolution found.
+    Output per image -> vision_stack/frames/trackT*/results/:
+      stem_roi.png: original frame
+      stem_roi_lane.png: lane ROI
+      stem_roi_traffic.png: traffic light ROI
+      stem_roi_sign.png: sign ROI
     """
     import os
 
@@ -273,9 +231,9 @@ if __name__ == "__main__":
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     seen_shapes = set()
-    total_ok    = 0
-    total_fail  = 0
-    frame_id    = 0
+    total_ok = 0
+    total_fail = 0
+    frame_id = 0
 
     for sample_dir in SAMPLE_DIRS:
         if not os.path.isdir(sample_dir):
@@ -296,7 +254,7 @@ if __name__ == "__main__":
 
         for filename in image_files:
             img_path = os.path.join(sample_dir, filename)
-            stem     = os.path.splitext(filename)[0]
+            stem = os.path.splitext(filename)[0]
 
             frame = cv2.imread(img_path)
             if frame is None:
@@ -316,16 +274,16 @@ if __name__ == "__main__":
             if (H, W) not in seen_shapes:
                 seen_shapes.add((H, W))
                 print(f"\n[COORDS] Resolution {W}x{H}:")
-                print(f"  lane_rect    : {result.lane_rect}")
-                print(f"  traffic_rect : {result.traffic_rect}")
-                print(f"  sign_rect    : {result.sign_rect}")
+                print(f" lane_rect: {result.lane_rect}")
+                print(f" traffic_rect: {result.traffic_rect}")
+                print(f" sign_rect: {result.sign_rect}")
 
             # Debug image 1: overlay
             overlay = draw_roi_overlay(frame, result)
             cv2.imwrite(
                 os.path.join(results_dir, f"{stem}_roi_overlay.png"), overlay)
 
-            # Debug image 2: lane ROI (copy for safe write)
+            # Debug image 2: lane ROI
             cv2.imwrite(
                 os.path.join(results_dir, f"{stem}_roi_lane.png"),
                 result.lane_roi.copy())
@@ -340,8 +298,8 @@ if __name__ == "__main__":
                 os.path.join(results_dir, f"{stem}_roi_sign.png"),
                 result.sign_roi.copy())
 
-            print(f"[OK] frame_id={frame_id}  {img_path}")
-            frame_id  += 1
-            total_ok  += 1
+            print(f"[OK] frame_id={frame_id} {img_path}")
+            frame_id += 1
+            total_ok += 1
 
     print(f"\nDone. {total_ok} processed, {total_fail} failed.")

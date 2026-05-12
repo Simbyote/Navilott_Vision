@@ -1,26 +1,16 @@
 """
 lane_offset_linker.py
 
-Phase 2 Pipeline — Stages 1 through 6.
+Phase 2 Pipeline
 
-Adds Stage 6 (lane offset estimation) to the S1-S5 chain.
-Stage 7 (output packaging) remains stubbed.
+Purpose:
+    Tests stages 1 through 6
+
+Adds Stage 6 (lane offset estimation) to the S1-S5 chain
+Stage 7 (output packaging) remains stubbed
 
 Stage 6 replaces the perspective transform with a direct pixel-based
 lateral offset computation
-
-@TODO: Add the final output packaging stage (Phase2Output) and connect it to the Phase 3 entry point.
-
-Usage
------
-  python lane_offset_linker.py
-
-To use as a module:
-  from phase2_linker_s1s6 import load_config, run_s1_to_s6
-  cfg    = load_config()
-  result = run_s1_to_s6(frame, frame_id, timestamp_ms, cfg)
-  # result.lane_offset  → LaneOffsetResult, ready for Phase 3
-  # result.detections   → list[DetectionObject], carried forward to Stage 7
 """
 import os
 import sys
@@ -30,9 +20,9 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, List
 
-# ---------------------------------------------------------------------------
-# Stage imports
-# ---------------------------------------------------------------------------
+# ============================================================================
+# Stage Imports
+# ============================================================================
 
 from preprocess import preprocess_frame
 from roi_crop import crop_rois, draw_roi_overlay, ROICropResult
@@ -57,18 +47,16 @@ from feature_fusion import (
 from lane_offset import compute_lane_offset, LaneOffsetResult   # Stage 6
 from phase2_out import package_phase2_output  # Stage 7 stub
 
-
 # =============================================================================
 # Calibration file paths
 # =============================================================================
 
-CALIBRATION_HSV          = "vision_stack/calibration/hsv_ranges.json"
-CALIBRATION_HSV_DUMMY    = "vision_stack/dummy/dummy_hsv_ranges.json"
+CALIBRATION_HSV = "vision_stack/calibration/hsv_ranges.json"
+CALIBRATION_HSV_DUMMY = "vision_stack/dummy/dummy_hsv_ranges.json"
 
 # =============================================================================
 # Config
 # =============================================================================
-
 @dataclass
 class S1S6Config:
     """
@@ -83,16 +71,20 @@ class S1S6Config:
     gaussian_sigma: sigma for initial Gaussian blur in Stage 1
     lane_offset_conf_threshold: confidence threshold for including detections in lane offset computation
     """
-    hsv_ranges:                HSVRanges
-    blob_filter:               BlobFilter
-    canny_params:              CannyParams
-    lane_filter:               LaneContourFilter
-    sign_filter:               SignContourFilter
-    gaussian_kernel_size:      tuple = (5, 5)
-    gaussian_sigma:            float = 0.0
+    hsv_ranges: HSVRanges
+    blob_filter: BlobFilter
+    canny_params: CannyParams
+    lane_filter: LaneContourFilter
+    sign_filter: SignContourFilter
+    gaussian_kernel_size: tuple = (5, 5)
+    gaussian_sigma: float = 0.0
     lane_offset_conf_threshold: float = 0.30
 
 def load_config() -> S1S6Config:
+    """
+    Purpose:
+        Load calibration files and assemble S1S6Config
+    """
     if os.path.exists(CALIBRATION_HSV):
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV)
         print(f"[CONFIG] HSV ranges loaded from {CALIBRATION_HSV}")
@@ -104,24 +96,23 @@ def load_config() -> S1S6Config:
         hsv_ranges = load_hsv_ranges(CALIBRATION_HSV_DUMMY)
 
     return S1S6Config(
-        hsv_ranges           = hsv_ranges,
-        blob_filter          = BlobFilter(),
-        canny_params         = CannyParams(),
-        lane_filter          = LaneContourFilter(),
-        sign_filter          = SignContourFilter(),
+        hsv_ranges = hsv_ranges,
+        blob_filter = BlobFilter(),
+        canny_params = CannyParams(),
+        lane_filter = LaneContourFilter(),
+        sign_filter = SignContourFilter(),
         gaussian_kernel_size = (5, 5),
-        gaussian_sigma       = 0.0,
+        gaussian_sigma = 0.0,
         lane_offset_conf_threshold = 0.50,
     )
 
 # =============================================================================
 # Result Container
 # =============================================================================
-
 @dataclass
 class S1S6Result:
     """
-    Output of the S1-S6 pipeline.
+    Output of the S1-S6 pipeline
 
     detections: list of DetectionObject from feature fusion
     lane_offset: LaneOffsetResult from Stage 6
@@ -131,24 +122,24 @@ class S1S6Result:
     times: dict of stage execution times in milliseconds
     fusion_log: optional list of log entries from feature fusion stage
     """
-    detections:   List[DetectionObject]
-    lane_offset:  LaneOffsetResult
-    roi_result:   ROICropResult
-    frame_id:     int
+    detections: List[DetectionObject]
+    lane_offset: LaneOffsetResult
+    roi_result: ROICropResult
+    frame_id: int
     timestamp_ms: int
-    times:        dict
-    fusion_log:   List[str]
+    times: dict
+    fusion_log: List[str]
 
 # =============================================================================
-# Per-frame executor
+# Per-Frame Execution
 # =============================================================================
 def run_s1_to_s6(
-    frame:        np.ndarray,
-    frame_id:     int,
+    frame: np.ndarray,
+    frame_id: int,
     timestamp_ms: int,
-    cfg:          S1S6Config,
-    debug_dir:    Optional[str] = None,
-    stem:         str           = "frame",
+    cfg: S1S6Config,
+    debug_dir: Optional[str] = None,
+    stem: str           = "frame",
 ) -> S1S6Result:
     """
     Purpose:
@@ -172,9 +163,9 @@ def run_s1_to_s6(
     # =============================================================================
     t = time.time()
     conditioned = preprocess_frame(
-        frame                = frame,
+        frame = frame,
         gaussian_kernel_size = cfg.gaussian_kernel_size,
-        gaussian_sigma       = cfg.gaussian_sigma,
+        gaussian_sigma = cfg.gaussian_sigma,
     )
     times["s1_preprocess"] = (time.time() - t) * 1000
 
@@ -205,10 +196,10 @@ def run_s1_to_s6(
     # ============================================================================
     t = time.time()
     traffic_candidates, color_debug = extract_traffic_light_candidates(
-        roi          = roi_result.traffic_roi,
-        hsv_ranges   = cfg.hsv_ranges,
-        blob_filter  = cfg.blob_filter,
-        frame_id     = frame_id,
+        roi = roi_result.traffic_roi,
+        hsv_ranges = cfg.hsv_ranges,
+        blob_filter = cfg.blob_filter,
+        frame_id = frame_id,
         timestamp_ms = timestamp_ms,
     )
     times["s3_color_branch"] = (time.time() - t) * 1000
@@ -234,12 +225,12 @@ def run_s1_to_s6(
     # ============================================================================
     t = time.time()
     geo_result, lane_debug, sign_debug = run_geometry_branch(
-        lane_roi     = roi_result.lane_roi,
-        sign_roi     = roi_result.sign_roi,
+        lane_roi = roi_result.lane_roi,
+        sign_roi = roi_result.sign_roi,
         canny_params = cfg.canny_params,
-        lane_filter  = cfg.lane_filter,
-        sign_filter  = cfg.sign_filter,
-        frame_id     = frame_id,
+        lane_filter = cfg.lane_filter,
+        sign_filter = cfg.sign_filter,
+        frame_id = frame_id,
         timestamp_ms = timestamp_ms,
     )
     times["s4_geometry_branch"] = (time.time() - t) * 1000
@@ -256,14 +247,14 @@ def run_s1_to_s6(
     t = time.time()
     detections, fusion_summary = fuse_detections(
         traffic_candidates = traffic_candidates,
-        lane_candidates    = geo_result.lane_candidates,
-        sign_candidates    = geo_result.sign_candidates,
-        frame_id           = frame_id,
-        timestamp_ms       = timestamp_ms,
-        source_rois        = SourceROIInfo(
-            lane_shape    = roi_result.lane_roi.shape[:2],
+        lane_candidates = geo_result.lane_candidates,
+        sign_candidates = geo_result.sign_candidates,
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+        source_rois = SourceROIInfo(
+            lane_shape = roi_result.lane_roi.shape[:2],
             traffic_shape = roi_result.traffic_roi.shape[:2],
-            sign_shape    = roi_result.sign_roi.shape[:2],
+            sign_shape = roi_result.sign_roi.shape[:2],
         ),
     )
     times["s5_feature_fusion"] = (time.time() - t) * 1000
@@ -280,44 +271,42 @@ def run_s1_to_s6(
     t = time.time()
     lane_roi_width = roi_result.lane_roi.shape[1]
     lane_offset: LaneOffsetResult = compute_lane_offset(
-        detections      = detections,
-        frame_width     = lane_roi_width,
-        frame_id        = frame_id,
-        timestamp        = timestamp_ms,
-        conf_threshold  = cfg.lane_offset_conf_threshold,
+        detections = detections,
+        frame_width = lane_roi_width,
+        frame_id = frame_id,
+        timestamp = timestamp_ms,
+        conf_threshold = cfg.lane_offset_conf_threshold,
     )
     times["s6_lane_offset"] = (time.time() - t) * 1000
 
     # =============================================================================
-    # Stage 7: NOT YET CONNECTED
+    # Stage 7: Not integrated
     #
     # Stage 7 stub: phase2_out.package_phase2_output
     # (detections, lane_offset, frame_id, timestamp_ms) -> Phase2Output
     # =============================================================================
-
     TARGET_FPS = 20          # the current operating point
     FRAME_BUDGET_MS = (1.0 / TARGET_FPS) * 1000
 
     if frame_id % TARGET_FPS == 0:
         breakdown = "  ".join(f"{k}={v:.1f}ms" for k, v in times.items())
-        total     = sum(times.values())
-        flag      = " *** OVER BUDGET ***" if total > FRAME_BUDGET_MS else ""
-        print(f"[timing] frame={frame_id:04d}  {breakdown}  total={total:.1f}ms{flag}")
+        total = sum(times.values())
+        flag = " *** OVER BUDGET ***" if total > FRAME_BUDGET_MS else ""
+        print(f"[timing] frame={frame_id:04d} {breakdown} total={total:.1f}ms{flag}")
 
     return S1S6Result(
-        detections   = detections,
-        lane_offset  = lane_offset,
-        roi_result   = roi_result,
-        frame_id     = frame_id,
+        detections = detections,
+        lane_offset = lane_offset,
+        roi_result = roi_result,
+        frame_id = frame_id,
         timestamp_ms = timestamp_ms,
-        times        = times,
-        fusion_log   = fusion_summary.get("log", []),
+        times = times,
+        fusion_log = fusion_summary.get("log", []),
     )
 
 # ==============================================================================
 # Dataset runner
 # ==============================================================================
-
 SAMPLE_DIRS = [
     "vision_stack/frames/trackT3",
     "vision_stack/frames/trackT4",
@@ -326,16 +315,28 @@ SAMPLE_DIRS = [
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 
+# ==============================================================================
+# Test
+# ==============================================================================
 if __name__ == "__main__":
+    """
+    Driver Test (Phase 2 Pipeline)
+
+    Purpose:
+        Performs the entire processing pipeline on a set of sample images
+
+    Note:
+        Does not output any images; is purely for benchmarking
+    """
     try:
         cfg = load_config()
     except FileNotFoundError as e:
         print(f"[FATAL] Config load failed: {e}")
         sys.exit(1)
 
-    total_ok   = 0
+    total_ok = 0
     total_fail = 0
-    frame_id   = 0
+    frame_id = 0
 
     for sample_dir in SAMPLE_DIRS:
         if not os.path.isdir(sample_dir):
@@ -355,7 +356,7 @@ if __name__ == "__main__":
 
         for filename in image_files:
             img_path = os.path.join(sample_dir, filename)
-            stem     = os.path.splitext(filename)[0]
+            stem = os.path.splitext(filename)[0]
 
             frame = cv2.imread(img_path)
             if frame is None:
@@ -365,32 +366,32 @@ if __name__ == "__main__":
 
             try:
                 result = run_s1_to_s6(
-                    frame        = frame,
-                    frame_id     = frame_id,
+                    frame = frame,
+                    frame_id = frame_id,
                     timestamp_ms = int(time.time() * 1000),
-                    cfg          = cfg,
-                    debug_dir    = results_dir,
-                    stem         = stem,
+                    cfg = cfg,
+                    debug_dir = results_dir,
+                    stem = stem,
                 )
             except Exception as e:
-                print(f"[FAIL] frame_id={frame_id:04d}  {img_path}: {type(e).__name__}: {e}")
+                print(f"[FAIL] frame_id={frame_id:04d} {img_path}: {type(e).__name__}: {e}")
                 total_fail += 1
-                frame_id   += 1
+                frame_id += 1
                 continue
 
             lo = result.lane_offset
             offset_str = (
-                f"offset={lo.offset:+.4f}  mode={lo.mode}  "
-                f"conf={lo.confidence:.2f}  boundaries={lo.boundary_count}"
+                f"offset={lo.offset:+.4f} mode={lo.mode}"
+                f"conf={lo.confidence:.2f} boundaries={lo.boundary_count}"
             )
             if lo.lane_width_px is not None:
-                offset_str += f"  width_px={lo.lane_width_px:.1f}"
+                offset_str += f" width_px={lo.lane_width_px:.1f}"
 
             print(f"[OK] frame={frame_id:04d}  {filename}  {offset_str}")
 
             if result.fusion_log:
                 for entry in result.fusion_log:
-                    print(f"       {entry}")
+                    print(f"{entry}")
 
             total_ok += 1
             frame_id += 1
