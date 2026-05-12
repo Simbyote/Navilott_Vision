@@ -25,6 +25,7 @@ The results of both are returned together for feature fusion
 All coordinates are ROI-relative. Feature fusion is responsible for
 re-projecting into source frame coordinates
 """
+import sys
 import os
 import cv2
 import numpy as np
@@ -32,6 +33,12 @@ import time
 from dataclasses import dataclass
 from typing import List
 
+# ==========================================================
+# Dataset Loading Utility
+# ==========================================================
+sys.path.insert(0, "vision_stack/src")
+
+from unzip_data import extract_dataset
 
 # ============================================================================
 # Input Dataclasses
@@ -593,11 +600,10 @@ if __name__ == "__main__":
     """
     import os
 
-    SAMPLE_DIRS = [
-        "vision_stack/frames/trackT3",
-        "vision_stack/frames/trackT4",
-        "vision_stack/frames/trackT5"
-    ]
+    SAMPLE_DIRS = extract_dataset(
+        zip_path = "vision_stack/frames/frame_tracks.zip",
+        dest_dir  = "vision_stack/frames",
+    )
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 
     canny_params = CannyParams()

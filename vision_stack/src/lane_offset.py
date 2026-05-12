@@ -14,7 +14,9 @@ Offsets:
 
 Notes:
     Output is normalized to frame width, making it resolution-independent
-    and directly usable as a steering error signal in Phase 3 PID.
+    and directly usable as a steering error signal in Phase 3 PID
+
+@TODO: Does not have its own Standalone Test Block
 """
 from dataclasses import dataclass
 from typing import List, Optional

@@ -10,12 +10,20 @@ Purpose:
 Returns an empty list if no candidates survive blob filtering
 Coordinates are relative to the traffic-light ROI
 """
+import sys
 import cv2
 import numpy as np
 import json
 import time
 from dataclasses import dataclass, field
 from typing import List
+
+# ==========================================================
+# Dataset Loading Utility
+# ==========================================================
+sys.path.insert(0, "vision_stack/src")
+
+from unzip_data import extract_dataset
 
 # ============================================================================
 # Configuration Dataclasses
@@ -350,11 +358,10 @@ if __name__ == "__main__":
     import os
     import sys
 
-    SAMPLE_DIRS = [
-        "vision_stack/frames/trackT3",
-        "vision_stack/frames/trackT4",
-        "vision_stack/frames/trackT5"
-    ]
+    SAMPLE_DIRS = extract_dataset(
+        zip_path = "vision_stack/frames/frame_tracks.zip",
+        dest_dir  = "vision_stack/frames",
+    )
     HSV_RANGES_PATH = "vision_stack/calibration/hsv_ranges.json"  # for real detections
     HSV_DUMMY_PATH = "vision_stack/dummy/dummy_hsv_ranges.json"  # for unit test scaffolding
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")

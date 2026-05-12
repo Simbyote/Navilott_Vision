@@ -73,9 +73,17 @@ All coordinates are computed deterministically from (H, W) = frame.shape[:2]
     h = H
     slice: frame[0 : H, W//2 : W]
 """
+import sys
 import cv2
 import numpy as np
 from dataclasses import dataclass
+
+# ==========================================================
+# Dataset Loading Utility
+# ==========================================================
+sys.path.insert(0, "vision_stack/src")
+
+from unzip_data import extract_dataset
 
 # ============================================================================
 # Result Container
@@ -223,11 +231,10 @@ if __name__ == "__main__":
     """
     import os
 
-    SAMPLE_DIRS = [
-        "vision_stack/frames/trackT3",
-        "vision_stack/frames/trackT4",
-        "vision_stack/frames/trackT5"
-    ]
+    SAMPLE_DIRS = extract_dataset(
+        zip_path = "vision_stack/frames/frame_tracks.zip",
+        dest_dir  = "vision_stack/frames",
+    )
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     seen_shapes = set()

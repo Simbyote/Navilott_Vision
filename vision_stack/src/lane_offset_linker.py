@@ -20,6 +20,13 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional, List
 
+# ==========================================================
+# Dataset Loading Utility
+# ==========================================================
+sys.path.insert(0, "vision_stack/src")
+
+from unzip_data import extract_dataset
+
 # ============================================================================
 # Stage Imports
 # ============================================================================
@@ -304,16 +311,11 @@ def run_s1_to_s6(
         fusion_log = fusion_summary.get("log", []),
     )
 
-# ==============================================================================
-# Dataset runner
-# ==============================================================================
-SAMPLE_DIRS = [
-    "vision_stack/frames/trackT3",
-    "vision_stack/frames/trackT4",
-    "vision_stack/frames/trackT5",
-]
+SAMPLE_DIRS = extract_dataset(
+        zip_path = "vision_stack/frames/frame_tracks.zip",
+        dest_dir  = "vision_stack/frames",
+    )
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
-
 
 # ==============================================================================
 # Test

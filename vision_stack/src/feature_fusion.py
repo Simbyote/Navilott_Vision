@@ -25,6 +25,7 @@ Purpose:
 Any candidate that does not survive conflict resolution is logged in the debug summary
 
 Notes:
+    Standalone Test does not utilize dataset_loader.py
     position is the centroid of the winning candidate's bounding box in ROI
     pixel coordinates
 
@@ -56,7 +57,6 @@ class SourceROIInfo:
     lane_shape: tuple
     traffic_shape: tuple
     sign_shape: tuple
-
 
 @dataclass
 class DetectionObject:
@@ -149,7 +149,6 @@ def _centroid(
     cy = float(y) + float(h) / 2.0 if h > 0 else float(y)
     return {"x": round(cx, 2), "y": round(cy, 2)}
 
-
 def _valid_confidence(
         c: float
     ) -> bool:
@@ -158,7 +157,6 @@ def _valid_confidence(
         Guard against invalid confidence values
     """
     return 0.0 <= c <= 1.0
-
 
 def _best_candidate(
         candidates: list, 
@@ -183,11 +181,9 @@ def _best_candidate(
         return None
     return max(valid, key=lambda c: c.confidence)
 
-
 # =============================================================================
 # Feature Fusion
 # ============================================================================
-
 def fuse_detections(
     traffic_candidates: list,
     lane_candidates: list,
