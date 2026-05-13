@@ -27,19 +27,35 @@ Purpose:
 
     After extraction the layout on disk mirrors this structure under dest_dir,
     and the returned list of paths is a drop-in replacement for SAMPLE_DIRS
-
-Usage:
-    from dataset_loader import extract_dataset
-
-    SAMPLE_DIRS = extract_dataset(
-        zip_path = "datasets/track_run_01.zip",
-        dest_dir = "vision_stack/frames",
-    )
 """
 
 import os
 import zipfile
+import urllib.request
 
+# ==============================================================================
+# Fetches Remote Datasets
+# ==============================================================================
+def fetch_dataset(
+    url: str,
+    zip_path: str,
+    dest_dir: str,
+    track_prefix: str = "track",
+) -> list[str]:
+    """
+    Downloads the dataset zip from url if zip_path doesn't exist locally,
+    then delegates to extract_dataset().
+    """
+    if not os.path.isfile(zip_path):
+        print(f"[dataset_loader] Downloading dataset from {url} ...")
+        os.makedirs(os.path.dirname(zip_path) or ".", exist_ok=True)
+        urllib.request.urlretrieve(url, zip_path)
+        print(f"[dataset_loader] Saved to {zip_path}")
+    return extract_dataset(zip_path=zip_path, dest_dir=dest_dir, track_prefix=track_prefix)
+
+# ==============================================================================
+# Extracts Local Datasets
+# ==============================================================================
 def extract_dataset(
     zip_path: str,
     dest_dir: str,

@@ -25,7 +25,7 @@ from typing import Optional, List
 # ==========================================================
 sys.path.insert(0, "vision_stack/src")
 
-from unzip_data import extract_dataset
+from unzip_data import fetch_dataset
 
 # ============================================================================
 # Stage Imports
@@ -311,10 +311,11 @@ def run_s1_to_s6(
         fusion_log = fusion_summary.get("log", []),
     )
 
-SAMPLE_DIRS = extract_dataset(
-        zip_path = "vision_stack/frames/frame_tracks.zip",
-        dest_dir  = "vision_stack/frames",
-    )
+SAMPLE_DIRS = fetch_dataset(
+    url="https://github.com/Simbyote/Navilott_Vision/releases/download/v1.0-dataset/frame_tracks.zip",
+    zip_path="vision_stack/frames/frame_tracks.zip",
+    dest_dir="vision_stack/frames",
+)
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
 # ==============================================================================

@@ -23,7 +23,7 @@ from typing import List
 # ==========================================================
 sys.path.insert(0, "vision_stack/src")
 
-from unzip_data import extract_dataset
+from unzip_data import fetch_dataset
 
 # ============================================================================
 # Configuration Dataclasses
@@ -358,9 +358,10 @@ if __name__ == "__main__":
     import os
     import sys
 
-    SAMPLE_DIRS = extract_dataset(
-        zip_path = "vision_stack/frames/frame_tracks.zip",
-        dest_dir  = "vision_stack/frames",
+    SAMPLE_DIRS = fetch_dataset(
+        url="https://github.com/Simbyote/Navilott_Vision/releases/download/v1.0-dataset/frame_tracks.zip",
+        zip_path="vision_stack/frames/frame_tracks.zip",
+        dest_dir="vision_stack/frames",
     )
     HSV_RANGES_PATH = "vision_stack/calibration/hsv_ranges.json"  # for real detections
     HSV_DUMMY_PATH = "vision_stack/dummy/dummy_hsv_ranges.json"  # for unit test scaffolding
