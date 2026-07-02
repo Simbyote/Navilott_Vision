@@ -81,7 +81,7 @@ LOOP_BUDGET_MS = 1000.0 / FPS          # e.g. 66.6 ms at 15 FPS
 COLOR_SPACE = "YUV"
 
 # Set True to write a debug overlay video to output.avi
-SAVE_VIDEO = False
+SAVE_VIDEO = True
 
 # Calibration file paths
 HSV_RANGES_PATH = "vision_stack/calibration/hsv_ranges.json"

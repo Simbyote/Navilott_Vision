@@ -6,6 +6,11 @@ sample_img/
 *.jpg
 *.png
 
+# Workspace
+/workspace/
+**/workspace/
+workspace/
+
 # Templates
 /temp/
 **/temp/
@@ -24,13 +29,17 @@ video/
 /video
 *.avi
 
-# Mock and results
+# Mock
 /mock/
 **/mock/
 mock/
+
+# Results
 /results/
 **/results/
 results/
 /results
+
+# Miscellaneous
 *.txt
 *.zip
