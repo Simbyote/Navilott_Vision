@@ -205,6 +205,79 @@ def _contours(
     return contours
 
 # ============================================================================
+# RESOLUTION 2 and 4: Invoked per corresponding flag
+# Trapazoid masks and dilate kernels are cached per (shape/params) key; per frame
+# cost is in a dict lookup. ROI shape is contant at runtime; each cache holds exactly
+# one entry in practice
+# ============================================================================
+_TRAP_MASK_CACHE: dict = {}
+_DILATE_KERNEL_CACHE: dict = {}
+
+def _trapazoid_mask(
+        roi_shape: tuple, 
+        corners: tuple
+    ) -> np.ndarray:
+    """
+    Purpose:
+        RESOLUTION 2: Builds and caches a filled trapezoid mask for the lane ROI.
+        Corner fractions are relative to the ROI as delivered
+
+    Inputs:
+        roi_shape: (H, W) of the lane ROI
+        corners: ((x_frac, y_frac), ...)
+    
+    Outputs:
+        uint8 mask, 255 inside the trapazoid, 0 outside
+    """
+    key = (roi_shape, corners)
+    mask = _TRAP_MASK_CACHE.get(key)
+    if mask is None:
+        h, w = roi_shape
+        pts = np.array(
+            [[int(xf * (w - 1)), int(yf * (h - 1))] for xf, yf in corners],
+            dtype=np.int32,
+        )
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [pts], 255)
+        _TRAP_MASK_CACHE[key] = mask
+    return mask
+
+def _vertical_dilate(
+        edges: np.ndarray, 
+        kernel_w: int, 
+        kernel_h: int
+    ) -> np.ndarray:
+    """
+    Purpose:
+        RESOLUTION 4: Dilate Canny output with a vertical structuring element; dashed
+            lane lines segments merge into a single contour before extraction. kernel_w
+            must be 1 to avoid horizontal thickening
+    """
+    key = (kernel_w, kernel_h)
+    kernel = _DILATE_KERNEL_CACHE.get(key)
+    if kernel is None:
+        kernel = np.ones((kernel_h, kernel_w), dtype=np.uint8)
+        _DILATE_KERNEL_CACHE[key] = kernel
+    return cv2.dilate(edges, kernel)
+
+def _angle_from_horizontal(
+        rect_w: float,
+        rect_h: float,
+        rect_angle: float    
+    ) -> float:
+    """
+    Purpose:
+        Convert cv2.minAreaRect output into the ong axis angle from horizontal in [0, 90]
+
+        When rect_w >= rect_h, the long axis makes the angle along the horizontal, otherwise
+        it is 90 - angle
+    """
+    ang = rect_angle if rect_w >= rect_h else 90.0 - rect_angle
+    # Fold into [0, 90] case of drift across versions
+    ang = abs(ang) % 180.0
+    return ang if ang <= 90.0 else 180.0 - ang
+
+# ============================================================================
 # Lane Boundary Detection
 # ============================================================================
 def _lane_confidence(
@@ -281,6 +354,8 @@ def _extract_lane_candidates(
     timestamp_ms: int,
     roi_shape: tuple,
     gray: np.ndarray,
+    fix_cfg = None,
+    tags = None,
 ) -> List[LaneCandidate]:
     """
     Purpose:
@@ -293,18 +368,42 @@ def _extract_lane_candidates(
         timestamp_ms : int
         roi_shape: tuple
         gray: np.ndarray
+        fix_cfg: Optional[Config] from the config.py
+        NOTE: Rejects contours whose long axis is steeper than the 
+            max_angle_from_horizontal_deg OR whose centroid sits in the
+            top reject_top_frac of the ROI
+        tags: Optional[FrameTags]
+        NOTE: Failure mode counters are filled regardless of flag state
 
     Outputs:
         candidates : list[LaneCandidate]
     """
     candidates = []
+
+    # Mount fix and tag configs out of the contour loop
+    fix3_on = fix_cfg is not None and fix_cfg.orientation_filt
+    if fix3_on or tags is not None:
+        op = fix_cfg.orientation_params if fix_cfg is not None else None
+        max_ang = op.max_angle_from_horizontal_deg if op else 65.0
+        top_frac = op.reject_top_frac if op else 0.25
+
     roi_h, roi_w = roi_shape
+
+    roi_h_f = float(roi_shape[0])
+    roi_w_f = float(roi_shape[1])
 
     for contour in contours:
         area = cv2.contourArea(contour)
+        x,y, w, h = cv2.boundingRect(contour)
 
         # Reject contours that are too small
         if area < lane_filter.min_area or area > lane_filter.max_area:
+            # Instrumentation: Size rejection in the central third of the ROI
+            # is the dashed line fragment signature 
+            if tags is not None:
+                cx = x + w / 2.0
+                if roi_w_f / 3.0 <= cx <= 2.0 * roi_w_f / 3.0:
+                    tags.dashed_reject_center += 1
             continue
         x, y, w, h = cv2.boundingRect(contour)
         if h == 0 or w == 0:
@@ -313,14 +412,34 @@ def _extract_lane_candidates(
             continue
 
         # Accept if longer dimension is at least min_aspect x shorter
-        _, (rect_w, rect_h), _ = cv2.minAreaRect(contour)
+        _, (rect_w, rect_h), rect_angle = cv2.minAreaRect(contour)
         long_side = max(rect_w, rect_h)
         short_side = max(min(rect_w, rect_h), 1.0)
         elongation = long_side / short_side
 
         # Reject contours that are too elongated
         if elongation < lane_filter.min_aspect:
+            if tags is not None:
+                cx = x + w / 2.0
+                if roi_w_f / 3.0 <= cx <= 2.0 * roi_w_f / 3.0:
+                    tags.dashed_reject_center += 1 
             continue
+
+        # =======================================================================
+        # RESOLUTION 3: Orientation Filter and Failure Mode Tagging
+        # Criteria evaluated whenever either the fix or tagging is active
+        # Rejection only happens when the fix flag is toggled
+        # =======================================================================
+        if fix3_on or tags is not None:
+            ang = _angle_from_horizontal(rect_w, rect_h, rect_angle)
+            centroid_y = y + h / 2.0
+            violates_fix3 = (ang > max_ang) or (centroid_y < top_frac * roi_h_f)
+
+            if fix3_on and violates_fix3:
+                continue    # Rejection
+        else:
+            violates_fix3 = False
+
 
         # Reject contours that span more than max_roi_span of ROI
         horizontal = rect_w >= rect_h
@@ -333,6 +452,14 @@ def _extract_lane_candidates(
         mean_intensity = _mean_contour_intensity(gray, contour)
         if mean_intensity < lane_filter.min_intensity:
             continue
+
+        # INSTRUMENTATION: candidate is now definitively accepted — tag
+        # failure modes that a fix would have (or did not get to) suppress.
+        if tags is not None:
+            if violates_fix3:
+                tags.pole_misclassified += 1
+            if y == 0:
+                tags.wall_edge_detected += 1
 
         # Composite confidence score based on area and elongation
         confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, lane_filter)
@@ -354,10 +481,13 @@ def extract_lane_candidates(
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
+    fix_cfg = None,
+    tags = None,
 ) -> tuple:
     """
     Purpose:
-        Extracts lane candidates from lane ROI using grayscale-Canny-contour pipeline and lane contour filter
+        Extracts lane candidates from lane ROI using grayscale-Canny-contour 
+        pipeline and lane contour filter
 
     Inputs:
         lane_roi: np.ndarray
@@ -365,17 +495,43 @@ def extract_lane_candidates(
         lane_filter: LaneContourFilter
         frame_id: int
         timestamp_ms: int
+        fix_cfg: Optional[Config] from the config.py
+        NOTE: trapezoid mask enables RESOLUTION 2, dashed_dilate
+            enables RESOLUTION 4, orientation_filt enables RESOLUTION 3 
 
     Outputs:
-        candidates : list[LaneCandidate]
+        candidates: list[LaneCandidate]
+        debug_images: dict includes edge_processed when fixes 2/4 alter the edge 
+            image; overlays show what contours seen
     """
     gray = _to_grayscale(lane_roi)
     edges = _canny(gray, canny_params)
-    contours = _contours(edges)
+
+    # ===========================================================================
+    # RESOLUTION 2: Trapezoid Mask
+    # Applied to the edge image, no grayscale
+    # mean_contour_intensity continues to sample pixel intensities 
+    # =======================================================================
+    edges_processed = edges
+    
+    if fix_cfg is not None and fix_cfg.trapezoid_mask:
+        mask = _trapazoid_mask(lane_roi.shape[:2], fix_cfg.trapezoid_params.corners)
+        edges_processed = cv2.bitwise_and(edges_processed, mask)
+
+    # ===========================================================================
+    # Resolution 4: Dashed Dilation
+    # Merges vertically stacked dashed segments; runs after the mask for dilation
+    # =======================================================================
+    if fix_cfg is not None and fix_cfg.dashed_dilate:
+        dp = fix_cfg.dashed_params
+        edges_processed = _vertical_dilate(edges_processed, dp.kernel_w, dp.kernel_h)
+
+    contours = _contours(edges_processed)
 
     candidates = _extract_lane_candidates(
         contours, lane_filter, frame_id, timestamp_ms,
-        roi_shape=lane_roi.shape[:2], gray = gray
+        roi_shape=lane_roi.shape[:2], gray = gray,
+        fix_cfg=fix_cfg, tags=tags
     )
     # Debug overlays
     contour_overlay = cv2.cvtColor(gray.copy(), cv2.COLOR_GRAY2BGR)
@@ -393,6 +549,7 @@ def extract_lane_candidates(
     debug_images = {
         "gray": gray,
         "edges": edges,
+        "edges_processed": edges_processed,
         "contour_overlay": contour_overlay,
         "accepted_overlay": accepted_overlay,
     }
@@ -533,12 +690,15 @@ def run_geometry_branch(
     sign_filter: SignContourFilter,
     frame_id: int = 0,
     timestamp_ms: int = 0,
+    fix_cfg = None,
+    tags = None
 ) -> tuple:
     """
     Purpose:
         Runs the geometry branch on the given lane and sign ROIs with the specified parameters, returning
         the detected lane and sign candidates along with debug images.
 
+        fix_cfg and tags only apply to the lane path only
     Inputs:
         lane_roi: uint8 BGR from ROICropResult.lane_roi (@TODO: change to YUV)
         sign_roi: uint8 BGR from ROICropResult.sign_roi (@TODO: change to YUV)
@@ -563,7 +723,9 @@ def run_geometry_branch(
             raise ValueError(f"run_geometry_branch: {name} expected (H,W,3) BGR, got {roi.shape}")
 
     lane_candidates, lane_debug = extract_lane_candidates(
-        lane_roi, canny_params, lane_filter, frame_id, timestamp_ms)
+        lane_roi, canny_params, lane_filter, frame_id, timestamp_ms,
+        fix_cfg=fix_cfg, tags=tags
+    )
 
     sign_candidates, sign_debug = extract_sign_candidates(
         sign_roi, canny_params, sign_filter, frame_id, timestamp_ms)

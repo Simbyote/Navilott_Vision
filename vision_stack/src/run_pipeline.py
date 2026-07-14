@@ -13,12 +13,12 @@ Concurrency model: Time-slicing (single-threaded)
     Navigation update rate is tied to the camera frame rate
 
 Architecture:
-    Phase 1 -> Phase 2 -> Phase 3 -> EstimationPacket (Navigation)
+    Phase 1 (Capture) -> Phase 2 (Processing) -> Phase 3 (Estimation)
     capture -> preprocess EMA temporal filter
                 roi_crop motion consistency
-                color_branch:confidence threshold
+                color_branch: confidence threshold
                 geometry_branch: dead-reckoning fallback
-                feature_fusion:IMU heading integration
+                feature_fusion: IMU heading integration
                 lane_offset
                 phase2_out
 """
@@ -31,19 +31,70 @@ import time
 import logging
 
 # =============================================================================
+# Testing Mode
+# =============================================================================
+BENCH_MODE = True
+
+# =============================================================================
 # Third-Party
 # =============================================================================
 import cv2
 import numpy as np
-import pigpio
+if not BENCH_MODE:
+    import pigpio   # DMA PWM and requires pigpiod
 
 # =============================================================================
 # Pipeline Modules
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
-from system import System
-from imu import IMUReader, IMUFrame
+if not BENCH_MODE:
+    from system import System               # Button and display integration
+    from imu import IMUReader, IMUFrame     # Board imports and bus I/O
+else:
+    # =============================================================================
+    # TEST ENV ONLY: System and IMU placeholders
+    # =============================================================================
+    from dataclasses import dataclass as _dataclass
+
+    @_dataclass
+    class IMUFrame:
+        """
+        # Mirror of imu.IMUFrame: imports board and bus I/O; cannot be imported off pi
+        """
+        mean_yaw_rate_dps: float | None = None
+        peak_lateral_accel: float | None = None
+        sample_count: int = 0
+        valid: bool = False
+
+    class IMUReader:
+        """
+        snapshot() always returns IMUFrame(valid=False). Heading behavior is not testable
+        on bench
+        """
+        def __init__(self, *args, **kwargs): pass
+        def start(self) -> None: pass
+        def stop(self, timeout: float = 0.5) -> None: pass
+        def snapshot(self) -> IMUFrame: return IMUFrame()
+
+    class System:
+        """
+        wait_for_start() begins immediately with no button input; display updates are ignored
+        """
+        def wait_for_start(self) -> None: pass
+        def run_countdown(self) -> None: pass
+        def update_display(self, elapsed_s: float) -> None: pass
+        def show_final_time(self, elapsed_s: float) -> None:
+            print(f"[BENCH] final time: {elapsed_s:.2f} s")
+        def cleanup(self) -> None: pass
+
+from config import(
+    Config, FrameTags, 
+    intersection_edge_ratio,
+    INTERSECTION_EDGE_RATIO_THRESH,
+)
+
+
 from preprocess import preprocess_frame
 from roi_crop import crop_rois
 from color_branch import (
@@ -120,7 +171,6 @@ log = logging.getLogger("pipeline")
 # =============================================================================
 # Hardware Setup
 # =============================================================================
-pi = pigpio.pi()
 
 # Motor A (Left) — TB6612 AIN side
 _ain1 = 24
@@ -132,12 +182,27 @@ _bin2 = 22
 _pwmb = 12
 _stby = 23
 
-pi.set_mode(_ain1, pigpio.OUTPUT)
-pi.set_mode(_ain2, pigpio.OUTPUT)
-pi.set_mode(_bin1, pigpio.OUTPUT)
-pi.set_mode(_bin2, pigpio.OUTPUT)
-pi.set_mode(_stby, pigpio.OUTPUT)
+if not BENCH_MODE:
+    pi = pigpio.pi()
+    pi.set_mode(_ain1, pigpio.OUTPUT)
+    pi.set_mode(_ain2, pigpio.OUTPUT)
+    pi.set_mode(_bin1, pigpio.OUTPUT)
+    pi.set_mode(_bin2, pigpio.OUTPUT)
+    pi.set_mode(_stby, pigpio.OUTPUT)
+else:
+    # ============================================================================
+    # TEST ENV ONLY: pigpio placeholder
+    # All GPIO writes / PWM calls are ignored
+    # _drive executes on normal PD path; motor controls are observable
+    # ============================================================================
+    class _DummyPi:
+        connected = True
+        def set_mode(self, *args) -> None: pass
+        def write(self, *args) -> None: pass
+        def hardware_PWM(self, *args) -> None: pass
+        def stop(self) -> None: pass
 
+    pi = _DummyPi()
 
 def _drive(
         left_speed: float, 
@@ -152,6 +217,12 @@ def _drive(
         left_speed: [-1.0, 1.0]
         right_speed: [-1.0, 1.0]
     """
+    # =============================================================================
+    # TEST ENV ONLY: pi is a dummy; all writes are ignored
+    # =============================================================================
+    if BENCH_MODE:
+        log.debug("[BENCH] _drive L=%.3f R=%.3f", left_speed, right_speed)
+
     right_speed = -right_speed  # invert if right motor
     pi.write(_stby, 1)
     # Left
@@ -239,7 +310,9 @@ def _load_hsv(
 # =============================================================================
 # Phase 2 -> Phase 3 Adapter
 # =============================================================================
-def _adapt_detections_for_p3(p2_detections) -> list:
+def _adapt_detections_for_p3(
+        p2_detections
+    ) -> list:
     """
     Purpose:
         Convert feature_fusion.DetectionObject list into estimation.DetectionObject
@@ -293,7 +366,9 @@ def _build_p3_input(
 # IMU Reader @TODO Integrate encoder data
 # =============================================================================
 
-def _read_sensors(imu: IMUReader) -> tuple[SensorSample, IMUFrame]:
+def _read_sensors(
+        imu: IMUReader
+    ) -> tuple[SensorSample, IMUFrame]:
     frame = imu.snapshot()
     sample = SensorSample(
         wheel_speed = None,
@@ -303,14 +378,72 @@ def _read_sensors(imu: IMUReader) -> tuple[SensorSample, IMUFrame]:
     )
     return sample, frame
 
+# ============================================================================
+# Bench Frame Source
+# ============================================================================
+def _bench_frame_iter(
+        frames_dir: str
+    ):
+    """
+    TEST ENV ONLY: Iterate BGR frames from a directory of images (sorted by filename)
+    as a stand-in for the camera. The Gstreamer/libcamera pipeline is unaffected.
+    Alternate source is selected only when --frames is given on bench
+
+    Yields (ret, frame_bgr) matching cv2.VideoCapture.read() semantics, then
+    (False, None) once exhausted so the main loop terminates
+    """
+    import os
+    if not os.path.isdir(frames_dir):
+        raise FileNotFoundError(
+            f"_bench_frame_iter: {frames_dir!r} not found "
+            f"(cwd={os.getcwd()}) — paths are relative to the repo root"
+        )
+    exts = (".jpg", ".jpeg", ".png")
+    files = sorted(
+        os.path.join(frames_dir, f) for f in os.listdir(frames_dir)
+        if os.path.splitext(f)[1].lower() in exts
+    )
+    log.info("[BENCH] frame source: %d images from %s", len(files), frames_dir)
+    def _gen():                       # ← the yields live in here now
+        for path in files:
+            frame = cv2.imread(path)
+            yield (frame is not None), frame
+        yield False, None
+    return _gen()
+
+def _parse_args():
+    """
+    CLI: independently toggle fixes, optionally select a bench image dir
+    """
+    import argparse
+    ap = argparse.ArgumentParser(description="Navilott pipeline (fix-toggle bench build)")
+    ap.add_argument(
+        "--fix", action="append", default=[], metavar="NAME",
+        choices=list(Config.FIX_NAMES),
+        help=f"enable a fix (repeatable): {', '.join(Config.FIX_NAMES)}",
+    )
+    ap.add_argument(
+        "--frames", default=None, metavar="DIR",
+        help="BENCH: read frames from an image directory instead of the camera",
+    )
+    return ap.parse_args()
+
 # =============================================================================
 # Main loop
 # =============================================================================
-def main() -> None:
+def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
     # ==========================================================================
     # Initial Startup
     # ==========================================================================
     log.info("Starting Navilott Pipeline")
+
+    # Fix flag states
+    flags_str = fix_cfg.flags_str()
+    log.info("fix flags: [%s] (R=roi_inset T=trapazoid O=orientat D=dilate A=anchor)", 
+            flags_str)
+    
+    if BENCH_MODE:
+        log.info("BENCH_MODE active: hardware peripherals are stubbed")
 
     # Button & countdown
     s = System()
@@ -349,18 +482,25 @@ def main() -> None:
     # ==========================================================================
     # Phase 1: open camera
     # ==========================================================================
-    gst_pipeline = _build_gst_pipeline(FRAME_WIDTH, FRAME_HEIGHT, FPS, COLOR_SPACE)
-    log.info("Opening camera: %s", gst_pipeline)
+    cap = None
+    bench_iter = None
 
-    cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-    if not cap.isOpened():
-        log.error("Failed to open camera pipeline; is libcamera available?")
-        sys.exit(1)
+    if BENCH_MODE and frames_dir is not None:
+        # TEST ENV ONLY: override camera with a directory of images
+        bench_iter = _bench_frame_iter(frames_dir)
+    else:
+        gst_pipeline = _build_gst_pipeline(FRAME_WIDTH, FRAME_HEIGHT, FPS, COLOR_SPACE)
+        log.info("Opening camera: %s", gst_pipeline)
 
-    log.info(
-        "Camera open. Resolution=%dx%d  FPS=%d  Budget=%.1f ms/frame",
-        FRAME_WIDTH, FRAME_HEIGHT, FPS, LOOP_BUDGET_MS,
-    )
+        cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
+            log.error("Failed to open camera pipeline; is libcamera available?")
+            sys.exit(1)
+
+        log.info(
+            "Camera open. Resolution=%dx%d  FPS=%d  Budget=%.1f ms/frame",
+            FRAME_WIDTH, FRAME_HEIGHT, FPS, LOOP_BUDGET_MS,
+        )
 
     # Optional debug video writer
     out_writer = None
@@ -380,13 +520,23 @@ def main() -> None:
             # =================================================================
             # Phase 1: Capture
             # =================================================================
-            ret, frame_bgr = cap.read()
-            if not ret or frame_bgr is None:
-                log.warning("Frame %d: read failed — skipping", frame_id)
-                frame_id += 1
-                continue
+            if bench_iter is not None:
+                # TEST ENV ONLY: read from bench image directory
+                ret, frame_bgr = next(bench_iter, (False, None))
+                if not ret:
+                    log.info("[BENCH] frame source exhausted after %d frames", frame_id)
+                    break
+            else:
+                ret, frame_bgr = cap.read()
+                if not ret or frame_bgr is None:
+                    log.warning("Frame %d: read failed — skipping", frame_id)
+                    frame_id += 1
+                    continue
 
             timestamp_ms = int(time.time() * 1000)
+
+            # Per-frame failure mode instrumentation
+            tags = FrameTags()
 
             # =================================================================
             # Phase 2: Vision Perception
@@ -400,7 +550,8 @@ def main() -> None:
             preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_YUV2BGR)
 
             # Step 2: ROI crop returns NumPy views (no copy)
-            roi_result = crop_rois(preprocessed_bgr, frame_id=frame_id)
+            # RESOLUTION 1: roi_inset applies when enabled
+            roi_result = crop_rois(preprocessed_bgr, frame_id=frame_id, fix_cfg=fix_cfg)
 
             # Step 3a: Color branch traffic light candidates
             # roi_crop produces BGR views; color_branch expects BGR
@@ -422,6 +573,8 @@ def main() -> None:
                 sign_filter = sign_filter,
                 frame_id = frame_id,
                 timestamp_ms = timestamp_ms,
+                fix_cfg = fix_cfg,
+                tags = tags,
             )
 
             # Step 4: Feature fusion normalize and resolve conflicts
@@ -448,7 +601,25 @@ def main() -> None:
                 timestamp = timestamp_ms,
                 conf_threshold = LANE_CONF_THRESHOLD,
                 min_lane_width_px = MIN_LANE_WIDTH_PX,
+                fix_cfg = fix_cfg,
+                tags = tags,
             )
+
+            # =================================================================
+            # Intersection edge-ratio detection
+            # Reads the edge image the contour extractor consumed. Two
+            # count_nonzero calls — negligible against the frame budget
+            # =================================================================
+            edge_ratio = intersection_edge_ratio(_lane_debug["edges_processed"])
+            if edge_ratio > INTERSECTION_EDGE_RATIO_THRESH:
+                log.info(
+                    "[%s] f=%04d [INTERSECTION] edge_ratio=%.2f > %.2f — would trigger",
+                    flags_str, frame_id, edge_ratio, INTERSECTION_EDGE_RATIO_THRESH,
+                )
+                # TEST ENV ONLY: 
+                # TURN_EXECUTING is IMU-driven and the IMU is stubbed on bench 
+                # TODO: Toggle the PipelineMode during turns; include a state machine?
+                pass
 
             # Step 6: Package Phase 2 output
             p2_out = package_phase2_output(
@@ -499,6 +670,17 @@ def main() -> None:
             # =================================================================
             # Navigation Packet Log
             # =================================================================
+            # INSTRUMENTATION: Failure mode tagging
+            # summary() returns "" for clean frames. The log call is skipped
+            tag_str = tags.summary(lane_offset_result.mode)
+            if tag_str:
+                log.info(
+                    "[%s] f=%04d TAGS=%s offset=%+.4f mode=%s conf=%.2f",
+                    flags_str, frame_id, tag_str,
+                    lane_offset_result.offset, lane_offset_result.mode,
+                    lane_offset_result.confidence,
+                )
+            
             log.info(
                 "f=%04d t=%.1fms offset=%+.4f head=%+.2f° drive=%-7s "
                 "stop_sign=%s lane_mode=%s imu_n=%d yaw=%+.1f°/s",
@@ -532,7 +714,8 @@ def main() -> None:
         pi.write(_stby, 0)
         pi.stop()
         imu.stop()
-        cap.release()
+        if cap is not None:
+            cap.release()
         if out_writer is not None:
             out_writer.release()
 
@@ -601,4 +784,8 @@ def _draw_debug_overlay(
 # Main Entry Point
 # =============================================================================
 if __name__ == "__main__":
-    main()
+    _args = _parse_args()
+    main(
+        fix_cfg = Config.from_names(_args.fix),
+        frames_dir = _args.frames,
+    )

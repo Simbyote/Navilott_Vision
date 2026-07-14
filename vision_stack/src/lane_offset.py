@@ -56,6 +56,8 @@ def compute_lane_offset(
     timestamp: int,
     conf_threshold: float = 0.30,
     min_lane_width_px: float = 150.0,
+    fix_cfg = None,
+    tags = None,
 ) -> LaneOffsetResult:
     """
     Purpose:
@@ -68,6 +70,15 @@ def compute_lane_offset(
         timestamp: timestamp from capture loop
         conf_threshold: minimum confidence to use a candidate as a boundary anchor
         min_lane_width_px: minimum pixel distance between lane boundaries
+        fix_cfg: Optional[Config] from the config.py
+        NOTE: anchor_halves=True enables RESOLUTION 5
+            The left anchor lies in the left haf of the ROI and the right anchor
+            lies on the right half of the ROI. WHen all candidates fall one to one
+            half, the frame downgrades to left only or right only instead of two 
+            boundaries
+        tags: Optional[FrameTags] from the config.py
+        NOTE: anchor_wrong_half is set when a two-anchor result used anchors from the
+            same ROI half
 
     Output:
         LaneOffsetResult : final lane offset estimate
@@ -94,35 +105,53 @@ def compute_lane_offset(
     # Sort candidates by x position
     lanes_by_x = sorted(lanes, key=lambda d: d.position["x"])
 
-    left = lanes_by_x[0]
-    right = lanes_by_x[-1]
-
-    left_x = left.position["x"]
-    right_x = right.position["x"]
+    # =========================================================================
+    # Anchor selection
+    # Extremes of the sorted list, regardless of ROI half
+    # RESOLUTION 5 pools candidates per ROI half; left anchor is the
+    # leftmost of the left pool, right anchor the rightmost of the right pool
+    # An empty pool downgrades the frame to single-boundary mode
+    # =========================================================================
+    fix5_on = fix_cfg is not None and fix_cfg.anchor_halves
+    if fix5_on:
+        left_pool  = [d for d in lanes_by_x if d.position["x"] <  frame_center]
+        right_pool = [d for d in lanes_by_x if d.position["x"] >= frame_center]
+        left  = left_pool[0]   if left_pool  else None
+        right = right_pool[-1] if right_pool else None
+    else:
+        left = lanes_by_x[0]
+        right = lanes_by_x[-1]
 
     # =========================================================================
     # One boundary detection
     # =========================================================================
-    if left is right:
-        if left_x < frame_center:   # Detected boundary is on the left
-            offset = (frame_center - left_x) / frame_center
-            mode = "left_only"
-        else:                       # Detected boundary is on the right
-            offset = (frame_center - right_x) / frame_center
-            mode = "right_only"
+    if left is None or right is None or left is right:
+        anchor = left if left is not None else right
+        anchor_x = anchor.position["x"]
+
+        offset = (frame_center - anchor_x) / frame_center
+        mode = "left_only" if anchor_x < frame_center else "right_only"
 
         # Return only the applicable boundary anchor
         return LaneOffsetResult(
             offset=round(offset, 4),
-            left_x=left_x if mode == "left_only" else None,
-            right_x=right_x if mode == "right_only" else None,
+            left_x=anchor_x if mode == "left_only" else None,
+            right_x=anchor_x if mode == "right_only" else None,
             lane_width_px=None,
-            confidence=round(left.confidence, 4),
+            confidence=round(anchor.confidence, 4),
             boundary_count=boundary_count,
             mode=mode,
             frame_id=frame_id,
             timestamp=timestamp,
         )
+    
+    left_x = left.position["x"]
+    right_x = right.position["x"]
+
+    # INSTRUMENTATION: two-anchor result built from anchors in the same ROI
+    # half
+    if tags is not None and (left_x < frame_center) == (right_x < frame_center):
+        tags.anchor_wrong_half = True
 
     # ==========================================================================
     # Two boundary detections - checking width

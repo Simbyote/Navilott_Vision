@@ -114,7 +114,11 @@ class ROICropResult:
 # ============================================================================
 # Core Function
 # ============================================================================
-def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
+def crop_rois(
+        frame: np.ndarray, 
+        frame_id: int = 0, 
+        fix_cfg=None
+    ) -> ROICropResult:
     """
     Purpose:
         Partition one preprocessed BGR frame into three ROIs
@@ -122,9 +126,14 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     Inputs:
         frame: uint8 YUV ndarray, shape (H, W, 3)
         frame_id: integer identifier carried from the capture loop
+        fix_cfg: Optional[Config] from the config.py
+        NOTE: baseline geometry is unchanged; lane ROI is inset by side_margin_frac
+            on each side, staying symmetric, and starts at H*top_frac rather than
+            H // 2. Traffic and sign ROIs remain unaffected
 
     Outputs:
-        ROICropResult
+        ROICropResult: lane_rect always reflects the actual coordinates used; feature 
+        fusion and debug overlays remain intact
     """
     # Guard and input validation
     if frame is None:
@@ -148,6 +157,26 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     lane_y = H // 2
     lane_w = W 
     lane_h = H - H // 2
+
+    # ==========================================================================
+    # RESOLUTION 1: Lane ROI inset parameters for lane detection
+    # Symmetric horizontal marin and higher top edge
+    # Symmetric inset keeps lane ROI center to the frames center; normalized
+    # offset downstream is preserved
+    # ==========================================================================
+    if fix_cfg is not None and fix_cfg.roi_inset:
+        p = fix_cfg.roi_params
+        margin_px = int(W * p.side_margin_frac)
+        lane_x = margin_px
+        lane_w = W - 2 * margin_px
+        lane_y = int(H * p.top_frac)
+        lane_h = H - lane_y
+        if lane_w < 4 or lane_h < 2:
+            raise ValueError(
+                f"crop_rois: roi_inset produced degenerate lane ROI "
+                f"({lane_h}, {lane_w}) from frame ({H}, {W}) with "
+                f"margin={p.side_margin_frac}, top={p.top_frac}"
+            )
 
     # Traffic light: top-center half
     tl_x = W // 4
@@ -187,7 +216,10 @@ _TRAFFIC_COLOR = (255, 0, 0)   # blue
 _SIGN_COLOR = (0, 0, 255)   # red
 _RECT_THICKNESS = 2
 
-def draw_roi_overlay(frame: np.ndarray, result: ROICropResult) -> np.ndarray:
+def draw_roi_overlay(
+        frame: np.ndarray, 
+        result: ROICropResult
+    ) -> np.ndarray:
     """
     Purpose:
         Return a copy of frame with the three ROI rectangles drawn on it
