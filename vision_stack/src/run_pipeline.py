@@ -17,12 +17,13 @@ import json
 from fake_capture import FakeCapture
 from vision_stack.src.main_linker import load_pipeline_config, run_phase2_on_frame
 
+# Paths to sample images
 SAMPLE_DIRS = [
     "vision_stack/frames/trackT3",
     "vision_stack/frames/trackT4",
     "vision_stack/frames/trackT5"
 ]
-
+# Status file path for writing pipeline status updates
 STATUS_FILE = "/tmp/autobot_status.json"
 
 def main():

@@ -27,3 +27,8 @@ video/
 results/
 /results
 *.png
+
+/frames/
+**/frames/
+frames/
+/frames

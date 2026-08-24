@@ -1,10 +1,10 @@
 """
-phase2_linker.py
+main_linker.py
 ================
 Phase 2 Pipeline Orchestrator — Vision Perception
 
-Connects all Phase 2 substages in the correct order, passing data between
-them in memory. No intermediate disk reads/writes are used for stage-to-stage
+Connects all Phase 2 substages, passing data between them in memory.
+No intermediate disk reads/writes are used for stage-to-stage
 passing. Debug images are written to disk only as a side-effect after each
 stage completes — they do not participate in the next stage's input.
 
@@ -57,7 +57,7 @@ Calibration dependencies (MISSING if not yet generated)
 
 Usage
 -----
-  python phase2_linker.py
+  python3 vision_stack/src/main_linker.py
 
   Processes every image found under the five standard sample directories.
   Writes debug output per stage into sN/results/.

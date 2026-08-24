@@ -4,7 +4,7 @@ lane_offset.py
 Lane Offset Estimation — Phase 2, Step 6 of 7 (replaces perspective transform)
 
 Computes lateral offset from lane center using pixel positions of lane
-boundary candidates from feature fusion. No homography required.
+boundary candidates from feature fusion.
 
 Offset convention:
     0.0  — robot is centered between detected boundaries
