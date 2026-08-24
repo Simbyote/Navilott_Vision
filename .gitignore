@@ -6,6 +6,12 @@ sample_img/
 *.jpg
 *.png
 
+# Logs
+/logs/
+**/logs/
+logs/
+/logs
+
 # Workspace
 /workspace/
 **/workspace/

@@ -39,6 +39,7 @@ from typing import List
 sys.path.insert(0, "vision_stack/src")
 
 from unzip_data import fetch_dataset
+from config import ContourDebug
 
 # ============================================================================
 # Input Dataclasses
@@ -73,7 +74,7 @@ class LaneContourFilter:    # Lane Boundary
     min_area: float = 0.0
     max_area: float = 300.0
     min_aspect: float = 8.0
-    max_aspect: float = 10.0
+    max_aspect: float = 14.0
     ref_area: float = 2000.0
     max_roi_span: float = 1.0
     min_intensity: float = 80.0
@@ -206,14 +207,14 @@ def _contours(
 
 # ============================================================================
 # RESOLUTION 2 and 4: Invoked per corresponding flag
-# Trapazoid masks and dilate kernels are cached per (shape/params) key; per frame
-# cost is in a dict lookup. ROI shape is contant at runtime; each cache holds exactly
+# Trapezoid masks and dilate kernels are cached per (shape/params) key; per frame
+# cost is in a dict lookup. ROI shape is constant at runtime; each cache holds exactly
 # one entry in practice
 # ============================================================================
 _TRAP_MASK_CACHE: dict = {}
 _DILATE_KERNEL_CACHE: dict = {}
 
-def _trapazoid_mask(
+def _trapezoid_mask(
         roi_shape: tuple, 
         corners: tuple
     ) -> np.ndarray:
@@ -227,7 +228,7 @@ def _trapazoid_mask(
         corners: ((x_frac, y_frac), ...)
     
     Outputs:
-        uint8 mask, 255 inside the trapazoid, 0 outside
+        uint8 mask, 255 inside the trapezoid, 0 outside
     """
     key = (roi_shape, corners)
     mask = _TRAP_MASK_CACHE.get(key)
@@ -395,16 +396,27 @@ def _extract_lane_candidates(
     for contour in contours:
         area = cv2.contourArea(contour)
         x,y, w, h = cv2.boundingRect(contour)
+        roi_w_f_local = roi_w_f
+        cx = x + w / 2.0
+        center_third = roi_w_f_local / 3.0 <= cx <= 2.0 * roi_w_f_local / 3.0
 
         # Reject contours that are too small
         if area < lane_filter.min_area or area > lane_filter.max_area:
+            reason = "min_area" if area < lane_filter.min_area else "max_area"
             # Instrumentation: Size rejection in the central third of the ROI
             # is the dashed line fragment signature 
             if tags is not None:
-                cx = x + w / 2.0
-                if roi_w_f / 3.0 <= cx <= 2.0 * roi_w_f / 3.0:
+                if center_third:
                     tags.dashed_reject_center += 1
+                # =========================================================
+                # DEBUG INFO - Size
+                # =========================================================
+                tags.contour_debug.append(ContourDebug(
+                    area=area, aspect=0.0, intensity=0.0, roi_span=0.0,
+                    center_in_middle_third=center_third, accepted=False, reject_reason=reason
+                ))
             continue
+
         x, y, w, h = cv2.boundingRect(contour)
         if h == 0 or w == 0:
             continue
@@ -420,9 +432,15 @@ def _extract_lane_candidates(
         # Reject contours that are too elongated
         if elongation < lane_filter.min_aspect:
             if tags is not None:
-                cx = x + w / 2.0
-                if roi_w_f / 3.0 <= cx <= 2.0 * roi_w_f / 3.0:
-                    tags.dashed_reject_center += 1 
+                if center_third:
+                    tags.dashed_reject_center += 1
+                # =========================================================
+                # DEBUG INFO - Elongation
+                # =========================================================
+                tags.contour_debug.append(ContourDebug(
+                    area=area, aspect=elongation, intensity=0.0, roi_span=0.0,
+                    center_in_middle_third=center_third, accepted=False, reject_reason="min_aspect"
+                ))
             continue
 
         # =======================================================================
@@ -434,8 +452,15 @@ def _extract_lane_candidates(
             ang = _angle_from_horizontal(rect_w, rect_h, rect_angle)
             centroid_y = y + h / 2.0
             violates_fix3 = (ang > max_ang) or (centroid_y < top_frac * roi_h_f)
-
             if fix3_on and violates_fix3:
+                if tags is not None:
+                    # =========================================================
+                    # DEBUG INFO - Orientation
+                    # =========================================================
+                    tags.contour_debug.append(ContourDebug(
+                        area=area, aspect=elongation, intensity=0.0, roi_span=0.0,
+                        center_in_middle_third=center_third, accepted=False, reject_reason="orientation"
+                    ))
                 continue    # Rejection
         else:
             violates_fix3 = False
@@ -443,14 +468,29 @@ def _extract_lane_candidates(
 
         # Reject contours that span more than max_roi_span of ROI
         horizontal = rect_w >= rect_h
-        if horizontal and (w / roi_w) > lane_filter.max_roi_span:
-            continue
-        if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
+        span = (w / roi_w_f) if horizontal else (h / roi_h_f)
+        if span > lane_filter.max_roi_span:
+            if tags is not None:
+                # =========================================================
+                # DEBUG INFO - ROI Span
+                # =========================================================
+                tags.contour_debug.append(ContourDebug(
+                    area=area, aspect=elongation, intensity=0.0, roi_span=span,
+                    center_in_middle_third=center_third, accepted=False, reject_reason="roi_span"
+                ))
             continue
 
         # Reject dark contours, such as seams
         mean_intensity = _mean_contour_intensity(gray, contour)
         if mean_intensity < lane_filter.min_intensity:
+            if tags is not None:
+                # =========================================================
+                # DEBUG INFO - Intensity
+                # =========================================================
+                tags.contour_debug.append(ContourDebug(
+                    area=area, aspect=elongation, intensity=mean_intensity, roi_span=span,
+                    center_in_middle_third=center_third, accepted=False, reject_reason="min_intensity"
+                ))
             continue
 
         # INSTRUMENTATION: candidate is now definitively accepted — tag
@@ -460,6 +500,14 @@ def _extract_lane_candidates(
                 tags.pole_misclassified += 1
             if y == 0:
                 tags.wall_edge_detected += 1
+
+            # =========================================================
+            # DEBUG INFO - Accepted Contour
+            # =========================================================
+            tags.contour_debug.append(ContourDebug(
+                area=area, aspect=elongation, intensity=mean_intensity, roi_span=span,
+                center_in_middle_third=center_third, accepted=True, reject_reason="-"
+            ))
 
         # Composite confidence score based on area and elongation
         confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, lane_filter)
@@ -515,7 +563,7 @@ def extract_lane_candidates(
     edges_processed = edges
     
     if fix_cfg is not None and fix_cfg.trapezoid_mask:
-        mask = _trapazoid_mask(lane_roi.shape[:2], fix_cfg.trapezoid_params.corners)
+        mask = _trapezoid_mask(lane_roi.shape[:2], fix_cfg.trapezoid_params.corners)
         edges_processed = cv2.bitwise_and(edges_processed, mask)
 
     # ===========================================================================
@@ -585,7 +633,6 @@ def _extract_sign_candidates(
         Extract stop sign candidates from contours based on vertex count, area, and solidity
     """
     candidates = []
-
 
     for contour in contours:
         area = cv2.contourArea(contour)

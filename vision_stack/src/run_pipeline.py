@@ -33,7 +33,8 @@ import logging
 # =============================================================================
 # Testing Mode
 # =============================================================================
-BENCH_MODE = True
+BENCH_MODE = True       # Non-raspberry pi testing
+DEBUG_CONTOURS = True   # Logs contours for debugging
 
 # =============================================================================
 # Third-Party
@@ -439,7 +440,7 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
 
     # Fix flag states
     flags_str = fix_cfg.flags_str()
-    log.info("fix flags: [%s] (R=roi_inset T=trapazoid O=orientat D=dilate A=anchor)", 
+    log.info("fix flags: [%s] (R=roi_inset T=trapezoid O=orientat D=dilate A=anchor)", 
             flags_str)
     
     if BENCH_MODE:
@@ -673,6 +674,12 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
             # INSTRUMENTATION: Failure mode tagging
             # summary() returns "" for clean frames. The log call is skipped
             tag_str = tags.summary(lane_offset_result.mode)
+            if DEBUG_CONTOURS:
+                for cd in tags.contour_debug:
+                    log.info(f"[{flags_str}] f={frame_id:04d} CONTOUR "
+                            f"accepted={cd.accepted} area={cd.area:.1f} aspect={cd.aspect:.2f} "
+                            f"intensity={cd.intensity:.1f} roi_span={cd.roi_span:.2f} "
+                            f"reject_reason={cd.reject_reason}")
             if tag_str:
                 log.info(
                     "[%s] f=%04d TAGS=%s offset=%+.4f mode=%s conf=%.2f",

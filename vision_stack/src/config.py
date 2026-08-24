@@ -89,7 +89,7 @@ class DashedDilateParams:
         detection range
     kernel_w: keep at 1 to avoid horizontal thickening
     """
-    kernel_h: int = 15  # TODO: REQUIRES CALIBRATION
+    kernel_h: int = 90  # TODO: REQUIRES CALIBRATION
     kernel_w: int = 1
 
 # =============================================================================
@@ -144,6 +144,24 @@ class Config:
                 f"Valid names: {cls.FIX_NAMES}"
             )
         return cls(**{n: True for n in names})
+
+# =============================================================================
+# Contour Debugging
+# =============================================================================
+@dataclass
+class ContourDebug:
+    area: float
+    aspect: float
+    intensity: float
+    roi_span: float
+    center_in_middle_third: bool
+    accepted: bool
+    reject_reason: str = "-" #: "max_area", 
+                             #  "min_aspect", 
+                             # "max_aspect", 
+                             # "min_intensity", 
+                             # "max_roi_span", or 
+                             # "-"
     
 # =============================================================================
 # Per-Frame Failure Mode Intrumentation
@@ -164,11 +182,14 @@ class FrameTags:
     dashed_reject_center: Contours rejected for area/elongation whose bbox center lies
         in the central third of the lane ROI
     anchor_wrong_half: both lane anchors land in the same ROI half
+    contour_debug: list of ContourDebug objects for all contours that reach the
+        geometry stage, regardless of accept/reject status
     """
     pole_misclassified: int = 0
     wall_edge_detected: int = 0
     dashed_reject_center: int = 0
     anchor_wrong_half: bool = False
+    contour_debug: list = field(default_factory=list)
 
     # Minimum center-region restrictions to call a dashed-line drop
     DASHED_DROP_MIN_REJECTS = 3     # TODO: REQUIRES CALIBRATION
