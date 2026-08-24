@@ -7,9 +7,9 @@ sample_img/
 *.png
 
 # Workspace
-# /workspace/
-# **/workspace/
-# workspace/
+/workspace/
+**/workspace/
+workspace/
 
 # Templates
 /temp/
