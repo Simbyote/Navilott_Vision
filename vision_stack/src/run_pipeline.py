@@ -157,8 +157,8 @@ def _drive(
     # Left
     spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
     pi.hardware_PWM(_pwma, 1000, spd_l)
-    pi.write(_ain1, 1 if left_speed > 0 else 0)
-    pi.write(_ain2, 1 if left_speed < 0 else 0)
+    pi.write(_ain1, 1 if left_speed < 0 else 0)
+    pi.write(_ain2, 1 if left_speed > 0 else 0)
     # Right
     spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
     pi.hardware_PWM(_pwmb, 1000, spd_r)
