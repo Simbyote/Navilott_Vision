@@ -43,3 +43,9 @@ results/
 # Miscellaneous
 *.txt
 *.zip
+
+# Logs
+/logs/
+**/logs/
+logs/
+/logs
