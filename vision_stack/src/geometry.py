@@ -69,15 +69,18 @@ class LaneContourFilter:    # Lane Boundary
     ref_area: area treated as confidence = 1.0 at expected detection range
     max_roi_span: fraction of ROI a contour may span in its elongated axis
     min_intensity: minimum average intensity (0-255) within contour; rejects dark blobs
-    min_aspect logic: lane lines may be horizontal or vertical depending on heading
+    score_anchor: max(w, h) / ref_area; used in confidence normalization
+    score_range: max(w, h) / ref_area; used in confidence normalization
     """
     min_area: float = 0.0
     max_area: float = 300.0
-    min_aspect: float = 8.0
-    max_aspect: float = 14.0
+    min_aspect: float = 3.0
+    max_aspect: float = 250.0
     ref_area: float = 2000.0
     max_roi_span: float = 1.0
     min_intensity: float = 80.0
+    score_anchor: float = 4.0
+    score_range: float = 2.0
 
 @dataclass
 class SignContourFilter:    # Stop Sign
@@ -303,10 +306,7 @@ def _lane_confidence(
         confidence: [0.0, 1.0]
     """
     # How far above the minimum elongation threshold? A stronger lane shape = higher score
-    elong_score = _clamp(
-        (elongation - f.min_aspect) / max(f.max_aspect - f.min_aspect, 1.0),
-        0.0, 1.0
-    )
+    elong_score = _clamp((elongation - f.score_anchor) / max(f.score_range, 1.0), 0.0, 1.0)
     # Size signal, normalized against expected detection area
     area_score = _clamp(area / max(f.ref_area, 1.0), 0.0, 1.0)
 
@@ -440,6 +440,20 @@ def _extract_lane_candidates(
                 tags.contour_debug.append(ContourDebug(
                     area=area, aspect=elongation, intensity=0.0, roi_span=0.0,
                     center_in_middle_third=center_third, accepted=False, reject_reason="min_aspect"
+                ))
+            continue
+
+        # Reject contours that have too extreme aspect ratios
+        if elongation > lane_filter.max_aspect:
+            if tags is not None:
+                if center_third:
+                    tags.dashed_reject_center += 1
+                # =========================================================
+                # DEBUG INFO - Elongation
+                # =========================================================
+                tags.contour_debug.append(ContourDebug(
+                    area=area, aspect=elongation, intensity=0.0, roi_span=0.0,
+                    center_in_middle_third=center_third, accepted=False, reject_reason="max_aspect"
                 ))
             continue
 

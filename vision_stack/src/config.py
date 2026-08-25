@@ -89,7 +89,7 @@ class DashedDilateParams:
         detection range
     kernel_w: keep at 1 to avoid horizontal thickening
     """
-    kernel_h: int = 90  # TODO: REQUIRES CALIBRATION
+    kernel_h: int = 50  # TODO: REQUIRES CALIBRATION
     kernel_w: int = 1
 
 # =============================================================================
