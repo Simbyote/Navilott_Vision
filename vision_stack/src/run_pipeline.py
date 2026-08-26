@@ -174,8 +174,8 @@ log = logging.getLogger("pipeline")
 # =============================================================================
 
 # Motor A (Left) — TB6612 AIN side
-_ain1 = 24
-_ain2 = 25
+_ain1 = 25
+_ain2 = 24
 _pwma = 13
 # Motor B (Right) — TB6612 BIN side
 _bin1 = 27
