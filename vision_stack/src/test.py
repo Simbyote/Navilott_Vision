@@ -141,7 +141,7 @@ check("empty ROI -> 0.0", intersection_edge_ratio(np.zeros((180, 480), np.uint8)
 print("Config plumbing")
 cfg = Config.from_names(["roi_inset", "anchor_halves"])
 check("from_names sets flags", cfg.roi_inset and cfg.anchor_halves and not cfg.trapezoid_mask)
-check("flags_str format", cfg.flags_str() == "R1 T0 O0 D0 A1")
+check("flags_str format", cfg.flags_str() == "I1 T0 O0 D0 A1")
 try:
     Config.from_names(["bogus"]); check("unknown name raises", False)
 except ValueError:

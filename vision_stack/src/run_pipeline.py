@@ -94,6 +94,7 @@ from config import(
     intersection_edge_ratio,
     INTERSECTION_EDGE_RATIO_THRESH,
 )
+from csv_logger import RunLogger
 
 
 from preprocess import preprocess_frame
@@ -427,12 +428,25 @@ def _parse_args():
         "--frames", default=None, metavar="DIR",
         help="BENCH: read frames from an image directory instead of the camera",
     )
+    ap.add_argument(
+        "--csv", default=None, metavar="PREFIX",
+        help=(
+            "write structured per-frame/per-contour CSV logs to "
+            "PREFIX_frames.csv and PREFIX_contours.csv (extension-less "
+            "prefix). When omitted, per-frame detail is only ever printed "
+            "to the terminal/text log as before"
+        ),
+    )
     return ap.parse_args()
 
 # =============================================================================
 # Main loop
 # =============================================================================
-def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
+def main(
+        fix_cfg: Config = Config(), 
+        frames_dir: str | None = None,
+        csv_prefix: str | None = None,
+    ) -> None:
     # ==========================================================================
     # Initial Startup
     # ==========================================================================
@@ -440,11 +454,22 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
 
     # Fix flag states
     flags_str = fix_cfg.flags_str()
-    log.info("fix flags: [%s] (R=roi_inset T=trapezoid O=orientat D=dilate A=anchor)", 
+    log.info("fix flags: [%s] (I=roi_inset T=trapezoid O=orientat D=dilate A=anchor)", 
             flags_str)
     
     if BENCH_MODE:
         log.info("BENCH_MODE active: hardware peripherals are stubbed")
+
+    # =========================================================================
+    # CSV Logging
+    # run_logger is a no-op (log_frame/log_contours/close all become
+    # harmless) when csv_prefix is None, so no branching is needed at the
+    # per-frame call sites below
+    # =========================================================================
+    run_logger = RunLogger(csv_prefix, fix_cfg)
+    if csv_prefix is not None:
+        log.info("CSV logging enabled -> %s_frames.csv / %s_contours.csv",
+                 csv_prefix, csv_prefix)
 
     # Button & countdown
     s = System()
@@ -612,7 +637,10 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
             # count_nonzero calls — negligible against the frame budget
             # =================================================================
             edge_ratio = intersection_edge_ratio(_lane_debug["edges_processed"])
-            if edge_ratio > INTERSECTION_EDGE_RATIO_THRESH:
+            intersection_trigger = edge_ratio > INTERSECTION_EDGE_RATIO_THRESH
+            if intersection_trigger and csv_prefix is None:
+                # Only echoed to the terminal when CSV logging is off;
+                # otherwise this is just the intersection_trigger column
                 log.info(
                     "[%s] f=%04d [INTERSECTION] edge_ratio=%.2f > %.2f — would trigger",
                     flags_str, frame_id, edge_ratio, INTERSECTION_EDGE_RATIO_THRESH,
@@ -672,35 +700,61 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
             # Navigation Packet Log
             # =================================================================
             # INSTRUMENTATION: Failure mode tagging
-            # summary() returns "" for clean frames. The log call is skipped
+            # summary() returns "" for clean frames.
+            budget_exceeded = frame_time_ms > LOOP_BUDGET_MS
             tag_str = tags.summary(lane_offset_result.mode)
-            if DEBUG_CONTOURS:
-                for cd in tags.contour_debug:
-                    log.info(f"[{flags_str}] f={frame_id:04d} CONTOUR "
-                            f"accepted={cd.accepted} area={cd.area:.1f} aspect={cd.aspect:.2f} "
-                            f"intensity={cd.intensity:.1f} roi_span={cd.roi_span:.2f} "
-                            f"reject_reason={cd.reject_reason}")
-            if tag_str:
-                log.info(
-                    "[%s] f=%04d TAGS=%s offset=%+.4f mode=%s conf=%.2f",
-                    flags_str, frame_id, tag_str,
-                    lane_offset_result.offset, lane_offset_result.mode,
-                    lane_offset_result.confidence,
+
+            if csv_prefix is not None:
+                # Structured path: one frames.csv row + one contours.csv
+                # row per accepted/rejected contour (no-op if DEBUG_CONTOURS
+                # left tags.contour_debug empty)
+                run_logger.log_frame(
+                    frame_id = frame_id,
+                    timestamp_ms = timestamp_ms,
+                    frame_time_ms = frame_time_ms,
+                    budget_exceeded = budget_exceeded,
+                    offset = nav_packet.lane_offset,
+                    heading_error = nav_packet.heading_error,
+                    drive_state = nav_packet.drive_state,
+                    stop_sign_detected = nav_packet.stop_sign_detected,
+                    lane_mode = lane_offset_result.mode,
+                    lane_confidence = lane_offset_result.confidence,
+                    edge_ratio = edge_ratio,
+                    intersection_trigger = intersection_trigger,
+                    tags = tags,
+                    imu_sample_count = imu_frame.sample_count,
+                    imu_yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
                 )
-            
-            log.info(
-                "f=%04d t=%.1fms offset=%+.4f head=%+.2f° drive=%-7s "
-                "stop_sign=%s lane_mode=%s imu_n=%d yaw=%+.1f°/s",
-                frame_id,
-                frame_time_ms,
-                nav_packet.lane_offset,
-                nav_packet.heading_error,
-                nav_packet.drive_state,
-                "T" if nav_packet.stop_sign_detected else "F",
-                lane_offset_result.mode,
-                imu_frame.sample_count,
-                imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
-            )
+                if DEBUG_CONTOURS:
+                    run_logger.log_contours(frame_id, timestamp_ms, tags.contour_debug)
+            else:
+                # Legacy path: same info as unstructured terminal/text-log lines
+                if DEBUG_CONTOURS:
+                    for cd in tags.contour_debug:
+                        log.info(f"[{flags_str}] f={frame_id:04d} CONTOUR "
+                                f"accepted={cd.accepted} area={cd.area:.1f} aspect={cd.aspect:.2f} "
+                                f"intensity={cd.intensity:.1f} roi_span={cd.roi_span:.2f} "
+                                f"reject_reason={cd.reject_reason}")
+                if tag_str:
+                    log.info(
+                        "[%s] f=%04d TAGS=%s offset=%+.4f mode=%s conf=%.2f",
+                        flags_str, frame_id, tag_str,
+                        lane_offset_result.offset, lane_offset_result.mode,
+                        lane_offset_result.confidence,
+                    )
+                log.info(
+                    "f=%04d t=%.1fms offset=%+.4f head=%+.2f° drive=%-7s "
+                    "stop_sign=%s lane_mode=%s imu_n=%d yaw=%+.1f°/s",
+                    frame_id,
+                    frame_time_ms,
+                    nav_packet.lane_offset,
+                    nav_packet.heading_error,
+                    nav_packet.drive_state,
+                    "T" if nav_packet.stop_sign_detected else "F",
+                    lane_offset_result.mode,
+                    imu_frame.sample_count,
+                    imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
+                )
 
             # =================================================================
             # Optional Debug Video
@@ -725,6 +779,7 @@ def main(fix_cfg: Config = Config(), frames_dir:str | None = None) -> None:
             cap.release()
         if out_writer is not None:
             out_writer.release()
+        run_logger.close()
 
         elapsed_s = time.perf_counter() - t_run_start
         s.show_final_time(elapsed_s)   # freeze final time on display
@@ -795,4 +850,5 @@ if __name__ == "__main__":
     main(
         fix_cfg = Config.from_names(_args.fix),
         frames_dir = _args.frames,
+        csv_prefix = _args.csv,
     )

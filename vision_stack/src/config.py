@@ -26,7 +26,6 @@ Fixes:
 """
 
 from dataclasses import dataclass, field
-from tkinter.font import names
 import numpy as np
 
 # =============================================================================
@@ -89,7 +88,7 @@ class DashedDilateParams:
         detection range
     kernel_w: keep at 1 to avoid horizontal thickening
     """
-    kernel_h: int = 50  # TODO: REQUIRES CALIBRATION
+    kernel_h: int = 1
     kernel_w: int = 1
 
 # =============================================================================
@@ -124,7 +123,7 @@ class Config:
         Compact log tag
         Computes once at startup and reuses the string
         """
-        return (f"R{int(self.roi_inset)} T{int(self.trapezoid_mask)} "
+        return (f"I{int(self.roi_inset)} T{int(self.trapezoid_mask)} "
                 f"O{int(self.orientation_filt)} D{int(self.dashed_dilate)} "
                 f"A{int(self.anchor_halves)}")
     

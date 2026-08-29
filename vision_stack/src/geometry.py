@@ -73,7 +73,7 @@ class LaneContourFilter:    # Lane Boundary
     score_range: max(w, h) / ref_area; used in confidence normalization
     """
     min_area: float = 0.0
-    max_area: float = 300.0
+    max_area: float = 25000.0
     min_aspect: float = 3.0
     max_aspect: float = 250.0
     ref_area: float = 2000.0
