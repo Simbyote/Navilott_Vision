@@ -2,20 +2,26 @@
 # sweep_fix.sh — run all 5 single-fix bench tests with one command
 #
 # Usage:
-#   ./vision_stack/scripts/sweep_fix.sh <track> <paramtag>
-#   ./vision_stack/scripts/sweep_fix.sh T3 baseline_calib1
+#   ./vision_stack/scripts/sweep_fix.sh <track> <gen> <paramtag>
+#   ./vision_stack/scripts/sweep_fix.sh T3 gen0 sm15_tf55
+#
+# gen names the config.py baseline this batch of runs was taken against —
+# the non-swept dataclass defaults in RoiInsetParams, TrapezoidMaskParams,
+# OrientationFiltParams, DashedDilateParams. Bump it by hand only when
+# those defaults change, and record what changed in
+# vision_stack/logs/CALIBRATION_LOG.md. paramtag stays reserved for the
+# parameter(s) under test in this specific run (see FILENAME_LEGEND.md).
 #
 # Runs each of the 5 fixes in isolation (its own pipeline invocation),
-# one directory per fix letter, so a rerun with a different paramtag never
-# collides with an earlier attempt:
-#   vision_stack/logs/T3Logs/I/baseline_calib1__20260829-1512.log   (roi_inset)
-#   vision_stack/logs/T3Logs/T/baseline_calib1__20260829-1512.log   (trapezoid_mask)
-#   vision_stack/logs/T3Logs/O/baseline_calib1__20260829-1512.log   (orientation_filt)
-#   vision_stack/logs/T3Logs/D/baseline_calib1__20260829-1512.log   (dashed_dilate)
-#   vision_stack/logs/T3Logs/A/baseline_calib1__20260829-1512.log   (anchor_halves)
+# one directory per fix letter nested under gen, so a rerun with a
+# different paramtag never collides with an earlier attempt:
+#   vision_stack/logs/T3Logs/I/gen0/sm15_tf55__20260829-1512.log   (roi_inset)
+#   vision_stack/logs/T3Logs/T/gen0/sm15_tf55__20260829-1512.log   (trapezoid_mask)
+#   vision_stack/logs/T3Logs/O/gen0/sm15_tf55__20260829-1512.log   (orientation_filt)
+#   vision_stack/logs/T3Logs/D/gen0/sm15_tf55__20260829-1512.log   (dashed_dilate)
+#   vision_stack/logs/T3Logs/A/gen0/sm15_tf55__20260829-1512.log   (anchor_halves)
 #
-# paramtag is freeform — describe what this isolated-fix pass is checking
-# (e.g. a calibration round name). For testing how fixes interact with
+# paramtag is otherwise freeform. For testing how fixes interact with
 # each other, use sweep_fix_combo.sh instead — that's the one that runs
 # several fixes together in a single invocation.
 
@@ -28,8 +34,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-TRACK="${1:?Usage: $0 <track> <paramtag>}"
-PARAMTAG="${2:?Usage: $0 <track> <paramtag>}"
+TRACK="${1:?Usage: $0 <track> <gen> <paramtag>}"
+GEN="${2:?Usage: $0 <track> <gen> <paramtag>}"
+PARAMTAG="${3:?Usage: $0 <track> <gen> <paramtag>}"
 
 TS="$(date +%Y%m%d-%H%M)"
 
@@ -43,7 +50,7 @@ declare -A FIX_LETTER=(
 
 for fix in roi_inset trapezoid_mask orientation_filt dashed_dilate anchor_halves; do
   letter="${FIX_LETTER[$fix]}"
-  fix_dir="vision_stack/logs/${TRACK}Logs/${letter}"
+  fix_dir="vision_stack/logs/${TRACK}Logs/${letter}/${GEN}"
   mkdir -p "$fix_dir"
   base="${fix_dir}/${PARAMTAG}__${TS}"
   out="${base}.log"
@@ -55,4 +62,4 @@ for fix in roi_inset trapezoid_mask orientation_filt dashed_dilate anchor_halves
     > "$out" 2>&1
 done
 
-echo "Done. 5 logs + CSV pairs written under vision_stack/logs/${TRACK}Logs/"
+echo "Done. 5 logs + CSV pairs written under vision_stack/logs/${TRACK}Logs/*/${GEN}/"

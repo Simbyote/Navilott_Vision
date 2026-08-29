@@ -42,8 +42,8 @@ class RoiInsetParams:
 
     top_frac: Lane ROI starts at H*top_frac
     """
-    side_margin_frac: float = 0.12
-    top_frac: float = 0.60
+    side_margin_frac: float = 0.15 # From 0.12
+    top_frac: float = 0.55         # From 0.60
 
 @dataclass(frozen=True)
 class TrapezoidMaskParams:
@@ -88,7 +88,7 @@ class DashedDilateParams:
         detection range
     kernel_w: keep at 1 to avoid horizontal thickening
     """
-    kernel_h: int = 1
+    kernel_h: int = 2
     kernel_w: int = 1
 
 # =============================================================================

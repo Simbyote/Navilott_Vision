@@ -2,8 +2,8 @@
 # sweep_fix_combo.sh — run one bench test with several fixes enabled together
 #
 # Usage:
-#   ./vision_stack/scripts/sweep_fix_combo.sh <track> <paramtag> <fix1,fix2,...>
-#   ./vision_stack/scripts/sweep_fix_combo.sh T3 oa65_dh12 orientation_filt,dashed_dilate
+#   ./vision_stack/scripts/sweep_fix_combo.sh <track> <gen> <paramtag> <fix1,fix2,...>
+#   ./vision_stack/scripts/sweep_fix_combo.sh T3 gen0 oa65_dh12 orientation_filt,dashed_dilate
 #
 # Unlike sweep_fix.sh (which isolates each of the 5 fixes into its own log),
 # this runs ONE pipeline invocation with all requested fixes turned on at
@@ -15,6 +15,11 @@
 #     I T O D A letter order), since that's what you hold constant across
 #     several calibration attempts:
 #       vision_stack/logs/T3Logs/OD/
+#   - Inside that, a directory per gen — the config.py baseline (the
+#     non-swept dataclass defaults) this batch of runs was taken against.
+#     Bump gen by hand only when those defaults change, and log what
+#     changed in vision_stack/logs/CALIBRATION_LOG.md:
+#       vision_stack/logs/T3Logs/OD/gen0/
 #   - Inside that, each attempt is named after the variable(s) you changed
 #     plus a timestamp, so nothing overwrites when you circle back to the
 #     same combo later:
@@ -37,9 +42,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 cd "$REPO_ROOT"
 
-TRACK="${1:?Usage: $0 <track> <paramtag> <fix1,fix2,...>}"
-PARAMTAG="${2:?Usage: $0 <track> <paramtag> <fix1,fix2,...>}"
-FIXES_RAW="${3:?Usage: $0 <track> <paramtag> <fix1,fix2,...>}"
+TRACK="${1:?Usage: $0 <track> <gen> <paramtag> <fix1,fix2,...>}"
+GEN="${2:?Usage: $0 <track> <gen> <paramtag> <fix1,fix2,...>}"
+PARAMTAG="${3:?Usage: $0 <track> <gen> <paramtag> <fix1,fix2,...>}"
+FIXES_RAW="${4:?Usage: $0 <track> <gen> <paramtag> <fix1,fix2,...>}"
 
 # Canonical order matches Config.FIX_NAMES / flags_str() in config.py.
 CANONICAL_ORDER=(roi_inset trapezoid_mask orientation_filt dashed_dilate anchor_halves)
@@ -80,7 +86,7 @@ for fix in "${CANONICAL_ORDER[@]}"; do
   fi
 done
 
-COMBO_DIR="vision_stack/logs/${TRACK}Logs/${LETTERS}"
+COMBO_DIR="vision_stack/logs/${TRACK}Logs/${LETTERS}/${GEN}"
 mkdir -p "$COMBO_DIR"
 
 TS="$(date +%Y%m%d-%H%M)"
