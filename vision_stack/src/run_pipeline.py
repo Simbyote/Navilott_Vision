@@ -96,7 +96,7 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM = -0.32   # meters
+OFFSET_TRIM = 0.0   # meters
 
 # =============================================================================
 # Motor Control Parameters
@@ -104,6 +104,12 @@ OFFSET_TRIM = -0.32   # meters
 BASE_SPEED = 0.45   # Constant forward speed (0.0 to 1.0)
 KP = 0.40   # Proportional gain
 KD = 0.05   # Derivative gain;smooths correction jitter
+
+# Soft-start: seconds to linearly ramp from 0 -> BASE_SPEED any time driving
+# resumes from a full stop (segment start, or a "stop" drive_state ending).
+# Targets motor inrush current at the moment of the speed jump, not just
+# steady-state draw -- lowering BASE_SPEED alone doesn't address this.
+RAMP_SECONDS = 0.75
 
 _last_error: float = 0.0
 
@@ -239,7 +245,10 @@ def _load_hsv(
 # =============================================================================
 # Phase 2 -> Phase 3 Adapter
 # =============================================================================
-def _adapt_detections_for_p3(p2_detections) -> list:
+def _adapt_detections_for_p3(
+        p2_detections,
+        lane_roi_width: float,
+    ) -> list:
     """
     Purpose:
         Convert feature_fusion.DetectionObject list into estimation.DetectionObject
@@ -247,6 +256,9 @@ def _adapt_detections_for_p3(p2_detections) -> list:
     
     Inputs:
         p2_detections: list of feature_fusion.DetectionObject from Phase 2
+        lane_roi_width: width in px of the lane ROI this frame's detections
+            were measured against (roi_result.lane_roi.shape[1]) — the
+            center reference for the lane_boundary conversion below
 
     Outputs:
         list of estimation.DetectionObject:
@@ -258,12 +270,16 @@ def _adapt_detections_for_p3(p2_detections) -> list:
             .confidence -> .confidence
             .timestamp -> .timestamp
     """
+    lane_center_px = lane_roi_width / 2.0
     adapted = []
     for d in p2_detections:
+        x = d.position["x"]
+        if d.type == "lane_boundary":
+            x = x - lane_center_px
         adapted.append(P3DetectionObject(
             type = d.type,
             label = d.label_detail,
-            position_x = d.position["x"],
+            position_x = x,
             position_y = d.position["y"],
             confidence = d.confidence,
             timestamp = d.timestamp,
@@ -373,6 +389,7 @@ def main() -> None:
     # Main loop
     # ==========================================================================
     frame_id = 0
+    ramp_start_ts: float | None = None   # None -> ramp restarts on next drive
     try:
         while True:
             t_frame_start = time.perf_counter()
@@ -464,7 +481,7 @@ def main() -> None:
             sensor_sample, imu_frame = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
-            p3_detections = _adapt_detections_for_p3(p2_out.detections)
+            p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
             p3_input = _build_p3_input(p2_out, p3_detections)
             nav_packet = p3_processor.process(p3_input, sensor_sample)
 
@@ -475,11 +492,17 @@ def main() -> None:
 
             if nav_packet.drive_state == "stop":
                 _drive(0.0, 0.0)
+                ramp_start_ts = None
             else:
+                if ramp_start_ts is None:
+                    ramp_start_ts = t_frame_start
+                ramp_frac  = min(1.0, (t_frame_start - ramp_start_ts) / RAMP_SECONDS)
+                ramped_base = BASE_SPEED * ramp_frac
+
                 error = nav_packet.lane_offset + OFFSET_TRIM
                 derivative = error - _last_error
                 correction = (error * KP) + (derivative * KD)
-                _drive(BASE_SPEED - correction, BASE_SPEED + correction)
+                _drive(ramped_base - correction, ramped_base + correction)
                 _last_error = error
 
             # =================================================================
