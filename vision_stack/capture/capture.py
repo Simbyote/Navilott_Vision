@@ -16,7 +16,7 @@ pipeline = (
     "appsink drop=true max-buffers=1 sync=false"
 )
 
-FRAME_RATE = 20
+FRAME_RATE = 15
 
 cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
 
