@@ -1,5 +1,5 @@
 """
-main_pipeline.py
+run_pipeline.py
 
 Complete Navilott Pipeline: Senior Design Project
 
@@ -314,15 +314,19 @@ def _load_hsv(
 # Phase 2 -> Phase 3 Adapter
 # =============================================================================
 def _adapt_detections_for_p3(
-        p2_detections
+        p2_detections,
+        lane_roi_width: float,
     ) -> list:
     """
     Purpose:
         Convert feature_fusion.DetectionObject list into estimation.DetectionObject
         list expected by Phase3Processor
-    
+
     Inputs:
         p2_detections: list of feature_fusion.DetectionObject from Phase 2
+        lane_roi_width: width in px of the lane ROI this frame's detections
+            were measured against (roi_result.lane_roi.shape[1]) — the
+            center reference for the lane_boundary conversion below
 
     Outputs:
         list of estimation.DetectionObject:
@@ -330,16 +334,33 @@ def _adapt_detections_for_p3(
             .type -> .type
             .label_detail -> .label
             .position["x"] -> .position_x
+                lane_boundary: estimation.py's contract requires position_x
+                to already be the signed pixel offset from the ROI center
+                column. feature_fusion.DetectionObject.position["x"] is
+                ROI-local (per feature_fusion.py's own docstring: "position
+                is the centroid ... in ROI pixel coordinates", always >= 0),
+                so it's centered here: x - lane_roi_width/2. Matches the
+                same center reference compute_lane_offset() already uses
+                (frame_width=lane_roi_width there too).
+                traffic_light / stop_sign: left uncentered — nothing in
+                Phase 3 documents them as requiring a signed offset, and
+                _motion_consistency()/_classify_traffic()/_classify_stop_sign()
+                only use position_x/position_y for jump-distance comparisons,
+                which don't care about the coordinate origin.
             .position["y"] -> .position_y
             .confidence -> .confidence
             .timestamp -> .timestamp
     """
+    lane_center_px = lane_roi_width / 2.0
     adapted = []
     for d in p2_detections:
+        x = d.position["x"]
+        if d.type == "lane_boundary":
+            x = x - lane_center_px
         adapted.append(P3DetectionObject(
             type = d.type,
             label = d.label_detail,
-            position_x = d.position["x"],
+            position_x = x,
             position_y = d.position["y"],
             confidence = d.confidence,
             timestamp = d.timestamp,
@@ -678,7 +699,7 @@ def main(
             sensor_sample, imu_frame = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
-            p3_detections = _adapt_detections_for_p3(p2_out.detections)
+            p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
             p3_input = _build_p3_input(p2_out, p3_detections)
             nav_packet = p3_processor.process(p3_input, sensor_sample)
 
@@ -1087,7 +1108,7 @@ def run_single_fix_session(
                     # Phase 3: Navigation Signal Processing
                     # -----------------------------------------------------------
                     sensor_sample, imu_frame = _read_sensors(imu)
-                    p3_detections = _adapt_detections_for_p3(p2_out.detections)
+                    p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
                     p3_input = _build_p3_input(p2_out, p3_detections)
                     nav_packet = p3_processor.process(p3_input, sensor_sample)
 
