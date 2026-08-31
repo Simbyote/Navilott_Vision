@@ -4,7 +4,7 @@ import time
 """
     color space: YUV
     Resolution: 480x360
-    Frame rate: 20 fps
+    Frame rate: 15 fps
     Camera: IMX219
     Buffers: 1
 """

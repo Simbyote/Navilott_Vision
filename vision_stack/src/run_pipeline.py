@@ -26,6 +26,7 @@ Architecture:
 # =============================================================================
 # Standard library
 # =============================================================================
+import os
 import sys
 import time
 import logging
@@ -437,6 +438,19 @@ def _parse_args():
             "to the terminal/text log as before"
         ),
     )
+    ap.add_argument(
+        "--session", action="store_true",
+        help=(
+            "run the segmented single-fix hardware session instead of a "
+            "single fixed-config run: baseline + each fix alone, one "
+            "segment at a time, pausing on the start button between "
+            "segments so the robot can be repositioned"
+        ),
+    )
+    ap.add_argument(
+        "--segment-seconds", type=float, default=10.0, metavar="SECONDS",
+        help="wall-clock duration of each --session segment (default: 10.0)",
+    )
     return ap.parse_args()
 
 # =============================================================================
@@ -843,12 +857,328 @@ def _draw_debug_overlay(
     return vis
 
 # =============================================================================
+# Combo-Letter Tag (matches FilenameLegend.md's convention)
+# =============================================================================
+_FIX_LETTERS = {
+    "roi_inset": "I",
+    "trapezoid_mask": "T",
+    "orientation_filt": "O",
+    "dashed_dilate": "D",
+    "anchor_halves": "A",
+}
+
+def _combo_letters(
+        fix_cfg: Config
+    ) -> str:
+    """
+    Purpose:
+        Concatenate the letters for whichever fixes are active, in
+        Config.FIX_NAMES order, matching the <LETTERS> directory
+        convention combine_runs.py/plot_runs.py already expect.
+        "NONE" when zero fixes are active.
+    """
+    active = "".join(_FIX_LETTERS[n] for n in Config.FIX_NAMES if getattr(fix_cfg, n))
+    return active or "NONE"
+
+# =============================================================================
+# Segmented Single-Fix Hardware Session
+# =============================================================================
+def run_single_fix_session(
+        fix_names: list[str] | None = None,
+        segment_seconds: float = 10.0,
+        frames_dir: str | None = None,
+        log_dir: str = "vision_stack/logs/HWLiveLogs",
+    ) -> None:
+    """
+    Purpose:
+        Step through baseline + each fix ALONE (never combined), one
+        segment at a time, pausing on the start button between segments
+        so the robot can be repositioned by hand. Each segment gets its
+        own fresh Phase3Processor (no EMA/dead-reckoning state carried
+        over from the previous segment's fix) and its own RunLogger, so
+        the resulting CSVs drop into <log_dir>/<LETTERS>/ exactly like an
+        offline sweep run and combine_runs.py/plot_runs.py can ingest
+        them unmodified.
+
+    Inputs:
+        fix_names: which fixes to test in isolation, in this order,
+            after an automatic "none" baseline segment. Defaults to
+            Config.FIX_NAMES (all five, in their canonical order) — pass
+            a subset to test fewer.
+        segment_seconds: wall-clock duration of each segment
+        frames_dir: BENCH-only — read segments from an image directory
+            instead of the camera, to dry-run the session logic before
+            hardware. Same semantics as main()'s frames_dir.
+        log_dir: base directory for per-segment CSVs (and, if SAVE_VIDEO,
+            per-segment debug videos)
+    """
+    global _last_error
+
+    session_timestamp = time.strftime("%Y%m%d-%H%M")
+    segments: list[tuple[str, Config]] = [("none", Config())] + [
+        (name, Config.from_names([name])) for name in (fix_names or Config.FIX_NAMES)
+    ]
+
+    log.info("Starting Navilott single-fix hardware session: %d segments, %.1fs each",
+             len(segments), segment_seconds)
+    if BENCH_MODE:
+        log.info("BENCH_MODE active: hardware peripherals are stubbed")
+
+    # ==========================================================================
+    # One-time setup — shared across every segment
+    # ==========================================================================
+    s = System()
+    t_run_start = time.perf_counter()
+
+    imu = IMUReader(address=0x68, rate_hz=100.0)
+    imu.start()
+
+    hsv_ranges = _load_hsv(HSV_RANGES_PATH, HSV_DUMMY_PATH)
+    blob_filter = BlobFilter()
+    canny_params = CannyParams()
+    lane_filter = LaneContourFilter()
+    sign_filter = SignContourFilter()
+
+    p3_config = Phase3Config(
+        ema_alpha = 0.35,
+        vote_window = 3,
+        min_confidence_lane = LANE_CONF_THRESHOLD,
+        min_confidence_traffic = TRAFFIC_CONF_THRESHOLD,
+        min_confidence_sign = SIGN_CONF_THRESHOLD,
+        px_per_meter = (FRAME_WIDTH / 2) / 0.35,
+        deadreck_max_frames = 10,
+    )
+
+    cap = None
+    bench_iter = None
+    if BENCH_MODE and frames_dir is not None:
+        bench_iter = _bench_frame_iter(frames_dir)
+    else:
+        gst_pipeline = _build_gst_pipeline(FRAME_WIDTH, FRAME_HEIGHT, FPS, COLOR_SPACE)
+        log.info("Opening camera: %s", gst_pipeline)
+        cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
+            log.error("Failed to open camera pipeline; is libcamera available?")
+            sys.exit(1)
+
+    try:
+        for seg_label, fix_cfg in segments:
+            letters = _combo_letters(fix_cfg)
+            flags_str = fix_cfg.flags_str()
+            log.info(
+                "=== Segment '%s' [%s] — press start to run %.1fs ===",
+                seg_label, flags_str, segment_seconds,
+            )
+
+            # Button-gated pause: reposition the robot, then press start
+            # to begin exactly this segment
+            s.wait_for_start()
+            s.run_countdown()
+
+            # Fresh per-segment state: EMA/dead-reckoning history and the
+            # PD derivative term must not leak from one fix's run into
+            # the next's
+            p3_processor = Phase3Processor(p3_config)
+            _last_error = 0.0
+
+            seg_dir = f"{log_dir}/{letters}"
+            os.makedirs(seg_dir, exist_ok=True)
+            csv_prefix = f"{seg_dir}/live__{session_timestamp}"
+            run_logger = RunLogger(csv_prefix, fix_cfg)
+            log.info("CSV logging -> %s_frames.csv / %s_contours.csv", csv_prefix, csv_prefix)
+
+            out_writer = None
+            if SAVE_VIDEO:
+                fourcc = cv2.VideoWriter_fourcc(*"XVID")
+                video_path = f"{seg_dir}/live__{session_timestamp}.avi"
+                out_writer = cv2.VideoWriter(video_path, fourcc, FPS, (FRAME_WIDTH, FRAME_HEIGHT))
+                log.info("Debug video writer opened -> %s", video_path)
+
+            frame_id = 0
+            seg_start = time.perf_counter()
+            try:
+                while (time.perf_counter() - seg_start) < segment_seconds:
+                    t_frame_start = time.perf_counter()
+
+                    # -----------------------------------------------------------
+                    # Phase 1: Capture
+                    # -----------------------------------------------------------
+                    if bench_iter is not None:
+                        ret, frame_bgr = next(bench_iter, (False, None))
+                        if not ret:
+                            log.info("[BENCH] frame source exhausted after %d frames", frame_id)
+                            break
+                    else:
+                        ret, frame_bgr = cap.read()
+                        if not ret or frame_bgr is None:
+                            log.warning("Frame %d: read failed — skipping", frame_id)
+                            frame_id += 1
+                            continue
+
+                    timestamp_ms = int(time.time() * 1000)
+                    tags = FrameTags()
+
+                    # -----------------------------------------------------------
+                    # Phase 2: Vision Perception
+                    # -----------------------------------------------------------
+                    frame_yuv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV)
+                    preprocessed = preprocess_frame(frame_yuv)
+                    preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_YUV2BGR)
+
+                    roi_result = crop_rois(preprocessed_bgr, frame_id=frame_id, fix_cfg=fix_cfg)
+
+                    tl_candidates, _tl_debug = extract_traffic_light_candidates(
+                        roi = roi_result.traffic_roi.copy(),
+                        hsv_ranges = hsv_ranges,
+                        blob_filter = blob_filter,
+                        frame_id = frame_id,
+                        timestamp_ms = timestamp_ms,
+                    )
+
+                    geo_result, _lane_debug, _sign_debug = run_geometry_branch(
+                        lane_roi = roi_result.lane_roi.copy(),
+                        sign_roi = roi_result.sign_roi.copy(),
+                        canny_params = canny_params,
+                        lane_filter = lane_filter,
+                        sign_filter = sign_filter,
+                        frame_id = frame_id,
+                        timestamp_ms = timestamp_ms,
+                        fix_cfg = fix_cfg,
+                        tags = tags,
+                    )
+
+                    source_rois = SourceROIInfo(
+                        lane_shape = roi_result.lane_roi.shape[:2],
+                        traffic_shape = roi_result.traffic_roi.shape[:2],
+                        sign_shape = roi_result.sign_roi.shape[:2],
+                    )
+                    detections, _fusion_summary = fuse_detections(
+                        traffic_candidates = tl_candidates,
+                        lane_candidates = geo_result.lane_candidates,
+                        sign_candidates = geo_result.sign_candidates,
+                        frame_id = frame_id,
+                        timestamp_ms = timestamp_ms,
+                        source_rois = source_rois,
+                    )
+
+                    lane_boundary_dets = [d for d in detections if d.type == "lane_boundary"]
+                    lane_offset_result = compute_lane_offset(
+                        detections = lane_boundary_dets,
+                        frame_width = roi_result.lane_roi.shape[1],
+                        frame_id = frame_id,
+                        timestamp = timestamp_ms,
+                        conf_threshold = LANE_CONF_THRESHOLD,
+                        min_lane_width_px = MIN_LANE_WIDTH_PX,
+                        fix_cfg = fix_cfg,
+                        tags = tags,
+                    )
+
+                    edge_ratio = intersection_edge_ratio(_lane_debug["edges_processed"])
+                    intersection_trigger = edge_ratio > INTERSECTION_EDGE_RATIO_THRESH
+
+                    p2_out = package_phase2_output(
+                        detections = detections,
+                        frame_id = frame_id,
+                        timestamp_ms = timestamp_ms,
+                    )
+
+                    # -----------------------------------------------------------
+                    # Phase 3: Navigation Signal Processing
+                    # -----------------------------------------------------------
+                    sensor_sample, imu_frame = _read_sensors(imu)
+                    p3_detections = _adapt_detections_for_p3(p2_out.detections)
+                    p3_input = _build_p3_input(p2_out, p3_detections)
+                    nav_packet = p3_processor.process(p3_input, sensor_sample)
+
+                    # -----------------------------------------------------------
+                    # Motor Control
+                    # -----------------------------------------------------------
+                    if nav_packet.drive_state == "stop":
+                        _drive(0.0, 0.0)
+                    else:
+                        error = nav_packet.lane_offset + OFFSET_TRIM
+                        derivative = error - _last_error
+                        correction = (error * KP) + (derivative * KD)
+                        _drive(BASE_SPEED - correction, BASE_SPEED + correction)
+                        _last_error = error
+
+                    # -----------------------------------------------------------
+                    # Timing + per-frame CSV log
+                    # -----------------------------------------------------------
+                    t_frame_end = time.perf_counter()
+                    frame_time_ms = (t_frame_end - t_frame_start) * 1000.0
+                    s.update_display(t_frame_end - t_run_start)
+
+                    if frame_time_ms > LOOP_BUDGET_MS:
+                        log.warning(
+                            "[%s] Frame %d: budget exceeded %.1f ms (budget %.1f ms)",
+                            letters, frame_id, frame_time_ms, LOOP_BUDGET_MS,
+                        )
+
+                    budget_exceeded = frame_time_ms > LOOP_BUDGET_MS
+                    run_logger.log_frame(
+                        frame_id = frame_id,
+                        timestamp_ms = timestamp_ms,
+                        frame_time_ms = frame_time_ms,
+                        budget_exceeded = budget_exceeded,
+                        offset = nav_packet.lane_offset,
+                        heading_error = nav_packet.heading_error,
+                        drive_state = nav_packet.drive_state,
+                        stop_sign_detected = nav_packet.stop_sign_detected,
+                        lane_mode = lane_offset_result.mode,
+                        lane_confidence = lane_offset_result.confidence,
+                        edge_ratio = edge_ratio,
+                        intersection_trigger = intersection_trigger,
+                        tags = tags,
+                        imu_sample_count = imu_frame.sample_count,
+                        imu_yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
+                    )
+                    if DEBUG_CONTOURS:
+                        run_logger.log_contours(frame_id, timestamp_ms, tags.contour_debug)
+
+                    if out_writer is not None:
+                        _overlay = _draw_debug_overlay(
+                            frame_bgr, nav_packet, lane_offset_result, frame_time_ms
+                        )
+                        out_writer.write(_overlay)
+
+                    frame_id += 1
+
+            finally:
+                _drive(0.0, 0.0)
+                if out_writer is not None:
+                    out_writer.release()
+                run_logger.close()
+                log.info("Segment '%s' [%s] done: %d frames -> %s_frames.csv",
+                          seg_label, letters, frame_id, csv_prefix)
+
+    except KeyboardInterrupt:
+        log.info("Session stopped by user.")
+
+    finally:
+        _drive(0.0, 0.0)
+        pi.write(_stby, 0)
+        pi.stop()
+        imu.stop()
+        if cap is not None:
+            cap.release()
+
+        elapsed_s = time.perf_counter() - t_run_start
+        s.show_final_time(elapsed_s)
+        time.sleep(5.0)
+        s.cleanup()
+        log.info("Session complete.")
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 if __name__ == "__main__":
     _args = _parse_args()
-    main(
-        fix_cfg = Config.from_names(_args.fix),
-        frames_dir = _args.frames,
-        csv_prefix = _args.csv,
-    )
+    if _args.session:
+        run_single_fix_session(segment_seconds=_args.segment_seconds, frames_dir=_args.frames)
+    else:
+        main(
+            fix_cfg = Config.from_names(_args.fix),
+            frames_dir = _args.frames,
+            csv_prefix = _args.csv,
+        )

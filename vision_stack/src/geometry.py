@@ -69,8 +69,8 @@ class LaneContourFilter:    # Lane Boundary
     ref_area: area treated as confidence = 1.0 at expected detection range
     max_roi_span: fraction of ROI a contour may span in its elongated axis
     min_intensity: minimum average intensity (0-255) within contour; rejects dark blobs
-    score_anchor: max(w, h) / ref_area; used in confidence normalization
-    score_range: max(w, h) / ref_area; used in confidence normalization
+    score_anchor: reference elongation at which confidence = 1.0
+    score_range: range of max(w, h) / ref_area over which confidence is normalized
     """
     min_area: float = 0.0
     max_area: float = 25000.0
