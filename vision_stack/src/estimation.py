@@ -270,6 +270,17 @@ class _CentroidTracker:
         Output:
             True if within threshold; False to break
         lock the tracker
+
+        NOTE: unconditionally commits (x, y) as the new reference, even
+        when returning False. Safe ONLY for a detection class that never
+        has more than one candidate per frame (traffic_light, stop_sign
+        — fuse_detections() already reduces those to a single best
+        candidate upstream). For a class that can have several
+        simultaneous candidates per frame (lane_boundary), calling this
+        once per candidate chains each comparison off the previous
+        candidate's position instead of the prior frame's, and commits
+        the reference even on rejection — see select_best() below for
+        the version that avoids both.
         """
         if self.last_x is None:
             self.last_x, self.last_y = x, y
@@ -282,6 +293,55 @@ class _CentroidTracker:
         dist = (dx * dx + dy * dy) ** 0.5
         self.last_x, self.last_y = x, y
         return dist <= threshold
+
+    def select_best(
+            self,
+            candidates: list,
+            threshold: float,
+        ):
+        """
+        Purpose:
+            Pick (at most) one DetectionObject out of several simultaneous
+            same-frame candidates for this tracker's side, and commit to
+            it as the new reference. Unlike update(), every candidate is
+            checked against the SAME held-fixed prior-frame reference —
+            never against another candidate from this frame — and the
+            reference only moves when a candidate actually qualifies, so
+            a rejected outlier can never smuggle itself in as next
+            frame's reference point.
+
+        Inputs:
+            candidates: DetectionObject list for this frame, already
+                restricted to this tracker's side (e.g. all left-of-center
+                lane_boundary detections). May be empty.
+            threshold: maximum allowed centroid displacement in px from
+                the last accepted position
+
+        Output:
+            the accepted DetectionObject (highest-confidence one that's
+            within threshold of the prior reference, or the
+            highest-confidence candidate outright if this tracker has no
+            history yet), or None if candidates is empty or none qualify
+        """
+        if not candidates:
+            return None
+
+        if self.last_x is None or self.last_y is None:
+            best = max(candidates, key=lambda d: d.confidence)
+            self.last_x, self.last_y = best.position_x, best.position_y
+            return best
+
+        qualifying = [
+            d for d in candidates
+            if ((d.position_x - self.last_x) ** 2
+                + (d.position_y - self.last_y) ** 2) ** 0.5 <= threshold
+        ]
+        if not qualifying:
+            return None
+
+        best = max(qualifying, key=lambda d: d.confidence)
+        self.last_x, self.last_y = best.position_x, best.position_y
+        return best
 
 
 # ============================================================================
@@ -308,9 +368,15 @@ class Phase3Processor:
         self._stop_sign_buf:   Deque[bool] = deque(maxlen=self._cfg.vote_window)
 
         # Centroid trackers (one per detection class)
-        self._lane_tracker:    _CentroidTracker = _CentroidTracker()
-        self._traffic_tracker: _CentroidTracker = _CentroidTracker()
-        self._sign_tracker:    _CentroidTracker = _CentroidTracker()
+        # lane_boundary gets TWO trackers (left/right of image center),
+        # since fuse_detections() can hand it several simultaneous
+        # candidates per frame — unlike traffic_light/stop_sign, which
+        # are already reduced to a single best candidate upstream and
+        # so are safe with one shared tracker each
+        self._lane_tracker_left:  _CentroidTracker = _CentroidTracker()
+        self._lane_tracker_right: _CentroidTracker = _CentroidTracker()
+        self._traffic_tracker:    _CentroidTracker = _CentroidTracker()
+        self._sign_tracker:       _CentroidTracker = _CentroidTracker()
 
         # Dead-reckoning state
         self._last_timestamp_ms:  int   = 0
@@ -406,10 +472,16 @@ class Phase3Processor:
             filtered detections; also updates the internal centroid trackers
         """
         result = []
+
+        # lane_boundary: routed through _filter_lane_boundaries() — see
+        # that method for why this can't reuse the single-tracker
+        # update() path traffic_light/stop_sign use below
+        lane_dets = [d for d in detections if d.type == "lane_boundary"]
+        result.extend(self._filter_lane_boundaries(lane_dets, jump_thresh))
+
         for det in detections:
             if det.type == "lane_boundary":
-                ok = self._lane_tracker.update(
-                    det.position_x, det.position_y, jump_thresh)
+                continue
             elif det.type == "traffic_light":
                 ok = self._traffic_tracker.update(
                     det.position_x, det.position_y, jump_thresh)
@@ -421,6 +493,56 @@ class Phase3Processor:
             if ok:
                 result.append(det)
         return result
+
+    def _filter_lane_boundaries(
+        self,
+        lane_dets:   List[DetectionObject],
+        jump_thresh: float,
+    ) -> List[DetectionObject]:
+        """
+        Purpose:
+            Gate lane_boundary detections against per-side reference
+            trackers (left/right of the image center column, split on
+            the sign of position_x — the same centered-offset convention
+            _adapt_detections_for_p3 already establishes upstream).
+
+            fuse_detections() does NOT reduce lane_boundary to a single
+            best candidate the way it does for traffic_light/stop_sign
+            — every contour that clears geometry filtering becomes its
+            own detection, so a frame can carry several at once (more so
+            right at an intersection, where extra edges/curbs/stop-line
+            geometry also clear the filter). Routing all of them through
+            one shared _CentroidTracker.update() would compare each
+            candidate to whichever candidate was checked immediately
+            before it IN THE SAME FRAME rather than to the prior frame's
+            position, and — since update() commits its reference even on
+            rejection — would let a single spurious high-confidence
+            candidate silently become the new reference point that
+            following frames then measure "consistency" against. Left/
+            right trackers plus select_best() (which holds the reference
+            fixed across all of this frame's candidates and only commits
+            on an actual accept) avoid both problems.
+
+        Inputs:
+            lane_dets: this frame's lane_boundary detections, any order
+            jump_thresh: maximum allowed centroid jump in pixels
+
+        Output:
+            accepted lane_boundary detections — at most one per side,
+            each the highest-confidence qualifying candidate on that side
+        """
+        left_candidates  = [d for d in lane_dets if d.position_x <  0.0]
+        right_candidates = [d for d in lane_dets if d.position_x >= 0.0]
+
+        accepted = []
+        for tracker, candidates in (
+            (self._lane_tracker_left,  left_candidates),
+            (self._lane_tracker_right, right_candidates),
+        ):
+            best = tracker.select_best(candidates, jump_thresh)
+            if best is not None:
+                accepted.append(best)
+        return accepted
 
     # ===========================================================================
     # Stage 2 & 3: Lane Offset 
