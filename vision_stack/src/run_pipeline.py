@@ -34,7 +34,7 @@ import logging
 # =============================================================================
 # Testing Mode
 # =============================================================================
-BENCH_MODE = True       # Non-raspberry pi testing
+BENCH_MODE = False      # Non-raspberry pi testing
 DEBUG_CONTOURS = True   # Logs contours for debugging
 
 # =============================================================================
@@ -728,6 +728,7 @@ def main(
                     frame_time_ms = frame_time_ms,
                     budget_exceeded = budget_exceeded,
                     offset = nav_packet.lane_offset,
+                    raw_offset = lane_offset_result.offset,
                     heading_error = nav_packet.heading_error,
                     drive_state = nav_packet.drive_state,
                     stop_sign_detected = nav_packet.stop_sign_detected,
@@ -1122,6 +1123,7 @@ def run_single_fix_session(
                         frame_time_ms = frame_time_ms,
                         budget_exceeded = budget_exceeded,
                         offset = nav_packet.lane_offset,
+                        raw_offset = lane_offset_result.offset,
                         heading_error = nav_packet.heading_error,
                         drive_state = nav_packet.drive_state,
                         stop_sign_detected = nav_packet.stop_sign_detected,
