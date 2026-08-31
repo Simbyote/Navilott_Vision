@@ -30,6 +30,7 @@ import os
 import sys
 import time
 import logging
+import itertools
 
 # =============================================================================
 # Testing Mode
@@ -465,7 +466,8 @@ def _parse_args():
             "to the terminal/text log as before"
         ),
     )
-    ap.add_argument(
+    _session_group = ap.add_mutually_exclusive_group()
+    _session_group.add_argument(
         "--session", action="store_true",
         help=(
             "run the segmented single-fix hardware session instead of a "
@@ -474,9 +476,48 @@ def _parse_args():
             "segments so the robot can be repositioned"
         ),
     )
+    _session_group.add_argument(
+        "--combo-session", action="store_true",
+        help=(
+            "run the segmented fix-COMBINATION hardware session instead "
+            "of a single fixed-config run: baseline + every combination "
+            "of --fix (or all Config.FIX_NAMES if --fix is omitted) at "
+            "each --combo-size, one segment at a time, pausing on the "
+            "start button between segments"
+        ),
+    )
+    ap.add_argument(
+        "--combo-size", action="append", type=int, default=[], metavar="N",
+        help=(
+            "with --combo-session: combination size to test (repeatable, "
+            "e.g. --combo-size 2 --combo-size 3 for pairs and triples "
+            "only). Defaults to every size from 2 up to the number of "
+            "fixes being combined (singles are already covered by "
+            "--session)"
+        ),
+    )
     ap.add_argument(
         "--segment-seconds", type=float, default=10.0, metavar="SECONDS",
-        help="wall-clock duration of each --session segment (default: 10.0)",
+        help="wall-clock duration of each --session/--combo-session segment (default: 10.0)",
+    )
+    ap.add_argument(
+        "--max-segments", type=int, default=20, metavar="N",
+        help=(
+            "with --combo-session: safety cap on total segment count "
+            "(including baseline), since each segment is a manual "
+            "reposition-and-button-press on hardware. Pass a higher "
+            "value explicitly if that many segments is intended "
+            "(default: 20)"
+        ),
+    )
+    ap.add_argument(
+        "--list-segments", action="store_true",
+        help=(
+            "with --session/--combo-session: print the planned segment "
+            "order and letters, then exit without touching hardware or "
+            "waiting on the start button — use this to sanity-check a "
+            "combo sweep's segment count before committing to it"
+        ),
     )
     return ap.parse_args()
 
@@ -916,46 +957,106 @@ def _combo_letters(
     return active or "NONE"
 
 # =============================================================================
-# Segmented Single-Fix Hardware Session
+# Segmented Hardware Session — shared driver
 # =============================================================================
-def run_single_fix_session(
-        fix_names: list[str] | None = None,
-        segment_seconds: float = 10.0,
-        frames_dir: str | None = None,
-        log_dir: str = "vision_stack/logs/HWLiveLogs",
+def _build_combo_segments(
+        fix_names: list[str],
+        combo_sizes: list[int],
+    ) -> list[tuple[str, "Config"]]:
+    """
+    Purpose:
+        Expand fix_names into every combination at each requested size,
+        as ("name1+name2+...", Config) pairs. Combinations at a given
+        size are generated in Config.FIX_NAMES order (itertools.combinations
+        preserves input order), which is also the order _combo_letters()
+        re-derives its letters in, so segment labels and <LETTERS>
+        directory names stay consistent with each other and with
+        run_single_fix_session's single-fix segments.
+
+    Inputs:
+        fix_names: pool of fix names to draw combinations from
+        combo_sizes: which combination sizes to generate, e.g. [2, 3]
+            for pairs and triples. A size >= len(fix_names) collapses to
+            the single all-fixes-active combination.
+
+    Outputs:
+        list of (label, Config) tuples, one per combination, NOT including
+        the "none" baseline — callers that want a baseline segment prepend
+        it themselves, same as run_single_fix_session does.
+    """
+    out: list[tuple[str, Config]] = []
+    for k in combo_sizes:
+        if k < 1 or k > len(fix_names):
+            raise ValueError(
+                f"_build_combo_segments: combo size {k} invalid for "
+                f"{len(fix_names)} fix name(s) {fix_names}"
+            )
+        for combo in itertools.combinations(fix_names, k):
+            out.append(("+".join(combo), Config.from_names(list(combo))))
+    return out
+
+
+def _describe_segments(
+        segments: list[tuple[str, "Config"]],
+        segment_seconds: float,
     ) -> None:
     """
     Purpose:
-        Step through baseline + each fix ALONE (never combined), one
+        Log the planned segment order/letters/duration without touching
+        hardware or the start button — a dry-run preview so a combo sweep's
+        segment count (which grows fast) can be sanity-checked before
+        committing to a physical session.
+    """
+    total_s = len(segments) * segment_seconds
+    log.info(
+        "Segment plan: %d segment(s), %.1fs each, ~%.1f min total "
+        "(button presses only — no camera/motor activity in preview)",
+        len(segments), segment_seconds, total_s / 60.0,
+    )
+    for i, (seg_label, fix_cfg) in enumerate(segments):
+        log.info("  [%02d] %-24s letters=%s", i, seg_label, _combo_letters(fix_cfg))
+
+
+def _run_fix_sweep_session(
+        segments: list[tuple[str, "Config"]],
+        segment_seconds: float = 10.0,
+        frames_dir: str | None = None,
+        log_dir: str = "vision_stack/logs/HWLiveLogs",
+        sweep_label: str = "fix",
+    ) -> None:
+    """
+    Purpose:
+        Step through a pre-built list of (label, Config) segments, one
         segment at a time, pausing on the start button between segments
         so the robot can be repositioned by hand. Each segment gets its
         own fresh Phase3Processor (no EMA/dead-reckoning state carried
-        over from the previous segment's fix) and its own RunLogger, so
+        over from the previous segment's config) and its own RunLogger, so
         the resulting CSVs drop into <log_dir>/<LETTERS>/ exactly like an
         offline sweep run and combine_runs.py/plot_runs.py can ingest
-        them unmodified.
+        them unmodified. This is the shared driver behind both
+        run_single_fix_session (segments = baseline + each fix alone) and
+        run_fix_combo_session (segments = baseline + fix combinations) —
+        neither builds its own copy of the per-frame loop.
 
     Inputs:
-        fix_names: which fixes to test in isolation, in this order,
-            after an automatic "none" baseline segment. Defaults to
-            Config.FIX_NAMES (all five, in their canonical order) — pass
-            a subset to test fewer.
+        segments: ordered (label, Config) pairs to run, in session order.
+            Callers own the "none" baseline decision — both wrapper
+            functions below prepend one.
         segment_seconds: wall-clock duration of each segment
         frames_dir: BENCH-only — read segments from an image directory
             instead of the camera, to dry-run the session logic before
             hardware. Same semantics as main()'s frames_dir.
         log_dir: base directory for per-segment CSVs (and, if SAVE_VIDEO,
             per-segment debug videos)
+        sweep_label: only used in the startup log line ("single-fix",
+            "combo", etc.) to distinguish which sweep is running
     """
     global _last_error
 
     session_timestamp = time.strftime("%Y%m%d-%H%M")
-    segments: list[tuple[str, Config]] = [("none", Config())] + [
-        (name, Config.from_names([name])) for name in (fix_names or Config.FIX_NAMES)
-    ]
 
-    log.info("Starting Navilott single-fix hardware session: %d segments, %.1fs each",
-             len(segments), segment_seconds)
+    log.info("Starting Navilott %s hardware session: %d segments, %.1fs each",
+             sweep_label, len(segments), segment_seconds)
     if BENCH_MODE:
         log.info("BENCH_MODE active: hardware peripherals are stubbed")
 
@@ -1212,13 +1313,146 @@ def run_single_fix_session(
         s.cleanup()
         log.info("Session complete.")
 
+
+# =============================================================================
+# Segmented Single-Fix Hardware Session
+# =============================================================================
+def run_single_fix_session(
+        fix_names: list[str] | None = None,
+        segment_seconds: float = 10.0,
+        frames_dir: str | None = None,
+        log_dir: str = "vision_stack/logs/HWLiveLogs",
+    ) -> None:
+    """
+    Purpose:
+        Step through baseline + each fix ALONE (never combined). Thin
+        wrapper around _run_fix_sweep_session — see that function for the
+        actual per-segment driver.
+
+    Inputs:
+        fix_names: which fixes to test in isolation, in this order,
+            after an automatic "none" baseline segment. Defaults to
+            Config.FIX_NAMES (all five, in their canonical order) — pass
+            a subset to test fewer.
+        segment_seconds: wall-clock duration of each segment
+        frames_dir: BENCH-only — read segments from an image directory
+            instead of the camera, to dry-run the session logic before
+            hardware. Same semantics as main()'s frames_dir.
+        log_dir: base directory for per-segment CSVs (and, if SAVE_VIDEO,
+            per-segment debug videos)
+    """
+    segments: list[tuple[str, Config]] = [("none", Config())] + [
+        (name, Config.from_names([name])) for name in (fix_names or Config.FIX_NAMES)
+    ]
+    _run_fix_sweep_session(
+        segments = segments,
+        segment_seconds = segment_seconds,
+        frames_dir = frames_dir,
+        log_dir = log_dir,
+        sweep_label = "single-fix",
+    )
+
+
+# =============================================================================
+# Segmented Fix-Combination Hardware Session
+# =============================================================================
+def run_fix_combo_session(
+        fix_names: list[str] | None = None,
+        combo_sizes: list[int] | None = None,
+        segment_seconds: float = 10.0,
+        frames_dir: str | None = None,
+        log_dir: str = "vision_stack/logs/HWLiveLogs",
+        max_segments: int | None = 20,
+    ) -> None:
+    """
+    Purpose:
+        Step through baseline + every combination of fixes at the
+        requested size(s), the same way run_single_fix_session steps
+        through fixes alone. Reuses _run_fix_sweep_session for the actual
+        per-segment loop, so segment behavior (fresh Phase3Processor,
+        fresh RunLogger, <log_dir>/<LETTERS>/ layout) is identical between
+        the two — only how the segment list is built differs.
+
+    Inputs:
+        fix_names: pool of fixes to combine. Defaults to Config.FIX_NAMES
+            (all five, in their canonical order) — pass a subset to
+            combine fewer.
+        combo_sizes: which combination sizes to test, e.g. [2] for pairs
+            only, or [2, 3] for pairs and triples. Defaults to every size
+            from 2 up to len(fix_names) — i.e. the full powerset above
+            singles, since singles are already covered by
+            run_single_fix_session. Combination count grows fast
+            (C(5,2..5) = 26 for all five default fixes), so this is
+            usually worth narrowing on a real hardware session.
+        segment_seconds: wall-clock duration of each segment
+        frames_dir: BENCH-only — read segments from an image directory
+            instead of the camera, to dry-run the session logic before
+            hardware. Same semantics as main()'s frames_dir.
+        log_dir: base directory for per-segment CSVs (and, if SAVE_VIDEO,
+            per-segment debug videos)
+        max_segments: safety cap on total segment count (including the
+            "none" baseline). Each segment needs a physical
+            reposition-and-button-press on hardware, so an unnarrowed
+            combo_sizes on all five fixes can silently ask for far more
+            manual segments than intended. Raises ValueError instead of
+            running if the built segment list exceeds this. Pass None to
+            disable the check.
+    """
+    names = fix_names or list(Config.FIX_NAMES)
+    sizes = combo_sizes or list(range(2, len(names) + 1))
+
+    segments: list[tuple[str, Config]] = [("none", Config())] + _build_combo_segments(names, sizes)
+
+    if max_segments is not None and len(segments) > max_segments:
+        raise ValueError(
+            f"run_fix_combo_session: {len(segments)} segments requested "
+            f"(fix_names={names}, combo_sizes={sizes}) exceeds max_segments="
+            f"{max_segments}. Narrow combo_sizes/fix_names, or pass a "
+            f"higher max_segments explicitly if this many segments is "
+            f"intended."
+        )
+
+    _run_fix_sweep_session(
+        segments = segments,
+        segment_seconds = segment_seconds,
+        frames_dir = frames_dir,
+        log_dir = log_dir,
+        sweep_label = "combo",
+    )
+
+
 # =============================================================================
 # Main Entry Point
 # =============================================================================
 if __name__ == "__main__":
     _args = _parse_args()
     if _args.session:
-        run_single_fix_session(segment_seconds=_args.segment_seconds, frames_dir=_args.frames)
+        if _args.list_segments:
+            _segments = [("none", Config())] + [
+                (name, Config.from_names([name]))
+                for name in (_args.fix or Config.FIX_NAMES)
+            ]
+            _describe_segments(_segments, _args.segment_seconds)
+        else:
+            run_single_fix_session(
+                fix_names = _args.fix or None,
+                segment_seconds = _args.segment_seconds,
+                frames_dir = _args.frames,
+            )
+    elif _args.combo_session:
+        _combo_names = _args.fix or list(Config.FIX_NAMES)
+        _combo_sizes = _args.combo_size or list(range(2, len(_combo_names) + 1))
+        if _args.list_segments:
+            _segments = [("none", Config())] + _build_combo_segments(_combo_names, _combo_sizes)
+            _describe_segments(_segments, _args.segment_seconds)
+        else:
+            run_fix_combo_session(
+                fix_names = _combo_names,
+                combo_sizes = _combo_sizes,
+                segment_seconds = _args.segment_seconds,
+                frames_dir = _args.frames,
+                max_segments = _args.max_segments,
+            )
     else:
         main(
             fix_cfg = Config.from_names(_args.fix),
