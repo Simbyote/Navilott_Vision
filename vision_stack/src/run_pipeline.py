@@ -1,5 +1,5 @@
 """
-run_pipeline.py
+main_pipeline.py
 
 Complete Navilott Pipeline: Senior Design Project
 
@@ -150,7 +150,7 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 MIN_LANE_WIDTH_PX = 150.0
 
 # Offset of the camera
-OFFSET_TRIM = -0.32   # meters
+OFFSET_TRIM = 0.0   # meters
 
 # =============================================================================
 # Motor Control Parameters
@@ -158,6 +158,12 @@ OFFSET_TRIM = -0.32   # meters
 BASE_SPEED = 0.45   # Constant forward speed (0.0 to 1.0)
 KP = 0.40   # Proportional gain
 KD = 0.05   # Derivative gain;smooths correction jitter
+
+# Soft-start: seconds to linearly ramp from 0 -> BASE_SPEED any time driving
+# resumes from a full stop (segment start, or a "stop" drive_state ending).
+# Targets motor inrush current at the moment of the speed jump, not just
+# steady-state draw -- lowering BASE_SPEED alone doesn't address this.
+RAMP_SECONDS = 0.75
 
 _last_error: float = 0.0
 
@@ -574,6 +580,7 @@ def main(
     # Main loop
     # ==========================================================================
     frame_id = 0
+    ramp_start_ts: float | None = None   # None -> ramp restarts on next drive
     try:
         while True:
             t_frame_start = time.perf_counter()
@@ -710,11 +717,17 @@ def main(
 
             if nav_packet.drive_state == "stop":
                 _drive(0.0, 0.0)
+                ramp_start_ts = None
             else:
+                if ramp_start_ts is None:
+                    ramp_start_ts = t_frame_start
+                ramp_frac  = min(1.0, (t_frame_start - ramp_start_ts) / RAMP_SECONDS)
+                ramped_base = BASE_SPEED * ramp_frac
+
                 error = nav_packet.lane_offset + OFFSET_TRIM
                 derivative = error - _last_error
                 correction = (error * KP) + (derivative * KD)
-                _drive(BASE_SPEED - correction, BASE_SPEED + correction)
+                _drive(ramped_base - correction, ramped_base + correction)
                 _last_error = error
 
             # =================================================================
@@ -997,11 +1010,12 @@ def run_single_fix_session(
             s.wait_for_start()
             s.run_countdown()
 
-            # Fresh per-segment state: EMA/dead-reckoning history and the
-            # PD derivative term must not leak from one fix's run into
-            # the next's
+            # Fresh per-segment state: EMA/dead-reckoning history, the PD
+            # derivative term, and the soft-start ramp must not leak from
+            # one fix's run into the next's
             p3_processor = Phase3Processor(p3_config)
             _last_error = 0.0
+            ramp_start_ts: float | None = None   # None -> ramp restarts on next drive
 
             seg_dir = f"{log_dir}/{letters}"
             os.makedirs(seg_dir, exist_ok=True)
@@ -1117,11 +1131,17 @@ def run_single_fix_session(
                     # -----------------------------------------------------------
                     if nav_packet.drive_state == "stop":
                         _drive(0.0, 0.0)
+                        ramp_start_ts = None
                     else:
+                        if ramp_start_ts is None:
+                            ramp_start_ts = t_frame_start
+                        ramp_frac  = min(1.0, (t_frame_start - ramp_start_ts) / RAMP_SECONDS)
+                        ramped_base = BASE_SPEED * ramp_frac
+
                         error = nav_packet.lane_offset + OFFSET_TRIM
                         derivative = error - _last_error
                         correction = (error * KP) + (derivative * KD)
-                        _drive(BASE_SPEED - correction, BASE_SPEED + correction)
+                        _drive(ramped_base - correction, ramped_base + correction)
                         _last_error = error
 
                     # -----------------------------------------------------------
