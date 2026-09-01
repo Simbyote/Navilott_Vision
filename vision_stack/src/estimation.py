@@ -146,6 +146,24 @@ class EstimationPacket:
                     intersection opening — lane_offset/heading_error are
                     on dead-reckoning/IMU fallback rather than fresh
                     vision detections for the whole time this is True
+    .lane_sides_tracked: DIAGNOSTIC ONLY, not used by Navigation.
+                    Which side(s) of center had a lane_boundary
+                    detection survive _filter_lane_boundaries()
+                    (motion consistency) this frame — "L", "R", "LR",
+                    or "" — regardless of whether it then cleared
+                    min_confidence_lane or intersection_active.
+    .lane_sides_used: DIAGNOSTIC ONLY, not used by Navigation. Which
+                    side(s) actually determined lane_offset this frame —
+                    same encoding as lane_sides_tracked, but "" whenever
+                    lane_offset came from dead-reckoning/intersection
+                    hold instead of vision. "LR" means a plausible
+                    two-boundary pair was found and centered between
+                    (see Phase3Config.lane_width_tolerance). "L" or "R"
+                    alone means only that side was detected and
+                    lane_offset is a fixed search bias toward the
+                    MISSING side, not that boundary's raw position —
+                    see Phase3Config.single_boundary_search_bias_m and
+                    _filter_lane.
     .yaw_rate: Pass-through from SensorSample (0.0 if None)
     .lateral_accel: Pass-through from SensorSample (0.0 if None)
     .wheel_speed: Pass-through from SensorSample (0.0 if None)
@@ -157,6 +175,8 @@ class EstimationPacket:
     drive_state:        str
     stop_sign_detected: bool
     intersection_active: bool
+    lane_sides_tracked: str
+    lane_sides_used:    str
     yaw_rate:           float
     lateral_accel:      float
     wheel_speed:        float
@@ -189,6 +209,39 @@ class Phase3Config:
         px_per_meter: Pixel-to-meter conversion for lane_offset
                 At 480x360 with ~35 cm visible lane half-width,
                 a starting estimate is (480/2) / 0.35 ≈ 686 px/m
+        expected_lane_width_m: expected real-world distance between
+                the left and right lane boundaries. Used to sanity-check
+                a two-boundary pair before trusting it as true lane
+                center — see lane_width_tolerance. TODO: REQUIRES
+                CALIBRATION against the actual course lane width
+        lane_width_tolerance: fractional tolerance around
+                expected_lane_width_m (e.g. 0.35 = ±35%) within which a
+                left+right pair is accepted as a plausible lane. A pair
+                outside this range (e.g. two edges of a curb/corner at
+                an intersection that both individually clear motion
+                consistency + confidence but aren't the same lane) is
+                rejected outright rather than averaged — see
+                _filter_lane. TODO: REQUIRES CALIBRATION
+        single_boundary_search_bias_m: magnitude of the lane_offset
+                reported when only ONE boundary is detected (the other
+                vanished — e.g. past a stop line, or a temporary dashed-
+                line gap). By design this is NOT that boundary's raw
+                distance from center — it's a fixed search signal biased
+                toward the MISSING side, since the system's target state
+                is always two-boundary and should actively hunt for the
+                lost boundary rather than treat the one it can see as
+                lane center. Sign convention: seeing only the right
+                boundary reports +single_boundary_search_bias_m (commands
+                a left turn toward the missing left boundary); seeing
+                only the left boundary reports the negative (commands a
+                right turn toward the missing right boundary) — matches
+                lane_offset's existing "positive = robot right of center"
+                convention and the drive loop's existing correction sign.
+                TODO: REQUIRES CALIBRATION — too small and the search
+                turn is too gentle to ever reacquire the missing
+                boundary in time; too large and it overshoots/oscillates
+                whenever a boundary is briefly and legitimately dropped
+                (e.g. a single dashed-line gap frame)
 
     4) Motion consistency:
         max_centroid_jump_px: Maximum allowed centroid displacement between
@@ -234,6 +287,9 @@ class Phase3Config:
     min_confidence_sign:    float = 0.45
 
     px_per_meter:           float = 686.0
+    expected_lane_width_m:  float = 0.65
+    lane_width_tolerance:   float = 0.35
+    single_boundary_search_bias_m: float = 0.15
 
     max_centroid_jump_px:   float = 80.0
 
@@ -432,6 +488,12 @@ class Phase3Processor:
         self._intersection_exit_streak:   int  = 0
         self._intersection_frames_active: int  = 0
 
+        # DIAGNOSTIC ONLY (see EstimationPacket.lane_sides_tracked/
+        # lane_sides_used) — set inside _filter_lane each call, read
+        # back in process() when assembling the packet
+        self._last_lane_sides_tracked: str = ""
+        self._last_lane_sides_used:    str = ""
+
     # ===========================================================================
     # Entry Point
     # ===========================================================================
@@ -503,6 +565,8 @@ class Phase3Processor:
             drive_state = drive_state,
             stop_sign_detected = stop_sign_detected,
             intersection_active = intersection_active,
+            lane_sides_tracked = self._last_lane_sides_tracked,
+            lane_sides_used = self._last_lane_sides_used,
             yaw_rate = sensor_sample.yaw_rate      or 0.0,
             lateral_accel = sensor_sample.lateral_accel or 0.0,
             wheel_speed = sensor_sample.wheel_speed   or 0.0,
@@ -711,34 +775,94 @@ class Phase3Processor:
         """
         cfg = self._cfg
 
+        # DIAGNOSTIC ONLY: which side(s) survived motion consistency
+        # this frame, independent of confidence/intersection gating
+        # below. Doesn't affect anything returned from this method.
+        boundary_dets = [d for d in detections if d.type == "lane_boundary"]
+        self._last_lane_sides_tracked = self._lane_sides_str(boundary_dets)
+
         if intersection_active:
             # Same hold-last-estimate path as an empty-detections frame,
             # but doesn't bypass deadreck_max_frames — a long intersection
             # can still go stale exactly like an ordinary vision dropout
+            self._last_lane_sides_used = ""
             if self._deadreck_frames < cfg.deadreck_max_frames:
                 self._deadreck_frames += 1
             return self._last_lane_offset_m, False
 
         lane_dets = [
-            d for d in detections
-            if d.type == "lane_boundary" and d.confidence >= cfg.min_confidence_lane
+            d for d in boundary_dets
+            if d.confidence >= cfg.min_confidence_lane
         ]
+        # _filter_lane_boundaries guarantees at most one candidate per
+        # side, so lane_dets holds at most one "left" (position_x < 0.0)
+        # and one "right" (position_x >= 0.0) detection
+        left  = next((d for d in lane_dets if d.position_x <  0.0), None)
+        right = next((d for d in lane_dets if d.position_x >= 0.0), None)
 
-        if lane_dets:
-            avg_px   = sum(d.position_x for d in lane_dets) / len(lane_dets)
-            offset_m = avg_px / cfg.px_per_meter
+        offset_m = None
+        sides_used = ""
+
+        if left is not None and right is not None:
+            # True two-boundary: only trust this as real lane center if
+            # the pair's width is plausible — corner/curb geometry near
+            # an intersection can present two edges that individually
+            # clear motion consistency + confidence but aren't actually
+            # the same lane (see Phase3Config.lane_width_tolerance). An
+            # implausible pair is rejected outright, not averaged; it
+            # falls through to dead-reckoning below rather than guessing
+            # which single side (if either) is trustworthy
+            width_px    = right.position_x - left.position_x
+            width_lo_px = cfg.expected_lane_width_m * cfg.px_per_meter * (1.0 - cfg.lane_width_tolerance)
+            width_hi_px = cfg.expected_lane_width_m * cfg.px_per_meter * (1.0 + cfg.lane_width_tolerance)
+            if width_lo_px <= width_px <= width_hi_px:
+                offset_m   = ((left.position_x + right.position_x) / 2.0) / cfg.px_per_meter
+                sides_used = "LR"
+        elif right is not None:
+            # Only the right boundary is visible — the left one vanished.
+            # Report a fixed search bias toward the MISSING (left) side
+            # rather than this boundary's raw distance from center: the
+            # target state is always two-boundary, so a single boundary
+            # should drive an active hunt for its missing pair, not be
+            # treated as lane center. Positive lane_offset commands a
+            # left turn in the drive loop — see Phase3Config docstring
+            offset_m   = cfg.single_boundary_search_bias_m
+            sides_used = "R"
+        elif left is not None:
+            # Only the left boundary is visible — search toward the
+            # missing right side (negative = right turn)
+            offset_m   = -cfg.single_boundary_search_bias_m
+            sides_used = "L"
+
+        if offset_m is not None:
+            self._last_lane_sides_used = sides_used
             smoothed = self._lane_offset_ema.update(offset_m, cfg.ema_alpha)
             self._last_lane_offset_m = smoothed
             self._deadreck_frames    = 0
             return smoothed, True
 
+        # No usable vision this frame — either nothing detected/passed
+        # confidence, or a two-boundary pair was rejected as implausible.
         # Dead-reckoning: hold last estimate within the allowed window
+        self._last_lane_sides_used = ""
         if self._deadreck_frames < cfg.deadreck_max_frames:
             self._deadreck_frames += 1
             return self._last_lane_offset_m, False
 
         # Stale — hold silently; Navigation must not rely on this value
         return self._last_lane_offset_m, False
+
+    @staticmethod
+    def _lane_sides_str(dets: List[DetectionObject]) -> str:
+        """
+        DIAGNOSTIC ONLY. Encodes which side(s) of image center a set of
+        lane_boundary detections cover as "L", "R", "LR", or "" — same
+        centered position_x convention as _filter_lane_boundaries
+        (left: position_x < 0.0, right: position_x >= 0.0).
+        """
+        has_left  = any(d.position_x <  0.0 for d in dets)
+        has_right = any(d.position_x >= 0.0 for d in dets)
+        return ("L" if has_left else "") + ("R" if has_right else "")
 
     # ===========================================================================
     # Stage 2 & 3: Heading Error

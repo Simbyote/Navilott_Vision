@@ -284,6 +284,63 @@ The IMU feeds directly into State Estimation as a high-rate, vision-independent 
 
 ---
 
+### Lane Offset (Live Implementation)
+
+**File:** `estimation.py`, `Phase3Processor._filter_lane()`
+
+This is the actual steering signal — not the Phase 2 `LaneOffsetResult`
+described in `phase2_pipeline.md` Stage 5, which is bench-diagnostic only.
+
+Operates directly on raw `lane_boundary` DetectionObjects (pixel
+positions), not on a pre-normalized Phase 2 offset. `_filter_lane_boundaries`
+guarantees at most one candidate per side (left: position_x < 0.0, right:
+position_x >= 0.0) before this stage runs.
+
+**Units:** meters, via `px_per_meter` (default 686.0 px/m) — NOT
+normalized [-1.0, +1.0].
+
+**Two boundaries detected:** only trusted as true lane center if the
+pixel gap between them is plausible as a real lane — within
+`expected_lane_width_m` (default 0.65 m) ± `lane_width_tolerance`
+(default ±35%). This is a percentage tolerance BAND (both a floor and a
+ceiling), not the flat `MIN_LANE_WIDTH_PX` floor used in the bench-only
+Phase 2 path. An implausible pair (e.g. two edges of a corner/curb near
+an intersection, which can pass motion consistency + confidence but
+aren't the same lane) is rejected outright and falls through to
+dead-reckoning rather than being averaged.
+
+**Only one boundary detected:** NOT "inferred from anchor position."
+Reports a fixed search bias (`single_boundary_search_bias_m`, default
+0.15 m) signed toward the MISSING side — the system's target state is
+always two-boundary, so a single boundary should actively hunt for its
+missing pair rather than be treated as lane center.
+
+**Sign convention:** positive `lane_offset` = robot is RIGHT of lane
+center and commands a LEFT turn in the drive loop (`_drive(base -
+correction, base + correction)`, correction = KP*error + KD*derivative,
+error = lane_offset + OFFSET_TRIM). Seeing only the right boundary
+reports positive (search left, toward the missing left boundary); seeing
+only the left boundary reports negative (search right). This is the
+OPPOSITE of the sign convention stated for the bench-only Phase 2 path
+in `phase2_pipeline.md` — the two paths are not meant to agree, since
+only this one drives the motors.
+
+**Dead-reckoning:** holds the last computed `lane_offset` frozen for up
+to `deadreck_max_frames` (default 10) frames, then continues holding it
+(now stale) if vision doesn't return in time. This is a flat freeze, NOT
+sensor fusion — `distance_traveled` and `wheel_speed` are not integrated
+into it despite being passed into the function signature. (IMU yaw-rate
+integration DOES happen, but for `heading_error`, a separate signal — see
+`_filter_heading`.)
+
+**Diagnostics:** `EstimationPacket.lane_sides_tracked` /
+`.lane_sides_used` ("L"/"R"/"LR"/"") serve the same debugging role as
+Phase 2's `mode` field but are not equivalent to it — `lane_sides_used`
+reflects the live plausibility-gated logic above, not the Phase 2 flat
+width check.
+
+---
+
 ### State Estimation Outputs
 
 The sensor inputs above augment the final state estimation step.
