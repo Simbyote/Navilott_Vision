@@ -279,36 +279,41 @@ Position is the centroid of the bounding box.
 
 ---
 
-## Stage 5 — Lane Offset Estimation (Bench Diagnostic Only)
+## Stage 5 — Lane Offset Estimation
 
 **File:** `lane_offset.py`
 
-`compute_lane_offset()` runs every frame and produces a `LaneOffsetResult`
-(normalized [-1.0, +1.0], `mode` field, gated by a flat MIN_LANE_WIDTH_PX
-floor) as documented below. **This result is not consumed by Phase 3 or
-the nav packet.** It exists for bench logging/visualization only. The
-live steering signal is computed independently in Phase 3 — see
-`pipeline.md`, Phase 3 section, "Lane Offset (Live Implementation)".
+Computes the robot's normalized lateral offset from lane center using the
+pixel x-positions of lane boundary candidates produced by feature fusion
 
 ### Computation
 
-lane_center = (left_x + right_x) / 2.0
-offset      = (lane_center - frame_center) / (lane_width_px / 2.0)
-offset      = clamp(offset, -1.0, +1.0)
+Lane boundary candidates are filtered to those meeting the confidence
+threshold. The highest-confidence left and right anchors are selected by
+x-position. Lane center is their midpoint. Offset is normalized to the lane
+half-width:
+
+```
+    lane_center = (left_x + right_x) / 2.0
+    offset      = (lane_center − frame_center) / (lane_width_px / 2.0)
+    offset      = clamp(offset, −1.0, +1.0)
+```
+
+A positive offset means the robot is left of lane center. A negative offset
+means the robot is right of lane center
 
 ### Detection Modes
 
-| Mode             | Condition                                | Offset source                       |
-| ---------------- | ----------------------------------------- | ------------------------------------ |
-| `two_boundary`    | Left and right anchors detected           | Midpoint formula above               |
-| `left_only`       | Only left boundary detected               | Inferred from left anchor position   |
-| `right_only`      | Only right boundary detected              | Inferred from right anchor position  |
-| `width_rejected`  | Boundary span below `min_lane_width_px`   | Midpoint used; anchors discarded     |
-| `none`            | No candidates above confidence threshold  | offset = 0.0                         |
+| Mode             | Condition                                      | Offset source                        |
+|------------------|------------------------------------------------|--------------------------------------|
+| `two_boundary`   | Left and right anchors detected                | Midpoint formula above               |
+| `left_only`      | Only left boundary detected                    | Inferred from left anchor position   |
+| `right_only`     | Only right boundary detected                   | Inferred from right anchor position  |
+| `width_rejected` | Boundary span below `min_lane_width_px`        | Midpoint used; anchors discarded     |
+| `none`           | No candidates above confidence threshold       | offset = 0.0; Phase 3 uses fallback  |
 
-`MIN_LANE_WIDTH_PX = 150.0` (run_pipeline.py). This mode/threshold pair is
-NOT the gate used for live steering — see the Phase 3 section for the
-actual plausibility check.
+Phase 3 reads `mode` to determine whether to trust `offset` directly or
+substitute a dead-reckoned estimate from EMA and IMU integration.
 
 ### Output
 

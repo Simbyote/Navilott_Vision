@@ -212,15 +212,8 @@ class Phase3Config:
         expected_lane_width_m: expected real-world distance between
                 the left and right lane boundaries. Used to sanity-check
                 a two-boundary pair before trusting it as true lane
-                center — see lane_width_tolerance. Set from the bench
-                course measurements in the calibration notes (~14cm
-                between the tracked lane boundaries); the previous 0.65m
-                placeholder was ~4.6x too wide, so essentially every
-                legitimate two-boundary pair was failing the width check
-                and falling through to dead-reckoning / single-boundary
-                mode. STILL REQUIRES CALIBRATION against px_per_meter —
-                re-verify both together against the calibration script
-                once it lands
+                center — see lane_width_tolerance. TODO: REQUIRES
+                CALIBRATION against the actual course lane width
         lane_width_tolerance: fractional tolerance around
                 expected_lane_width_m (e.g. 0.35 = ±35%) within which a
                 left+right pair is accepted as a plausible lane. A pair
@@ -229,20 +222,10 @@ class Phase3Config:
                 consistency + confidence but aren't the same lane) is
                 rejected outright rather than averaged — see
                 _filter_lane. TODO: REQUIRES CALIBRATION
-        max_lane_offset_m: safety clamp applied to every lane_offset this
-                stage returns (two-boundary, single-boundary, and
-                dead-reckoning hold alike). Previously only the
-                single-boundary and width-rejected paths were implicitly
-                bounded (by single_boundary_search_bias_m); a genuine
-                two-boundary pair that passes the width check with a bad
-                anchor pick had no ceiling at all. Set comfortably above
-                single_boundary_search_bias_m so it never clips normal
-                hunting behavior, only outliers.
         single_boundary_search_bias_m: magnitude of the lane_offset
-                reported once only ONE boundary is detected AND that
-                condition has been confirmed for
-                single_boundary_confirm_frames straight frames (see
-                below). By design this is NOT that boundary's raw
+                reported when only ONE boundary is detected (the other
+                vanished — e.g. past a stop line, or a temporary dashed-
+                line gap). By design this is NOT that boundary's raw
                 distance from center — it's a fixed search signal biased
                 toward the MISSING side, since the system's target state
                 is always two-boundary and should actively hunt for the
@@ -259,24 +242,6 @@ class Phase3Config:
                 boundary in time; too large and it overshoots/oscillates
                 whenever a boundary is briefly and legitimately dropped
                 (e.g. a single dashed-line gap frame)
-        single_boundary_confirm_frames: consecutive frames a side must be
-                missing before single_boundary_search_bias_m engages at
-                all. Below this, a one-sided frame is treated the same
-                as a no-detection frame (dead-reckoning hold), not a
-                confirmed loss — a single dashed-line gap or a
-                pole/wall contour flicker used to trigger the full
-                search bias on frame one, every time, which is what
-                produced the "sharp turn" / edge-hugging behavior seen
-                on the bench (the biggest, least-tentative correction in
-                the whole system was being fired by the noisiest
-                detection mode). Matching deadreck_max_frames is a
-                reasonable start.
-        single_boundary_ramp_frames: once confirmed, the number of
-                additional frames over which the search bias ramps
-                linearly from 0 to single_boundary_search_bias_m, rather
-                than snapping to full magnitude the instant it's
-                confirmed. Smooths the P/D response instead of handing
-                the controller a step input.
 
     4) Motion consistency:
         max_centroid_jump_px: Maximum allowed centroid displacement between
@@ -284,19 +249,7 @@ class Phase3Config:
 
     5) Dead-reckoning:
         deadreck_max_frames: Maximum frames to hold last lane_offset before
-                the estimate is considered stale. Also bounds how long
-                _filter_heading() will keep integrating raw IMU yaw_rate
-                on a vision dropout — previously heading_error had no
-                such bound (only a loose +/-90deg clamp) and would
-                free-integrate gyro drift for as long as vision stayed
-                unconfident, producing 15-20+ deg errors over a
-                second-plus of dropout that then had to be corrected all
-                at once the instant vision reacquired.
-        heading_decay_factor: once a vision dropout has outlasted
-                deadreck_max_frames, heading_error decays toward zero by
-                this factor per frame instead of continuing to
-                integrate. 0.85 halves the residual in ~4-5 frames at
-                ~15-20 FPS; must be in (0.0, 1.0)
+                the estimate is considered stale
 
     6) Intersection handling:
         intersection_enabled: hard on/off switch for the whole
@@ -334,17 +287,13 @@ class Phase3Config:
     min_confidence_sign:    float = 0.45
 
     px_per_meter:           float = 686.0
-    expected_lane_width_m:  float = 0.14   # was 0.65 — see docstring
+    expected_lane_width_m:  float = 0.65
     lane_width_tolerance:   float = 0.35
-    max_lane_offset_m:      float = 0.25
-    single_boundary_search_bias_m:    float = 0.15
-    single_boundary_confirm_frames:   int   = 5
-    single_boundary_ramp_frames:      int   = 3
+    single_boundary_search_bias_m: float = 0.15
 
     max_centroid_jump_px:   float = 80.0
 
     deadreck_max_frames:    int   = 10
-    heading_decay_factor:   float = 0.85
 
     intersection_enabled:      bool = False
     intersection_enter_frames: int  = 2
@@ -528,15 +477,6 @@ class Phase3Processor:
         self._last_timestamp_ms:  int   = 0
         self._deadreck_frames:    int   = 0
         self._last_lane_offset_m: float = 0.0
-
-        # Single-boundary hysteresis: consecutive frames where only the
-        # right (or only the left) boundary has been the sole candidate.
-        # See Phase3Config.single_boundary_confirm_frames /
-        # single_boundary_ramp_frames — reset whenever a frame doesn't
-        # match that side's single-boundary case (two-boundary, the
-        # other side alone, or nothing at all)
-        self._right_only_streak:  int   = 0
-        self._left_only_streak:   int   = 0
 
         # IMU heading integration state
         self._heading_from_imu: float = 0.0
@@ -878,57 +818,23 @@ class Phase3Processor:
             if width_lo_px <= width_px <= width_hi_px:
                 offset_m   = ((left.position_x + right.position_x) / 2.0) / cfg.px_per_meter
                 sides_used = "LR"
-            # Confirmed two-boundary this frame either way (even if the
-            # pair got rejected below) — neither single-side case applies
-            self._right_only_streak = 0
-            self._left_only_streak  = 0
         elif right is not None:
             # Only the right boundary is visible — the left one vanished.
-            # Don't trust this as a real loss until it's been true for
-            # single_boundary_confirm_frames straight frames; a single
-            # noisy/flickered frame (a rejected dashed contour, a
-            # misclassified pole dropping out for one frame) falls
-            # through to the ordinary dead-reckoning hold below instead
-            # of firing the search bias on frame one
-            self._left_only_streak  = 0
-            self._right_only_streak += 1
-            if self._right_only_streak >= cfg.single_boundary_confirm_frames:
-                # Ramp the bias in over single_boundary_ramp_frames rather
-                # than snapping to full magnitude — softens the P/D step
-                # response. Report a fixed search bias toward the MISSING
-                # (left) side rather than this boundary's raw distance
-                # from center: the target state is always two-boundary,
-                # so a confirmed single boundary should drive an active
-                # hunt for its missing pair, not be treated as lane
-                # center. Positive lane_offset commands a left turn in
-                # the drive loop — see Phase3Config docstring
-                ramp_frames = max(1, cfg.single_boundary_ramp_frames)
-                ramp_frac   = min(1.0, (self._right_only_streak - cfg.single_boundary_confirm_frames + 1) / ramp_frames)
-                offset_m    = cfg.single_boundary_search_bias_m * ramp_frac
-                sides_used  = "R"
+            # Report a fixed search bias toward the MISSING (left) side
+            # rather than this boundary's raw distance from center: the
+            # target state is always two-boundary, so a single boundary
+            # should drive an active hunt for its missing pair, not be
+            # treated as lane center. Positive lane_offset commands a
+            # left turn in the drive loop — see Phase3Config docstring
+            offset_m   = cfg.single_boundary_search_bias_m
+            sides_used = "R"
         elif left is not None:
-            # Only the left boundary is visible — same confirm/ramp
-            # treatment, searching toward the missing right side
-            # (negative = right turn)
-            self._right_only_streak = 0
-            self._left_only_streak  += 1
-            if self._left_only_streak >= cfg.single_boundary_confirm_frames:
-                ramp_frames = max(1, cfg.single_boundary_ramp_frames)
-                ramp_frac   = min(1.0, (self._left_only_streak - cfg.single_boundary_confirm_frames + 1) / ramp_frames)
-                offset_m    = -cfg.single_boundary_search_bias_m * ramp_frac
-                sides_used  = "L"
-        else:
-            self._right_only_streak = 0
-            self._left_only_streak  = 0
+            # Only the left boundary is visible — search toward the
+            # missing right side (negative = right turn)
+            offset_m   = -cfg.single_boundary_search_bias_m
+            sides_used = "L"
 
         if offset_m is not None:
-            # Safety clamp: nothing this stage returns should exceed
-            # max_lane_offset_m, regardless of path. Previously only the
-            # single-boundary paths were implicitly bounded (by
-            # single_boundary_search_bias_m); a two-boundary pair that
-            # passed the width check with a bad anchor pick had no
-            # ceiling at all
-            offset_m = max(-cfg.max_lane_offset_m, min(cfg.max_lane_offset_m, offset_m))
             self._last_lane_sides_used = sides_used
             smoothed = self._lane_offset_ema.update(offset_m, cfg.ema_alpha)
             self._last_lane_offset_m = smoothed
@@ -990,28 +896,9 @@ class Phase3Processor:
             self._heading_from_imu = smoothed   # sync accumulator to vision
             return smoothed
 
-        # self._deadreck_frames was already updated by _filter_lane()
-        # earlier this frame, so it reflects how long vision has been
-        # unconfident as of THIS frame. Only trust open-loop gyro
-        # integration for that same window — past it, decay back toward
-        # zero instead of continuing to integrate raw yaw_rate. Without
-        # this, a >1s vision dropout (e.g. sustained pole/wall
-        # misclassification clutter, or an unresolved intersection) let
-        # heading_error free-run to 15-20+ deg, bounded only by the loose
-        # +/-90deg clamp, and then had to be corrected all at once the
-        # instant vision reacquired — a large derivative spike went
-        # straight into KD on the very next confident frame
-        if (sensor_sample.yaw_rate is not None and dt > 0.0
-                and self._deadreck_frames < self._cfg.deadreck_max_frames):
+        if sensor_sample.yaw_rate is not None and dt > 0.0:
             self._heading_from_imu += sensor_sample.yaw_rate * dt
             self._heading_from_imu  = max(-90.0, min(90.0, self._heading_from_imu))
-            return self._heading_from_imu
-
-        if self._deadreck_frames >= self._cfg.deadreck_max_frames:
-            # Stale — Navigation must not rely on this value (matches the
-            # lane_offset dead-reckoning contract). Decay rather than
-            # hold or keep integrating.
-            self._heading_from_imu *= self._cfg.heading_decay_factor
             return self._heading_from_imu
 
         return self._heading_error_ema.value or 0.0
