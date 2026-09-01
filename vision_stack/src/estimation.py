@@ -199,6 +199,19 @@ class Phase3Config:
                 the estimate is considered stale
 
     6) Intersection handling:
+        intersection_enabled: hard on/off switch for the whole
+                intersection state machine, independent of
+                INTERSECTION_EDGE_RATIO_THRESH's value. Unlike
+                min_confidence_* (bounded [0.0, 1.0], so 1.1 is a
+                provable disable), edge_ratio in config.py is
+                open-ended — an arbitrarily high threshold is NOT a
+                guaranteed off switch for it, only a less-likely one.
+                This flag is the actual off switch. Defaults to False
+                (disabled) until INTERSECTION_EDGE_RATIO_THRESH is
+                calibrated against real intersection-crossing data —
+                matches how traffic/sign detection is already gated
+                off via their own confidence thresholds pending
+                calibration
         intersection_enter_frames: consecutive raw intersection triggers
                 (from run_pipeline.py's intersection_edge_ratio() check)
                 required before Phase 3 commits to INTERSECTION mode —
@@ -226,9 +239,10 @@ class Phase3Config:
 
     deadreck_max_frames:    int   = 10
 
-    intersection_enter_frames: int = 2
-    intersection_exit_frames:  int = 2
-    intersection_max_frames:   int = 45
+    intersection_enabled:      bool = False
+    intersection_enter_frames: int  = 2
+    intersection_exit_frames:  int  = 2
+    intersection_max_frames:   int  = 45
 
 
 # ============================================================================
@@ -528,6 +542,21 @@ class Phase3Processor:
             applying this frame's update), False otherwise
         """
         cfg = self._cfg
+
+        if not cfg.intersection_enabled:
+            # Hard disable — independent of raw_trigger and of whatever
+            # INTERSECTION_EDGE_RATIO_THRESH happens to be set to.
+            # edge_ratio is open-ended (unlike the [0.0, 1.0]-bounded
+            # confidence fields), so no threshold value can be trusted
+            # as a guaranteed off switch for it; this flag is. Also
+            # clears any state a prior enabled run left behind, so
+            # toggling this off mid-development can't leave a stale
+            # partial streak/active-frame count around.
+            self._intersection_active = False
+            self._intersection_enter_streak = 0
+            self._intersection_exit_streak = 0
+            self._intersection_frames_active = 0
+            return False
 
         if not self._intersection_active:
             self._intersection_enter_streak = (
@@ -908,6 +937,7 @@ if __name__ == "__main__":
         min_confidence_sign=0.45,
         px_per_meter=686.0,
         deadreck_max_frames=5,
+        intersection_enabled=True,   # demo only — real pipeline defaults to False
         intersection_enter_frames=2,
         intersection_exit_frames=2,
         intersection_max_frames=45,
