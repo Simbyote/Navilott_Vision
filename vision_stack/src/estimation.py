@@ -141,29 +141,6 @@ class EstimationPacket:
                     Vision-primary; IMU yaw integration fallback
     .drive_state: "go" | "caution" | "stop"
     .stop_sign_detected: detecting a stop sign takes precedence over traffic light state
-    .intersection_active: True while Phase 3's debounced intersection
-                    state machine considers the robot inside an
-                    intersection opening — lane_offset/heading_error are
-                    on dead-reckoning/IMU fallback rather than fresh
-                    vision detections for the whole time this is True
-    .lane_sides_tracked: DIAGNOSTIC ONLY, not used by Navigation.
-                    Which side(s) of center had a lane_boundary
-                    detection survive _filter_lane_boundaries()
-                    (motion consistency) this frame — "L", "R", "LR",
-                    or "" — regardless of whether it then cleared
-                    min_confidence_lane or intersection_active.
-    .lane_sides_used: DIAGNOSTIC ONLY, not used by Navigation. Which
-                    side(s) actually determined lane_offset this frame —
-                    same encoding as lane_sides_tracked, but "" whenever
-                    lane_offset came from dead-reckoning/intersection
-                    hold instead of vision. "LR" means a plausible
-                    two-boundary pair was found and centered between
-                    (see Phase3Config.lane_width_tolerance). "L" or "R"
-                    alone means only that side was detected and
-                    lane_offset is a fixed search bias toward the
-                    MISSING side, not that boundary's raw position —
-                    see Phase3Config.single_boundary_search_bias_m and
-                    _filter_lane.
     .yaw_rate: Pass-through from SensorSample (0.0 if None)
     .lateral_accel: Pass-through from SensorSample (0.0 if None)
     .wheel_speed: Pass-through from SensorSample (0.0 if None)
@@ -174,9 +151,6 @@ class EstimationPacket:
     heading_error:      float
     drive_state:        str
     stop_sign_detected: bool
-    intersection_active: bool
-    lane_sides_tracked: str
-    lane_sides_used:    str
     yaw_rate:           float
     lateral_accel:      float
     wheel_speed:        float
@@ -209,39 +183,6 @@ class Phase3Config:
         px_per_meter: Pixel-to-meter conversion for lane_offset
                 At 480x360 with ~35 cm visible lane half-width,
                 a starting estimate is (480/2) / 0.35 ≈ 686 px/m
-        expected_lane_width_m: expected real-world distance between
-                the left and right lane boundaries. Used to sanity-check
-                a two-boundary pair before trusting it as true lane
-                center — see lane_width_tolerance. TODO: REQUIRES
-                CALIBRATION against the actual course lane width
-        lane_width_tolerance: fractional tolerance around
-                expected_lane_width_m (e.g. 0.35 = ±35%) within which a
-                left+right pair is accepted as a plausible lane. A pair
-                outside this range (e.g. two edges of a curb/corner at
-                an intersection that both individually clear motion
-                consistency + confidence but aren't the same lane) is
-                rejected outright rather than averaged — see
-                _filter_lane. TODO: REQUIRES CALIBRATION
-        single_boundary_search_bias_m: magnitude of the lane_offset
-                reported when only ONE boundary is detected (the other
-                vanished — e.g. past a stop line, or a temporary dashed-
-                line gap). By design this is NOT that boundary's raw
-                distance from center — it's a fixed search signal biased
-                toward the MISSING side, since the system's target state
-                is always two-boundary and should actively hunt for the
-                lost boundary rather than treat the one it can see as
-                lane center. Sign convention: seeing only the right
-                boundary reports +single_boundary_search_bias_m (commands
-                a left turn toward the missing left boundary); seeing
-                only the left boundary reports the negative (commands a
-                right turn toward the missing right boundary) — matches
-                lane_offset's existing "positive = robot right of center"
-                convention and the drive loop's existing correction sign.
-                TODO: REQUIRES CALIBRATION — too small and the search
-                turn is too gentle to ever reacquire the missing
-                boundary in time; too large and it overshoots/oscillates
-                whenever a boundary is briefly and legitimately dropped
-                (e.g. a single dashed-line gap frame)
 
     4) Motion consistency:
         max_centroid_jump_px: Maximum allowed centroid displacement between
@@ -250,34 +191,6 @@ class Phase3Config:
     5) Dead-reckoning:
         deadreck_max_frames: Maximum frames to hold last lane_offset before
                 the estimate is considered stale
-
-    6) Intersection handling:
-        intersection_enabled: hard on/off switch for the whole
-                intersection state machine, independent of
-                INTERSECTION_EDGE_RATIO_THRESH's value. Unlike
-                min_confidence_* (bounded [0.0, 1.0], so 1.1 is a
-                provable disable), edge_ratio in config.py is
-                open-ended — an arbitrarily high threshold is NOT a
-                guaranteed off switch for it, only a less-likely one.
-                This flag is the actual off switch. Defaults to False
-                (disabled) until INTERSECTION_EDGE_RATIO_THRESH is
-                calibrated against real intersection-crossing data —
-                matches how traffic/sign detection is already gated
-                off via their own confidence thresholds pending
-                calibration
-        intersection_enter_frames: consecutive raw intersection triggers
-                (from run_pipeline.py's intersection_edge_ratio() check)
-                required before Phase 3 commits to INTERSECTION mode —
-                debounces a single noisy edge-ratio spike into a real
-                crossing. TODO: REQUIRES CALIBRATION against actual
-                course speed/FPS dwell time
-        intersection_exit_frames: consecutive non-triggers required
-                before Phase 3 leaves INTERSECTION mode.
-                TODO: REQUIRES CALIBRATION
-        intersection_max_frames: hard cap on how long INTERSECTION mode
-                can stay active regardless of the raw trigger, so a
-                stuck-on edge-ratio reading can't wedge the robot into
-                dead-reckoning indefinitely. TODO: REQUIRES CALIBRATION
     """
     ema_alpha:              float = 0.35
     vote_window:            int   = 3
@@ -287,18 +200,10 @@ class Phase3Config:
     min_confidence_sign:    float = 0.45
 
     px_per_meter:           float = 686.0
-    expected_lane_width_m:  float = 0.65
-    lane_width_tolerance:   float = 0.35
-    single_boundary_search_bias_m: float = 0.15
 
     max_centroid_jump_px:   float = 80.0
 
     deadreck_max_frames:    int   = 10
-
-    intersection_enabled:      bool = False
-    intersection_enter_frames: int  = 2
-    intersection_exit_frames:  int  = 2
-    intersection_max_frames:   int  = 45
 
 
 # ============================================================================
@@ -365,17 +270,6 @@ class _CentroidTracker:
         Output:
             True if within threshold; False to break
         lock the tracker
-
-        NOTE: unconditionally commits (x, y) as the new reference, even
-        when returning False. Safe ONLY for a detection class that never
-        has more than one candidate per frame (traffic_light, stop_sign
-        — fuse_detections() already reduces those to a single best
-        candidate upstream). For a class that can have several
-        simultaneous candidates per frame (lane_boundary), calling this
-        once per candidate chains each comparison off the previous
-        candidate's position instead of the prior frame's, and commits
-        the reference even on rejection — see select_best() below for
-        the version that avoids both.
         """
         if self.last_x is None:
             self.last_x, self.last_y = x, y
@@ -388,55 +282,6 @@ class _CentroidTracker:
         dist = (dx * dx + dy * dy) ** 0.5
         self.last_x, self.last_y = x, y
         return dist <= threshold
-
-    def select_best(
-            self,
-            candidates: list,
-            threshold: float,
-        ):
-        """
-        Purpose:
-            Pick (at most) one DetectionObject out of several simultaneous
-            same-frame candidates for this tracker's side, and commit to
-            it as the new reference. Unlike update(), every candidate is
-            checked against the SAME held-fixed prior-frame reference —
-            never against another candidate from this frame — and the
-            reference only moves when a candidate actually qualifies, so
-            a rejected outlier can never smuggle itself in as next
-            frame's reference point.
-
-        Inputs:
-            candidates: DetectionObject list for this frame, already
-                restricted to this tracker's side (e.g. all left-of-center
-                lane_boundary detections). May be empty.
-            threshold: maximum allowed centroid displacement in px from
-                the last accepted position
-
-        Output:
-            the accepted DetectionObject (highest-confidence one that's
-            within threshold of the prior reference, or the
-            highest-confidence candidate outright if this tracker has no
-            history yet), or None if candidates is empty or none qualify
-        """
-        if not candidates:
-            return None
-
-        if self.last_x is None or self.last_y is None:
-            best = max(candidates, key=lambda d: d.confidence)
-            self.last_x, self.last_y = best.position_x, best.position_y
-            return best
-
-        qualifying = [
-            d for d in candidates
-            if ((d.position_x - self.last_x) ** 2
-                + (d.position_y - self.last_y) ** 2) ** 0.5 <= threshold
-        ]
-        if not qualifying:
-            return None
-
-        best = max(qualifying, key=lambda d: d.confidence)
-        self.last_x, self.last_y = best.position_x, best.position_y
-        return best
 
 
 # ============================================================================
@@ -463,15 +308,9 @@ class Phase3Processor:
         self._stop_sign_buf:   Deque[bool] = deque(maxlen=self._cfg.vote_window)
 
         # Centroid trackers (one per detection class)
-        # lane_boundary gets TWO trackers (left/right of image center),
-        # since fuse_detections() can hand it several simultaneous
-        # candidates per frame — unlike traffic_light/stop_sign, which
-        # are already reduced to a single best candidate upstream and
-        # so are safe with one shared tracker each
-        self._lane_tracker_left:  _CentroidTracker = _CentroidTracker()
-        self._lane_tracker_right: _CentroidTracker = _CentroidTracker()
-        self._traffic_tracker:    _CentroidTracker = _CentroidTracker()
-        self._sign_tracker:       _CentroidTracker = _CentroidTracker()
+        self._lane_tracker:    _CentroidTracker = _CentroidTracker()
+        self._traffic_tracker: _CentroidTracker = _CentroidTracker()
+        self._sign_tracker:    _CentroidTracker = _CentroidTracker()
 
         # Dead-reckoning state
         self._last_timestamp_ms:  int   = 0
@@ -481,19 +320,6 @@ class Phase3Processor:
         # IMU heading integration state
         self._heading_from_imu: float = 0.0
 
-        # Intersection state machine (debounced from the raw per-frame
-        # intersection_edge_ratio() trigger — see _update_intersection_state)
-        self._intersection_active:        bool = False
-        self._intersection_enter_streak:  int  = 0
-        self._intersection_exit_streak:   int  = 0
-        self._intersection_frames_active: int  = 0
-
-        # DIAGNOSTIC ONLY (see EstimationPacket.lane_sides_tracked/
-        # lane_sides_used) — set inside _filter_lane each call, read
-        # back in process() when assembling the packet
-        self._last_lane_sides_tracked: str = ""
-        self._last_lane_sides_used:    str = ""
-
     # ===========================================================================
     # Entry Point
     # ===========================================================================
@@ -501,7 +327,6 @@ class Phase3Processor:
         self,
         phase2_out:    Phase2Output,
         sensor_sample: SensorSample,
-        intersection_trigger: bool = False,
     ) -> EstimationPacket:
         """
         Purpose:
@@ -510,12 +335,6 @@ class Phase3Processor:
         Input:
             phase2_out: Phase2Output from the vision pipeline
             sensor_sample: SensorSample for this frame window
-            intersection_trigger: this frame's raw intersection_edge_ratio()
-                > INTERSECTION_EDGE_RATIO_THRESH result from run_pipeline.py.
-                Debounced internally into a persistent INTERSECTION mode —
-                see _update_intersection_state(). Defaults to False so
-                existing callers (and the standalone test block below)
-                keep working unchanged if they don't pass it.
 
         Output:
             EstimationPacket ready for Navigation
@@ -535,17 +354,11 @@ class Phase3Processor:
             speed_scale = 1.0 + sensor_sample.wheel_speed * dt * cfg.px_per_meter
             jump_thresh = cfg.max_centroid_jump_px * min(speed_scale, 3.0)
 
-        # Intersection state machine — update BEFORE filtering so this
-        # frame's lane/heading estimate already reflects whichever mode
-        # we're in
-        intersection_active = self._update_intersection_state(intersection_trigger)
-
         # Stage 1: Motion consistency check
         consistent = self._motion_consistency(phase2_out.detections, jump_thresh)
 
         # Stages 2 & 3: Temporal filtering & confidence threshold
-        lane_offset_m, lane_confident = self._filter_lane(consistent, dt, sensor_sample,
-                                                            intersection_active)
+        lane_offset_m, lane_confident = self._filter_lane(consistent, dt, sensor_sample)
         heading_error_deg             = self._filter_heading(consistent, dt,
                                                               sensor_sample, lane_confident)
         raw_drive_state               = self._classify_traffic(consistent)
@@ -564,87 +377,12 @@ class Phase3Processor:
             heading_error = round(heading_error_deg, 3),
             drive_state = drive_state,
             stop_sign_detected = stop_sign_detected,
-            intersection_active = intersection_active,
-            lane_sides_tracked = self._last_lane_sides_tracked,
-            lane_sides_used = self._last_lane_sides_used,
             yaw_rate = sensor_sample.yaw_rate      or 0.0,
             lateral_accel = sensor_sample.lateral_accel or 0.0,
             wheel_speed = sensor_sample.wheel_speed   or 0.0,
             frame_id = phase2_out.frame_id,
             timestamp_ms = phase2_out.timestamp_ms,
         )
-
-    # ===========================================================================
-    # Intersection State Machine
-    # ===========================================================================
-    def _update_intersection_state(
-            self,
-            raw_trigger: bool,
-        ) -> bool:
-        """
-        Purpose:
-            Debounce the raw per-frame intersection_edge_ratio() trigger
-            into a persistent INTERSECTION mode with hysteresis, so a
-            single noisy frame can't flip behavior and a real crossing
-            doesn't need to re-trigger every frame to stay active.
-
-            On the exit transition (mode was active, now leaving), the
-            lane_boundary side-trackers are reset to "no history" so the
-            first fresh candidates seen after the intersection are
-            accepted outright rather than gated against a now-stale
-            pre-intersection position — otherwise reacquiring the real
-            lane lines right as vision becomes trustworthy again would
-            hit the exact motion-consistency rejection this was meant to
-            avoid.
-
-        Inputs:
-            raw_trigger: this frame's intersection_edge_ratio() >
-                INTERSECTION_EDGE_RATIO_THRESH result
-
-        Output:
-            True if INTERSECTION mode is active this frame (after
-            applying this frame's update), False otherwise
-        """
-        cfg = self._cfg
-
-        if not cfg.intersection_enabled:
-            # Hard disable — independent of raw_trigger and of whatever
-            # INTERSECTION_EDGE_RATIO_THRESH happens to be set to.
-            # edge_ratio is open-ended (unlike the [0.0, 1.0]-bounded
-            # confidence fields), so no threshold value can be trusted
-            # as a guaranteed off switch for it; this flag is. Also
-            # clears any state a prior enabled run left behind, so
-            # toggling this off mid-development can't leave a stale
-            # partial streak/active-frame count around.
-            self._intersection_active = False
-            self._intersection_enter_streak = 0
-            self._intersection_exit_streak = 0
-            self._intersection_frames_active = 0
-            return False
-
-        if not self._intersection_active:
-            self._intersection_enter_streak = (
-                self._intersection_enter_streak + 1 if raw_trigger else 0
-            )
-            if self._intersection_enter_streak >= cfg.intersection_enter_frames:
-                self._intersection_active = True
-                self._intersection_exit_streak = 0
-                self._intersection_frames_active = 0
-        else:
-            self._intersection_frames_active += 1
-            self._intersection_exit_streak = (
-                self._intersection_exit_streak + 1 if not raw_trigger else 0
-            )
-            if (self._intersection_exit_streak >= cfg.intersection_exit_frames
-                    or self._intersection_frames_active >= cfg.intersection_max_frames):
-                self._intersection_active = False
-                self._intersection_enter_streak = 0
-                # Fresh start: don't let post-intersection candidates get
-                # gated against a stale pre-intersection reference point
-                self._lane_tracker_left  = _CentroidTracker()
-                self._lane_tracker_right = _CentroidTracker()
-
-        return self._intersection_active
 
     # ===========================================================================
     # Stage 1: Motion Consistency Check
@@ -668,16 +406,10 @@ class Phase3Processor:
             filtered detections; also updates the internal centroid trackers
         """
         result = []
-
-        # lane_boundary: routed through _filter_lane_boundaries() — see
-        # that method for why this can't reuse the single-tracker
-        # update() path traffic_light/stop_sign use below
-        lane_dets = [d for d in detections if d.type == "lane_boundary"]
-        result.extend(self._filter_lane_boundaries(lane_dets, jump_thresh))
-
         for det in detections:
             if det.type == "lane_boundary":
-                continue
+                ok = self._lane_tracker.update(
+                    det.position_x, det.position_y, jump_thresh)
             elif det.type == "traffic_light":
                 ok = self._traffic_tracker.update(
                     det.position_x, det.position_y, jump_thresh)
@@ -690,56 +422,6 @@ class Phase3Processor:
                 result.append(det)
         return result
 
-    def _filter_lane_boundaries(
-        self,
-        lane_dets:   List[DetectionObject],
-        jump_thresh: float,
-    ) -> List[DetectionObject]:
-        """
-        Purpose:
-            Gate lane_boundary detections against per-side reference
-            trackers (left/right of the image center column, split on
-            the sign of position_x — the same centered-offset convention
-            _adapt_detections_for_p3 already establishes upstream).
-
-            fuse_detections() does NOT reduce lane_boundary to a single
-            best candidate the way it does for traffic_light/stop_sign
-            — every contour that clears geometry filtering becomes its
-            own detection, so a frame can carry several at once (more so
-            right at an intersection, where extra edges/curbs/stop-line
-            geometry also clear the filter). Routing all of them through
-            one shared _CentroidTracker.update() would compare each
-            candidate to whichever candidate was checked immediately
-            before it IN THE SAME FRAME rather than to the prior frame's
-            position, and — since update() commits its reference even on
-            rejection — would let a single spurious high-confidence
-            candidate silently become the new reference point that
-            following frames then measure "consistency" against. Left/
-            right trackers plus select_best() (which holds the reference
-            fixed across all of this frame's candidates and only commits
-            on an actual accept) avoid both problems.
-
-        Inputs:
-            lane_dets: this frame's lane_boundary detections, any order
-            jump_thresh: maximum allowed centroid jump in pixels
-
-        Output:
-            accepted lane_boundary detections — at most one per side,
-            each the highest-confidence qualifying candidate on that side
-        """
-        left_candidates  = [d for d in lane_dets if d.position_x <  0.0]
-        right_candidates = [d for d in lane_dets if d.position_x >= 0.0]
-
-        accepted = []
-        for tracker, candidates in (
-            (self._lane_tracker_left,  left_candidates),
-            (self._lane_tracker_right, right_candidates),
-        ):
-            best = tracker.select_best(candidates, jump_thresh)
-            if best is not None:
-                accepted.append(best)
-        return accepted
-
     # ===========================================================================
     # Stage 2 & 3: Lane Offset 
     # ===========================================================================
@@ -748,7 +430,6 @@ class Phase3Processor:
         detections:    List[DetectionObject],
         dt:            float,
         sensor_sample: SensorSample,
-        intersection_active: bool = False,
     ) -> tuple:
         """
         Purpose:
@@ -758,15 +439,6 @@ class Phase3Processor:
             detections: list of DetectionObject from Phase 2
             dt: time delta in seconds between this frame and the previous one
             sensor_sample: SensorSample for this frame
-            intersection_active: True when Phase 3's debounced
-                intersection state machine considers the robot inside an
-                intersection opening. When True, vision candidates for
-                this frame are ignored entirely (not just filtered) and
-                the estimate coasts on dead-reckoning — extra geometry
-                inside an intersection (crossing-street edges, the stop
-                line, missing lane markings across the gap) makes
-                whatever candidates DO pass motion consistency this
-                frame untrustworthy as "lane center", not just noisy
 
         Output:
             lane_offset_m: lateral offset from lane center in meters
@@ -774,95 +446,26 @@ class Phase3Processor:
                             False if it's a dead-reckoning fallback
         """
         cfg = self._cfg
-
-        # DIAGNOSTIC ONLY: which side(s) survived motion consistency
-        # this frame, independent of confidence/intersection gating
-        # below. Doesn't affect anything returned from this method.
-        boundary_dets = [d for d in detections if d.type == "lane_boundary"]
-        self._last_lane_sides_tracked = self._lane_sides_str(boundary_dets)
-
-        if intersection_active:
-            # Same hold-last-estimate path as an empty-detections frame,
-            # but doesn't bypass deadreck_max_frames — a long intersection
-            # can still go stale exactly like an ordinary vision dropout
-            self._last_lane_sides_used = ""
-            if self._deadreck_frames < cfg.deadreck_max_frames:
-                self._deadreck_frames += 1
-            return self._last_lane_offset_m, False
-
         lane_dets = [
-            d for d in boundary_dets
-            if d.confidence >= cfg.min_confidence_lane
+            d for d in detections
+            if d.type == "lane_boundary" and d.confidence >= cfg.min_confidence_lane
         ]
-        # _filter_lane_boundaries guarantees at most one candidate per
-        # side, so lane_dets holds at most one "left" (position_x < 0.0)
-        # and one "right" (position_x >= 0.0) detection
-        left  = next((d for d in lane_dets if d.position_x <  0.0), None)
-        right = next((d for d in lane_dets if d.position_x >= 0.0), None)
 
-        offset_m = None
-        sides_used = ""
-
-        if left is not None and right is not None:
-            # True two-boundary: only trust this as real lane center if
-            # the pair's width is plausible — corner/curb geometry near
-            # an intersection can present two edges that individually
-            # clear motion consistency + confidence but aren't actually
-            # the same lane (see Phase3Config.lane_width_tolerance). An
-            # implausible pair is rejected outright, not averaged; it
-            # falls through to dead-reckoning below rather than guessing
-            # which single side (if either) is trustworthy
-            width_px    = right.position_x - left.position_x
-            width_lo_px = cfg.expected_lane_width_m * cfg.px_per_meter * (1.0 - cfg.lane_width_tolerance)
-            width_hi_px = cfg.expected_lane_width_m * cfg.px_per_meter * (1.0 + cfg.lane_width_tolerance)
-            if width_lo_px <= width_px <= width_hi_px:
-                offset_m   = ((left.position_x + right.position_x) / 2.0) / cfg.px_per_meter
-                sides_used = "LR"
-        elif right is not None:
-            # Only the right boundary is visible — the left one vanished.
-            # Report a fixed search bias toward the MISSING (left) side
-            # rather than this boundary's raw distance from center: the
-            # target state is always two-boundary, so a single boundary
-            # should drive an active hunt for its missing pair, not be
-            # treated as lane center. Positive lane_offset commands a
-            # left turn in the drive loop — see Phase3Config docstring
-            offset_m   = cfg.single_boundary_search_bias_m
-            sides_used = "R"
-        elif left is not None:
-            # Only the left boundary is visible — search toward the
-            # missing right side (negative = right turn)
-            offset_m   = -cfg.single_boundary_search_bias_m
-            sides_used = "L"
-
-        if offset_m is not None:
-            self._last_lane_sides_used = sides_used
+        if lane_dets:
+            avg_px   = sum(d.position_x for d in lane_dets) / len(lane_dets)
+            offset_m = avg_px / cfg.px_per_meter
             smoothed = self._lane_offset_ema.update(offset_m, cfg.ema_alpha)
             self._last_lane_offset_m = smoothed
             self._deadreck_frames    = 0
             return smoothed, True
 
-        # No usable vision this frame — either nothing detected/passed
-        # confidence, or a two-boundary pair was rejected as implausible.
         # Dead-reckoning: hold last estimate within the allowed window
-        self._last_lane_sides_used = ""
         if self._deadreck_frames < cfg.deadreck_max_frames:
             self._deadreck_frames += 1
             return self._last_lane_offset_m, False
 
         # Stale — hold silently; Navigation must not rely on this value
         return self._last_lane_offset_m, False
-
-    @staticmethod
-    def _lane_sides_str(dets: List[DetectionObject]) -> str:
-        """
-        DIAGNOSTIC ONLY. Encodes which side(s) of image center a set of
-        lane_boundary detections cover as "L", "R", "LR", or "" — same
-        centered position_x convention as _filter_lane_boundaries
-        (left: position_x < 0.0, right: position_x >= 0.0).
-        """
-        has_left  = any(d.position_x <  0.0 for d in dets)
-        has_right = any(d.position_x >= 0.0 for d in dets)
-        return ("L" if has_left else "") + ("R" if has_right else "")
 
     # ===========================================================================
     # Stage 2 & 3: Heading Error
@@ -1006,22 +609,13 @@ def _majority_vote_bool(buf: Deque[bool]) -> bool:
 if __name__ == "__main__":
     """
     Mock Test:
-        Runs the Phase3Processor through a synthetic 15-frame sequence
+        Runs the Phase3Processor through a synthetic 9-frame sequence
 
     Test Cases:
-        Frames  0-2 : steady green light + centered lane (normal operation)
-        Frames  3-4 : red light appears
-        Frame   5   : no detections (dead-reckoning + IMU fallback)
-        Frames  6-8 : stop sign detected at course exit
-        Frames  9-14: intersection crossing — raw edge-ratio trigger fires
-            for 3 consecutive frames (enters INTERSECTION mode after
-            intersection_enter_frames=2), spurious wide-jump lane
-            candidates appear during the crossing (should be ignored
-            entirely, not just motion-consistency-filtered, while
-            intersection_active is True), then the trigger clears and a
-            fresh, differently-positioned lane pair reappears (should be
-            accepted immediately once INTERSECTION mode exits, thanks to
-            the tracker reset in _update_intersection_state)
+        Frames 0-2 : steady green light + centered lane (normal operation)
+        Frames 3-4 : red light appears
+        Frame  5   : no detections (dead-reckoning + IMU fallback)
+        Frames 6-8 : stop sign detected at course exit
     """
 
     def _make_det(
@@ -1061,66 +655,46 @@ if __name__ == "__main__":
         min_confidence_sign=0.45,
         px_per_meter=686.0,
         deadreck_max_frames=5,
-        intersection_enabled=True,   # demo only — real pipeline defaults to False
-        intersection_enter_frames=2,
-        intersection_exit_frames=2,
-        intersection_max_frames=45,
     )
     proc = Phase3Processor(cfg)
 
     sequences = [
-        # (frame_id, ts_ms, detections, sensor_sample, intersection_trigger)
+        # (frame_id, ts_ms, detections, sensor_sample)
         (0, 0,   [_make_det("traffic_light", "green", 240, 50, 0.85),
                   _make_det("lane_boundary", "lane_boundary", 15, 300, 0.70)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.5), False),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.5)),
         (1, 55,  [_make_det("traffic_light", "green", 241, 50, 0.88),
                   _make_det("lane_boundary", "lane_boundary", -10, 300, 0.72)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.3), False),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.3)),
         (2, 110, [_make_det("traffic_light", "green", 242, 50, 0.83),
                   _make_det("lane_boundary", "lane_boundary", 5, 300, 0.68)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.2), False),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.2)),
         (3, 165, [_make_det("traffic_light", "red", 242, 50, 0.92),
                   _make_det("lane_boundary", "lane_boundary", 5, 300, 0.65)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0)),
         (4, 220, [_make_det("traffic_light", "red", 243, 50, 0.90)],
-         SensorSample(wheel_speed=0.1, yaw_rate=1.0), False),
+         SensorSample(wheel_speed=0.1, yaw_rate=1.0)),
         (5, 275, [],   # no detections — fallback frame
-         SensorSample(wheel_speed=0.1, yaw_rate=2.0), False),
+         SensorSample(wheel_speed=0.1, yaw_rate=2.0)),
         (6, 330, [_make_det("stop_sign", "stop_sign", 380, 200, 0.75)],
-         SensorSample(wheel_speed=0.0), False),
+         SensorSample(wheel_speed=0.0)),
         (7, 385, [_make_det("stop_sign", "stop_sign", 381, 200, 0.78)],
-         SensorSample(wheel_speed=0.0), False),
+         SensorSample(wheel_speed=0.0)),
         (8, 440, [_make_det("stop_sign", "stop_sign", 382, 200, 0.81),
                   _make_det("traffic_light", "red", 243, 50, 0.88)],
-         SensorSample(wheel_speed=0.0), False),
-        # --- Intersection crossing ---
-        (9, 495, [_make_det("lane_boundary", "lane_boundary", 8, 300, 0.65)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # trigger #1 — not yet debounced in
-        (10, 550, [_make_det("lane_boundary", "lane_boundary", 260, 300, 0.95)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # trigger #2 — INTERSECTION now active
-        (11, 605, [_make_det("lane_boundary", "lane_boundary", 270, 300, 0.97)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # spurious candidate ignored outright
-        (12, 660, [_make_det("lane_boundary", "lane_boundary", 265, 300, 0.96)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # trigger clears — exit streak #1
-        (13, 715, [_make_det("lane_boundary", "lane_boundary", 6, 300, 0.70),
-                    _make_det("lane_boundary", "lane_boundary", -145, 300, 0.60)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # exit streak #2 — mode exits this frame
-        (14, 770, [_make_det("lane_boundary", "lane_boundary", 10, 300, 0.72),
-                    _make_det("lane_boundary", "lane_boundary", -140, 300, 0.62)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # fresh pair accepted immediately
+         SensorSample(wheel_speed=0.0)),
     ]
 
-    print(f"{'f':>3} {'lane_off':>9} {'head_err':>9} {'drive':>7} {'stop':>5} {'isect':>5}")
-    print("-" * 50)
+    print(f"{'f':>3} {'lane_off':>9} {'head_err':>9} {'drive':>7} {'stop':>5}")
+    print("-" * 42)
 
-    for frame_id, ts_ms, dets, sensors, isect_trig in sequences:
+    for frame_id, ts_ms, dets, sensors in sequences:
         p2  = Phase2Output(detections=dets, frame_id=frame_id, timestamp_ms=ts_ms)
-        pkt = proc.process(p2, sensors, intersection_trigger=isect_trig)
+        pkt = proc.process(p2, sensors)
         print(
             f"{pkt.frame_id:>3} "
             f"{pkt.lane_offset:>+9.4f} "
             f"{pkt.heading_error:>+9.3f} "
             f"{pkt.drive_state:>7} "
-            f"{'T' if pkt.stop_sign_detected else 'F':>5} "
-            f"{'T' if pkt.intersection_active else 'F':>5}"
+            f"{'T' if pkt.stop_sign_detected else 'F':>5}"
         )
