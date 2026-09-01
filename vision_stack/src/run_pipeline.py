@@ -749,7 +749,8 @@ def main(
             # Adapt Phase 2 detections to Phase 3 schema and run processor
             p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
             p3_input = _build_p3_input(p2_out, p3_detections)
-            nav_packet = p3_processor.process(p3_input, sensor_sample)
+            nav_packet = p3_processor.process(p3_input, sensor_sample,
+                                               intersection_trigger=intersection_trigger)
 
             # =================================================================
             # Motor Control
@@ -811,6 +812,7 @@ def main(
                     lane_confidence = lane_offset_result.confidence,
                     edge_ratio = edge_ratio,
                     intersection_trigger = intersection_trigger,
+                    intersection_active = nav_packet.intersection_active,
                     tags = tags,
                     imu_sample_count = imu_frame.sample_count,
                     imu_yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
@@ -1225,7 +1227,8 @@ def _run_fix_sweep_session(
                     sensor_sample, imu_frame = _read_sensors(imu)
                     p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
                     p3_input = _build_p3_input(p2_out, p3_detections)
-                    nav_packet = p3_processor.process(p3_input, sensor_sample)
+                    nav_packet = p3_processor.process(p3_input, sensor_sample,
+                                                       intersection_trigger=intersection_trigger)
 
                     # -----------------------------------------------------------
                     # Motor Control
@@ -1273,6 +1276,7 @@ def _run_fix_sweep_session(
                         lane_confidence = lane_offset_result.confidence,
                         edge_ratio = edge_ratio,
                         intersection_trigger = intersection_trigger,
+                        intersection_active = nav_packet.intersection_active,
                         tags = tags,
                         imu_sample_count = imu_frame.sample_count,
                         imu_yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,

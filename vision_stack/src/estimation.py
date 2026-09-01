@@ -141,6 +141,11 @@ class EstimationPacket:
                     Vision-primary; IMU yaw integration fallback
     .drive_state: "go" | "caution" | "stop"
     .stop_sign_detected: detecting a stop sign takes precedence over traffic light state
+    .intersection_active: True while Phase 3's debounced intersection
+                    state machine considers the robot inside an
+                    intersection opening — lane_offset/heading_error are
+                    on dead-reckoning/IMU fallback rather than fresh
+                    vision detections for the whole time this is True
     .yaw_rate: Pass-through from SensorSample (0.0 if None)
     .lateral_accel: Pass-through from SensorSample (0.0 if None)
     .wheel_speed: Pass-through from SensorSample (0.0 if None)
@@ -151,6 +156,7 @@ class EstimationPacket:
     heading_error:      float
     drive_state:        str
     stop_sign_detected: bool
+    intersection_active: bool
     yaw_rate:           float
     lateral_accel:      float
     wheel_speed:        float
@@ -191,6 +197,21 @@ class Phase3Config:
     5) Dead-reckoning:
         deadreck_max_frames: Maximum frames to hold last lane_offset before
                 the estimate is considered stale
+
+    6) Intersection handling:
+        intersection_enter_frames: consecutive raw intersection triggers
+                (from run_pipeline.py's intersection_edge_ratio() check)
+                required before Phase 3 commits to INTERSECTION mode —
+                debounces a single noisy edge-ratio spike into a real
+                crossing. TODO: REQUIRES CALIBRATION against actual
+                course speed/FPS dwell time
+        intersection_exit_frames: consecutive non-triggers required
+                before Phase 3 leaves INTERSECTION mode.
+                TODO: REQUIRES CALIBRATION
+        intersection_max_frames: hard cap on how long INTERSECTION mode
+                can stay active regardless of the raw trigger, so a
+                stuck-on edge-ratio reading can't wedge the robot into
+                dead-reckoning indefinitely. TODO: REQUIRES CALIBRATION
     """
     ema_alpha:              float = 0.35
     vote_window:            int   = 3
@@ -204,6 +225,10 @@ class Phase3Config:
     max_centroid_jump_px:   float = 80.0
 
     deadreck_max_frames:    int   = 10
+
+    intersection_enter_frames: int = 2
+    intersection_exit_frames:  int = 2
+    intersection_max_frames:   int = 45
 
 
 # ============================================================================
@@ -386,6 +411,13 @@ class Phase3Processor:
         # IMU heading integration state
         self._heading_from_imu: float = 0.0
 
+        # Intersection state machine (debounced from the raw per-frame
+        # intersection_edge_ratio() trigger — see _update_intersection_state)
+        self._intersection_active:        bool = False
+        self._intersection_enter_streak:  int  = 0
+        self._intersection_exit_streak:   int  = 0
+        self._intersection_frames_active: int  = 0
+
     # ===========================================================================
     # Entry Point
     # ===========================================================================
@@ -393,6 +425,7 @@ class Phase3Processor:
         self,
         phase2_out:    Phase2Output,
         sensor_sample: SensorSample,
+        intersection_trigger: bool = False,
     ) -> EstimationPacket:
         """
         Purpose:
@@ -401,6 +434,12 @@ class Phase3Processor:
         Input:
             phase2_out: Phase2Output from the vision pipeline
             sensor_sample: SensorSample for this frame window
+            intersection_trigger: this frame's raw intersection_edge_ratio()
+                > INTERSECTION_EDGE_RATIO_THRESH result from run_pipeline.py.
+                Debounced internally into a persistent INTERSECTION mode —
+                see _update_intersection_state(). Defaults to False so
+                existing callers (and the standalone test block below)
+                keep working unchanged if they don't pass it.
 
         Output:
             EstimationPacket ready for Navigation
@@ -420,11 +459,17 @@ class Phase3Processor:
             speed_scale = 1.0 + sensor_sample.wheel_speed * dt * cfg.px_per_meter
             jump_thresh = cfg.max_centroid_jump_px * min(speed_scale, 3.0)
 
+        # Intersection state machine — update BEFORE filtering so this
+        # frame's lane/heading estimate already reflects whichever mode
+        # we're in
+        intersection_active = self._update_intersection_state(intersection_trigger)
+
         # Stage 1: Motion consistency check
         consistent = self._motion_consistency(phase2_out.detections, jump_thresh)
 
         # Stages 2 & 3: Temporal filtering & confidence threshold
-        lane_offset_m, lane_confident = self._filter_lane(consistent, dt, sensor_sample)
+        lane_offset_m, lane_confident = self._filter_lane(consistent, dt, sensor_sample,
+                                                            intersection_active)
         heading_error_deg             = self._filter_heading(consistent, dt,
                                                               sensor_sample, lane_confident)
         raw_drive_state               = self._classify_traffic(consistent)
@@ -443,12 +488,70 @@ class Phase3Processor:
             heading_error = round(heading_error_deg, 3),
             drive_state = drive_state,
             stop_sign_detected = stop_sign_detected,
+            intersection_active = intersection_active,
             yaw_rate = sensor_sample.yaw_rate      or 0.0,
             lateral_accel = sensor_sample.lateral_accel or 0.0,
             wheel_speed = sensor_sample.wheel_speed   or 0.0,
             frame_id = phase2_out.frame_id,
             timestamp_ms = phase2_out.timestamp_ms,
         )
+
+    # ===========================================================================
+    # Intersection State Machine
+    # ===========================================================================
+    def _update_intersection_state(
+            self,
+            raw_trigger: bool,
+        ) -> bool:
+        """
+        Purpose:
+            Debounce the raw per-frame intersection_edge_ratio() trigger
+            into a persistent INTERSECTION mode with hysteresis, so a
+            single noisy frame can't flip behavior and a real crossing
+            doesn't need to re-trigger every frame to stay active.
+
+            On the exit transition (mode was active, now leaving), the
+            lane_boundary side-trackers are reset to "no history" so the
+            first fresh candidates seen after the intersection are
+            accepted outright rather than gated against a now-stale
+            pre-intersection position — otherwise reacquiring the real
+            lane lines right as vision becomes trustworthy again would
+            hit the exact motion-consistency rejection this was meant to
+            avoid.
+
+        Inputs:
+            raw_trigger: this frame's intersection_edge_ratio() >
+                INTERSECTION_EDGE_RATIO_THRESH result
+
+        Output:
+            True if INTERSECTION mode is active this frame (after
+            applying this frame's update), False otherwise
+        """
+        cfg = self._cfg
+
+        if not self._intersection_active:
+            self._intersection_enter_streak = (
+                self._intersection_enter_streak + 1 if raw_trigger else 0
+            )
+            if self._intersection_enter_streak >= cfg.intersection_enter_frames:
+                self._intersection_active = True
+                self._intersection_exit_streak = 0
+                self._intersection_frames_active = 0
+        else:
+            self._intersection_frames_active += 1
+            self._intersection_exit_streak = (
+                self._intersection_exit_streak + 1 if not raw_trigger else 0
+            )
+            if (self._intersection_exit_streak >= cfg.intersection_exit_frames
+                    or self._intersection_frames_active >= cfg.intersection_max_frames):
+                self._intersection_active = False
+                self._intersection_enter_streak = 0
+                # Fresh start: don't let post-intersection candidates get
+                # gated against a stale pre-intersection reference point
+                self._lane_tracker_left  = _CentroidTracker()
+                self._lane_tracker_right = _CentroidTracker()
+
+        return self._intersection_active
 
     # ===========================================================================
     # Stage 1: Motion Consistency Check
@@ -552,6 +655,7 @@ class Phase3Processor:
         detections:    List[DetectionObject],
         dt:            float,
         sensor_sample: SensorSample,
+        intersection_active: bool = False,
     ) -> tuple:
         """
         Purpose:
@@ -561,6 +665,15 @@ class Phase3Processor:
             detections: list of DetectionObject from Phase 2
             dt: time delta in seconds between this frame and the previous one
             sensor_sample: SensorSample for this frame
+            intersection_active: True when Phase 3's debounced
+                intersection state machine considers the robot inside an
+                intersection opening. When True, vision candidates for
+                this frame are ignored entirely (not just filtered) and
+                the estimate coasts on dead-reckoning — extra geometry
+                inside an intersection (crossing-street edges, the stop
+                line, missing lane markings across the gap) makes
+                whatever candidates DO pass motion consistency this
+                frame untrustworthy as "lane center", not just noisy
 
         Output:
             lane_offset_m: lateral offset from lane center in meters
@@ -568,6 +681,15 @@ class Phase3Processor:
                             False if it's a dead-reckoning fallback
         """
         cfg = self._cfg
+
+        if intersection_active:
+            # Same hold-last-estimate path as an empty-detections frame,
+            # but doesn't bypass deadreck_max_frames — a long intersection
+            # can still go stale exactly like an ordinary vision dropout
+            if self._deadreck_frames < cfg.deadreck_max_frames:
+                self._deadreck_frames += 1
+            return self._last_lane_offset_m, False
+
         lane_dets = [
             d for d in detections
             if d.type == "lane_boundary" and d.confidence >= cfg.min_confidence_lane
@@ -731,13 +853,22 @@ def _majority_vote_bool(buf: Deque[bool]) -> bool:
 if __name__ == "__main__":
     """
     Mock Test:
-        Runs the Phase3Processor through a synthetic 9-frame sequence
+        Runs the Phase3Processor through a synthetic 15-frame sequence
 
     Test Cases:
-        Frames 0-2 : steady green light + centered lane (normal operation)
-        Frames 3-4 : red light appears
-        Frame  5   : no detections (dead-reckoning + IMU fallback)
-        Frames 6-8 : stop sign detected at course exit
+        Frames  0-2 : steady green light + centered lane (normal operation)
+        Frames  3-4 : red light appears
+        Frame   5   : no detections (dead-reckoning + IMU fallback)
+        Frames  6-8 : stop sign detected at course exit
+        Frames  9-14: intersection crossing — raw edge-ratio trigger fires
+            for 3 consecutive frames (enters INTERSECTION mode after
+            intersection_enter_frames=2), spurious wide-jump lane
+            candidates appear during the crossing (should be ignored
+            entirely, not just motion-consistency-filtered, while
+            intersection_active is True), then the trigger clears and a
+            fresh, differently-positioned lane pair reappears (should be
+            accepted immediately once INTERSECTION mode exits, thanks to
+            the tracker reset in _update_intersection_state)
     """
 
     def _make_det(
@@ -777,46 +908,65 @@ if __name__ == "__main__":
         min_confidence_sign=0.45,
         px_per_meter=686.0,
         deadreck_max_frames=5,
+        intersection_enter_frames=2,
+        intersection_exit_frames=2,
+        intersection_max_frames=45,
     )
     proc = Phase3Processor(cfg)
 
     sequences = [
-        # (frame_id, ts_ms, detections, sensor_sample)
+        # (frame_id, ts_ms, detections, sensor_sample, intersection_trigger)
         (0, 0,   [_make_det("traffic_light", "green", 240, 50, 0.85),
                   _make_det("lane_boundary", "lane_boundary", 15, 300, 0.70)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.5)),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.5), False),
         (1, 55,  [_make_det("traffic_light", "green", 241, 50, 0.88),
                   _make_det("lane_boundary", "lane_boundary", -10, 300, 0.72)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.3)),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.3), False),
         (2, 110, [_make_det("traffic_light", "green", 242, 50, 0.83),
                   _make_det("lane_boundary", "lane_boundary", 5, 300, 0.68)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.2)),
+         SensorSample(wheel_speed=0.3, yaw_rate=0.2), False),
         (3, 165, [_make_det("traffic_light", "red", 242, 50, 0.92),
                   _make_det("lane_boundary", "lane_boundary", 5, 300, 0.65)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0)),
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),
         (4, 220, [_make_det("traffic_light", "red", 243, 50, 0.90)],
-         SensorSample(wheel_speed=0.1, yaw_rate=1.0)),
+         SensorSample(wheel_speed=0.1, yaw_rate=1.0), False),
         (5, 275, [],   # no detections — fallback frame
-         SensorSample(wheel_speed=0.1, yaw_rate=2.0)),
+         SensorSample(wheel_speed=0.1, yaw_rate=2.0), False),
         (6, 330, [_make_det("stop_sign", "stop_sign", 380, 200, 0.75)],
-         SensorSample(wheel_speed=0.0)),
+         SensorSample(wheel_speed=0.0), False),
         (7, 385, [_make_det("stop_sign", "stop_sign", 381, 200, 0.78)],
-         SensorSample(wheel_speed=0.0)),
+         SensorSample(wheel_speed=0.0), False),
         (8, 440, [_make_det("stop_sign", "stop_sign", 382, 200, 0.81),
                   _make_det("traffic_light", "red", 243, 50, 0.88)],
-         SensorSample(wheel_speed=0.0)),
+         SensorSample(wheel_speed=0.0), False),
+        # --- Intersection crossing ---
+        (9, 495, [_make_det("lane_boundary", "lane_boundary", 8, 300, 0.65)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # trigger #1 — not yet debounced in
+        (10, 550, [_make_det("lane_boundary", "lane_boundary", 260, 300, 0.95)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # trigger #2 — INTERSECTION now active
+        (11, 605, [_make_det("lane_boundary", "lane_boundary", 270, 300, 0.97)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), True),   # spurious candidate ignored outright
+        (12, 660, [_make_det("lane_boundary", "lane_boundary", 265, 300, 0.96)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # trigger clears — exit streak #1
+        (13, 715, [_make_det("lane_boundary", "lane_boundary", 6, 300, 0.70),
+                    _make_det("lane_boundary", "lane_boundary", -145, 300, 0.60)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # exit streak #2 — mode exits this frame
+        (14, 770, [_make_det("lane_boundary", "lane_boundary", 10, 300, 0.72),
+                    _make_det("lane_boundary", "lane_boundary", -140, 300, 0.62)],
+         SensorSample(wheel_speed=0.2, yaw_rate=0.0), False),  # fresh pair accepted immediately
     ]
 
-    print(f"{'f':>3} {'lane_off':>9} {'head_err':>9} {'drive':>7} {'stop':>5}")
-    print("-" * 42)
+    print(f"{'f':>3} {'lane_off':>9} {'head_err':>9} {'drive':>7} {'stop':>5} {'isect':>5}")
+    print("-" * 50)
 
-    for frame_id, ts_ms, dets, sensors in sequences:
+    for frame_id, ts_ms, dets, sensors, isect_trig in sequences:
         p2  = Phase2Output(detections=dets, frame_id=frame_id, timestamp_ms=ts_ms)
-        pkt = proc.process(p2, sensors)
+        pkt = proc.process(p2, sensors, intersection_trigger=isect_trig)
         print(
             f"{pkt.frame_id:>3} "
             f"{pkt.lane_offset:>+9.4f} "
             f"{pkt.heading_error:>+9.3f} "
             f"{pkt.drive_state:>7} "
-            f"{'T' if pkt.stop_sign_detected else 'F':>5}"
+            f"{'T' if pkt.stop_sign_detected else 'F':>5} "
+            f"{'T' if pkt.intersection_active else 'F':>5}"
         )
