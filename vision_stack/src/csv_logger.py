@@ -45,8 +45,7 @@ FRAME_FIELDS = [
     "fix_dashed_dilate", "fix_anchor_halves",
     "offset", "raw_offset", "heading_error", "drive_state", "stop_sign_detected",
     "lane_mode", "lane_confidence",
-    "edge_ratio", "intersection_trigger", "intersection_active",
-    "lane_sides_tracked", "lane_sides_used",
+    "edge_ratio", "intersection_trigger",
     "pole_misclassified", "wall_edge_detected", "dashed_reject_center",
     "anchor_wrong_half", "dashed_line_dropped",
     "imu_sample_count", "imu_yaw_rate_dps",
@@ -107,33 +106,12 @@ class RunLogger:
             lane_confidence: float,
             edge_ratio: float,
             intersection_trigger: bool,
-            intersection_active: bool,
-            lane_sides_tracked: str,
-            lane_sides_used: str,
             tags: FrameTags,
             imu_sample_count: int,
             imu_yaw_rate_dps: float,
         ) -> None:
         """
         Write one row of per-frame navigation + failure-mode state
-
-        NOTE: intersection_trigger is the raw per-frame
-            intersection_edge_ratio() > INTERSECTION_EDGE_RATIO_THRESH
-            check; intersection_active is Phase 3's debounced state
-            machine (Phase3Config.intersection_enter_frames/
-            exit_frames) built from a run of those triggers — expect
-            intersection_active to lag trigger by a couple frames on
-            entry/exit and to stay True through brief trigger gaps
-
-        NOTE: lane_sides_tracked/lane_sides_used are DIAGNOSTIC ONLY
-            (EstimationPacket.lane_sides_tracked/lane_sides_used) —
-            "L"/"R"/"LR"/"" for which side(s) of center had a
-            lane_boundary detection survive motion consistency
-            (_tracked) vs. actually feed the offset average this
-            frame (_used). Watch for _used == "L" or "R" alone
-            (never "LR") — that means offset this frame is one
-            boundary's raw distance from center, not a true
-            lane-center estimate.
         """
         if not self._enabled:
             return
@@ -161,9 +139,6 @@ class RunLogger:
             "lane_confidence": round(lane_confidence, 3),
             "edge_ratio": round(edge_ratio, 4),
             "intersection_trigger": int(intersection_trigger),
-            "intersection_active": int(intersection_active),
-            "lane_sides_tracked": lane_sides_tracked,
-            "lane_sides_used": lane_sides_used,
             "pole_misclassified": tags.pole_misclassified,
             "wall_edge_detected": tags.wall_edge_detected,
             "dashed_reject_center": tags.dashed_reject_center,
