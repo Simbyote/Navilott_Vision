@@ -48,6 +48,8 @@ from phase2_out import package_phase2_output
 from contracts import NavDetection, Phase2Snapshot, SensorSample
 from estimation import Phase3Processor, Phase3Config
 from pd_control import PDController, PDConfig
+
+from roi_crop import crop_rois
 from geometry import (
     run_geometry_branch,
     CannyParams, LaneContourFilter, SignContourFilter,
