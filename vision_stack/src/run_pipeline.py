@@ -42,27 +42,15 @@ import pigpio
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
-from system import System
-from imu import IMUReader, IMUFrame
-from preprocess import preprocess_frame
-from roi_crop import crop_rois
-from color_branch import (
-    extract_traffic_light_candidates,
-    HSVRanges, BlobFilter,
-    load_hsv_ranges,
-)
-from geometry import (
-    run_geometry_branch,
-    CannyParams, LaneContourFilter, SignContourFilter,
-)
 from feature_fusion import fuse_detections, SourceROIInfo
 from lane_offset import compute_lane_offset
 from phase2_out import package_phase2_output
-from estimation import (
-    Phase3Processor, Phase3Config,
-    SensorSample,
-    DetectionObject as P3DetectionObject,
-    Phase2Output as P3Phase2Output,
+from contracts import NavDetection, Phase2Snapshot, SensorSample
+from estimation import Phase3Processor, Phase3Config
+from pd_control import PDController, PDConfig
+from geometry import (
+    run_geometry_branch,
+    CannyParams, LaneContourFilter, SignContourFilter,
 )
 
 # =============================================================================
@@ -94,6 +82,8 @@ LANE_CONF_THRESHOLD = 0.30  # operational
 
 # Minimum lane width in pixels for two-boundary mode
 MIN_LANE_WIDTH_PX = 150.0
+MAX_LANE_WIDTH_PX = 0.80 * FRAME_WIDTH     # 384 px at 480
+NOMINAL_LANE_WIDTH_PX = 240.0  
 
 # Offset of the camera
 OFFSET_TRIM = 0.0   # meters
@@ -110,8 +100,6 @@ KD = 0.05   # Derivative gain;smooths correction jitter
 # Targets motor inrush current at the moment of the speed jump, not just
 # steady-state draw -- lowering BASE_SPEED alone doesn't address this.
 RAMP_SECONDS = 0.75
-
-_last_error: float = 0.0
 
 # =============================================================================
 # Logging
@@ -245,64 +233,51 @@ def _load_hsv(
 # =============================================================================
 # Phase 2 -> Phase 3 Adapter
 # =============================================================================
-def _adapt_detections_for_p3(
-        p2_detections,
-        lane_roi_width: float,
-    ) -> list:
+def _adapt_detections_for_p3(p2_detections) -> list:
     """
     Purpose:
-        Convert feature_fusion.DetectionObject list into estimation.DetectionObject
-        list expected by Phase3Processor
-    
+        Convert feature_fusion.DetectionObject into contracts.NavDetection.
+
     Inputs:
-        p2_detections: list of feature_fusion.DetectionObject from Phase 2
-        lane_roi_width: width in px of the lane ROI this frame's detections
-            were measured against (roi_result.lane_roi.shape[1]) — the
-            center reference for the lane_boundary conversion below
+        p2_detections: list of feature_fusion.DetectionObject
 
     Outputs:
-        list of estimation.DetectionObject:
-        feature_fusion.DetectionObject -> estimation.DetectionObject
-            .type -> .type
-            .label_detail -> .label
-            .position["x"] -> .position_x
-            .position["y"] -> .position_y
-            .confidence -> .confidence
-            .timestamp -> .timestamp
-    """
-    lane_center_px = lane_roi_width / 2.0
-    adapted = []
-    for d in p2_detections:
-        x = d.position["x"]
-        if d.type == "lane_boundary":
-            x = x - lane_center_px
-        adapted.append(P3DetectionObject(
-            type = d.type,
-            label = d.label_detail,
-            position_x = x,
-            position_y = d.position["y"],
-            confidence = d.confidence,
-            timestamp = d.timestamp,
-        ))
-    return adapted
+        list[NavDetection] containing traffic_light and stop_sign ONLY.
 
-def _build_p3_input(
-        p2_out, 
-        detections_p3
-    ) -> P3Phase2Output:
+    Notes:
+        lane_boundary detections are deliberately excluded. They are reduced to
+        a single LaneEstimate by lane_offset.compute_lane_offset() before the
+        seam. Phase 3 must never see them, or it will be tempted to re-derive
+        the offset -- which is exactly the bug this replaces.
+
+        Positions are already re-projected into source-frame coordinates by
+        feature_fusion (R7), so no centre subtraction happens here.
+    """
+    return [
+        NavDetection(
+            type=d.type,
+            label=d.label_detail,
+            position_x=d.position["x"],
+            position_y=d.position["y"],
+            timestamp_ms=d.timestamp,
+            confidence=d.confidence,
+        )
+        for d in p2_detections
+        if d.type in ("traffic_light", "stop_sign")
+    ]
+
+
+def _build_p3_input(p2_out, detections_p3, lane_result) -> Phase2Snapshot:
     """
     Purpose:
-        Wrap adapted detections in the Phase 3 Phase2Output container
-    Inputs:
-        p2_out: Phase2Output from Phase 2, used for frame_id and timestamp
-        detections_p3: list of estimation.DetectionObject adapted from Phase 2 detections
-    Outputs:
-        P3Phase2Output with detections and metadata for Phase 3 processing
+        Wrap the frame's detections and the pre-reduced lane estimate in the
+        Phase 3 seam container.
     """
-    return P3Phase2Output(
-        detections = detections_p3,
-        frame_id = p2_out.frame_id,
-        timestamp_ms = p2_out.timestamp_ms,
+    return Phase2Snapshot(
+        detections=detections_p3,
+        lane=lane_result.to_lane_estimate(),
+        frame_id=p2_out.frame_id,
+        timestamp_ms=p2_out.timestamp_ms,
     )
 
 # =============================================================================
@@ -351,16 +326,27 @@ def main() -> None:
     lane_filter = LaneContourFilter()
     sign_filter = SignContourFilter()
 
-    p3_config = Phase3Config(
+        p3_config = Phase3Config(
         ema_alpha = 0.35,
         vote_window = 3,
         min_confidence_lane = LANE_CONF_THRESHOLD,
         min_confidence_traffic = TRAFFIC_CONF_THRESHOLD,
         min_confidence_sign = SIGN_CONF_THRESHOLD,
         px_per_meter = (FRAME_WIDTH / 2) / 0.35,
+        lane_half_width_px = FRAME_WIDTH / 2,
+        max_lane_rate_norm_per_s = 6.0,     # TODO-CALIBRATE
         deadreck_max_frames = 10,
+        ema_reset_after_frames = 4,
+        stale_decay_per_frame = 0.0,        # raise to 0.10-0.20 after bench validation
     )
     p3_processor = Phase3Processor(p3_config)
+
+    pd = PDController(PDConfig(
+        kp = KP, kd = KD,
+        base_speed = BASE_SPEED,
+        ramp_seconds = RAMP_SECONDS,
+        offset_trim = OFFSET_TRIM,
+    ))
 
     # ==========================================================================
     # Phase 1: open camera
@@ -403,7 +389,7 @@ def main() -> None:
                 frame_id += 1
                 continue
 
-            timestamp_ms = int(time.time() * 1000)
+            timestamp_ms = int(t_frame_start * 1000.0)
 
             # =================================================================
             # Phase 2: Vision Perception
@@ -446,6 +432,10 @@ def main() -> None:
                 lane_shape = roi_result.lane_roi.shape[:2],
                 traffic_shape = roi_result.traffic_roi.shape[:2],
                 sign_shape = roi_result.sign_roi.shape[:2],
+
+                lane_rect = roi_result.lane_rect,
+                traffic_rect = roi_result.traffic_rect,
+                sign_rect = roi_result.sign_rect,
             )
             detections, _fusion_summary = fuse_detections(
                 traffic_candidates = tl_candidates,
@@ -460,11 +450,13 @@ def main() -> None:
             lane_boundary_dets = [d for d in detections if d.type == "lane_boundary"]
             lane_offset_result = compute_lane_offset(
                 detections = lane_boundary_dets,
-                frame_width = roi_result.lane_roi.shape[1],
+                frame_width = roi_result.source_shape[1],
                 frame_id = frame_id,
                 timestamp = timestamp_ms,
                 conf_threshold = LANE_CONF_THRESHOLD,
                 min_lane_width_px = MIN_LANE_WIDTH_PX,
+                max_lane_width_px = MAX_LANE_WIDTH_PX,
+                nominal_lane_width_px = NOMINAL_LANE_WIDTH_PX,
             )
 
             # Step 6: Package Phase 2 output
@@ -481,29 +473,22 @@ def main() -> None:
             sensor_sample, imu_frame = _read_sensors(imu)
 
             # Adapt Phase 2 detections to Phase 3 schema and run processor
-            p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
-            p3_input = _build_p3_input(p2_out, p3_detections)
+            p3_detections = _adapt_detections_for_p3(p2_out.detections)
+            p3_input = _build_p3_input(p2_out, p3_detections, lane_offset_result)
             nav_packet = p3_processor.process(p3_input, sensor_sample)
 
             # =================================================================
             # Motor Control
             # =================================================================
-            global _last_error
-
             if nav_packet.drive_state == "stop":
-                _drive(0.0, 0.0)
-                ramp_start_ts = None
+                _drive(*pd.stop())
             else:
-                if ramp_start_ts is None:
-                    ramp_start_ts = t_frame_start
-                ramp_frac  = min(1.0, (t_frame_start - ramp_start_ts) / RAMP_SECONDS)
-                ramped_base = BASE_SPEED * ramp_frac
-
-                error = nav_packet.lane_offset + OFFSET_TRIM
-                derivative = error - _last_error
-                correction = (error * KP) + (derivative * KD)
-                _drive(ramped_base - correction, ramped_base + correction)
-                _last_error = error
+                left, right = pd.update(
+                    offset = nav_packet.lane_offset,
+                    offset_valid = nav_packet.lane_offset_valid,
+                    now_s = t_frame_start,
+                )
+                _drive(left, right)
 
             # =================================================================
             # Timing check
@@ -522,16 +507,23 @@ def main() -> None:
             # =================================================================
             # Navigation Packet Log
             # =================================================================
-            log.info(
-                "f=%04d t=%.1fms offset=%+.4f head=%+.2f° drive=%-7s "
-                "stop_sign=%s lane_mode=%s imu_n=%d yaw=%+.1f°/s",
+                        log.info(
+                "f=%04d t=%.1fms off=%+.4f n=%+.4f %s age=%02d%s head=%+.2f° "
+                "src=%-6s drive=%-7s stop_sign=%s p2_mode=%-13s p3_mode=%-13s "
+                "imu_n=%d yaw=%+.1f°/s",
                 frame_id,
                 frame_time_ms,
                 nav_packet.lane_offset,
+                nav_packet.lane_offset_norm,
+                "OK " if nav_packet.lane_offset_valid else "DR ",
+                nav_packet.lane_offset_age,
+                " STALE" if nav_packet.lane_offset_stale else "      ",
                 nav_packet.heading_error,
+                nav_packet.heading_source,
                 nav_packet.drive_state,
                 "T" if nav_packet.stop_sign_detected else "F",
-                lane_offset_result.mode,
+                lane_offset_result.mode,      # what Phase 2 measured
+                nav_packet.lane_mode,         # what Phase 3 acted on
                 imu_frame.sample_count,
                 imu_frame.mean_yaw_rate_dps if imu_frame.valid else 0.0,
             )
