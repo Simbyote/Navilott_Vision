@@ -330,7 +330,7 @@ def main() -> None:
     lane_filter = LaneContourFilter()
     sign_filter = SignContourFilter()
 
-        p3_config = Phase3Config(
+    p3_config = Phase3Config(
         ema_alpha = 0.35,
         vote_window = 3,
         min_confidence_lane = LANE_CONF_THRESHOLD,
@@ -511,7 +511,7 @@ def main() -> None:
             # =================================================================
             # Navigation Packet Log
             # =================================================================
-                        log.info(
+            log.info(
                 "f=%04d t=%.1fms off=%+.4f n=%+.4f %s age=%02d%s head=%+.2f° "
                 "src=%-6s drive=%-7s stop_sign=%s p2_mode=%-13s p3_mode=%-13s "
                 "imu_n=%d yaw=%+.1f°/s",
