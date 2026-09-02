@@ -152,7 +152,6 @@ def _drive(
         left_speed: [-1.0, 1.0]
         right_speed: [-1.0, 1.0]
     """
-    right_speed = -right_speed  # invert if right motor
     pi.write(_stby, 1)
     # Left
     spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
