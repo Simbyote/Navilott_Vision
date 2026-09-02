@@ -74,6 +74,9 @@ class LaneContourFilter:    # Lane Boundary
     max_area: float = 200.0
     min_aspect: float = 5.0
     max_aspect: float = 300.0      # NOW ENFORCED as a rejection (was unused)
+    score_aspect_lo:   float = 6.0
+    score_aspect_hi:   float = 16.0
+    score_aspect_soft: float = 12.0   # rolloff width outside the plateau
     ref_area: float = 300.0       # was 2000.0, above max_area -> capped score
     max_roi_span: float = 0.60    # was 1.0 -> "ratio > 1.0" could never fire
     min_intensity: float = 20.0
@@ -254,15 +257,16 @@ def _lane_confidence(
     Outputs:
         confidence: [0.0, 1.0]
     """
-    # Elongation is BAND-PASS, not monotonic. The old form rewarded elongation
-    # without bound and saturated at 1.0 for anything past max_aspect, so a
-    # continuous wall/floor seam (elongation ~25) scored higher than a real
-    # dashed lane marking (elongation ~9). A lane dash has a BOUNDED aspect
-    # ratio; only scenery is arbitrarily long. Score peaks mid-band.
-    band_lo, band_hi = f.min_aspect, f.max_aspect
-    band_mid = 0.5 * (band_lo + band_hi)
-    band_half = max(0.5 * (band_hi - band_lo), 1.0)
-    elong_score = _clamp(1.0 - abs(elongation - band_mid) / band_half, 0.0, 1.0)
+
+    # Elongation signal
+    lo, hi = f.score_aspect_lo, f.score_aspect_hi
+    soft = max(f.score_aspect_soft, 1.0)
+    if lo <= elongation <= hi:
+        elong_score = 1.0
+    elif elongation < lo:
+        elong_score = _clamp(1.0 - (lo - elongation) / soft, 0.0, 1.0)
+    else:
+        elong_score = _clamp(1.0 - (elongation - hi) / soft, 0.0, 1.0)
 
     # Size signal. ref_area is now <= max_area, so this can actually reach 1.0.
     # Previously ref_area=2000 with max_area=300 capped area_score at 0.15,
@@ -387,6 +391,7 @@ def _extract_lane_candidates(
 
         # Composite confidence score based on area and elongation
         confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, roi_w, lane_filter)
+        print(f"[lane] elong={elongation:5.1f} area={area:6.0f} conf={confidence:.2f}")   # TEMP
 
         candidates.append(LaneCandidate(
             label = "lane_boundary",
@@ -652,9 +657,7 @@ if __name__ == "__main__":
     import os
 
     SAMPLE_DIRS = [
-        "vision_stack/frames/Sample1",
-        "vision_stack/frames/Sample2",
-        "vision_stack/frames/Sample3"
+        "vision_stack/frames/Walk1"
     ]
 
     '''

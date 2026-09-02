@@ -39,8 +39,8 @@ from dataclasses import dataclass
 @dataclass
 class PDConfig:
     """
-    kp: proportional gain
-    kd: derivative gain
+    kp: proportional gain - compares the measured offset to the desired offset (0.0)
+    kd: derivative gain - compares the change in measured offset to the change in desired offset (0.0)
     base_speed: constant forward speed, [0.0, 1.0]
     ramp_seconds: soft-start ramp from 0 -> base_speed on every resume
     offset_trim: constant added to the measured offset, same units as offset
