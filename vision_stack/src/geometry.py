@@ -1,5 +1,5 @@
 """
-geometry_branch.py
+geometry.py
 
 Geometry Branch Stage
 
@@ -70,13 +70,15 @@ class LaneContourFilter:    # Lane Boundary
     min_intensity: minimum average intensity (0-255) within contour; rejects dark blobs
     min_aspect logic: lane lines may be horizontal or vertical depending on heading
     """
-    min_area: float = 0.0
+    min_area: float = 12.0        # was 0.0 -> "area < 0.0" could never fire
     max_area: float = 300.0
     min_aspect: float = 8.0
-    max_aspect: float = 10.0
-    ref_area: float = 2000.0
-    max_roi_span: float = 1.0
+    max_aspect: float = 18.0      # NOW ENFORCED as a rejection (was unused)
+    ref_area: float = 220.0       # was 2000.0, above max_area -> capped score
+    max_roi_span: float = 0.60    # was 1.0 -> "ratio > 1.0" could never fire
     min_intensity: float = 80.0
+    edge_margin_frac: float = 0.08   # lateral prior; see _lane_confidence
+    edge_penalty: float = 0.35       # multiplier for contours in the margin
 
 @dataclass
 class SignContourFilter:    # Stop Sign
@@ -172,13 +174,36 @@ def _clamp(
     """
     return max(lo, min(hi, value))
 
+# Set True ONLY together with re-calibrating CannyParams and
+# LaneContourFilter.min_intensity. See the note in _to_grayscale().
+INPUT_IS_BGR = False
+
 def _to_grayscale(
         roi: np.ndarray
     ) -> np.ndarray:
     """
     Purpose:
-        Convert image to grayscale
+        Convert the ROI to grayscale.
+
+    WARNING -- do not flip INPUT_IS_BGR on its own.
+        run_pipeline.py passes BGR into this branch, but the legacy path below
+        runs COLOR_YUV2BGR on it, reinterpreting BGR data as YUV and pushing it
+        through the YUV->BGR matrix. The resulting "grayscale" is a scrambled
+        linear combination of the true channels.
+
+        Every downstream constant -- CannyParams(10, 160),
+        LaneContourFilter.min_intensity=80, and _mean_contour_intensity's
+        behaviour -- was tuned empirically AGAINST that scrambled image. They
+        are therefore self-consistent and currently working. Correcting the
+        conversion without re-calibrating those three constants in the same
+        commit will make lane detection worse, not better.
+
+        Flipping this flag also removes one full-ROI cvtColor per branch per
+        frame, which is worth having given 11.2% of frames exceeded the 66.7 ms
+        budget in session2.log.
     """
+    if INPUT_IS_BGR:
+        return cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     roi_bgr = cv2.cvtColor(roi, cv2.COLOR_YUV2BGR)
     return cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -211,7 +236,7 @@ def _lane_confidence(
         area: float, 
         elongation: float, 
         bbox: tuple,
-        roi_h: int, f: LaneContourFilter
+        roi_h: int, roi_w: int, f: LaneContourFilter
     ) -> float:
     """
     Purpose:
@@ -223,24 +248,47 @@ def _lane_confidence(
         elongation: contour aspect ratio
         bbox: (x, y, w, h) in lane ROI coords
         roi_h: lane ROI height
+        roi_w: lane ROI width
         f: LaneContourFilter
 
     Outputs:
         confidence: [0.0, 1.0]
     """
-    # How far above the minimum elongation threshold? A stronger lane shape = higher score
-    elong_score = _clamp(
-        (elongation - f.min_aspect) / max(f.max_aspect - f.min_aspect, 1.0),
-        0.0, 1.0
-    )
-    # Size signal, normalized against expected detection area
-    area_score = _clamp(area / max(f.ref_area, 1.0), 0.0, 1.0)
+    # Elongation is BAND-PASS, not monotonic. The old form rewarded elongation
+    # without bound and saturated at 1.0 for anything past max_aspect, so a
+    # continuous wall/floor seam (elongation ~25) scored higher than a real
+    # dashed lane marking (elongation ~9). A lane dash has a BOUNDED aspect
+    # ratio; only scenery is arbitrarily long. Score peaks mid-band.
+    band_lo, band_hi = f.min_aspect, f.max_aspect
+    band_mid = 0.5 * (band_lo + band_hi)
+    band_half = max(0.5 * (band_hi - band_lo), 1.0)
+    elong_score = _clamp(1.0 - abs(elongation - band_mid) / band_half, 0.0, 1.0)
 
-    # Vertical proximity, contours near the bottom of the lane ROI are closer to camera
+    # Size signal. ref_area is now <= max_area, so this can actually reach 1.0.
+    # Previously ref_area=2000 with max_area=300 capped area_score at 0.15,
+    # meaning its 0.30 weight contributed at most 0.045 and lane confidence
+    # could never exceed 0.745.
+    area_score = _clamp(area / max(min(f.ref_area, f.max_area), 1.0), 0.0, 1.0)
+
+    # Vertical proximity: contours near the bottom of the lane ROI are closer
+    # to the camera and more trustworthy.
     x, y, w, h = bbox
     proximity_score = _clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
 
-    return round(0.50 * elong_score + 0.30 * area_score + 0.20 * proximity_score, 4)
+    score = 0.45 * elong_score + 0.30 * area_score + 0.25 * proximity_score
+
+    # Lateral prior. A contour hugging the left or right margin of the lane ROI
+    # is far more likely to be a wall base, table leg, or mat edge than a lane
+    # marking -- the robot cannot be so far out of lane that a boundary reaches
+    # the frame edge while the pipeline still claims a valid lane. This is the
+    # geometry-side half of the wall fix; the estimator-side half is the width
+    # band in lane_offset.compute_lane_offset().
+    if roi_w > 0:
+        margin = f.edge_margin_frac * roi_w
+        if x < margin or (x + w) > (roi_w - margin):
+            score *= f.edge_penalty
+
+    return round(_clamp(score, 0.0, 1.0), 4)
 
 def _mean_contour_intensity(
         gray: np.ndarray, 
@@ -318,8 +366,11 @@ def _extract_lane_candidates(
         short_side = max(min(rect_w, rect_h), 1.0)
         elongation = long_side / short_side
 
-        # Reject contours that are too elongated
-        if elongation < lane_filter.min_aspect:
+        # Reject contours outside the lane-shape aspect band.
+        # max_aspect was documented as "upper bound; rejects extreme aspect
+        # ratios" but had no rejection branch -- it was only an EMA normaliser.
+        # This is what let an unbounded wall seam through.
+        if elongation < lane_filter.min_aspect or elongation > lane_filter.max_aspect:
             continue
 
         # Reject contours that span more than max_roi_span of ROI
@@ -335,7 +386,7 @@ def _extract_lane_candidates(
             continue
 
         # Composite confidence score based on area and elongation
-        confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, lane_filter)
+        confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, roi_w, lane_filter)
 
         candidates.append(LaneCandidate(
             label = "lane_boundary",
