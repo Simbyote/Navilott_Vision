@@ -127,8 +127,8 @@ _ain1 = 24
 _ain2 = 25
 _pwma = 13
 # Motor B (Right) — TB6612 BIN side
-_bin1 = 27
-_bin2 = 22
+_bin1 = 22
+_bin2 = 27
 _pwmb = 12
 _stby = 23
 
