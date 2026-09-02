@@ -86,6 +86,16 @@ sys.path.insert(0, "vision_stack/src")
 from unzip_data import fetch_dataset
 
 # ============================================================================
+# Tuning
+# ============================================================================
+# Fraction of frame width trimmed from EACH side of the lane ROI.
+# 0.10 at 480 px trims 48 px per side, leaving a 384 px lane ROI.
+# TODO-CALIBRATE against trackT3/T4/T5: raise until wall/mat-edge contours stop
+# appearing in *_gb_lane_accepted.png, but not so far that a real boundary is
+# clipped when the robot is legitimately off-centre.
+LANE_X_INSET_FRAC = 0.10
+
+# ============================================================================
 # Result Container
 # ============================================================================
 @dataclass
@@ -143,10 +153,20 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
         )
 
     # Coordinate Computation
-    # Lane: lower half
-    lane_x = 0
+    # Lane: lower half, inset laterally.
+    #
+    # This ROI used to span the FULL frame width (lane_x=0, lane_w=W) -- it
+    # cropped vertically only. That is why the "narrow FOV + lane ROI should
+    # crop the wall out" assumption failed: there was no lateral crop to do it.
+    # Anything beside the robot at floor level landed in the bottom corner of
+    # the lane ROI, which is the region the proximity term rewards most.
+    #
+    # NOTE: this makes lane_x != 0, so ROI-local x is no longer accidentally
+    # equal to source-frame x. feature_fusion MUST re-project (see R7). Landing
+    # this without the re-projection shifts every lane detection by lane_x px.
+    lane_x = int(W * LANE_X_INSET_FRAC)
     lane_y = H // 2
-    lane_w = W 
+    lane_w = W - 2 * lane_x
     lane_h = H - H // 2
 
     # Traffic light: top-center half

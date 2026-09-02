@@ -58,6 +58,16 @@ class SourceROIInfo:
     traffic_shape: tuple
     sign_shape: tuple
 
+    # ROI origins in SOURCE FRAME pixels, i.e. (x, y, w, h) from ROICropResult.
+    # geometry.py's module header always stated "Feature fusion is responsible
+    # for re-projecting into source frame coordinates" -- it never did. These
+    # rects were computed by crop_rois and then never read by anything.
+    # Defaulting to None preserves the old (ROI-local) behaviour so this can be
+    # bisected independently.
+    lane_rect: Optional[tuple] = None
+    traffic_rect: Optional[tuple] = None
+    sign_rect: Optional[tuple] = None
+
 @dataclass
 class DetectionObject:
     """
@@ -138,15 +148,35 @@ class _SignCandidate:
 # Utility Functions
 # ============================================================================
 def _centroid(
-        bbox: tuple
+        bbox: tuple,
+        roi_rect: Optional[tuple] = None,
     ) -> dict:
     """
     Purpose:
-        Compute bounding box centroid. Guards against zero-size bbox.
+        Compute a bounding box centroid, re-projected into source frame
+        coordinates when the ROI origin is known.
+
+    Inputs:
+        bbox: (x, y, w, h) in ROI-local pixels
+        roi_rect: (x, y, w, h) of the ROI within the source frame, or None to
+                  leave the centroid in ROI-local coordinates (legacy behaviour)
+
+    Outputs:
+        {"x": float, "y": float}
+
+    Notes:
+        Without re-projection the sign branch is short by W//2 = 240 px and the
+        traffic branch by W//4 = 120 px. Both are currently masked because their
+        confidence gates are set to 1.1; un-gating them for D2 surfaces the
+        error immediately, and it presents as a detection failure rather than a
+        coordinate failure.
     """
     x, y, w, h = bbox
     cx = float(x) + float(w) / 2.0 if w > 0 else float(x)
     cy = float(y) + float(h) / 2.0 if h > 0 else float(y)
+    if roi_rect is not None:
+        cx += float(roi_rect[0])
+        cy += float(roi_rect[1])
     return {"x": round(cx, 2), "y": round(cy, 2)}
 
 def _valid_confidence(
@@ -231,7 +261,8 @@ def fuse_detections(
                     f"[SUPPRESSED] traffic_light: {c.label} conf={c.confidence:.4f} "
                     f"(lost to {best_tl.label} conf={best_tl.confidence:.4f})"
                 )
-        pos = _centroid(best_tl.bbox) if source_rois is not None else {"x": 0.0, "y": 0.0}
+        pos = (_centroid(best_tl.bbox, source_rois.traffic_rect)
+               if source_rois is not None else {"x": 0.0, "y": 0.0})
         detections.append(DetectionObject(
             type         = "traffic_light",
             position     = pos,
@@ -256,7 +287,8 @@ def fuse_detections(
 
     # Sort descending by confidence (LB-2)
     for c in sorted(valid_lanes, key=lambda x: x.confidence, reverse=True):
-        pos = _centroid(c.bbox) if source_rois is not None else {"x": 0.0, "y": 0.0}
+        pos = (_centroid(c.bbox, source_rois.lane_rect)
+               if source_rois is not None else {"x": 0.0, "y": 0.0})
         detections.append(DetectionObject(
             type = "lane_boundary",
             position = pos,
@@ -279,7 +311,8 @@ def fuse_detections(
                     f"[SUPPRESSED] stop_sign: conf={c.confidence:.4f} v={c.vertex_count} "
                     f"(lost to conf={best_sign.confidence:.4f} v={best_sign.vertex_count})"
                 )
-        pos = _centroid(best_sign.bbox) if source_rois is not None else {"x": 0.0, "y": 0.0}
+        pos = (_centroid(best_sign.bbox, source_rois.sign_rect)
+               if source_rois is not None else {"x": 0.0, "y": 0.0})
         detections.append(DetectionObject(
             type = "stop_sign",
             position = pos,
