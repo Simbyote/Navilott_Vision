@@ -93,7 +93,10 @@ from unzip_data import fetch_dataset
 # TODO-CALIBRATE against trackT3/T4/T5: raise until wall/mat-edge contours stop
 # appearing in *_gb_lane_accepted.png, but not so far that a real boundary is
 # clipped when the robot is legitimately off-centre.
-LANE_X_INSET_FRAC = 0.10
+LANE_X_INSET_FRAC = 0.01
+
+# Fraction of frame height trimmed from the top of the lane ROI.
+LANE_Y_TOP_FRAC = 0.75
 
 # ============================================================================
 # Result Container
@@ -165,9 +168,9 @@ def crop_rois(frame: np.ndarray, frame_id: int = 0) -> ROICropResult:
     # equal to source-frame x. feature_fusion MUST re-project (see R7). Landing
     # this without the re-projection shifts every lane detection by lane_x px.
     lane_x = int(W * LANE_X_INSET_FRAC)
-    lane_y = H // 2
+    lane_y = int(H * LANE_Y_TOP_FRAC)
     lane_w = W - 2 * lane_x
-    lane_h = H - H // 2
+    lane_h = H - lane_y
 
     # Traffic light: top-center half
     tl_x = W // 4
@@ -251,11 +254,19 @@ if __name__ == "__main__":
     """
     import os
 
+
+    SAMPLE_DIRS = [
+        "vision_stack/frames/Sample1",
+        "vision_stack/frames/Sample2",
+        "vision_stack/frames/Sample3"
+    ]
+    '''
     SAMPLE_DIRS = fetch_dataset(
         url="https://github.com/Simbyote/Navilott_Vision/releases/download/v1.0-dataset/frame_tracks.zip",
         zip_path="vision_stack/frames/frame_tracks.zip",
         dest_dir="vision_stack/frames",
     )
+    '''
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 
     seen_shapes = set()

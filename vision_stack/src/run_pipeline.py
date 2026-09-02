@@ -71,8 +71,8 @@ FPS = 15
 LOOP_BUDGET_MS = 1000.0 / FPS          # e.g. 66.6 ms at 15 FPS
 
 # Color space emitted by GStreamer: "YUV" or "BGR"
-# Default: YUV
-COLOR_SPACE = "YUV"
+# Default: BGR
+COLOR_SPACE = "BGR"
 
 # Set True to write a debug overlay video to output.avi
 SAVE_VIDEO = True
@@ -337,7 +337,7 @@ def main() -> None:
         min_confidence_lane = LANE_CONF_THRESHOLD,
         min_confidence_traffic = TRAFFIC_CONF_THRESHOLD,
         min_confidence_sign = SIGN_CONF_THRESHOLD,
-        px_per_meter = (FRAME_WIDTH / 2) / 0.35,
+        px_per_meter = (FRAME_WIDTH / 2) / 0.35,            # Pixels per metre is a scaling constant, but is used as a physical constant
         lane_half_width_px = FRAME_WIDTH / 2,
         max_lane_rate_norm_per_s = 6.0,     # TODO-CALIBRATE
         deadreck_max_frames = 10,

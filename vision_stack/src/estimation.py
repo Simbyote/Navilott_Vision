@@ -88,25 +88,23 @@ class Phase3Config:
     All tuning parameters for Phase 3.
 
     1) Temporal filtering
-        ema_alpha: EMA factor for lane_offset and heading_error.
-                   Higher = faster response, less smoothing. Range [0.1, 0.9].
+        ema_alpha: EMA factor for lane_offset and heading_error. Higher = faster response, less smoothing. Range [0.1, 0.9].
         vote_window: frames over which discrete states are majority-voted.
 
     2) Confidence thresholding
         min_confidence_lane / _traffic / _sign
 
     3) Lane offset scaling
-        px_per_meter: SCALING constant only. There is no homography, so this
-                   does not survive a change in camera pitch or mount height.
-                   Do not treat the output as true metres at range.
+        px_per_meter: Scaling constant only. Is sensitive to camera pitch and height. Not to be treated as an output as true metres at range.
         lane_half_width_px: px corresponding to offset_norm = 1.0. Used to put
                    the rate gate in pixel units.
 
     4) Motion consistency
         max_centroid_jump_px: max centroid displacement between consecutive
                    frames, for traffic_light and stop_sign.
+        TODO-CALIBRATE ///
         max_lane_rate_norm_per_s: max plausible rate of change of the
-                   normalised lane offset. TODO-CALIBRATE. At 15 FPS a value of
+                   normalised lane offset. At 15 FPS a value of
                    6.0 permits ~0.40 of full scale per frame, which is well
                    above real robot dynamics but below a detection swap.
 

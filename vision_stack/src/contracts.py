@@ -4,29 +4,31 @@ contracts.py
 Shared Phase 2 <-> Phase 3 Schema
 
 Purpose:
+    
+
     Single definition of every object that crosses the Phase 2 / Phase 3 seam.
 
     Before this module, estimation.py re-declared its own private mirrors of
     DetectionObject and Phase2Output. No import edge crossed the seam, so no
     import error, type checker, or linter could ever detect the two schemas
     drifting apart. They drifted: Phase 3's docstring promised a pre-reduced
-    lane-centre offset and Phase 2 handed it one detection per boundary.
+    lane-center offset and Phase 2 handed it one detection per boundary.
 
     Both phases now import from here. Drift becomes an import-time failure
     instead of a silent runtime bias.
 
 =============================================================================
-CANONICAL SIGN CONVENTION  (matches pipeline.md and phase2_pipeline.md)
+CANONICAL SIGN CONVENTION 
 =============================================================================
 
-    Image x increases to the robot's RIGHT (after the 180 deg videoflip).
+    Image x increases to the robot's RIGHT after an 180 deg videoflip
 
-    offset > 0  ->  lane centre appears RIGHT of image centre
-                ->  robot is LEFT of lane centre
+    offset > 0  ->  lane center appears RIGHT of image center
+                ->  robot is LEFT of lane center
                 ->  robot must steer RIGHT
 
-    offset < 0  ->  robot is RIGHT of lane centre, must steer LEFT
-    offset = 0  ->  centred
+    offset < 0  ->  robot is RIGHT of lane center, must steer LEFT
+    offset = 0  ->  centerd
 
     This is the ONLY convention in the codebase. Every producer normalises to
     it before emitting. estimation.py's old EstimationPacket docstring said the
@@ -95,12 +97,12 @@ LANE_MODES_ALL = frozenset({
 @dataclass
 class LaneEstimate:
     """
-    The lane-centre estimate for one frame, ALREADY REDUCED to a single value.
+    The lane-center estimate for one frame, ALREADY REDUCED to a single value.
 
     This is the fix for the original contract violation. Phase 3 used to
     receive N lane_boundary detections and average their x-positions, which
-    only equals the lane centre when the surviving detections are laterally
-    symmetric -- they never are, because a dashed centre line fragments into
+    only equals the lane center when the surviving detections are laterally
+    symmetric -- they never are, because a dashed center line fragments into
     several contours while a solid edge line yields one.
 
     Reduction is now done exactly once, in lane_offset.compute_lane_offset(),
@@ -214,8 +216,8 @@ class EstimationPacket:
     Validated navigation signals produced by Phase 3.
     This is the handoff contract to the Navigation subsystem.
 
-    lane_offset: lateral offset from lane centre, metres (see UNITS above)
-                 POSITIVE = robot is LEFT of lane centre, must steer RIGHT
+    lane_offset: lateral offset from lane center, metres (see UNITS above)
+                 POSITIVE = robot is LEFT of lane center, must steer RIGHT
     lane_offset_norm: the same signal normalised to [-1.0, +1.0]
 
     lane_offset_valid: False when this frame's value is dead-reckoned or stale.

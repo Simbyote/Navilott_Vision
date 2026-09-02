@@ -53,8 +53,8 @@ class CannyParams:  # Edge Detection
     aperture_size: Sobel kernel size (3, 5, or 7)
     """
     threshold1: float = 10.0
-    threshold2: float = 160.0
-    aperture_size: int   = 3
+    threshold2: float = 300.0
+    aperture_size: int = 3
 
 @dataclass
 class LaneContourFilter:    # Lane Boundary
@@ -70,13 +70,13 @@ class LaneContourFilter:    # Lane Boundary
     min_intensity: minimum average intensity (0-255) within contour; rejects dark blobs
     min_aspect logic: lane lines may be horizontal or vertical depending on heading
     """
-    min_area: float = 12.0        # was 0.0 -> "area < 0.0" could never fire
-    max_area: float = 300.0
-    min_aspect: float = 8.0
-    max_aspect: float = 18.0      # NOW ENFORCED as a rejection (was unused)
-    ref_area: float = 220.0       # was 2000.0, above max_area -> capped score
+    min_area: float = 1.0        # was 0.0 -> "area < 0.0" could never fire
+    max_area: float = 200.0
+    min_aspect: float = 5.0
+    max_aspect: float = 300.0      # NOW ENFORCED as a rejection (was unused)
+    ref_area: float = 300.0       # was 2000.0, above max_area -> capped score
     max_roi_span: float = 0.60    # was 1.0 -> "ratio > 1.0" could never fire
-    min_intensity: float = 80.0
+    min_intensity: float = 20.0
     edge_margin_frac: float = 0.08   # lateral prior; see _lane_confidence
     edge_penalty: float = 0.35       # multiplier for contours in the margin
 
@@ -176,7 +176,7 @@ def _clamp(
 
 # Set True ONLY together with re-calibrating CannyParams and
 # LaneContourFilter.min_intensity. See the note in _to_grayscale().
-INPUT_IS_BGR = False
+INPUT_IS_BGR = True
 
 def _to_grayscale(
         roi: np.ndarray
@@ -651,11 +651,19 @@ if __name__ == "__main__":
     """
     import os
 
+    SAMPLE_DIRS = [
+        "vision_stack/frames/Sample1",
+        "vision_stack/frames/Sample2",
+        "vision_stack/frames/Sample3"
+    ]
+
+    '''
     SAMPLE_DIRS = fetch_dataset(
         url="https://github.com/Simbyote/Navilott_Vision/releases/download/v1.0-dataset/frame_tracks.zip",
         zip_path="vision_stack/frames/frame_tracks.zip",
         dest_dir="vision_stack/frames",
     )
+    '''
     IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
 
     canny_params = CannyParams()
@@ -711,17 +719,8 @@ if __name__ == "__main__":
             ts_ms = int(time.time() * 1000)
 
             if use_inline_crop:
-                img_path = os.path.join(sample_dir, f"{stem}{next((os.path.splitext(f)[1] for f in full_images if os.path.splitext(f)[0] == stem), '.png')}")
-                img = cv2.imread(img_path)
-                if img is None:
-                    print(f"[FAIL] Could not read: {img_path}")
-                    total_fail += 1
-                    continue
-                H, W = img.shape[:2]
-                # lane ROI: lower half
-                lane_roi = img[H // 2 : H, 0 : W]
-                # sign ROI: right half, full height
-                sign_roi = img[0 : H, W // 2 : W]
+                print(f"[SKIP] no ROI fixtures in {results_dir} — run roi_crop.py first")
+                continue
             else:
                 lane_img = cv2.imread(roi_lane_files[stem])
                 sign_img = cv2.imread(roi_sign_files[stem])
