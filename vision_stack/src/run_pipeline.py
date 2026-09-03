@@ -84,7 +84,7 @@ HSV_DUMMY_PATH = "vision_stack/dummy/dummy_hsv_ranges.json"
 # Demo-mode confidence gates (traffic/sign disabled until calibrated)
 TRAFFIC_CONF_THRESHOLD = 1.1   # effectively disabled; max is 1.0
 SIGN_CONF_THRESHOLD = 1.1   # effectively disabled
-LANE_CONF_THRESHOLD = 0.30  # operational
+LANE_CONF_THRESHOLD = 0.70  # operational
 
 # Minimum lane width in pixels for two-boundary mode
 MIN_LANE_WIDTH_PX = 150.0

@@ -93,10 +93,10 @@ from unzip_data import fetch_dataset
 # TODO-CALIBRATE against trackT3/T4/T5: raise until wall/mat-edge contours stop
 # appearing in *_gb_lane_accepted.png, but not so far that a real boundary is
 # clipped when the robot is legitimately off-centre.
-LANE_X_INSET_FRAC = 0.01
+LANE_X_INSET_FRAC = 0.00
 
 # Fraction of frame height trimmed from the top of the lane ROI.
-LANE_Y_TOP_FRAC = 0.75
+LANE_Y_TOP_FRAC = 0.70
 
 # ============================================================================
 # Result Container
@@ -256,7 +256,7 @@ if __name__ == "__main__":
 
 
     SAMPLE_DIRS = [
-        "vision_stack/frames/Walk1"
+        "vision_stack/frames/Walk2"
     ]
     '''
     SAMPLE_DIRS = fetch_dataset(

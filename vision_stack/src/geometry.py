@@ -32,12 +32,11 @@ import numpy as np
 import time
 from dataclasses import dataclass
 from typing import List
+sys.path.insert(0, "vision_stack/src")
 
 # ==========================================================
 # Dataset Loading Utility
 # ==========================================================
-sys.path.insert(0, "vision_stack/src")
-
 from unzip_data import fetch_dataset
 
 # ============================================================================
@@ -52,9 +51,9 @@ class CannyParams:  # Edge Detection
     threshold2: upper hysteresis threshold
     aperture_size: Sobel kernel size (3, 5, or 7)
     """
-    threshold1: float = 10.0
-    threshold2: float = 300.0
-    aperture_size: int = 3
+    threshold1: float = 10000.0 # Helps to remove noisy contours
+    threshold2: float = 45000.0 # Helps to remove noisy contours
+    aperture_size: int = 7
 
 @dataclass
 class LaneContourFilter:    # Lane Boundary
@@ -70,18 +69,18 @@ class LaneContourFilter:    # Lane Boundary
     min_intensity: minimum average intensity (0-255) within contour; rejects dark blobs
     min_aspect logic: lane lines may be horizontal or vertical depending on heading
     """
-    min_area: float = 1.0        # was 0.0 -> "area < 0.0" could never fire
-    max_area: float = 200.0
-    min_aspect: float = 5.0
-    max_aspect: float = 300.0      # NOW ENFORCED as a rejection (was unused)
-    score_aspect_lo:   float = 6.0
-    score_aspect_hi:   float = 16.0
-    score_aspect_soft: float = 12.0   # rolloff width outside the plateau
-    ref_area: float = 300.0       # was 2000.0, above max_area -> capped score
-    max_roi_span: float = 0.60    # was 1.0 -> "ratio > 1.0" could never fire
-    min_intensity: float = 20.0
-    edge_margin_frac: float = 0.08   # lateral prior; see _lane_confidence
-    edge_penalty: float = 0.35       # multiplier for contours in the margin
+    min_area: float = 0.0       # Affects how large a bounding box must be. For our case, tune to 0 makes any bounding box acceptable, even when lines are tiny
+    max_area: float = 10000.0   # Helps to fix some lane lines not being detectable due to noise
+    min_aspect: float = 1.0         # Higher min values limit detections
+    max_aspect: float = 1000.0      # Lower max values limit detections
+    score_aspect_lo:   float = 8.0
+    score_aspect_hi:   float = 24.0
+    score_aspect_soft: float = 18.0   # rolloff width outside the plateau
+    ref_area: float = 100.0       # has an effect on confidence. Increasing lowers confidence
+    max_roi_span: float = 1.0     # closer to 0 reduces accepted contours
+    min_intensity: float = 140.0     # Helps to eliminate dark blobs
+    edge_margin_frac: float = 0.75   # lateral prior; see _lane_confidence
+    edge_penalty: float = 0.5       # multiplier for contours in the margin
 
 @dataclass
 class SignContourFilter:    # Stop Sign
@@ -257,7 +256,6 @@ def _lane_confidence(
     Outputs:
         confidence: [0.0, 1.0]
     """
-
     # Elongation signal
     lo, hi = f.score_aspect_lo, f.score_aspect_hi
     soft = max(f.score_aspect_soft, 1.0)
@@ -267,6 +265,7 @@ def _lane_confidence(
         elong_score = _clamp(1.0 - (lo - elongation) / soft, 0.0, 1.0)
     else:
         elong_score = _clamp(1.0 - (elongation - hi) / soft, 0.0, 1.0)
+
 
     # Size signal. ref_area is now <= max_area, so this can actually reach 1.0.
     # Previously ref_area=2000 with max_area=300 capped area_score at 0.15,
@@ -333,6 +332,7 @@ def _extract_lane_candidates(
     timestamp_ms: int,
     roi_shape: tuple,
     gray: np.ndarray,
+    reject_counts: dict | None = None,
 ) -> List[LaneCandidate]:
     """
     Purpose:
@@ -352,16 +352,29 @@ def _extract_lane_candidates(
     candidates = []
     roi_h, roi_w = roi_shape
 
+    # Rejection histogram. Each `continue` below is invisible from outside this
+    # function, so a frame that finds nothing looks identical to a frame that
+    # found forty contours and threw them all away for one reason. Counter
+    # names match the LaneContourFilter field that did the rejecting.
+    rc = reject_counts if reject_counts is not None else {}
+    for _k in ("seen", "area", "degenerate", "too_few_pts",
+               "aspect", "span", "intensity", "accepted"):
+        rc.setdefault(_k, 0)
+
     for contour in contours:
+        rc["seen"] += 1
         area = cv2.contourArea(contour)
 
         # Reject contours that are too small
         if area < lane_filter.min_area or area > lane_filter.max_area:
+            rc["area"] += 1
             continue
         x, y, w, h = cv2.boundingRect(contour)
         if h == 0 or w == 0:
+            rc["degenerate"] += 1
             continue
         if len(contour) < 5:
+            rc["too_few_pts"] += 1
             continue
 
         # Accept if longer dimension is at least min_aspect x shorter
@@ -375,23 +388,26 @@ def _extract_lane_candidates(
         # ratios" but had no rejection branch -- it was only an EMA normaliser.
         # This is what let an unbounded wall seam through.
         if elongation < lane_filter.min_aspect or elongation > lane_filter.max_aspect:
+            rc["aspect"] += 1
             continue
 
         # Reject contours that span more than max_roi_span of ROI
         horizontal = rect_w >= rect_h
         if horizontal and (w / roi_w) > lane_filter.max_roi_span:
+            rc["span"] += 1
             continue
         if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
+            rc["span"] += 1
             continue
 
         # Reject dark contours, such as seams
         mean_intensity = _mean_contour_intensity(gray, contour)
         if mean_intensity < lane_filter.min_intensity:
+            rc["intensity"] += 1
             continue
 
         # Composite confidence score based on area and elongation
         confidence = _lane_confidence(area, elongation, (x, y, w, h), roi_h, roi_w, lane_filter)
-        print(f"[lane] elong={elongation:5.1f} area={area:6.0f} conf={confidence:.2f}")   # TEMP
 
         candidates.append(LaneCandidate(
             label = "lane_boundary",
@@ -401,6 +417,7 @@ def _extract_lane_candidates(
             frame_id = frame_id,
             timestamp_ms = timestamp_ms,
         ))
+        rc["accepted"] += 1
 
     return candidates
 
@@ -410,6 +427,7 @@ def extract_lane_candidates(
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
+    draw_overlays: bool = True,
 ) -> tuple:
     """
     Purpose:
@@ -429,29 +447,38 @@ def extract_lane_candidates(
     edges = _canny(gray, canny_params)
     contours = _contours(edges)
 
+    reject_counts = {}
     candidates = _extract_lane_candidates(
         contours, lane_filter, frame_id, timestamp_ms,
-        roi_shape=lane_roi.shape[:2], gray = gray
+        roi_shape=lane_roi.shape[:2], gray = gray,
+        reject_counts = reject_counts,
     )
-    # Debug overlays
-    contour_overlay = cv2.cvtColor(gray.copy(), cv2.COLOR_GRAY2BGR)
-    accepted_overlay = lane_roi.copy()
 
-    cv2.drawContours(contour_overlay, contours, -1, (200, 200, 200), 1)
-    for c in candidates:
-        cv2.drawContours(accepted_overlay, [c.contour], -1, (0, 255, 0), 2)
-        x, y, w, h = c.bbox
-        cv2.rectangle(accepted_overlay, (x, y), (x + w - 1, y + h - 1), (0, 200, 0), 1)
-        cv2.putText(accepted_overlay, f"{c.confidence:.2f}",
-                    (x, max(y - 3, 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 0), 1, cv2.LINE_AA)
-
+    # reject_counts is cheap -- eight integers. The overlays are not:
+    # drawContours over every contour plus a putText per candidate runs on the
+    # LIVE loop today and run_pipeline throws the result away. Pass
+    # draw_overlays=False from the pipeline; the offline harness keeps them.
     debug_images = {
         "gray": gray,
         "edges": edges,
-        "contour_overlay": contour_overlay,
-        "accepted_overlay": accepted_overlay,
+        "reject_counts": reject_counts,
     }
+
+    if draw_overlays:
+        contour_overlay = cv2.cvtColor(gray.copy(), cv2.COLOR_GRAY2BGR)
+        accepted_overlay = lane_roi.copy()
+
+        cv2.drawContours(contour_overlay, contours, -1, (200, 200, 200), 1)
+        for c in candidates:
+            cv2.drawContours(accepted_overlay, [c.contour], -1, (0, 255, 0), 2)
+            x, y, w, h = c.bbox
+            cv2.rectangle(accepted_overlay, (x, y), (x + w - 1, y + h - 1), (0, 200, 0), 1)
+            cv2.putText(accepted_overlay, f"{c.confidence:.2f}",
+                        (x, max(y - 3, 10)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 0), 1, cv2.LINE_AA)
+
+        debug_images["contour_overlay"] = contour_overlay
+        debug_images["accepted_overlay"] = accepted_overlay
 
     return candidates, debug_images
 
@@ -589,6 +616,7 @@ def run_geometry_branch(
     sign_filter: SignContourFilter,
     frame_id: int = 0,
     timestamp_ms: int = 0,
+    draw_overlays: bool = True,
 ) -> tuple:
     """
     Purpose:
@@ -596,8 +624,8 @@ def run_geometry_branch(
         the detected lane and sign candidates along with debug images.
 
     Inputs:
-        lane_roi: uint8 BGR from ROICropResult.lane_roi (@TODO: change to YUV)
-        sign_roi: uint8 BGR from ROICropResult.sign_roi (@TODO: change to YUV)
+        lane_roi: uint8 BGR from ROICropResult.lane_roi
+        sign_roi: uint8 BGR from ROICropResult.sign_roi
         canny_params: CannyParams shared for both ROIs
         lane_filter: LaneContourFilter
         sign_filters: SignContourFilter
@@ -619,7 +647,8 @@ def run_geometry_branch(
             raise ValueError(f"run_geometry_branch: {name} expected (H,W,3) BGR, got {roi.shape}")
 
     lane_candidates, lane_debug = extract_lane_candidates(
-        lane_roi, canny_params, lane_filter, frame_id, timestamp_ms)
+        lane_roi, canny_params, lane_filter, frame_id, timestamp_ms,
+        draw_overlays = draw_overlays)
 
     sign_candidates, sign_debug = extract_sign_candidates(
         sign_roi, canny_params, sign_filter, frame_id, timestamp_ms)
@@ -657,7 +686,7 @@ if __name__ == "__main__":
     import os
 
     SAMPLE_DIRS = [
-        "vision_stack/frames/Walk1"
+        "vision_stack/frames/Walk2"
     ]
 
     '''

@@ -1,5 +1,5 @@
 """
-estimation.py  (was phase3.py)
+estimation.py
 
 Navigation Signal Processing
 
@@ -287,6 +287,10 @@ class Phase3Processor:
 
         self._heading_from_imu: float = 0.0
 
+        # Last _filter_lane() diagnostic dict. Read-only for the tracer;
+        # nothing in the control path consumes it.
+        self.last_lane_diag: dict = {}
+
     # =======================================================================
     # Entry point
     # =======================================================================
@@ -321,6 +325,7 @@ class Phase3Processor:
 
         # Stages 2 & 3: lane
         lane = self._filter_lane(phase2_out.lane, dt)
+        self.last_lane_diag = lane
 
         # Stages 2 & 3: heading
         heading_error_deg, heading_source = self._filter_heading(
@@ -435,16 +440,48 @@ class Phase3Processor:
         """
         cfg = self._cfg
 
-        usable = (
-            lane is not None
-            and lane.valid
-            and lane.mode != LANE_MODE_NONE
-            and lane.confidence >= cfg.min_confidence_lane
-        )
+        # ---- diagnostics --------------------------------------------------
+        # Extra keys only. The five keys the caller reads (norm, valid, age,
+        # stale, mode) are unchanged, so EstimationPacket construction in
+        # process() is untouched and this cannot drift the seam contract.
+        diag = {
+            "raw":        None if lane is None else lane.offset_norm,
+            "conf":       None if lane is None else lane.confidence,
+            "conf_min":   cfg.min_confidence_lane,
+            "dt":         dt,
+            "usable":     False,
+            "reject":     None,
+            "ema_prev":   self._lane_offset_ema.value,
+            "gate_last":  self._lane_gate.last_norm,
+            "gate_delta": None,
+            "gate_limit": cfg.max_lane_rate_norm_per_s * dt if dt > 0.0 else None,
+            "ema_reset":  False,
+        }
 
-        if usable and not self._lane_gate.update(
-                lane.offset_norm, dt, cfg.max_lane_rate_norm_per_s):
-            usable = False   # implausible jump: treat as a missed frame
+        if lane is None:
+            diag["reject"] = "no_estimate"
+            usable = False
+        elif not lane.valid:
+            diag["reject"] = "not_valid"
+            usable = False
+        elif lane.mode == LANE_MODE_NONE:
+            diag["reject"] = "mode_none"
+            usable = False
+        elif lane.confidence < cfg.min_confidence_lane:
+            diag["reject"] = "confidence"
+            usable = False
+        else:
+            usable = True
+
+        if usable:
+            if self._lane_gate.last_norm is not None and dt > 0.0:
+                diag["gate_delta"] = abs(lane.offset_norm - self._lane_gate.last_norm)
+            if not self._lane_gate.update(
+                    lane.offset_norm, dt, cfg.max_lane_rate_norm_per_s):
+                usable = False   # implausible jump: treat as a missed frame
+                diag["reject"] = "rate_gate"
+
+        diag["usable"] = usable
 
         if usable:
             # Long gap behind us: drop EMA history so the reacquisition frame
@@ -452,13 +489,14 @@ class Phase3Processor:
             if self._lane_age >= cfg.ema_reset_after_frames:
                 self._lane_offset_ema.reset()
                 self._heading_error_ema.reset()
+                diag["ema_reset"] = True
 
             smoothed = self._lane_offset_ema.update(lane.offset_norm, cfg.ema_alpha)
             self._last_lane_offset_norm = smoothed
             self._last_lane_mode = lane.mode
             self._lane_age = 0
             return {"norm": smoothed, "valid": True, "age": 0,
-                    "stale": False, "mode": lane.mode}
+                    "stale": False, "mode": lane.mode, **diag}
 
         # No usable measurement this frame
         self._lane_age += 1
@@ -478,7 +516,7 @@ class Phase3Processor:
 
         return {"norm": self._last_lane_offset_norm, "valid": False,
                 "age": self._lane_age, "stale": stale,
-                "mode": self._last_lane_mode}
+                "mode": self._last_lane_mode, **diag}
 
     # =======================================================================
     # Stages 2 & 3: Heading error

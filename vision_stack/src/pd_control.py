@@ -67,6 +67,10 @@ class PDController:
         self._last_correction: float = 0.0
         self._ramp_start_ts: float | None = None
 
+        # Last update() term breakdown, for the tracer. Read-only; nothing in
+        # the control path consumes it.
+        self.last_diag: dict = {}
+
     def stop(self) -> tuple:
         """
         Purpose:
@@ -78,6 +82,11 @@ class PDController:
         self._ramp_start_ts = None
         self._last_error = None       # clear the derivative across the stop
         self._last_correction = 0.0
+        self.last_diag = {
+            "ramp_frac": 0.0, "ramped_base": 0.0, "error": None,
+            "derivative": None, "correction_raw": 0.0, "correction": 0.0,
+            "clamped": False, "held": False, "stopped": True,
+        }
         return 0.0, 0.0
 
     def update(
@@ -108,10 +117,14 @@ class PDController:
         ramp_frac = min(1.0, (now_s - self._ramp_start_ts) / max(cfg.ramp_seconds, 1e-6))
         ramped_base = cfg.base_speed * ramp_frac
 
+        error = None
+        derivative = None
+        seeded = False
         if offset_valid:
             error = offset + cfg.offset_trim
             if self._last_error is None:
                 self._last_error = error          # seed: no first-frame kick
+                seeded = True
             derivative = error - self._last_error
             correction = (error * cfg.kp) + (derivative * cfg.kd)
             self._last_error = error
@@ -120,11 +133,27 @@ class PDController:
             # re-applying a proportional term against a frozen error.
             correction = self._last_correction * cfg.hold_decay
 
+        correction_raw = correction
+
         # Ramp the correction alongside the base, then clamp so neither wheel
         # can be commanded to reverse while driving forward.
         correction *= ramp_frac
+        pre_clamp = correction
         correction = max(-ramped_base, min(ramped_base, correction))
         self._last_correction = correction
+
+        self.last_diag = {
+            "ramp_frac":      ramp_frac,
+            "ramped_base":    ramped_base,
+            "error":          error,
+            "derivative":     derivative,
+            "correction_raw": correction_raw,
+            "correction":     correction,
+            "clamped":        abs(pre_clamp - correction) > 1e-9,
+            "held":           not offset_valid,
+            "seeded":         seeded,
+            "stopped":        False,
+        }
 
         # Positive correction => left wheel slows, right wheel speeds up.
         return ramped_base - correction, ramped_base + correction
