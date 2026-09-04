@@ -3,8 +3,8 @@
     "a_cm_px": 3162.875974119336,
     "f_px": 409.0,
     "u0": 240.0,
-    "min_range_cm": 22.0,
-    "max_range_cm": 90.0,
+    "min_range_cm": 19.0,
+    "max_range_cm": 50.0,
     "calibrated": true,
     "roll_deg": 0.0
 }
