@@ -18,7 +18,7 @@ Purpose:
 
 LAYER STACK
 
-    L1  Ground projection   contour  -> segment in centimetres on the ground
+    L1  Ground projection   contour  -> segment in centimeters on the ground
     L2  Classification      segment  -> longitudinal / transverse / rejected
     L3  Ground map          segments -> short-horizon map, odometry-propagated
     L4  Scene state         map      -> LANE_FOLLOW / APPROACHING_STOP / ...
@@ -46,7 +46,7 @@ WHY GROUND COORDINATES
     Image-space angle depends on the robot's lateral offset and heading as much
     as on the line itself, so the boundary between "/" and "_" moves around as
     the robot drives. After projection the thresholds are fixed, and width in
-    centimetres becomes available -- which is the single most discriminative
+    centimeters becomes available -- which is the single most discriminative
     feature the pipeline has. A lane line is ~1 cm wide; a puzzle-mat seam, a
     curb, and the arena wall base are not. Most false positives die on width
     alone, before any angle logic runs.
@@ -113,7 +113,7 @@ STATUS OF THE NUMBERS IN THIS FILE
     GroundCalibration ships with PLACEHOLDER optics. They are geometrically
     self-consistent but they are not your camera. Run the two-position
     calibration (see GroundCalibration.solve_from_two_positions) and write the
-    JSON before trusting any centimetre value this file prints.
+    JSON before trusting any centimeter value this file prints.
 """
 
 # =============================================================================
@@ -202,7 +202,7 @@ class GroundCalibration:
         rather than a projection parameter. Segments nearer than this are
         discarded -- whatever produced them is not the floor ahead.
     max_range_cm: far cutoff. Beyond this one pixel of row error is worth
-        several centimetres and the estimate is not usable.
+        several centimeters and the estimate is not usable.
     calibrated: False when these are the shipped placeholders. Logged loudly.
     roll_deg: residual image rotation left over AFTER the videoflip, degrees,
         positive = image rotated clockwise. An inverted mount is corrected by
@@ -430,7 +430,7 @@ class GroundCalibration:
         except FileNotFoundError:
             log.warning(
                 "No ground calibration at %s -- using PLACEHOLDER optics. "
-                "Every centimetre value below is a guess.", path,
+                "Every centimeter value below is a guess.", path,
             )
             return cls.placeholder_for_roi(
                 roi_top_row=int(FRAME_HEIGHT * 0.70))
@@ -513,7 +513,7 @@ class GroundCalibration:
         """
         Purpose:
             Lateral scale at one image row. Useful for sanity printouts and for
-            sizing pixel-domain thresholds from centimetre requirements.
+            sizing pixel-domain thresholds from centimeter requirements.
         """
         dv = max(v - self.v0, 1e-6)
         return (self.a_cm_px / dv) / self.f_px
@@ -524,7 +524,7 @@ class GroundSegment:
     """
     One lane-marking candidate expressed on the ground plane.
 
-    All lengths are centimetres in the robot frame (+x right, +y forward).
+    All lengths are centimeters in the robot frame (+x right, +y forward).
 
     p0: (x, y) of the near endpoint of the fitted centreline
     p1: (x, y) of the far endpoint
@@ -617,7 +617,7 @@ def segment_from_contour(
     if len(ground) < 5:
         return None                          # too little of it is on the floor
 
-    box = cv2.boxPoints(cv2.minAreaRect(ground))   # 4x2, in centimetres
+    box = cv2.boxPoints(cv2.minAreaRect(ground))   # 4x2, in centimeters
 
     def _mid(a, b):
         return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)
@@ -747,7 +747,7 @@ def bias_report(
 @dataclass
 class CourseGeometry:
     """
-    Physical constants of the arena, in centimetres. Measured, not tuned.
+    Physical constants of the arena, in centimeters. Measured, not tuned.
 
     lane_width_cm: centre of dividing line to lane edge
     line_width_cm: painted/taped line width
@@ -1510,7 +1510,7 @@ def replay(sample_dirs: List[str], write_maps: bool = True) -> None:
     """
     calib = GroundCalibration.load(GROUND_CALIB_PATH)
     if not calib.calibrated:
-        log.warning("Replaying with placeholder optics -- treat centimetre "
+        log.warning("Replaying with placeholder optics -- treat centimeter "
                     "values as relative, not absolute.")
 
     cfgs = StageConfigs(
