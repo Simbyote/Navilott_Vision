@@ -29,7 +29,9 @@ import numpy as np
 # Config
 # =============================================================================
 SAMPLE_DIRS = [
-    "vision_stack/frames/Walk2"
+    "vision_stack/frames/Sample1",
+    "vision_stack/frames/Sample2",
+    "vision_stack/frames/Sample3",
 ]
 
 MATCH_TAG = "lane_accepted"      # substring matched against filenames in results/
