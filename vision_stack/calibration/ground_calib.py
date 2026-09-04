@@ -88,7 +88,22 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-sys.path.insert(0, "vision_stack/src")
+# Resolve the repo root from THIS FILE, not from the working directory.
+# sys.path.insert(0, "vision_stack/src") only works when cwd happens to be the
+# repo root, so the import breaks the moment the tool is run from anywhere else
+# -- including from inside vision_stack/calibration, which is where it lives.
+_here = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = _here
+while REPO_ROOT != os.path.dirname(REPO_ROOT):
+    if os.path.isdir(os.path.join(REPO_ROOT, "vision_stack")):
+        break
+    REPO_ROOT = os.path.dirname(REPO_ROOT)
+else:
+    REPO_ROOT = os.getcwd()
+
+for _p in (os.path.join(REPO_ROOT, "vision_stack", "src"), REPO_ROOT, _here):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 from run_state_pipeline import (
     GroundCalibration, GROUND_CALIB_PATH,
@@ -98,7 +113,9 @@ from run_state_pipeline import (
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("calibrate")
 
-CALIB_DIR = os.path.dirname(GROUND_CALIB_PATH) or "vision_stack/calibration"
+CALIB_DIR = os.path.join(REPO_ROOT, os.path.dirname(GROUND_CALIB_PATH)
+                         or "vision_stack/calibration")
+CALIB_JSON = os.path.join(REPO_ROOT, GROUND_CALIB_PATH)
 CAMERA_HEIGHT_CM = 4.0
 LANE_Y_TOP_FRAC = 0.70          # must match roi_crop.py
 
@@ -380,6 +397,37 @@ def candidates(path: str, dark: bool = False, search_top_frac: float = 0.50,
               "--search-top-frac")
 
 
+def profile(path: str, dark: bool = False, band: int = 8) -> None:
+    """
+    Purpose:
+        Show WHERE the dark (or bright) pixels are, by image row. Answers the
+        question the candidate list cannot: is the strip in the frame at all,
+        and at what row?
+
+    Notes:
+        Reads the whole frame, ignoring --search-top-frac, precisely so a strip
+        that fell outside the search region still shows up here.
+    """
+    img = cv2.imread(path)
+    if img is None:
+        log.error("Could not read %s", path)
+        return
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    cut = float(np.percentile(gray, 2.0 if dark else 98.0))
+    hit = (gray <= cut) if dark else (gray >= cut)
+
+    print(f"\n{os.path.basename(path)}   {'darkest' if dark else 'brightest'} "
+          f"2% of pixels (threshold {cut:.0f})")
+    print(f"  {'rows':>9} {'count':>6} {'mean':>5}")
+    counts = [(r, int(hit[r:r + band].sum()), int(gray[r:r + band].mean()))
+              for r in range(0, gray.shape[0], band)]
+    peak = max((c for _, c, _ in counts), default=1) or 1
+    for r, c, mean in counts:
+        bar = "#" * int(46.0 * c / peak)
+        print(f"  {r:4d}-{min(r + band - 1, gray.shape[0] - 1):4d} "
+              f"{c:6d} {mean:5d}  {bar}")
+
+
 # =============================================================================
 # Consistency
 # =============================================================================
@@ -601,7 +649,7 @@ def solve(span_cm: float, manual: bool = False, dark: bool = False,
         print("\n  Only two positions captured, so nothing is held out and the fit")
         print("  is exact by construction. Capture a third to get a real error bar.")
 
-    calib.save(GROUND_CALIB_PATH)
+    calib.save(CALIB_JSON)
     print()
     check()
 
@@ -758,7 +806,7 @@ def solve_from_course(
 
     calib = GroundCalibration(
         v0=v0, a_cm_px=a_cm_px, f_px=f_px, u0=FRAME_WIDTH / 2.0, calibrated=True)
-    calib.save(GROUND_CALIB_PATH)
+    calib.save(CALIB_JSON)
 
     print("\n  VALIDATE ON A DIMENSION YOU DID NOT USE. lane_cm went in as an")
     print("  input, so stage_check 4's lane-width test is now circular. Check")
@@ -777,7 +825,7 @@ def check() -> None:
         check that catches a calibration which is self-consistent but wrong for
         the ROI it gets applied to.
     """
-    calib = GroundCalibration.load(GROUND_CALIB_PATH)
+    calib = GroundCalibration.load(CALIB_JSON)
     roi_top = int(FRAME_HEIGHT * LANE_Y_TOP_FRAC)
     lane_rect = (0, roi_top, FRAME_WIDTH, FRAME_HEIGHT - roi_top)
     info = calib.describe_rows(lane_rect)
@@ -837,6 +885,10 @@ if __name__ == "__main__":
     k.add_argument("--search-top-frac", type=float, default=0.50)
     k.add_argument("--top", type=int, default=6)
 
+    pr = sub.add_parser("profile", help="show where dark/bright pixels sit by row")
+    pr.add_argument("--image", required=True)
+    pr.add_argument("--dark", action="store_true")
+
     sub.add_parser("check", help="re-run the ROI mapping self-check")
 
     a = ap.parse_args()
@@ -845,6 +897,8 @@ if __name__ == "__main__":
     elif a.cmd == "measure":
         measure_image(a.image, search_top_frac=a.search_top_frac,
                       dark=a.dark)
+    elif a.cmd == "profile":
+        profile(a.image, a.dark)
     elif a.cmd == "candidates":
         candidates(a.image, a.dark, a.search_top_frac, a.top)
     elif a.cmd == "inspect":
