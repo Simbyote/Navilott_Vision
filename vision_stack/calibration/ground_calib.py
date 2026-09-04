@@ -105,7 +105,7 @@ for _p in (os.path.join(REPO_ROOT, "vision_stack", "src"), REPO_ROOT, _here):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from run_state_pipeline import (
+from state_pipeline import (
     GroundCalibration, GROUND_CALIB_PATH,
     FRAME_WIDTH, FRAME_HEIGHT, FPS,
 )
