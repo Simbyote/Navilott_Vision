@@ -951,11 +951,22 @@ class GroundMap:
     Segments are dropped once they fall behind the robot or age out.
     """
 
-    def __init__(self, max_age_frames: int = 30, behind_margin_cm: float = 10.0):
+    def __init__(self, max_age_frames: int = 30, behind_margin_cm: float = 10.0,
+                 max_segments: int = 60):
+        """
+        max_segments: hard cap, oldest dropped first. Without it the map grows
+            as (segments per frame) x max_age_frames, and a frame that produces
+            44 longitudinal segments -- which a fragmenting lane line does --
+            puts over a thousand in the map. That is a feedback loop: a bigger
+            map costs more per frame, the frame budget slips, and the propagate
+            step then runs over more segments still. Observed live: 1 segment
+            at frame 0, 169 by frame 66, frame time 47 ms rising to 134 ms.
+        """
         self._segments: List[GroundSegment] = []
         self._ages: List[int] = []
         self._max_age = max_age_frames
         self._behind = behind_margin_cm
+        self._max_segments = max_segments
 
     def propagate(self, ds_cm: float, dyaw_deg: float) -> None:
         """
@@ -1001,6 +1012,15 @@ class GroundMap:
         for seg in segments:
             self._segments.append(seg)
             self._ages.append(0)
+
+        # Oldest first, so a burst of fragments cannot evict the tracked stop
+        # line that the intersection logic is carrying through the blind zone.
+        if len(self._segments) > self._max_segments:
+            order = sorted(range(len(self._segments)),
+                           key=lambda i: -self._ages[i])
+            drop = set(order[:len(self._segments) - self._max_segments])
+            self._segments = [s for i, s in enumerate(self._segments) if i not in drop]
+            self._ages = [a for i, a in enumerate(self._ages) if i not in drop]
 
     def of_kind(self, kind: str, max_age: Optional[int] = None) -> List[GroundSegment]:
         """
@@ -1075,6 +1095,8 @@ class FSMConfig:
     stop_line_arm_cm:  float = 55.0
     lost_after_frames: int = 12
     exit_search_frac:  float = 0.6
+    single_anchor_max: float = 0.5
+    enable_intersections: bool = True
 
 
 @dataclass
@@ -1190,6 +1212,18 @@ class SceneStateMachine:
         # Canonical sign: lane centre to the robot's right => robot is left of
         # centre => positive => steer right.
         offset = max(-1.0, min(1.0, lane_centre / max(half, 1e-6)))
+
+        # A single anchor is INFERRED, not measured -- contracts.py says so and
+        # then nothing acted on it. One spurious contour 20 cm off to the side
+        # implies a lane centre at 13 cm, saturates the clamp, and commands
+        # full-authority steering. Worse, the side is decided by the sign of x,
+        # so two consecutive frames can read +1.0 then -1.0: a 2.0 swing from
+        # one detection moving a few centimetres. Capping single-anchor
+        # authority lets it nudge without letting it slam.
+        if mode != "two_boundary":
+            cap = self._cfg.single_anchor_max
+            offset = max(-cap, min(cap, offset))
+
         return offset, True, mode
 
     def lateral_estimate(
@@ -1236,13 +1270,15 @@ class SceneStateMachine:
         """
         cfg = self._cfg
         longitudinal = gmap.of_kind("longitudinal", max_age=2)
-        transverse = gmap.of_kind("transverse", max_age=2)
+        transverse = ([] if not cfg.enable_intersections
+                      else gmap.of_kind("transverse", max_age=2))
 
         offset, offset_valid, mode = self._lateral_from(longitudinal)
         heading, heading_valid = self._heading_from(longitudinal)
 
         self._longitudinal_votes.append(offset_valid)
-        stop_cm = gmap.nearest_transverse_distance()
+        stop_cm = (gmap.nearest_transverse_distance()
+                   if cfg.enable_intersections else None)
         self._transverse_votes.append(
             stop_cm is not None and stop_cm <= cfg.stop_line_arm_cm
         )
