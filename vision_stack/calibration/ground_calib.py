@@ -1,5 +1,5 @@
 """
-ground_calib.py
+calibrate_ground.py
 
 Ground Calibration Capture and Solver
 
@@ -57,21 +57,21 @@ VALIDATION
 
 USAGE
 
-    python ground_calib.py capture --distance 25      # on the robot
-    python ground_calib.py capture --distance 40
-    python ground_calib.py capture --distance 60
+    python calibrate_ground.py capture --distance 25      # on the robot
+    python calibrate_ground.py capture --distance 40
+    python calibrate_ground.py capture --distance 60
 
-    python ground_calib.py measure --image vision_stack/calibration/pos_25cm.png
+    python calibrate_ground.py measure --image vision_stack/calibration/pos_25cm.png
         Inspect one detection before committing. Writes a _detect.png overlay.
 
-    python ground_calib.py solve --span-cm 30
+    python calibrate_ground.py solve --span-cm 30
         Measures every captured position, solves, validates, writes the JSON.
 
-    python ground_calib.py check
+    python calibrate_ground.py check
         Re-runs the ROI mapping self-check against the saved calibration.
 
     Detection can be overridden per image if the strip is hard to segment:
-        python ground_calib.py solve --span-cm 30 --manual
+        python calibrate_ground.py solve --span-cm 30 --manual
 """
 
 import os
@@ -90,7 +90,7 @@ import numpy as np
 
 sys.path.insert(0, "vision_stack/src")
 
-from state_pipeline import (
+from run_state_pipeline import (
     GroundCalibration, GROUND_CALIB_PATH,
     FRAME_WIDTH, FRAME_HEIGHT, FPS,
 )
@@ -813,6 +813,8 @@ if __name__ == "__main__":
                    help="type in row and span instead of detecting them")
     s.add_argument("--dark", action="store_true",
                    help="strip is DARKER than the surface (e.g. black tape)")
+    s.add_argument("--force", action="store_true",
+                   help="write the JSON even if the residual check fails")
 
     sc = sub.add_parser("solve-course",
                         help="calibrate from known course dimensions, no tape")
