@@ -1,5 +1,5 @@
 """
-ground_calibrate.py
+ground_calib.py
 
 Ground Calibration Capture and Solver
 
@@ -57,21 +57,21 @@ VALIDATION
 
 USAGE
 
-    python calibrate_ground.py capture --distance 25      # on the robot
-    python calibrate_ground.py capture --distance 40
-    python calibrate_ground.py capture --distance 60
+    python ground_calib.py capture --distance 25      # on the robot
+    python ground_calib.py capture --distance 40
+    python ground_calib.py capture --distance 60
 
-    python calibrate_ground.py measure --image vision_stack/calibration/pos_25cm.png
+    python ground_calib.py measure --image vision_stack/calibration/pos_25cm.png
         Inspect one detection before committing. Writes a _detect.png overlay.
 
-    python calibrate_ground.py solve --span-cm 30
+    python ground_calib.py solve --span-cm 30
         Measures every captured position, solves, validates, writes the JSON.
 
-    python calibrate_ground.py check
+    python ground_calib.py check
         Re-runs the ROI mapping self-check against the saved calibration.
 
     Detection can be overridden per image if the strip is hard to segment:
-        python calibrate_ground.py solve --span-cm 30 --manual
+        python ground_calib.py solve --span-cm 30 --manual
 """
 
 import os
@@ -315,6 +315,72 @@ def measure_manual(path: str) -> Optional[Measurement]:
 
 
 # =============================================================================
+# Candidate listing
+# =============================================================================
+def candidates(path: str, dark: bool = False, search_top_frac: float = 0.50,
+               top: int = 6) -> None:
+    """
+    Purpose:
+        List the blobs competing to be "the strip", so a wrong detection can be
+        diagnosed from a terminal instead of by opening the overlay.
+
+    Notes:
+        measure() takes the WIDEST candidate. When that is wrong, this shows
+        what it beat and why. The row column is the one to read: the strip lies
+        on the floor a known distance ahead, so its row must change a lot
+        between captures at different distances. A candidate whose row barely
+        moves between your 45 cm and 60 cm shots is not on the ground plane --
+        it is on a wall, and it will fit a model that is confidently wrong.
+    """
+    img = cv2.imread(path)
+    if img is None:
+        log.error("Could not read %s", path)
+        return
+
+    y_cut = int(img.shape[0] * search_top_frac)
+    crop = img[y_cut:, :]
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    if dark:
+        mask = (gray <= float(np.percentile(gray, 1.0))).astype(np.uint8) * 255
+    else:
+        mask = (gray >= float(np.percentile(gray, 99.0))).astype(np.uint8) * 255
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 9), np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 5), np.uint8))
+
+    conts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    rows = []
+    area_cap = 0.20 * crop.shape[0] * crop.shape[1]
+    for c in conts:
+        x, y, w, h = cv2.boundingRect(c)
+        m = cv2.moments(c)
+        if abs(m["m00"]) < 1e-6:
+            continue
+        aspect = w / max(h, 1)
+        why = []
+        if aspect < 3.0:
+            why.append("aspect")
+        if w * h > area_cap:
+            why.append("area")
+        if x <= 1 or (x + w) >= crop.shape[1] - 1:
+            why.append("clipped")
+        rows.append((w, m["m01"] / m["m00"] + y_cut, h, aspect,
+                     int(gray[y:y + h, x:x + w].mean()), ",".join(why) or "-"))
+
+    rows.sort(reverse=True)
+    print(f"\n{os.path.basename(path)}   polarity={'dark' if dark else 'bright'}"
+          f"   searching below row {y_cut}")
+    print(f"  {'rank':>4} {'span':>6} {'row':>8} {'height':>7} {'aspect':>7} "
+          f"{'mean':>6}  flags")
+    for i, (w, r, h, a, mean, flags) in enumerate(rows[:top], 1):
+        mark = "  <- measure() picks this" if i == 1 and flags in ("-", "clipped") else ""
+        print(f"  {i:>4} {w:6.0f} {r:8.1f} {h:7d} {a:7.1f} {mean:6d}  "
+              f"{flags}{mark}")
+    if not rows:
+        print("  no blobs at all -- try the other polarity, or a lower "
+              "--search-top-frac")
+
+
+# =============================================================================
 # Consistency
 # =============================================================================
 def consistency(ms: List[Measurement], span_cm: float) -> bool:
@@ -355,7 +421,15 @@ def consistency(ms: List[Measurement], span_cm: float) -> bool:
         ok = False
 
     prods = [m.span_px * m.distance_cm for m in ordered if not m.clipped]
-    if len(prods) >= 2:
+    if len(prods) < 2:
+        print(f"\n  [FAIL] only {len(prods)} position(s) had an unclipped span, so")
+        print("         span*distance cannot be cross-checked and f_px would rest")
+        print("         on a single uncorroborated measurement.")
+        print("         The frame covers roughly W*y/f cm at range y, so a strip")
+        print("         short enough to fit at your NEAREST capture is what fixes")
+        print("         this -- around 12 cm for this camera.")
+        ok = False
+    else:
         spread = (max(prods) - min(prods)) / max(max(prods), 1e-6)
         if spread > 0.15:
             print(f"\n  [FAIL] span*distance varies by {100 * spread:.0f}%. "
@@ -365,7 +439,8 @@ def consistency(ms: List[Measurement], span_cm: float) -> bool:
             print("         object, or the strip length differs from --span-cm.")
             ok = False
         else:
-            print(f"\n  [OK]   span*distance consistent to {100 * spread:.0f}%")
+            print(f"\n  [OK]   span*distance consistent to {100 * spread:.0f}% "
+                  f"over {len(prods)} unclipped positions")
     return ok
 
 
@@ -391,7 +466,8 @@ def inspect(span_cm: float, search_top_frac: float = 0.50,
 # =============================================================================
 # Solve
 # =============================================================================
-def solve(span_cm: float, manual: bool = False, dark: bool = False) -> None:
+def solve(span_cm: float, manual: bool = False, dark: bool = False,
+          force: bool = False) -> None:
     """
     Purpose:
         Measure every captured position, fit the model, validate, save.
@@ -403,7 +479,12 @@ def solve(span_cm: float, manual: bool = False, dark: bool = False) -> None:
                   "found %d.", CALIB_DIR, len(paths))
         return
 
-    log.info("Measuring %d positions (strip is %.1f cm long)\n", len(paths), span_cm)
+    log.info("Measuring %d positions (strip %.1f cm, polarity=%s)\n",
+             len(paths), span_cm, "DARK" if dark else "bright")
+    if not dark:
+        log.info("  (pass --dark if the strip is darker than the surface; "
+                 "inspect and solve\n   must use the SAME polarity or they "
+                 "measure different objects)")
     ms: List[Measurement] = []
     for p in paths:
         m = measure_manual(p) if manual else measure_image(p, dark=dark)
@@ -477,8 +558,21 @@ def solve(span_cm: float, manual: bool = False, dark: bool = False) -> None:
           f"(measured {CAMERA_HEIGHT_CM:.1f})   [{flag}]")
     if flag != "OK":
         print("    A and f are solved independently, so this is a real cross-check.")
-        print("    A large gap means the optical axis is not level, or a tape")
-        print("    measurement is off. Re-level before trusting the model.")
+        # A comes from rows alone and does not involve span_cm; f is inversely
+        # proportional to it. So the height error inverts directly into the
+        # strip length that WOULD make the model consistent -- which separates
+        # "the tape is not the length you told me" from "the mount is tilted".
+        implied_span = f_src.span_px * f_src.distance_cm * CAMERA_HEIGHT_CM / \
+            max(calib.a_cm_px, 1e-6)
+        print(f"    For a {CAMERA_HEIGHT_CM:.1f} cm mount, the measured span "
+              f"implies a strip {implied_span:.1f} cm long,")
+        print(f"    not the {span_cm:.1f} cm you passed. If your tape really is "
+              f"{span_cm:.1f} cm, then the")
+        print("    detection is measuring something else. Check the _detect.png "
+              "overlay before")
+        print("    touching the mount -- --span-cm is a measurement, not a knob, "
+              "and changing")
+        print("    it just rescales f and this number with it.")
 
     # ---- residuals on the positions not used in the fit --------------------
     interior = ms[1:-1]
@@ -491,12 +585,18 @@ def solve(span_cm: float, manual: bool = False, dark: bool = False) -> None:
             worst = max(worst, abs(err))
             print(f"    {m.distance_cm:5.1f} cm measured -> {pred:6.1f} cm "
                   f"predicted   ({err:+.1f} cm)")
-        verdict = "OK" if worst < 2.0 else "AXIS LIKELY NOT LEVEL"
+        verdict = "OK" if worst < 2.0 else "FAILED"
         print(f"  worst residual {worst:.1f} cm   [{verdict}]")
         if worst >= 2.0:
             print("    The model fits the two extremes exactly by construction, so")
-            print("    error here is the honest one. Re-level the mount rather than")
-            print("    re-measuring; the level-axis assumption is what failed.")
+            print("    error here is the honest one. Either the detections are not")
+            print("    all of the same object, or the optical axis is not level.")
+            print("\n  NOT WRITING ground_calib.json. A calibration that fails its")
+            print("  own residual check is worse than none: the pipeline would run")
+            print("  and report centimetres that are quietly wrong. Use --force to")
+            print("  override.")
+            if not force:
+                return
     else:
         print("\n  Only two positions captured, so nothing is held out and the fit")
         print("  is exact by construction. Capture a third to get a real error bar.")
@@ -729,6 +829,12 @@ if __name__ == "__main__":
     sc.add_argument("--fov-deg", type=float,
                     help="horizontal FOV, as an alternative to --long-cm")
 
+    k = sub.add_parser("candidates", help="list competing blobs in one image")
+    k.add_argument("--image", required=True)
+    k.add_argument("--dark", action="store_true")
+    k.add_argument("--search-top-frac", type=float, default=0.50)
+    k.add_argument("--top", type=int, default=6)
+
     sub.add_parser("check", help="re-run the ROI mapping self-check")
 
     a = ap.parse_args()
@@ -737,10 +843,12 @@ if __name__ == "__main__":
     elif a.cmd == "measure":
         measure_image(a.image, search_top_frac=a.search_top_frac,
                       dark=a.dark)
+    elif a.cmd == "candidates":
+        candidates(a.image, a.dark, a.search_top_frac, a.top)
     elif a.cmd == "inspect":
         inspect(a.span_cm, a.search_top_frac, a.dark)
     elif a.cmd == "solve":
-        solve(a.span_cm, a.manual, a.dark)
+        solve(a.span_cm, a.manual, a.dark, a.force)
     elif a.cmd == "solve-course":
         rows = None
         if a.long_rows:
