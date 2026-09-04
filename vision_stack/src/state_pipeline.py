@@ -1,5 +1,5 @@
 """
-state_pipeline.py
+run_state_pipeline.py
 
 Navilott Scene-State Pipeline (experimental alternative to run_pipeline.py)
 
@@ -18,7 +18,7 @@ Purpose:
 
 LAYER STACK
 
-    L1  Ground projection   contour  -> segment in centimeters on the ground
+    L1  Ground projection   contour  -> segment in centimetres on the ground
     L2  Classification      segment  -> longitudinal / transverse / rejected
     L3  Ground map          segments -> short-horizon map, odometry-propagated
     L4  Scene state         map      -> LANE_FOLLOW / APPROACHING_STOP / ...
@@ -46,7 +46,7 @@ WHY GROUND COORDINATES
     Image-space angle depends on the robot's lateral offset and heading as much
     as on the line itself, so the boundary between "/" and "_" moves around as
     the robot drives. After projection the thresholds are fixed, and width in
-    centimeters becomes available -- which is the single most discriminative
+    centimetres becomes available -- which is the single most discriminative
     feature the pipeline has. A lane line is ~1 cm wide; a puzzle-mat seam, a
     curb, and the arena wall base are not. Most false positives die on width
     alone, before any angle logic runs.
@@ -113,7 +113,7 @@ STATUS OF THE NUMBERS IN THIS FILE
     GroundCalibration ships with PLACEHOLDER optics. They are geometrically
     self-consistent but they are not your camera. Run the two-position
     calibration (see GroundCalibration.solve_from_two_positions) and write the
-    JSON before trusting any centimeter value this file prints.
+    JSON before trusting any centimetre value this file prints.
 """
 
 # =============================================================================
@@ -173,6 +173,22 @@ COLOR_SPACE = "BGR"
 
 GROUND_CALIB_PATH = "vision_stack/calibration/ground_calib.json"
 
+# =============================================================================
+# Wheel encoders
+# =============================================================================
+# Channel A GPIO per wheel, found with `python encoders.py scan`.
+# (Channel B is 21 left / 20 right; unused in single-channel mode.)
+ENCODER_LEFT_GPIO = 19
+ENCODER_RIGHT_GPIO = 16
+
+# Fill these in from `python encoders.py verify --left 19 --right 16 --turns 10`.
+# While either is None the pipeline falls back to integrating COMMANDED speed,
+# which is open-loop and drifts under wheel slip. Every intersection trigger is
+# a distance trigger, so this is the difference between entering an
+# intersection where the map says it is and entering it somewhere else.
+ENCODER_COUNTS_PER_OUTPUT_REV: Optional[float] = None    # TODO: measure
+WHEEL_DIAMETER_CM: Optional[float] = None                # TODO: measure
+
 
 # =============================================================================
 # L1: Ground Projection
@@ -202,7 +218,7 @@ class GroundCalibration:
         rather than a projection parameter. Segments nearer than this are
         discarded -- whatever produced them is not the floor ahead.
     max_range_cm: far cutoff. Beyond this one pixel of row error is worth
-        several centimeters and the estimate is not usable.
+        several centimetres and the estimate is not usable.
     calibrated: False when these are the shipped placeholders. Logged loudly.
     roll_deg: residual image rotation left over AFTER the videoflip, degrees,
         positive = image rotated clockwise. An inverted mount is corrected by
@@ -257,6 +273,8 @@ class GroundCalibration:
             u0: float = FRAME_WIDTH / 2.0,
             min_range_cm: float = 22.0,
             max_range_cm: float = 90.0,
+            f_span_px: Optional[float] = None,
+            f_span_range_cm: Optional[float] = None,
         ) -> "GroundCalibration":
         """
         Purpose:
@@ -295,17 +313,25 @@ class GroundCalibration:
                 "coordinates (v increases downward)."
             )
 
-        f_near = width_px_near * y_near_cm / max(feature_width_cm, 1e-6)
-        f_far = width_px_far * y_far_cm / max(feature_width_cm, 1e-6)
-        f_px = 0.5 * (f_near + f_far)
+        if f_span_px is not None and f_span_range_cm is not None:
+            # A single trusted span. Use this when some captures are clipped by
+            # the frame edge: a clipped span is a lower bound and averaging it
+            # in deflates f, which nothing downstream can detect because the
+            # depth residuals do not involve f at all.
+            f_px = f_span_px * f_span_range_cm / max(feature_width_cm, 1e-6)
+        else:
+            f_near = width_px_near * y_near_cm / max(feature_width_cm, 1e-6)
+            f_far = width_px_far * y_far_cm / max(feature_width_cm, 1e-6)
+            f_px = 0.5 * (f_near + f_far)
 
-        disagreement = abs(f_near - f_far) / max(f_px, 1e-6)
-        if disagreement > 0.15:
-            log.warning(
-                "Focal estimates disagree by %.0f%% (near=%.0f px, far=%.0f px). "
-                "Optical axis may not be level, or a range measurement is off.",
-                disagreement * 100.0, f_near, f_far,
-            )
+            disagreement = abs(f_near - f_far) / max(f_px, 1e-6)
+            if disagreement > 0.15:
+                log.warning(
+                    "Focal estimates disagree by %.0f%% (near=%.0f px, far=%.0f "
+                    "px). Optical axis may not be level, a range measurement is "
+                    "off, or a strip ran off the frame edge.",
+                    disagreement * 100.0, f_near, f_far,
+                )
 
         # Consistency check: A should equal f * camera height. With the mount
         # at 4 cm, an implied height far from that means the axis is pitched.
@@ -430,7 +456,7 @@ class GroundCalibration:
         except FileNotFoundError:
             log.warning(
                 "No ground calibration at %s -- using PLACEHOLDER optics. "
-                "Every centimeter value below is a guess.", path,
+                "Every centimetre value below is a guess.", path,
             )
             return cls.placeholder_for_roi(
                 roi_top_row=int(FRAME_HEIGHT * 0.70))
@@ -513,7 +539,7 @@ class GroundCalibration:
         """
         Purpose:
             Lateral scale at one image row. Useful for sanity printouts and for
-            sizing pixel-domain thresholds from centimeter requirements.
+            sizing pixel-domain thresholds from centimetre requirements.
         """
         dv = max(v - self.v0, 1e-6)
         return (self.a_cm_px / dv) / self.f_px
@@ -524,7 +550,7 @@ class GroundSegment:
     """
     One lane-marking candidate expressed on the ground plane.
 
-    All lengths are centimeters in the robot frame (+x right, +y forward).
+    All lengths are centimetres in the robot frame (+x right, +y forward).
 
     p0: (x, y) of the near endpoint of the fitted centreline
     p1: (x, y) of the far endpoint
@@ -617,7 +643,7 @@ def segment_from_contour(
     if len(ground) < 5:
         return None                          # too little of it is on the floor
 
-    box = cv2.boxPoints(cv2.minAreaRect(ground))   # 4x2, in centimeters
+    box = cv2.boxPoints(cv2.minAreaRect(ground))   # 4x2, in centimetres
 
     def _mid(a, b):
         return ((a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5)
@@ -747,7 +773,7 @@ def bias_report(
 @dataclass
 class CourseGeometry:
     """
-    Physical constants of the arena, in centimeters. Measured, not tuned.
+    Physical constants of the arena, in centimetres. Measured, not tuned.
 
     lane_width_cm: centre of dividing line to lane edge
     line_width_cm: painted/taped line width
@@ -1510,7 +1536,7 @@ def replay(sample_dirs: List[str], write_maps: bool = True) -> None:
     """
     calib = GroundCalibration.load(GROUND_CALIB_PATH)
     if not calib.calibrated:
-        log.warning("Replaying with placeholder optics -- treat centimeter "
+        log.warning("Replaying with placeholder optics -- treat centimetre "
                     "values as relative, not absolute.")
 
     cfgs = StageConfigs(
@@ -1612,6 +1638,21 @@ def main() -> None:
     from imu import IMUReader
     from system import System
 
+    encoders = None
+    if ENCODER_COUNTS_PER_OUTPUT_REV and WHEEL_DIAMETER_CM:
+        from encoders import EncoderReader
+        encoders = EncoderReader(
+            left_a=ENCODER_LEFT_GPIO, right_a=ENCODER_RIGHT_GPIO,
+            counts_per_output_rev=ENCODER_COUNTS_PER_OUTPUT_REV,
+            wheel_diameter_cm=WHEEL_DIAMETER_CM,
+        )
+    else:
+        log.warning(
+            "Encoders not configured -- odometry will integrate COMMANDED "
+            "speed. Distance triggers will drift under wheel slip. Set "
+            "ENCODER_COUNTS_PER_OUTPUT_REV and WHEEL_DIAMETER_CM after running "
+            "`python encoders.py verify`.")
+
     log.info("Starting Navilott scene-state pipeline")
 
     # ---- hardware ----------------------------------------------------------
@@ -1640,6 +1681,8 @@ def main() -> None:
 
     imu = IMUReader(address=0x68, rate_hz=100.0)
     imu.start()
+    if encoders:
+        encoders.start()
 
     # ---- stack -------------------------------------------------------------
     cfgs = StageConfigs(
@@ -1700,9 +1743,23 @@ def main() -> None:
 
             # ---- L3: odometry and map --------------------------------------
             imu_frame = imu.snapshot()
+
+            encoder_m = None
+            if encoders:
+                # set_direction before snapshot: single-channel counters are
+                # unsigned, so a reverse command has to be declared or the map
+                # propagates the wrong way.
+                encoders.set_direction(commanded_speed)
+                enc_frame = encoders.snapshot(moving=commanded_speed > 0.01)
+                if enc_frame.valid:
+                    encoder_m = encoders.total_distance_m
+                elif commanded_speed > 0.01:
+                    log.warning("Frame %d: driving but no encoder edges -- "
+                                "stall or disconnected channel", frame_id)
+
             ds_cm, dyaw = odom.update(
                 dt_s=dt_s,
-                encoder_distance_m=None,          # TODO: wire N20 encoders
+                encoder_distance_m=encoder_m,
                 yaw_rate_dps=imu_frame.mean_yaw_rate_dps if imu_frame.valid else None,
                 commanded_speed=commanded_speed,
             )
@@ -1754,6 +1811,8 @@ def main() -> None:
         pi.write(_stby, 0)
         pi.stop()
         imu.stop()
+        if encoders:
+            encoders.stop()
         cap.release()
         elapsed = time.perf_counter() - t_run_start
         s.show_final_time(elapsed)
@@ -1769,16 +1828,14 @@ if __name__ == "__main__":
     """
     Standalone modes:
 
-        python state_pipeline.py replay        # offline, no hardware
-        python state_pipeline.py live          # on the robot
+        python run_state_pipeline.py replay        # offline, no hardware
+        python run_state_pipeline.py live          # on the robot
 
     Replay is the mode to start in. It needs roi_crop.py to have run first, and
     it writes a bird's-eye map per frame next to the existing debug images.
     """
     SAMPLE_DIRS = [
-        "vision_stack/frames/Sample1",
-        "vision_stack/frames/Sample2",
-        "vision_stack/frames/Sample3",
+        "vision_stack/frames/Walk2"
     ]
 
     mode = sys.argv[1] if len(sys.argv) > 1 else "replay"
