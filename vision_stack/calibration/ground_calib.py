@@ -224,12 +224,26 @@ def detect_reference(
     img = img[y_cut:, :]
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    if dark:
-        thresh = float(np.percentile(gray, 100.0 - bright_percentile))
-        mask = (gray <= thresh).astype(np.uint8) * 255
-    else:
-        thresh = float(np.percentile(gray, bright_percentile))
-        mask = (gray >= thresh).astype(np.uint8) * 255
+
+    # Otsu, not a percentile. A percentile threshold assumes the object covers
+    # a KNOWN fraction of the frame, and it does not: the strip subtends more
+    # pixels the closer it is. At 30 cm a 30 cm strip covered ~4% of the search
+    # region against a 1% cut, so the threshold sliced into the strip and kept
+    # only its darkest core -- shrinking the measured span by 23% on the
+    # nearest capture and nowhere else. Otsu picks the split between the two
+    # intensity populations instead, which is what a dark strip on a uniform
+    # surface actually is.
+    flag = cv2.THRESH_BINARY_INV if dark else cv2.THRESH_BINARY
+    thresh, mask = cv2.threshold(gray, 0, 255, flag + cv2.THRESH_OTSU)
+
+    # Otsu always returns a split, even on a featureless frame where it just
+    # bisects the noise. Require the two populations to be genuinely separated.
+    fg, bg = gray[mask > 0], gray[mask == 0]
+    if fg.size == 0 or bg.size == 0 or abs(float(fg.mean()) - float(bg.mean())) < 25.0:
+        log.warning("  no clear %s object: the two intensity populations differ "
+                    "by less than 25 counts.\n  Nothing in this frame stands "
+                    "out from the surface.", "dark" if dark else "bright")
+        return None
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 9), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 5), np.uint8))
 
@@ -357,10 +371,8 @@ def candidates(path: str, dark: bool = False, search_top_frac: float = 0.50,
     y_cut = int(img.shape[0] * search_top_frac)
     crop = img[y_cut:, :]
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    if dark:
-        mask = (gray <= float(np.percentile(gray, 1.0))).astype(np.uint8) * 255
-    else:
-        mask = (gray >= float(np.percentile(gray, 99.0))).astype(np.uint8) * 255
+    _flag = cv2.THRESH_BINARY_INV if dark else cv2.THRESH_BINARY
+    _, mask = cv2.threshold(gray, 0, 255, _flag + cv2.THRESH_OTSU)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 9), np.uint8))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((2, 5), np.uint8))
 
@@ -395,6 +407,44 @@ def candidates(path: str, dark: bool = False, search_top_frac: float = 0.50,
     if not rows:
         print("  no blobs at all -- try the other polarity, or a lower "
               "--search-top-frac")
+
+
+def preview(path: str, cols: int = 100, rows: int = 40, invert: bool = False) -> None:
+    """
+    Purpose:
+        Render the capture as ASCII so it can be judged over SSH without
+        copying files off the Pi.
+
+    Notes:
+        Denser characters are DARKER by default, so black tape on a light
+        surface appears as a dark band. Row labels down the left match the row
+        numbers used everywhere else in this tool, so a feature spotted here
+        can be turned straight into a --search-top-frac.
+
+        Low resolution on purpose. This answers "is the strip in frame, and
+        roughly where", which is the question that has been blocking, not
+        "what does it look like".
+    """
+    img = cv2.imread(path)
+    if img is None:
+        log.error("Could not read %s", path)
+        return
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    small = cv2.resize(gray, (cols, rows), interpolation=cv2.INTER_AREA)
+
+    lo, hi = float(small.min()), float(small.max())
+    ramp = " .:-=+*#%@" if not invert else "@%#*+=-:. "
+    norm = (small - lo) / max(hi - lo, 1e-6)
+    idx = np.clip(((1.0 - norm) * (len(ramp) - 1)).astype(int), 0, len(ramp) - 1)
+
+    print(f"\n{os.path.basename(path)}   {w}x{h}   intensity {lo:.0f}-{hi:.0f}"
+          f"   (denser = darker)")
+    for r in range(rows):
+        src_row = int(r * h / rows)
+        line = "".join(ramp[i] for i in idx[r])
+        print(f"  {src_row:4d} |{line}|")
+    print(f"       +{'-' * cols}+")
 
 
 def profile(path: str, dark: bool = False, band: int = 8) -> None:
@@ -885,6 +935,12 @@ if __name__ == "__main__":
     k.add_argument("--search-top-frac", type=float, default=0.50)
     k.add_argument("--top", type=int, default=6)
 
+    pv = sub.add_parser("preview", help="render the capture as ASCII")
+    pv.add_argument("--image", required=True)
+    pv.add_argument("--cols", type=int, default=100)
+    pv.add_argument("--rows", type=int, default=40)
+    pv.add_argument("--invert", action="store_true")
+
     pr = sub.add_parser("profile", help="show where dark/bright pixels sit by row")
     pr.add_argument("--image", required=True)
     pr.add_argument("--dark", action="store_true")
@@ -897,6 +953,8 @@ if __name__ == "__main__":
     elif a.cmd == "measure":
         measure_image(a.image, search_top_frac=a.search_top_frac,
                       dark=a.dark)
+    elif a.cmd == "preview":
+        preview(a.image, a.cols, a.rows, a.invert)
     elif a.cmd == "profile":
         profile(a.image, a.dark)
     elif a.cmd == "candidates":
