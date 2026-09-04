@@ -73,13 +73,13 @@ class LaneContourFilter:    # Lane Boundary
     max_area: float = 10000.0   # Helps to fix some lane lines not being detectable due to noise
     min_aspect: float = 1.0         # Higher min values limit detections
     max_aspect: float = 1000.0      # Lower max values limit detections
-    score_aspect_lo:   float = 8.0
-    score_aspect_hi:   float = 24.0
-    score_aspect_soft: float = 18.0   # rolloff width outside the plateau
-    ref_area: float = 100.0       # has an effect on confidence. Increasing lowers confidence
+    score_aspect_lo:   float = 4.0
+    score_aspect_hi:   float = 60.0
+    score_aspect_soft: float = 4.0   # rolloff width outside the plateau
+    ref_area: float = 2000.0       # has an effect on confidence. Increasing lowers confidence
     max_roi_span: float = 1.0     # closer to 0 reduces accepted contours
     min_intensity: float = 140.0     # Helps to eliminate dark blobs
-    edge_margin_frac: float = 0.75   # lateral prior; see _lane_confidence
+    edge_margin_frac: float = 0.05   # lateral prior; see _lane_confidence
     edge_penalty: float = 0.5       # multiplier for contours in the margin
 
 @dataclass
@@ -686,7 +686,9 @@ if __name__ == "__main__":
     import os
 
     SAMPLE_DIRS = [
-        "vision_stack/frames/Walk2"
+        "vision_stack/frames/Sample1",
+        "vision_stack/frames/Sample2",
+        "vision_stack/frames/Sample3",
     ]
 
     '''

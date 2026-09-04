@@ -256,7 +256,9 @@ if __name__ == "__main__":
 
 
     SAMPLE_DIRS = [
-        "vision_stack/frames/Walk2"
+        "vision_stack/frames/Sample1",
+        "vision_stack/frames/Sample2",
+        "vision_stack/frames/Sample3",
     ]
     '''
     SAMPLE_DIRS = fetch_dataset(
