@@ -29,6 +29,13 @@ video/
 /video
 *.avi
 
+# Frames
+/frame/
+**/frame/
+frame/
+/frame
+*.csv
+
 # Mock
 /mock/
 **/mock/
@@ -49,3 +56,4 @@ results/
 **/logs/
 logs/
 /logs
+commit_log.md
