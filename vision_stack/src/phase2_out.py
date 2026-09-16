@@ -110,7 +110,7 @@ Packaging rules
   PR-4  frame_id and timestamp_ms are copied from the caller's arguments,
         not derived from any candidate or detection field.
   PR-5  TransformedCoords must have at least one non-None image or points
-        field. If both are None, package_phase2_output raises ValueError.
+        field. If both are None, Phase2Output raises ValueError.
 
 Failure cases
 -------------
@@ -138,10 +138,13 @@ Failure cases
        re-validate upstream outputs.
 """
 
+import sys
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Optional
 
+sys.path.insert(0, "vision_stack/src")
+from lane_offset import LaneOffsetResult
 
 # ---------------------------------------------------------------------------
 # Stub DetectionObject — mirrors feature_fusion.DetectionObject exactly.
@@ -165,31 +168,6 @@ class DetectionObject:
     bounding_box:  tuple = field(default=(0, 0, 0, 0))
     label_detail:  str   = field(default="")
 
-
-# ---------------------------------------------------------------------------
-# Transformed coordinate container
-# ---------------------------------------------------------------------------
-
-@dataclass
-class TransformedCoords:
-    """
-    Holds perspective-transform outputs from perspective_transform.py.
-
-    At least one of warped_image or transformed_points must be non-None.
-    Both may be non-None if the caller ran both transform modes.
-
-    warped_image        : (H_out, W_out, 3) uint8 BGR or None
-    transformed_points  : (N, 2) float32 bird's-eye px coords or None
-    source_points       : (N, 2) float32 original ROI coords or None
-    output_width        : warped canvas width in pixels
-    output_height       : warped canvas height in pixels
-    """
-    warped_image:       Optional[np.ndarray]   # Mode A result
-    transformed_points: Optional[np.ndarray]   # Mode B result
-    source_points:      Optional[np.ndarray]   # Mode B source, preserved
-    output_width:       int
-    output_height:      int
-
 # ---------------------------------------------------------------------------
 # Phase 2 output container
 # ---------------------------------------------------------------------------
@@ -201,71 +179,17 @@ class Phase2Output:
 
     Fields
     ------
-    detections          : list[DetectionObject] — fused detections, as-is
-    transformed_coords  : TransformedCoords | None — lane bird's-eye data
-    frame_id            : int — frame-level identifier from capture loop
-    timestamp_ms        : int — frame-level timestamp from capture loop
-    detection_count     : int — len(detections), set at package time
+    detections: list[DetectionObject] — fused detections, as-is
+    transformed_coords: TransformedCoords | None — lane bird's-eye data
+    frame_id: int — frame-level identifier from capture loop
+    timestamp_ms: int — frame-level timestamp from capture loop
+    detection_count: int — len(detections), set at package time
     """
-    detections:         List[DetectionObject]
-    frame_id:           int
-    timestamp_ms:       int
-    detection_count:    int
-
-
-# ---------------------------------------------------------------------------
-# Core substage
-# ---------------------------------------------------------------------------
-
-def package_phase2_output(
-    detections:         List[DetectionObject] | None = None,
-    frame_id:           int = 0,
-    timestamp_ms:       int = 0,
-) -> Phase2Output:
-    """
-    Package Phase 2 outputs into a Phase2Output for Phase 3 consumption.
-
-    Parameters
-    ----------
-    detections          : list[DetectionObject] from feature_fusion.py
-                          Empty list is valid. None is not.
-    transformed_coords  : TransformedCoords from perspective_transform.py,
-                          or None if homography data was unavailable.
-    frame_id            : int from capture loop
-    timestamp_ms        : int from capture loop
-
-    Returns
-    -------
-    Phase2Output
-    """
-    # --- Guard: detections must be a list (F1) -----------------------------
-    if detections is None:
-        raise TypeError(
-            "package_phase2_output: detections must be a list, not None. "
-            "Pass an empty list for frames with no detections."
-        )
-    if not isinstance(detections, list):
-        raise TypeError(
-            f"package_phase2_output: detections must be list, got {type(detections).__name__}"
-        )
-
-    # --- Guard: verify required fields on each DetectionObject (F2) --------
-    _REQUIRED = ("type", "position", "confidence", "timestamp")
-    for i, d in enumerate(detections):
-        for attr in _REQUIRED:
-            if not hasattr(d, attr):
-                raise AttributeError(
-                    f"package_phase2_output: detections[{i}] missing field '{attr}'. "
-                    "Upstream feature_fusion must supply complete DetectionObjects."
-                )
-
-    # --- Package (PR-1 through PR-4) ----------------------------------------
-    return Phase2Output(
-        detections         = detections,              # PR-1: as-is
-        frame_id           = frame_id,                # PR-4
-        timestamp_ms       = timestamp_ms,            # PR-4
-        detection_count    = len(detections),         # PR-3
-    )
+    detections: List[DetectionObject]
+    lane_offset_results: List[LaneOffsetResult]
+    frame_id: int
+    timestamp_ms: int
+    detection_count: int
 
 
 # ---------------------------------------------------------------------------
@@ -294,28 +218,46 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"  [FAIL] {name}: wrong exception type {type(e).__name__}: {e}")
 
-    print("\n--- package_phase2_output tests ---\n")
+    print("\n--- Phase2Output tests ---\n")
 
     # -----------------------------------------------------------------------
-    # Case 1: Full package — all fields present, transformed coords available
+    # Case 1: Full package — all fields present
     # -----------------------------------------------------------------------
     d1 = DetectionObject(
-        type="traffic_light", position={"x": 80.0, "y": 45.0},
-        confidence=0.91, timestamp=1000,
-        bounding_box=(65, 30, 30, 30), label_detail="green")
+        type="traffic_light",
+        position={"x": 80.0, "y": 45.0},
+        confidence=0.91, 
+        timestamp=1000,
+        bounding_box=(65, 30, 30, 30), 
+        label_detail="green"
+    )
     d2 = DetectionObject(
-        type="lane_boundary", position={"x": 10.0, "y": 200.0},
-        confidence=0.74, timestamp=1000,
-        bounding_box=(3, 140, 14, 120), label_detail="lane_boundary")
-    tc = TransformedCoords(
-        warped_image       = np.zeros((240, 320, 3), dtype=np.uint8),
-        transformed_points = np.array([[160.0, 220.0], [10.0, 200.0]], dtype=np.float32),
-        source_points      = np.array([[80.0, 200.0],  [5.0, 180.0]], dtype=np.float32),
-        output_width       = 320,
-        output_height      = 240,
+        type="lane_boundary", 
+        position={"x": 10.0, "y": 200.0},
+        confidence=0.74, 
+        timestamp=1000,
+        bounding_box=(3, 140, 14, 120), 
+        label_detail="lane_boundary"
+    )
+    lr = LaneOffsetResult(
+        offset = 0.0, 
+        left_x = 80.0, 
+        right_x = 10.0, 
+        lane_width_px = 70.0,
+        confidence = 0.91, 
+        boundary_count = 2, 
+        mode = "two_boundary",
+        frame_id = 42, 
+        timestamp = 1712345678000
     )
     try:
-        out = package_phase2_output([d1, d2], frame_id=42, timestamp_ms=1712345678000)
+        out = Phase2Output(
+            detections=[d1, d2], 
+            lane_offset_results=[lr],
+            frame_id=42, 
+            timestamp_ms=1712345678000,
+            detection_count=2
+        )
         assert out.detection_count == 2
         assert out.frame_id == 42
         assert out.timestamp_ms == 1712345678000
@@ -325,46 +267,20 @@ if __name__ == "__main__":
         _fail("Case 1", e)
 
     # -----------------------------------------------------------------------
-    # Case 2: Empty detection list, no transformed coords (PR-2)
+    # Case 2: Empty package
     # -----------------------------------------------------------------------
     try:
-        out = package_phase2_output([], frame_id=43, timestamp_ms=1712345678033)
+        out = Phase2Output(
+            detections=[], 
+            lane_offset_results=[],
+            frame_id=99, 
+            timestamp_ms=1712345679000,
+            detection_count=0
+        )
         assert out.detection_count == 0
-        _pass("Case 2: empty detections, no transformed coords")
+        _pass("Case 2: empty detections, no lane offset results provided")
     except Exception as e:
         _fail("Case 2", e)
-
-    # -----------------------------------------------------------------------
-    # Case 3: Transformed coords with points only (no warped image)
-    # -----------------------------------------------------------------------
-    tc_pts_only = TransformedCoords(
-        warped_image       = None,
-        transformed_points = np.array([[155.0, 218.0]], dtype=np.float32),
-        source_points      = np.array([[77.0, 198.0]],  dtype=np.float32),
-        output_width       = 320,
-        output_height      = 240,
-    )
-    try:
-        out = package_phase2_output([d2], frame_id=44, timestamp_ms=1712345678066)
-        _pass("Case 3: points-only TransformedCoords")
-    except Exception as e:
-        _fail("Case 3", e)
-
-    # -----------------------------------------------------------------------
-    # Case 4: Warped image only (no transformed points)
-    # -----------------------------------------------------------------------
-    tc_img_only = TransformedCoords(
-        warped_image       = np.zeros((240, 320, 3), dtype=np.uint8),
-        transformed_points = None,
-        source_points      = None,
-        output_width       = 320,
-        output_height      = 240,
-    )
-    try:
-        out = package_phase2_output([d1], frame_id=45, timestamp_ms=1712345678099)
-        _pass("Case 4: image-only TransformedCoords")
-    except Exception as e:
-        _fail("Case 4", e)
 
     # -----------------------------------------------------------------------
     # F1 — detections is None
@@ -372,7 +288,13 @@ if __name__ == "__main__":
     _expect_raises(
         "F1: detections=None raises TypeError",
         TypeError,
-        lambda: package_phase2_output(None, frame_id=42, timestamp_ms=1712345678000)
+        lambda: Phase2Output(
+            detections=None, 
+            lane_offset_results=[lr],
+            frame_id=99, 
+            timestamp_ms=1712345679000,
+            detection_count=0
+        )
     )
 
     # -----------------------------------------------------------------------
@@ -381,7 +303,13 @@ if __name__ == "__main__":
     _expect_raises(
         "F1b: detections=dict raises TypeError",
         TypeError,
-        lambda: package_phase2_output([], frame_id=42, timestamp_ms=1712345678000)
+        lambda: Phase2Output(
+            detections={}, 
+            lane_offset_results=[],
+            frame_id=99, 
+            timestamp_ms=1712345679000,
+            detection_count=0
+        )
     )
 
     # -----------------------------------------------------------------------
@@ -396,7 +324,7 @@ if __name__ == "__main__":
     _expect_raises(
         "F2: missing 'confidence' field raises AttributeError",
         AttributeError,
-        lambda: package_phase2_output([_BadDetection()], frame_id=42, timestamp_ms=1712345678000)  # type: ignore[arg-type]
+        lambda: Phase2Output([_BadDetection()], frame_id=42, timestamp_ms=1712345678000)  # type: ignore[arg-type]
     )
 
     # -----------------------------------------------------------------------
@@ -408,7 +336,7 @@ if __name__ == "__main__":
     _expect_raises(
         "F3: TransformedCoords both None raises ValueError",
         ValueError,
-        lambda: package_phase2_output([d1], frame_id=42, timestamp_ms=1712345678000)
+        lambda: Phase2Output(detections=[d1], transformed_coords=tc_empty)
     )
 
     # -----------------------------------------------------------------------
@@ -418,7 +346,12 @@ if __name__ == "__main__":
         type="stop_sign", position={"x": 200.0, "y": 60.0},
         confidence=0.82, timestamp=1001)
     try:
-        out = package_phase2_output([d1, d2, d3], frame_id=46, timestamp_ms=1712345678132)
+        out = Phase2Output(
+            detections=[d1, d2, d3], 
+            lane_offset_results=[],
+            frame_id=99, 
+            timestamp_ms=1712345679000
+        )
         assert out.detections[0].type == "traffic_light"
         assert out.detections[1].type == "lane_boundary"
         assert out.detections[2].type == "stop_sign"
@@ -432,7 +365,7 @@ if __name__ == "__main__":
     # -----------------------------------------------------------------------
     # Print a sample Phase2Output for visual inspection
     # -----------------------------------------------------------------------
-    sample = package_phase2_output([d1, d2], frame_id=99, timestamp_ms=1712345679000)
+    sample = Phase2Output([d1, d2], frame_id=99, timestamp_ms=1712345679000)
     print("Sample Phase2Output:")
     print(f"  frame_id         : {sample.frame_id}")
     print(f"  timestamp_ms     : {sample.timestamp_ms}")

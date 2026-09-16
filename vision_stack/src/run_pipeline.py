@@ -14,13 +14,18 @@ Concurrency model: Time-slicing (single-threaded)
 
 Architecture:
     Phase 1 -> Phase 2 -> Phase 3 -> EstimationPacket (Navigation)
-    capture -> preprocess EMA temporal filter
-                roi_crop motion consistency
-                color_branch:confidence threshold
-                geometry_branch: dead-reckoning fallback
-                feature_fusion:IMU heading integration
-                lane_offset
-                phase2_out
+    1. Capture Pipeline
+        libcamerasrc -> video/x-raw -> videoconvert -> appsink
+    2. Vision Perception Pipeline
+        preprocess_frame
+        crop_rois
+        color_branch
+        geometry_branch
+        feature_fusion
+        lane_offset
+        phase2_out
+    3. Navigation Signal Processing
+        phase3
 """
 
 # =============================================================================
@@ -42,28 +47,43 @@ import pigpio
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
-from system import System
-from imu import IMUReader, IMUFrame
-from preprocess import preprocess_frame
-from roi_crop import crop_rois
-from color_branch import (
+from system import System                                   # System Interfaces (Button & Display)
+from imu import IMUReader, IMUFrame                         # IMU Reader
+from encoder import EncoderReader, EncoderFrame             # Encoder Reader
+
+from capture import (
+    CameraSource,
+    CaptureError,
+    VideoSink
+)
+
+from preprocess import preprocess_frame                     # Phase 2, Stage 1: Preprocessing
+from roi_crop import (                                      # Phase 2, Stage 2: ROI Cropping
+    crop,
+    ROICropResult,
+    LANE, TRAFFIC, SIGN
+)                              
+from color_branch import (                                  # Phase 2, Stage 3a: Color Identification
     extract_traffic_light_candidates,
-    HSVRanges, BlobFilter,
-    load_hsv_ranges,
+    HSVRanges, 
+    BlobFilter,
+    load_hsv_ranges
 )
-from geometry import (
+from geometry import (                                      # Phase 2, Stage 3b: Contour Detection
     run_geometry_branch,
-    CannyParams, LaneContourFilter, SignContourFilter,
+    CannyParams, 
+    LaneContourFilter, 
+    SignContourFilter
 )
-from feature_fusion import fuse_detections, SourceROIInfo
-from lane_offset import compute_lane_offset
-from phase2_out import package_phase2_output
-from estimation import (
-    Phase3Processor, Phase3Config,
+from feature_fusion import fuse_detections, SourceROIInfo    # Phase 2, Stage 4: Fusing Detection Results
+from lane_offset import compute_lane_offset                  # Phase 2, Stage 5: Lane Offset Calculations 
+from phase2_out import Phase2Output                          # Phase 2, Stage 6: Packaging for Phase3 - Estimation
+from estimation import (                                     # Phase 3: Navigation Signal Processing
+    Phase3Processor, 
+    Phase3Config,
     SensorSample,
-    DetectionObject as P3DetectionObject,
-    Phase2Output as P3Phase2Output,
 )
+
 
 # =============================================================================
 # Configuration Parameters
@@ -74,7 +94,7 @@ FRAME_HEIGHT = 360
 
 # Frame rate: loop budget is derived from this
 FPS = 15
-LOOP_BUDGET_MS = 1000.0 / FPS          # e.g. 66.6 ms at 15 FPS
+LOOP_BUDGET_MS = 1000.0 / FPS
 
 # Color space emitted by GStreamer: "YUV" or "BGR"
 # Default: YUV
@@ -87,13 +107,12 @@ SAVE_VIDEO = True
 HSV_RANGES_PATH = "vision_stack/calibration/hsv_ranges.json"
 HSV_DUMMY_PATH = "vision_stack/dummy/dummy_hsv_ranges.json"
 
-# Demo-mode confidence gates (traffic/sign disabled until calibrated)
-TRAFFIC_CONF_THRESHOLD = 1.1   # effectively disabled; max is 1.0
+TRAFFIC_CONF_THRESHOLD = 1.1   # effectively disabled
 SIGN_CONF_THRESHOLD = 1.1   # effectively disabled
-LANE_CONF_THRESHOLD = 0.30  # operational
+LANE_CONF_THRESHOLD = 0.19
 
 # Minimum lane width in pixels for two-boundary mode
-MIN_LANE_WIDTH_PX = 150.0
+MIN_LANE_WIDTH_PX = 200.0
 
 # Offset of the camera
 OFFSET_TRIM = 0.0   # meters
@@ -104,11 +123,6 @@ OFFSET_TRIM = 0.0   # meters
 BASE_SPEED = 0.45   # Constant forward speed (0.0 to 1.0)
 KP = 0.40   # Proportional gain
 KD = 0.05   # Derivative gain;smooths correction jitter
-
-# Soft-start: seconds to linearly ramp from 0 -> BASE_SPEED any time driving
-# resumes from a full stop (segment start, or a "stop" drive_state ending).
-# Targets motor inrush current at the moment of the speed jump, not just
-# steady-state draw -- lowering BASE_SPEED alone doesn't address this.
 RAMP_SECONDS = 0.75
 
 _last_error: float = 0.0
@@ -172,42 +186,6 @@ def _drive(
     pi.write(_bin2, 1 if right_speed < 0 else 0)
 
 # =============================================================================
-# GStreamer pipeline string
-# =============================================================================
-def _build_gst_pipeline(
-        width: int, 
-        height: int, 
-        fps: int, 
-        color_space: str
-    ) -> str:
-    """
-    Purpose:
-        Builds a libcamera -> GStreamer -> OpenCV pipeline string
-    
-    Inputs:
-        width: frame width in pixels
-        height: frame height in pixels
-        fps: frames per second
-        color_space: "YUV" or "BGR"
-    
-    Outputs:
-        GStreamer pipeline string to pass to cv2.VideoCapture() for Phase 1 camera acquisition
-    """
-    fmt_map = {
-        "YUV": f"video/x-raw,colorimetry=bt709,width={width},height={height},framerate={fps}/1",
-        "BGR": f"video/x-raw,format=BGR,width={width},height={height},framerate={fps}/1",
-    }
-    fmt_string = fmt_map.get(color_space.upper(), fmt_map["YUV"])
-
-    return (
-        "libcamerasrc ! "
-        f"{fmt_string} ! "
-        "videoconvert ! "
-        "videoflip method=rotate-180 ! "
-        "appsink drop=true max-buffers=1 sync=false"
-    )
-
-# =============================================================================
 # Calibration Loaders
 # =============================================================================
 def _load_hsv(
@@ -242,9 +220,7 @@ def _load_hsv(
         return HSVRanges()   # structural scaffold only
 
 
-# =============================================================================
-# Phase 2 -> Phase 3 Adapter
-# =============================================================================
+## REMOVE
 def _adapt_detections_for_p3(
         p2_detections,
         lane_roi_width: float,
@@ -276,7 +252,7 @@ def _adapt_detections_for_p3(
         x = d.position["x"]
         if d.type == "lane_boundary":
             x = x - lane_center_px
-        adapted.append(P3DetectionObject(
+        adapted.append(DetectionObject(
             type = d.type,
             label = d.label_detail,
             position_x = x,
@@ -285,11 +261,13 @@ def _adapt_detections_for_p3(
             timestamp = d.timestamp,
         ))
     return adapted
+## REMOVE
 
+## REMOVE
 def _build_p3_input(
         p2_out, 
         detections_p3
-    ) -> P3Phase2Output:
+    ) -> Phase2Output:
     """
     Purpose:
         Wrap adapted detections in the Phase 3 Phase2Output container
@@ -297,35 +275,47 @@ def _build_p3_input(
         p2_out: Phase2Output from Phase 2, used for frame_id and timestamp
         detections_p3: list of estimation.DetectionObject adapted from Phase 2 detections
     Outputs:
-        P3Phase2Output with detections and metadata for Phase 3 processing
+        Phase2Output with detections and metadata for Phase 3 processing
     """
-    return P3Phase2Output(
+    return Phase2Output(
         detections = detections_p3,
         frame_id = p2_out.frame_id,
         timestamp_ms = p2_out.timestamp_ms,
     )
+## REMOVE
 
 # =============================================================================
 # IMU Reader @TODO Integrate encoder data
 # =============================================================================
 
-def _read_sensors(imu: IMUReader) -> tuple[SensorSample, IMUFrame]:
-    frame = imu.snapshot()
-    sample = SensorSample(
-        wheel_speed = None,
-        distance_traveled = None,
-        yaw_rate = frame.mean_yaw_rate_dps if frame.valid else None,
-        lateral_accel = frame.peak_lateral_accel if frame.valid else None,
+def _read_sensors(
+        imu: IMUReader | None,
+        encoder: EncoderReader | None,
+        frame_id: int,
+        timestamp_ms: float,
+    ) -> SensorSample:
+    """
+    Purpose:
+        Snapshot every fitted sensor into one coherent frame window.
+    Notes:
+        An unfitted sensor yields an empty frame (sample_count == 0),
+        so `valid` is False and Phase 3 falls back on its own.
+    """
+    return SensorSample(
+        frame_id=frame_id,
+        timestamp_ms=timestamp_ms,
+        imu=imu.snapshot() if imu is not None else IMUFrame(),
+        encoder=encoder.snapshot() if encoder is not None else EncoderFrame(),
     )
-    return sample, frame
 
 # =============================================================================
-# Main loop
+# System Initialization
 # =============================================================================
 def main() -> None:
     # ==========================================================================
     # Initial Startup
     # ==========================================================================
+    
     log.info("Starting Navilott Pipeline")
 
     # Button & countdown
@@ -341,6 +331,12 @@ def main() -> None:
     # ==========================================================================
     imu = IMUReader(address=0x68, rate_hz=100.0)
     imu.start()
+
+    # ==========================================================================
+    # Startup: Encoder
+    # ==========================================================================
+    encoder = EncoderReader()
+    # TODO: Integrate encoder data
 
     # ==========================================================================
     # Startup: calibration, stage configs, Phase 3 processor
@@ -365,25 +361,18 @@ def main() -> None:
     # ==========================================================================
     # Phase 1: open camera
     # ==========================================================================
-    gst_pipeline = _build_gst_pipeline(FRAME_WIDTH, FRAME_HEIGHT, FPS, COLOR_SPACE)
-    log.info("Opening camera: %s", gst_pipeline)
-
-    cap = cv2.VideoCapture(gst_pipeline, cv2.CAP_GSTREAMER)
-    if not cap.isOpened():
-        log.error("Failed to open camera pipeline; is libcamera available?")
-        sys.exit(1)
+    camera = CameraSource(FRAME_WIDTH, FRAME_HEIGHT, FPS)
+    camera.open()
 
     log.info(
         "Camera open. Resolution=%dx%d  FPS=%d  Budget=%.1f ms/frame",
         FRAME_WIDTH, FRAME_HEIGHT, FPS, LOOP_BUDGET_MS,
     )
 
-    # Optional debug video writer
-    out_writer = None
-    if SAVE_VIDEO:
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
-        out_writer = cv2.VideoWriter("output.avi", fourcc, FPS, (FRAME_WIDTH, FRAME_HEIGHT))
-        log.info("Debug video writer opened -> output.avi")
+    # Debug video writer
+    sink = VideoSink("output.avi", FPS, FRAME_WIDTH, FRAME_HEIGHT).open() if SAVE_VIDEO else None
+
+        
 
     # ==========================================================================
     # Main loop
@@ -397,32 +386,44 @@ def main() -> None:
             # =================================================================
             # Phase 1: Capture
             # =================================================================
-            ret, frame_bgr = cap.read()
-            if not ret or frame_bgr is None:
-                log.warning("Frame %d: read failed — skipping", frame_id)
-                frame_id += 1
-                continue
+            frame_bgr = camera.read()
 
             timestamp_ms = int(time.time() * 1000)
 
             # =================================================================
             # Phase 2: Vision Perception
             # =================================================================
-            # Step 1: Preprocessing (histogram equalization + Gaussian blur)
-            # preprocess_frame() expects YUV in, returns YUV out.
-            # capture.py / GStreamer hands us BGR from videoconvert, so we
-            # convert before and after to satisfy the stage contract.
-            frame_yuv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2YUV)
-            preprocessed = preprocess_frame(frame_yuv)               # -> YUV
-            preprocessed_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_YUV2BGR)
+            # Step 1: Preprocessing
+            # Geometry branch histogram equalization and gaussian blurring
+            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+            preprocessed_frame = preprocess_frame(gray)
 
-            # Step 2: ROI crop returns NumPy views (no copy)
-            roi_result = crop_rois(preprocessed_bgr, frame_id=frame_id)
+            # Color branch blurring only
+            blurred_frame = cv2.GaussianBlur(
+                frame_bgr,
+                (5, 5),
+                0.0,
+            )
+
+            # Step 2: ROI crop returns NumPy views
+            lane_roi, lane_rect = crop(preprocessed_frame, LANE)
+            sign_roi, sign_rect = crop(preprocessed_frame, SIGN)
+            traffic_roi, traffic_rect = crop(blurred_frame, TRAFFIC)
+            roi_results = ROICropResult(
+                lane_roi = lane_roi,
+                traffic_roi = traffic_roi,
+                sign_roi = sign_roi,
+                lane_rect = lane_rect,
+                traffic_rect = traffic_rect,
+                sign_rect = sign_rect,
+                frame_id = frame_id,
+                source_shape = frame_bgr.shape[:2],
+            )
 
             # Step 3a: Color branch traffic light candidates
             # roi_crop produces BGR views; color_branch expects BGR
             tl_candidates, _tl_debug = extract_traffic_light_candidates(
-                roi = roi_result.traffic_roi.copy(),   # copy: branch modifies internally
+                roi = roi_results.traffic_roi.copy(),   # copy: branch modifies internally
                 hsv_ranges = hsv_ranges,
                 blob_filter = blob_filter,
                 frame_id = frame_id,
@@ -432,8 +433,8 @@ def main() -> None:
             # Step 3b: Geometry branch lane + stop sign candidates
             # geometry.py _to_grayscale() internally handles BGR -> gray
             geo_result, _lane_debug, _sign_debug = run_geometry_branch(
-                lane_roi = roi_result.lane_roi.copy(),
-                sign_roi = roi_result.sign_roi.copy(),
+                lane_roi = roi_results.lane_roi.copy(),
+                sign_roi = roi_results.sign_roi.copy(),
                 canny_params = canny_params,
                 lane_filter = lane_filter,
                 sign_filter = sign_filter,
@@ -443,11 +444,11 @@ def main() -> None:
 
             # Step 4: Feature fusion normalize and resolve conflicts
             source_rois = SourceROIInfo(
-                lane_shape = roi_result.lane_roi.shape[:2],
-                traffic_shape = roi_result.traffic_roi.shape[:2],
-                sign_shape = roi_result.sign_roi.shape[:2],
+                lane_shape = roi_results.lane_roi.shape[:2],
+                traffic_shape = roi_results.traffic_roi.shape[:2],
+                sign_shape = roi_results.sign_roi.shape[:2],
             )
-            detections, _fusion_summary = fuse_detections(
+            fused_detections, _fusion_summary = fuse_detections(
                 traffic_candidates = tl_candidates,
                 lane_candidates = geo_result.lane_candidates,
                 sign_candidates = geo_result.sign_candidates,
@@ -457,10 +458,10 @@ def main() -> None:
             )
 
             # Step 5: Lane offset estimation
-            lane_boundary_dets = [d for d in detections if d.type == "lane_boundary"]
+            lane_boundary_dets = [d for d in fused_detections if d.type == "lane_boundary"]
             lane_offset_result = compute_lane_offset(
                 detections = lane_boundary_dets,
-                frame_width = roi_result.lane_roi.shape[1],
+                frame_width = roi_results.lane_roi.shape[1],
                 frame_id = frame_id,
                 timestamp = timestamp_ms,
                 conf_threshold = LANE_CONF_THRESHOLD,
@@ -468,18 +469,29 @@ def main() -> None:
             )
 
             # Step 6: Package Phase 2 output
-            p2_out = package_phase2_output(
-                detections = detections,
+            p2_out = Phase2Output(
+                detections = fused_detections,
+                lane_offset_results = [lane_offset_result],
                 frame_id = frame_id,
                 timestamp_ms = timestamp_ms,
+                detection_count = len(fused_detections),
             )
 
             # =================================================================
             # Phase 3: Navigation Signal Processing
             # =================================================================
-            # Read sensors
-            sensor_sample, imu_frame = _read_sensors(imu)
 
+            ### @TODO: FIX ME PLEASEEEEEEE
+
+            # Read sensors
+            sensor_sample = SensorSample(
+                    frame_id=frame_id,
+                    timestamp_ms=timestamp_ms,
+                    imu=imu.snapshot() if imu is not None else IMUFrame(),
+                    encoder=encoder.snapshot() if encoder is not None else EncoderFrame(),
+                )
+
+            # Run Phase 3
             # Adapt Phase 2 detections to Phase 3 schema and run processor
             p3_detections = _adapt_detections_for_p3(p2_out.detections, roi_result.lane_roi.shape[1])
             p3_input = _build_p3_input(p2_out, p3_detections)
@@ -539,25 +551,27 @@ def main() -> None:
             # =================================================================
             # Optional Debug Video
             # =================================================================
-            if out_writer is not None:
+            if sink is not None:
                 _overlay = _draw_debug_overlay(
                     frame_bgr, nav_packet, lane_offset_result, frame_time_ms
                 )
-                out_writer.write(_overlay)
+                sink.write(_overlay)
 
             frame_id += 1
 
-    except KeyboardInterrupt:
-        log.info("Stopped by user after %d frames.", frame_id)
+    except (KeyboardInterrupt, CaptureError) as exc:
+        log.info("Shutting down: %s", exc)
 
     finally:
         _drive(0.0, 0.0)
         pi.write(_stby, 0)
         pi.stop()
         imu.stop()
-        cap.release()
-        if out_writer is not None:
-            out_writer.release()
+        camera.release()
+
+        if sink is not None:
+            sink.release()
+
 
         elapsed_s = time.perf_counter() - t_run_start
         s.show_final_time(elapsed_s)   # freeze final time on display

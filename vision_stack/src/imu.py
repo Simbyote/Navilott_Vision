@@ -33,23 +33,14 @@ from dataclasses import dataclass, field
 
 @dataclass
 class IMUFrame:
-    """
-    Aggregated IMU values for one pipeline frame window.
+    """Aggregated IMU values for one pipeline frame window."""
+    mean_yaw_rate_dps: float | None = None   # gyro-Z mean, deg/s
+    peak_lateral_accel: float | None = None  # max |accel-Y|, m/s^2
+    sample_count: int = 0
 
-    Fields
-    ------
-    mean_yaw_rate_dps   : mean gyro-Z over the frame interval (deg/s).
-                          None if no samples were collected.
-    peak_lateral_accel  : highest-magnitude accel-Y sample in the frame
-                          interval (m/s²). None if no samples were collected.
-    sample_count        : number of raw IMU reads that went into this frame.
-    valid               : False when sample_count == 0; Phase 3 should treat
-                          both float fields as unusable when False.
-    """
-    mean_yaw_rate_dps  : float | None = None
-    peak_lateral_accel : float | None = None
-    sample_count       : int          = 0
-    valid              : bool         = False
+    @property
+    def valid(self) -> bool:
+        return self.sample_count > 0
 
 
 # =============================================================================

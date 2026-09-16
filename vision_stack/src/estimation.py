@@ -1,5 +1,5 @@
 """
-phase3.py
+estimation.py
 
 Navigation Signal Processing
 
@@ -15,8 +15,11 @@ Pipeline stages
                                   discrete states (drive_state, stop_sign_detected)
   3. Confidence thresholding   — reject any detection whose smoothed confidence
                                   is below the configured floor
+                               — dead reckoning fallback if no confident detections
+                                  are found
   4. State estimation          — fuse vision outputs with inertial sensor readings
                                   to produce final validated navigation signals
+  5. Final Navigation Packet   — assemble EstimationPacket for Navigation subsystem
 
 Inputs:
   phase2_out: Phase2Output
@@ -57,52 +60,15 @@ Outputs:
 
 from __future__ import annotations
 
+import sys
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque, List, Optional
 
-
-# ============================================================================
-# Detection type from Phase 2 output
-# ============================================================================
-
-@dataclass
-class DetectionObject:
-    """
-    Minimal mirror of the Phase 2 DetectionObject contract.
-
-    .type: "traffic_light" | "stop_sign" | "lane_boundary"
-    .label: (For traffic_light): "red" | "yellow" | "green"
-            (For stop_sign and lane_boundary): "stop_sign" and "lane_boundary"
-    .position_x: (For lane_boundary): signed pixel offset of lane center from image center column
-                 (For traffic_light and stop_sign): bbox centroid x
-    .position_y: bbox centroid y (pixels); used for motion consistency check
-    .confidence: confidence level from [0.0, 1.0]
-    .timestamp: frame timestamp
-
-    For lane_boundary detections, position_x is the signed pixel offset of
-    the lane center from the image center column
-    For traffic_light detections, label carries the color string
-    """
-    type:       str
-    label:      str
-    position_x: float
-    position_y: float
-    confidence: float
-    timestamp:  int
-
-@dataclass
-class Phase2Output:
-    """
-    Minimal Phase 2 output contract consumed by Phase 3.
-    
-    .detections: Detections list from Phase 2
-    .frame_id: Frame identifier from capture loop
-    .timestamp_ms: Timestamp from capture loop
-    """
-    detections:   List[DetectionObject]
-    frame_id:     int
-    timestamp_ms: int
+sys.path.insert(0, "vision_stack/src")
+from phase2_out import Phase2Output
+from imu import IMUFrame
+from encoder import EncoderFrame
 
 # ============================================================================
 # Sensor Input
@@ -110,40 +76,33 @@ class Phase2Output:
 
 @dataclass
 class SensorSample:
-    """
-    Odometry and IMU readings for one frame window
-    All fields may be None if the sensor is not fitted
-
-    .wheel_speed: speed of the robot
-    .distance_traveled: cumulative distance traveled since last reset
-    .yaw_rate: rate of change of heading in degrees per second
-    .lateral_accel: peak lateral acceleration in m/s² during the frame window
-    """
-    wheel_speed:       Optional[float] = None
-    distance_traveled: Optional[float] = None
-    yaw_rate:          Optional[float] = None
-    lateral_accel:     Optional[float] = None
+    """Odometry and IMU readings for one frame window."""
+    frame_id: int = 0
+    timestamp_ms: float = 0.0
+    imu: IMUFrame = field(default_factory=IMUFrame)
+    encoder: EncoderFrame = field(default_factory=EncoderFrame)
 
 # ============================================================================
-# Phase 3 Output
+# Phase 3 Contract - Final Output
 # ============================================================================
 
+# Phase 3 Contract
 @dataclass
 class EstimationPacket:
     """
     Validated navigation signals produced by Phase 3
     This is the handoff contract to the Navigation subsystem
 
-    .lane_offset: Lateral distance from lane center
-                Positive = robot is right of center
-                Vision-primary; encoder dead-reckoning fallback
+    .lane_offset: normalized pixel distance from lane center
+                  Positive = robot is right of center
+                  Negative = robot is left of center
     .heading_error: Angular deviation from target heading (deg)
-                    Vision-primary; IMU yaw integration fallback
-    .drive_state: "go" | "caution" | "stop"
-    .stop_sign_detected: detecting a stop sign takes precedence over traffic light state
-    .yaw_rate: Pass-through from SensorSample (0.0 if None)
-    .lateral_accel: Pass-through from SensorSample (0.0 if None)
-    .wheel_speed: Pass-through from SensorSample (0.0 if None)
+    .drive_state:   Traffic light HSV 
+                    "go" | "caution" | "stop"
+    .stop_sign_detected: 
+    .yaw_rate: Pass-through from SensorSample.imu (0.0 if None)
+    .lateral_accel: Pass-through from SensorSample.encoder (0.0 if None)
+    .wheel_speed: Pass-through from SensorSample.encoder (0.0 if None)
     .frame_id: frame identifier from capture loop
     .timestamp_ms: timestamp from capture loop
     """
@@ -203,7 +162,7 @@ class Phase3Config:
 
     max_centroid_jump_px:   float = 80.0
 
-    deadreck_max_frames:    int   = 10
+    deadreck_max_frames:    int   = 7
 
 
 # ============================================================================
@@ -291,7 +250,6 @@ class _CentroidTracker:
 class Phase3Processor:
     """
     Instantiate once at pipeline startup; call process() on every frame
-    @TODO: Threading support if processing time becomes an issue later on 
     """
     def __init__(
             self, 
@@ -371,7 +329,7 @@ class Phase3Processor:
         drive_state        = _majority_vote_str(self._drive_state_buf, default="go")
         stop_sign_detected = _majority_vote_bool(self._stop_sign_buf)
 
-        # Assemble Packet
+        # Final contract for Navigation subsystem handoff
         return EstimationPacket(
             lane_offset = round(lane_offset_m, 4),
             heading_error = round(heading_error_deg, 3),

@@ -67,7 +67,7 @@ except Exception as exc:                      # ImportError, or color_branch mis
 # Configuration
 # =============================================================================
 DEFAULT_SIZE = (480, 360)       # (w, h)
-DEFAULT_FPS = 20
+DEFAULT_FPS = 12
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 STEERING_MODES = ("two_boundary", "left_only", "right_only")
 
