@@ -50,7 +50,7 @@ import cv2
 import numpy as np
 
 from capture import CameraSource, CaptureError, FrameData
-from pipeline_linker import run_chain, PipelineConfig, MEASURED
+from phase2_linker import run_chain, PipelineConfig, MEASURED
 from lane_offset import _usable
 import debug_video as dv
 
