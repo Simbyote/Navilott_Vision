@@ -175,7 +175,7 @@ Total Pi budget:   ~48 ms (target ≤ 50 ms at ~20 FPS)
 MCU PID loop:      1 kHz independent of Pi cycle
 ```
 
-> **Note:** Histogram equalization dominates preprocessing (~5 ms). If undistortion is enabled it adds additional overhead and must be evaluated against the frame budget before committing.
+> **Note:** Histogram equalization dominates preprocessing (~5 ms).
 
 **Key difference:** In Option A the Pi PID loop runs at 1 kHz regardless of frame rate. In Option B, the MCU PID loop runs at 1 kHz regardless of frame rate.
 

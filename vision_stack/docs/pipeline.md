@@ -132,7 +132,7 @@ YUV Frame (from Phase 1)
 
 ### Preprocessing
 
-- **Histogram Equalization** — performed in YCrCb space; stabilizes intensity distribution under varying lighting. This is the primary conditioning step and is always active.
+- **Histogram Equalization** — performed in YCrCb color space; stabilizes intensity distribution under varying lighting. This is the primary conditioning step and is always active.
 - **Lens Undistortion** *(optional)* — corrects barrel distortion using the camera matrix from Step 1 calibration. The IMX219 exhibits modest distortion, and because the pipeline uses pixel-based (non-metric) lateral offset the practical benefit in the center ROI is limited. A comparative test on course frames is recommended before enabling in production. If enabled, it adds compute overhead per frame. Calibration procedure is in `operations.md` Step 1.
 
 ### Color Branch (HSV Thresholding)

@@ -12,7 +12,7 @@ one loop. One frame in, one `EstimationPacket` out, every cycle.
 libcamera / GStreamer
        │  BGR frame
        ▼
-  preprocess_frame()      histogram equalization (YCrCb) + Gaussian blur
+  preprocess_frame()      histogram equalization (YCrCb Color Space) + Gaussian blur
        │
        ▼
     crop_rois()           splits frame into lane_roi / traffic_roi / sign_roi

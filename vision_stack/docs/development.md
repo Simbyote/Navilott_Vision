@@ -21,7 +21,7 @@ Stage 1: Camera Capture Validation
   - Pass criteria: sustained ~20 FPS, < 10 ms capture time
 
 Stage 2: Preprocessing Benchmarks
-  - Undistortion + histogram equalization applied per frame
+  - Histogram equalization + Gaussian blur applied per frame
   - Calibration files loaded from disk
   - Benchmark: Stage-Timing (preprocessing only)
   - Pass criteria: < 5 ms per frame
