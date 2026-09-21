@@ -377,7 +377,7 @@ def extract_traffic_light_candidates(
         Extract traffic-light color candidates from the traffic-light ROI
 
     Inputs:
-        roi: uint8 BGR ndarray (@TODO Change to YUV)
+        roi: uint8 roi cropped BGR ndarray
         hsv_ranges: HSVRanges, normally calibrated and loaded with
                     load_hsv_ranges(). Uncalibrated ranges are accepted so
                     they can be tuned; debug["calibrated"] reports which
@@ -402,7 +402,7 @@ def extract_traffic_light_candidates(
     """
     # Guards and input validation
     if roi is None:
-        raise ValueError("extract_traffic_light_candidates: received None ROI")
+        raise ValueError("extract_traffic_light_candidates: received None")
     if roi.dtype != np.uint8:
         raise TypeError(f"extract_traffic_light_candidates: expected uint8, got {roi.dtype}")
     if roi.ndim != 3 or roi.shape[2] != 3:
@@ -451,36 +451,7 @@ def extract_traffic_light_candidates(
 
 # =============================================================================
 # Color Branch Stage
-# =============================================================================
-def _traffic_roi_bgr(roi, frame_bgr: np.ndarray) -> np.ndarray:
-    """
-    Purpose:
-        The traffic ROI in BGR. The color branch needs color, and the ROI the
-        crop stage hands out may be grayscale (geometry's are), so fall back
-        to cutting the original frame at the same rect
-
-    Notes:
-        The fallback is only right if the crop's rect is in the coordinates of
-        the frame given here, i.e. preprocessing did not resize or warp it.
-        The shapes are compared so a mismatch raises instead of analysing the
-        wrong pixels
-    """
-    img = roi.traffic_roi
-    if img is not None and img.ndim == 3 and img.shape[2] == 3:
-        return img
-
-    x, y, w, h = roi.traffic_rect
-    crop = frame_bgr[y:y + h, x:x + w]
-    if img is not None and crop.shape[:2] != img.shape[:2]:
-        raise ValueError(
-            f"run_color_stage: traffic_roi is {img.shape[:2]} but traffic_rect "
-            f"{roi.traffic_rect} cut {crop.shape[:2]} from the frame. The crop "
-            f"and the frame are not in the same coordinates (preprocess "
-            f"resized or warped?), so the color ROI cannot be recovered from "
-            f"the frame"
-        )
-    return crop
-
+# ============================================================================
 def run_color_stage(
         roi,
         frame_bgr: np.ndarray,
@@ -495,8 +466,7 @@ def run_color_stage(
 
     Inputs:
         roi: ROICropResult from crop_rois()
-        frame_bgr: the frame as capture delivered it, used only when the ROI
-                   the crop stage hands out is not already color
+        frame_bgr: The roi cropped bgr frame
         config: ColorConfig. With no hsv_ranges the branch is off
         trace: record the per-blob trace (see extract_traffic_light_candidates)
 
@@ -508,7 +478,7 @@ def run_color_stage(
         return [], {"enabled": False}
 
     candidates, debug = extract_traffic_light_candidates(
-        _traffic_roi_bgr(roi, frame_bgr),
+        frame_bgr,
         config.hsv_ranges,
         config.blob,
         roi.frame_id,

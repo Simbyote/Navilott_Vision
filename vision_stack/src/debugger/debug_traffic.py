@@ -368,3 +368,4 @@ class TrafficView:
         if state == "low":
             label += f"<{self.conf_threshold:.2f}"
         return label
+    

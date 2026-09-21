@@ -103,7 +103,7 @@ class LaneOffsetConfig:
     min_intensity: float = 90.0
     min_lane_width_px: float = 60.0
     max_lane_width_px: float = 400.0
-    expected_half_lane_px: Optional[float] = None
+    expected_half_lane_px: Optional[float] = 228        # Half of 95% of a single lane frame
     foot_band_px: int = 6
 
 # =============================================================================

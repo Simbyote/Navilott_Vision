@@ -37,7 +37,7 @@ from src.tests.artifacts import summarize
 TEST_CANNY = CannyParams(threshold1=80.0, threshold2=200.0, aperture_size=3, close_kernel=(9, 3))
 TEST_LANE = LaneContourFilter(min_area=1, max_area=1e6, min_aspect=0.0, max_aspect=1000.0,
                               max_roi_span=1.0, min_intensity=120.0, ref_length=0.25,
-                              ref_width=30.0, score_floor=0.0)
+                              ref_width=30.0)
 TEST_SIGN = SignContourFilter(min_area=200.0, max_area=30000.0, min_vertices=8, max_vertices=10,
                               min_solidity=0.80, epsilon_factor=0.03, ref_area=5000.0)
 TEST_CFG = GeometryConfig(canny=TEST_CANNY, lane=TEST_LANE, sign=TEST_SIGN)
