@@ -1,9 +1,16 @@
 """
-debug_video.py -- Debug video logging for lane_offset.py decisions
+debug_lane.py -- Lane view for the debug tooling
 
 Draws what compute_lane_offset() decided onto the frame it decided it on and
 writes the result to disk, so anchor selection and gating can be reviewed
 frame-by-frame after a run with no monitor on the robot.
+
+Two ways in, both built on the same drawing:
+    LaneView         the view live_view runs (extract / observe / render / row
+                     / report), the same interface as debug_stop and
+                     debug_traffic
+    DebugVideoWriter annotate() plus the decision CSV, for a loop that has the
+                     stage outputs in hand and no chain result (run_pipeline.py)
 
 Inputs are the stage's own outputs, unchanged:
     result      LaneOffsetResult
@@ -21,24 +28,22 @@ Overlay:
     centers     ROI center = robot (gray), lane center implied by the
                 offset (yellow; red when the offset is clamped at +/-1)
 
-Nothing here imports lane_offset.py, so run_pipeline.py can use the same
-writer in the live loop.
+Importing this module does not import lane_offset.py. Only candidate_gates()
+does, at its first call, so annotate() and DebugVideoWriter work anywhere the
+stage outputs do, and no import cycle with the stage is possible.
 """
-import csv
-import os
 import re
 from collections import Counter
 
 import cv2
 import numpy as np
 
+import src.debugger.debug_video as dv
+
 # =============================================================================
 # Configuration
 # =============================================================================
-FOURCC       = "MJPG"          # cheapest OpenCV encoder on ARM; use .avi
-DEFAULT_FPS  = 20.0
 FRAME_SIZE   = (480, 360)      # (w, h) the lane_rect coordinates assume
-IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
 STEERING_MODES = ("two_boundary", "left_only", "right_only")
 LOG_TAGS = ("BLIND", "MERGE", "SPAN", "ONE-SIDED", "UNCALIBRATED", "REJECT")
@@ -55,15 +60,18 @@ TAG_COLORS = {"BLIND": (60, 60, 255), "MERGE": (60, 60, 255),
 GATE_SHORT = {"confidence": "conf", "proximity": "prox", "length_px": "len",
               "width_px": "wid", "mean_intensity": "int"}
 
-C_GRAY   = (140, 140, 140)
-C_WHITE  = (235, 235, 235)
-C_USABLE = (90, 255, 90)                    # green; white vanishes on tape
 C_LEFT   = (255, 255, 0)                      # cyan
 C_RIGHT  = (255, 0, 255)                      # magenta
 C_LANE   = (0, 255, 255)                      # yellow
-C_RED    = (60, 60, 255)
-C_AMBER  = (0, 190, 255)
-FONT     = cv2.FONT_HERSHEY_SIMPLEX
+
+# Shared palette and label helper, from the generic module
+C_GRAY, C_WHITE, C_USABLE = dv.C_GRAY, dv.C_WHITE, dv.C_USABLE
+C_RED, C_AMBER, FONT = dv.C_RED, dv.C_AMBER, dv.FONT
+_text = dv.draw_text
+
+LANE_CSV_FIELDS = ("frame_id", "timestamp_ms", "mode", "offset", "left_x",
+                   "right_x", "lane_width_px", "confidence", "raw_count",
+                   "usable_count") + LOG_TAGS
 
 _TAG_RE = re.compile(r"^\[([A-Z-]+)\]")
 
@@ -105,10 +113,49 @@ def _blank(lane_rect, frame_size):
     img[y:y + h, x:x + w] = 55
     return img
 
-def _text(img, s, org, color, fs, th=1):
-    # Black outline first so labels stay readable over white tape
-    cv2.putText(img, s, org, FONT, fs, (0, 0, 0), th + 2, cv2.LINE_AA)
-    cv2.putText(img, s, org, FONT, fs, color, th, cv2.LINE_AA)
+def _csv_row(result, dbg):
+    """One decision-log row, in LANE_CSV_FIELDS order."""
+    tags = log_tags(dbg.get("log", ()))
+    opt = lambda v: "" if v is None else v
+    return [
+        result.frame_id, result.timestamp_ms, result.mode,
+        result.offset, opt(result.left_x), opt(result.right_x),
+        opt(result.lane_width_px), result.confidence,
+        dbg.get("raw_count", ""), result.boundary_count,
+        *(tags.get(t, 0) for t in LOG_TAGS),
+    ]
+
+def candidate_gates(geometry, config):
+    """
+    Purpose:
+        Pair every raw lane candidate with the gate that rejected it, or None
+        if it passed, in the form annotate() expects
+
+    Inputs:
+        geometry: GeometryBranchResult
+        config: the LaneOffsetConfig the chain ran with
+
+    Notes:
+        Re-runs lane_offset's _usable() per candidate rather than parsing the
+        debug log, because a passing candidate logs nothing and the entries
+        cannot be aligned back to their candidates by position.
+
+        _usable is private to lane_offset. It is imported here, at the first
+        call, so that nothing else in this module depends on lane_offset. A
+        public classify function in lane_offset would remove the need.
+    """
+    from src.perception.lane_offset import _usable
+
+    pairs = []
+    for cand in geometry.lane_candidates:
+        scratch = []
+        ok = _usable(cand, config, scratch)
+        gate = None
+        if not ok and scratch:
+            parts = scratch[-1].split()
+            gate = parts[1] if len(parts) > 1 else "rejected"
+        pairs.append((cand.bbox, gate))
+    return pairs
 
 # =============================================================================
 # Overlay
@@ -215,135 +262,148 @@ def annotate(frame, result, dbg, lane_rect, candidates=(), scale=1,
     return img
 
 # =============================================================================
+# View
+# =============================================================================
+class LaneView:
+    """
+    Lane view. Implements the view interface live_view runs:
+
+        name, CSV_FIELDS
+        extract(chain, frame) -> data   pull this target's data out of a chain
+                                        result; the lane view is the one that
+                                        draws on the source frame
+        observe(data)                   accumulate run statistics
+        render(data, scale) -> img      the annotated picture
+        row(data) -> list               one CSV row
+        report() -> [str]               lines for summary.txt
+
+    lane_config: the LaneOffsetConfig the chain ran with, used to say which
+                 gate rejected each candidate. None draws no candidate boxes
+                 (the decision, anchors and boundaries still draw)
+    """
+    name = "lane"
+    CSV_FIELDS = LANE_CSV_FIELDS
+
+    def __init__(self, lane_config=None):
+        self.lane_config = lane_config
+        self._frames = 0
+        self._accepted = 0
+        self._usable = 0
+        self._modes = {}
+        self._gates = {}
+        self._offsets = []
+        self._blind_run = 0
+        self._cur_blind = 0
+
+    # -- data -----------------------------------------------------------------
+    def extract(self, chain, frame=None):
+        gates = (candidate_gates(chain.geometry, self.lane_config)
+                 if self.lane_config is not None else [])
+        size = FRAME_SIZE if frame is None else (frame.shape[1], frame.shape[0])
+        return {
+            "frame": frame,
+            "frame_size": size,
+            "result": chain.offset,
+            "dbg": chain.offset_debug,
+            "lane_rect": chain.roi.lane_rect,
+            "gates": gates,
+        }
+
+    # -- statistics -----------------------------------------------------------
+    def observe(self, data):
+        result, dbg = data["result"], data["dbg"]
+        self._frames += 1
+        self._modes[result.mode] = self._modes.get(result.mode, 0) + 1
+        self._usable += result.boundary_count
+        self._accepted += dbg.get("raw_count", 0)
+
+        for _bbox, gate in data["gates"]:
+            if gate:
+                self._gates[gate] = self._gates.get(gate, 0) + 1
+        for entry in dbg.get("log", ()):
+            for tag in ("MERGE", "SPAN"):
+                if entry.startswith(f"[{tag}]"):
+                    self._gates[tag] = self._gates.get(tag, 0) + 1
+
+        if result.mode in STEERING_MODES:
+            self._offsets.append(result.offset)
+            self._cur_blind = 0
+        else:
+            self._cur_blind += 1
+            self._blind_run = max(self._blind_run, self._cur_blind)
+
+    def report(self):
+        n = max(self._frames, 1)
+        out = [f"[LANE] {self._frames} frames"]
+        out.append(f"candidates accepted     {self._accepted}  "
+                   f"({self._accepted/n:.2f} per frame)")
+        out.append(f"usable as boundaries    {self._usable}  "
+                   f"({self._usable/n:.2f} per frame, need 2.00)")
+        if self._accepted:
+            out.append(f"survival rate           "
+                       f"{100*self._usable/self._accepted:.1f}%")
+
+        out.append("")
+        out.append(f"[MODES] {self._frames} frames:")
+        for mode in ("two_boundary", "left_only", "right_only",
+                     "single_uncalibrated", "none"):
+            c = self._modes.get(mode, 0)
+            flag = "   <-- never" if c == 0 else ""
+            out.append(f" {mode:<22}{c:6}  ({100*c/n:5.1f}%){flag}")
+
+        steering = sum(self._modes.get(m, 0) for m in STEERING_MODES)
+        out.append("")
+        out.append(f"[AVAILABILITY] {steering}/{self._frames} frames produced a "
+                   f"steering signal ({100*steering/n:.1f}%)")
+        out.append(f"[BLIND] longest run without one: {self._blind_run} frames")
+
+        if self._gates:
+            out.append("")
+            out.append("[LOSSES] why a candidate or a pair was not used:")
+            for gate, c in sorted(self._gates.items(), key=lambda kv: -kv[1]):
+                out.append(f" {gate:<22}{c:6}")
+
+        if self._offsets:
+            s = sorted(self._offsets)
+            out.append("")
+            out.append(f"[OFFSETS] min {s[0]:+.3f}  med {s[len(s)//2]:+.3f}  "
+                       f"max {s[-1]:+.3f}")
+        return out
+
+    # -- picture and row --------------------------------------------------------
+    def render(self, data, scale=1):
+        return annotate(data["frame"], data["result"], data["dbg"],
+                        data["lane_rect"], data["gates"], scale,
+                        data["frame_size"])
+
+    def row(self, data):
+        return _csv_row(data["result"], data["dbg"])
+
+# =============================================================================
 # Writer
 # =============================================================================
-class DebugVideoWriter:
+class DebugVideoWriter(dv.ViewWriter):
     """
-    Opens on the first frame so the output size comes from real data.
+    The lane view's video and CSV, for a loop that has the stage outputs and
+    no chain result. live_view does not use this: it runs LaneView through
+    ViewWriter like every other view.
 
     csv_path: "auto" -> video path with .csv; None disables the sidecar
-    stride:   keep every Nth frame, for CPU relief on the robot. The overlay
-              frame id is the real one, so skipped frames show as gaps
+    stride:   keep every Nth frame, for CPU relief on the robot
     """
-    CSV_FIELDS = ("frame_id", "timestamp_ms", "mode", "offset", "left_x",
-                  "right_x", "lane_width_px", "confidence", "raw_count",
-                  "usable_count") + LOG_TAGS
+    CSV_FIELDS = LANE_CSV_FIELDS
 
-    def __init__(self, path, fps=DEFAULT_FPS, fourcc=FOURCC,
+    def __init__(self, path, fps=dv.DEFAULT_FPS, fourcc=dv.FOURCC,
                  csv_path="auto", stride=1):
-        self.path = path
-        self.fps = fps
-        self.fourcc = fourcc
-        self.stride = max(1, int(stride))
-        self.csv_path = (os.path.splitext(path)[0] + ".csv"
-                         if csv_path == "auto" else csv_path)
-        self.frames_written = 0
-        self._seen = 0
-        self._vw = None
-        self._size = None
-        self._csv_f = None
-        self._csv = None
-
-    def _open(self, w, h):
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        self._vw = cv2.VideoWriter(self.path,
-                                   cv2.VideoWriter_fourcc(*self.fourcc),
-                                   self.fps, (w, h))
-        # A missing codec otherwise fails silently and writes nothing
-        if not self._vw.isOpened():
-            raise RuntimeError(f"VideoWriter could not open {self.path} "
-                               f"with fourcc {self.fourcc}")
-        self._size = (w, h)
-        if self.csv_path:
-            self._csv_f = open(self.csv_path, "w", newline="")
-            self._csv = csv.writer(self._csv_f)
-            self._csv.writerow(self.CSV_FIELDS)
+        super().__init__(path, self.CSV_FIELDS, fps, fourcc, csv_path, stride)
 
     def write(self, frame, result, dbg, lane_rect, candidates=(), scale=1,
               frame_size=FRAME_SIZE):
         """Annotate and write one frame. Returns the image, or None if skipped."""
-        self._seen += 1
-        if (self._seen - 1) % self.stride:
+        if not self.take():
             return None
 
         img = annotate(frame, result, dbg, lane_rect, candidates, scale,
                        frame_size)
-        h, w = img.shape[:2]
-        if self._vw is None:
-            self._open(w, h)
-        if (w, h) != self._size:
-            # VideoWriter drops mismatched frames without an error
-            img = cv2.resize(img, self._size, interpolation=cv2.INTER_AREA)
-        self._vw.write(img)
-        self.frames_written += 1
-
-        if self._csv:
-            tags = log_tags(dbg.get("log", ()))
-            opt = lambda v: "" if v is None else v
-            self._csv.writerow([
-                result.frame_id, result.timestamp_ms, result.mode,
-                result.offset, opt(result.left_x), opt(result.right_x),
-                opt(result.lane_width_px), result.confidence,
-                dbg.get("raw_count", ""), result.boundary_count,
-                *(tags.get(t, 0) for t in LOG_TAGS),
-            ])
-        return img
-
-    def close(self):
-        if self._vw is not None:
-            self._vw.release()
-            self._vw = None
-        if self._csv_f is not None:
-            self._csv_f.close()
-            self._csv_f = self._csv = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self.close()
-        return False
-
-# =============================================================================
-# Self-test
-#
-#   python3 debug_video.py
-# =============================================================================
-if __name__ == "__main__":
-    import sys
-    from types import SimpleNamespace
-
-    RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                               "results")
-    out = os.path.join(RESULTS_DIR, "debug_video_selftest.avi")
-    LANE_RECT = (24, 252, 432, 108)
-    N = 30
-    failed = 0
-
-    with DebugVideoWriter(out) as vw:
-        for i in range(N):
-            res = SimpleNamespace(
-                offset=round((i - N / 2) / (N / 2.5), 4),
-                left_x=150.0 + i, right_x=300.0 + i, lane_width_px=150.0,
-                confidence=0.6, boundary_count=2, mode="two_boundary",
-                frame_id=i, timestamp_ms=i * 50)
-            dbg = {"raw_count": 3, "anchors": [(150.0 + i, 0.6), (300.0 + i, 0.6)],
-                   "log": ["[REJECT] confidence 0.1 < 0.3"]}
-            cands = [((148 + i, 10, 5, 95), None), ((298 + i, 10, 5, 95), None),
-                     ((60, 30, 20, 20), "confidence")]
-            vw.write(None, res, dbg, LANE_RECT, cands, scale=2)
-
-    cap = cv2.VideoCapture(out)
-    got = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    cap.release()
-    ok = got == N
-    failed += not ok
-    print(f"  {'ok  ' if ok else 'FAIL'}  video frame count {got}/{N}")
-
-    with open(os.path.splitext(out)[0] + ".csv", newline="") as f:
-        rows = list(csv.DictReader(f))
-    ok = len(rows) == N and all(r["REJECT"] == "1" for r in rows)
-    failed += not ok
-    print(f"  {'ok  ' if ok else 'FAIL'}  sidecar rows {len(rows)}/{N}, tags counted")
-
-    sys.exit(1 if failed else 0)
+        row = _csv_row(result, dbg) if self.csv_path else None
+        return self.push(img, row)

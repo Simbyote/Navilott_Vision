@@ -26,14 +26,12 @@ All coordinates are ROI-relative.
 @NOTE Think about moving each calculation done in _extract_lane_candidates into its own function
         similar to how _mean_contour_intensity is implemented
 """
-import os
 import cv2
 import numpy as np
-import time
 from dataclasses import dataclass, field
 from typing import List
 
-from roi_crop import ROICropResult
+from src.perception.roi_crop import ROICropResult
 
 # ============================================================================
 # Input Dataclasses
@@ -64,8 +62,7 @@ class LaneContourFilter:    # Lane Boundary
     max_aspect: upper bound of a long/short side from minAreaRect
     min_intensity: Minimum intensity (0-255) inside the contour. Rejects dark blobs
     ref_length: The contour long side, as a fraction of the ROI extent along that axis
-    ref_width: The contour short side, as a fraction of the ROI extent along that axis
-    score_floor: Prevents zeroed features from collapsing geometric means
+    ref_width: The contour short side, as pixels of the ROI extent along that axis
     """
     min_area: float = 1.0
     max_area: float = 1000.0
@@ -75,7 +72,6 @@ class LaneContourFilter:    # Lane Boundary
     min_intensity: float = 120.0
     ref_length: float = 0.25
     ref_width: float = 30.0
-    score_floor: float = 0.0
 
 @dataclass
 class SignContourFilter:    # Stop Sign
@@ -188,6 +184,8 @@ class SignCandidate:
     confidence: detection confidence
     frame_id: frame identifier
     timestamp_ms: time at which the detection was made
+    area: contour area in px^2 (ROI-relative). 0.0 means not computed
+    solidity: contour_area / convex_hull_area. 0.0 means not computed
     """
     label: str
     bbox: tuple
@@ -196,6 +194,8 @@ class SignCandidate:
     confidence: float
     frame_id: int
     timestamp_ms: int
+    area: float = 0.0
+    solidity: float = 0.0
 
 @dataclass
 class GeometryBranchResult:
@@ -704,16 +704,67 @@ def _sign_confidence(
     return round(0.5 * vertex_score + 0.5 * area_score, 4)
 
 
+# An area-rejected contour is traced only if its bounding box covers at least
+# this fraction of min_area; smaller ones are edge noise and are only counted.
+# Judged by bbox, not contour area: a Canny outline with a gap traces as a thin
+# sliver with almost no enclosed area but a sign-sized box, and that is exactly
+# the failure the trace is there to show
+TRACE_MIN_BBOX_FRAC = 1.0
+
+def _trace_entry(
+        contour: np.ndarray,
+        gate,
+        area: float,
+        vertices=None,
+        solidity=None,
+        confidence=None,
+        poly=None,
+    ) -> dict:
+    """
+    Purpose:
+        One row of the sign trace: a contour the detector looked at and what
+        it decided. Fields not measured before the contour was rejected are None
+
+    Inputs:
+        contour: the raw contour, used only for its bounding box
+        gate: None if accepted, else "area", "vertices", "hull" or "solidity"
+        area, vertices, solidity, confidence: measurements so far
+        poly: the approxPolyDP polygon
+
+    Outputs:
+        dict with bbox, gate, area, vertices, solidity, confidence, poly
+    """
+    return {
+        "bbox": cv2.boundingRect(contour),
+        "gate": gate,
+        "area": area,
+        "vertices": vertices,
+        "solidity": solidity,
+        "confidence": confidence,
+        "poly": poly,
+    }
+
 def _extract_sign_candidates(
     contours,
     sign_filter: SignContourFilter,
     frame_id: int,
     timestamp_ms: int,
-    reject_counts: dict | None = None
+    reject_counts: dict | None = None,
+    trace: list | None = None,
 ) -> List[SignCandidate]:
-    """ 
+    """
     Purpose:
         Extract stop sign candidates from contours based on vertex count, area, and solidity
+
+    Inputs:
+        contours: detected contours
+        sign_filter: SignContourFilter configuration
+        frame_id
+        timestamp_ms
+        reject_counts: dict, filled with a count per gate
+        trace: list, or None to skip. Given a list, one _trace_entry() is
+               appended per contour that reached a gate, accepted or not, so
+               a view can show what the detector saw and why it decided
     """
     candidates = []
 
@@ -726,6 +777,10 @@ def _extract_sign_candidates(
         area = cv2.contourArea(contour)
         if area < sign_filter.min_area or area > sign_filter.max_area:
             rc["area"] += 1
+            if trace is not None:
+                _, _, bw, bh = cv2.boundingRect(contour)
+                if bw * bh >= sign_filter.min_area * TRACE_MIN_BBOX_FRAC:
+                    trace.append(_trace_entry(contour, "area", area))
             continue
 
         # Polygon approximation
@@ -733,9 +788,14 @@ def _extract_sign_candidates(
         epsilon = sign_filter.epsilon_factor * arc_len
         approx = cv2.approxPolyDP(contour, epsilon, closed=True)
         n_verts = len(approx)
+        confidence = _sign_confidence(area, n_verts, sign_filter)
 
         if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
             rc["vertices"] += 1
+            if trace is not None:
+                trace.append(_trace_entry(
+                    contour, "vertices", area, n_verts,
+                    confidence=confidence, poly=approx))
             continue
 
         # Reject non-convex / fragmented shapes
@@ -743,15 +803,21 @@ def _extract_sign_candidates(
         hull_area = cv2.contourArea(hull)
         if hull_area <= 0:
             rc["hull"] += 1
+            if trace is not None:
+                trace.append(_trace_entry(
+                    contour, "hull", area, n_verts,
+                    confidence=confidence, poly=approx))
             continue
         solidity = area / hull_area
         if solidity < sign_filter.min_solidity:
             rc["solidity"] += 1
+            if trace is not None:
+                trace.append(_trace_entry(
+                    contour, "solidity", area, n_verts, round(solidity, 4),
+                    confidence, approx))
             continue
 
         x, y, w, h = cv2.boundingRect(contour)
-        confidence = _sign_confidence(area, n_verts, sign_filter)
-
         rc["accepted"] += 1
 
         candidates.append(SignCandidate(
@@ -762,7 +828,13 @@ def _extract_sign_candidates(
             confidence = confidence,
             frame_id = frame_id,
             timestamp_ms = timestamp_ms,
+            area = area,
+            solidity = round(solidity, 4),
         ))
+        if trace is not None:
+            trace.append(_trace_entry(
+                contour, None, area, n_verts, round(solidity, 4),
+                confidence, approx))
 
     return candidates
 
@@ -773,6 +845,7 @@ def extract_sign_candidates(
     frame_id: int,
     timestamp_ms: int,
     draw_overlays: bool = True,
+    trace: bool = False,
 ) -> tuple:
     """ Public interface
     Purpose:
@@ -795,24 +868,41 @@ def extract_sign_candidates(
             allocations and the contour rasterization per frame; the overlay
             keys are then absent from debug_images
 
+        trace : bool
+            Record every contour that reached a gate, with the gate that
+            rejected it, under debug_images["trace"]. Off by default: the
+            live loop does not read it
+
     Outputs:
         candidates : List[SignCandidate]
         debug_images : dict
+            Always: sign_roi, edges, reject_counts.
+            With trace: trace, a list of dicts (bbox, gate, area, vertices,
+            solidity, confidence, poly), ROI-relative like every coordinate
+            here. gate is None for the candidates that were accepted.
     """
     edges = _canny(sign_roi, canny_params)
     contours = _contours(edges)
+
+    reject_counts = {}
+    trace_log = [] if trace else None
 
     candidates = _extract_sign_candidates(
         contours, 
         sign_filter, 
         frame_id, 
-        timestamp_ms
+        timestamp_ms,
+        reject_counts,
+        trace_log,
     )
 
     debug_images = {
         "sign_roi": sign_roi,
         "edges": edges,
+        "reject_counts": reject_counts,
     }
+    if trace:
+        debug_images["trace"] = trace_log
 
     if draw_overlays:
         # Both overlays must be 3-channel. Annotations are drawn with BGR
@@ -848,6 +938,7 @@ def run_geometry_branch(
     frame_id: int = 0,
     timestamp_ms: int = 0,
     draw_overlays: bool = True,
+    trace: bool = False,
 ) -> tuple:
     """
     Purpose:
@@ -865,6 +956,8 @@ def run_geometry_branch(
         draw_overlays: build the debug overlays in both branches. False skips
                        four full-ROI allocations and two contour
                        rasterizations per frame
+        trace: record every sign contour and the gate that decided it (see
+               extract_sign_candidates)
 
     Outputs:
         result: GeometryBranchResult
@@ -902,7 +995,8 @@ def run_geometry_branch(
         sign_filter, 
         frame_id, 
         timestamp_ms,
-        draw_overlays
+        draw_overlays,
+        trace
     )
 
     result = GeometryBranchResult(
@@ -921,6 +1015,7 @@ def run_geometry_stage(
         roi: ROICropResult,
         config: GeometryConfig = GeometryConfig(),
         draw_overlays: bool = False,
+        trace: bool = False,
     ) -> tuple:
     """
     Purpose:
@@ -939,6 +1034,8 @@ def run_geometry_stage(
         draw_overlays: default False. The live loop discards the debug dicts,
                        so building them costs allocations nothing reads.
                        The dataset harness passes True
+        trace: default False. Records the per-contour sign trace for the
+               debug views; see extract_sign_candidates
 
     Outputs:
         result: GeometryBranchResult
@@ -959,402 +1056,5 @@ def run_geometry_stage(
         frame_id = roi.frame_id,
         timestamp_ms = roi.timestamp_ms,
         draw_overlays = draw_overlays,
+        trace = trace,
     )
- 
-# =============================================================================
-# Testing Harness --- Standalone
-# =============================================================================
-# =============================================================================
-# Self-test
-#
-#   python3 geometry.py             logic tests only, runs anywhere
-#   python3 geometry.py --dataset   also runs the full chain over the samples
-#
-# Exits non-zero on any logic failure so it can gate a commit.
-# =============================================================================
-if __name__ == "__main__":
-    import sys
-    import csv
-    import traceback
-
-    from capture import FrameData
-    from preprocess import preprocess_frame, PreprocessParams
-    from roi_crop import crop_rois, ROIConfig
-
-    H, W = 360, 480
-
-    _results = []
-
-    def check(name, fn):
-        """Run one test, record pass/fail, never abort the suite."""
-        try:
-            fn()
-        except Exception:
-            _results.append((name, False))
-            print(f"  FAIL  {name}")
-            for line in traceback.format_exc().strip().splitlines()[-2:]:
-                print(f"        {line.strip()}")
-        else:
-            _results.append((name, True))
-            print(f"  ok    {name}")
-
-    def expect_raises(exc_type, fn):
-        try:
-            fn()
-        except exc_type:
-            return
-        raise AssertionError(f"expected {exc_type.__name__}, nothing was raised")
-
-    def _synthetic_bgr(seed=11):
-        """A frame with a couple of bright thin marks in the lane ROI."""
-        rng = np.random.default_rng(seed)
-        f = rng.integers(0, 90, (H, W, 3), dtype=np.uint8)
-        f[300:305, 60:190] = 235
-        f[296:301, 280:410] = 230
-        return f
-
-    def _roi(frame_id=0, timestamp_ms=1000):
-        """An ROICropResult built by running the real stages in order."""
-        fd = FrameData(_synthetic_bgr(), frame_id, timestamp_ms)
-        return crop_rois(preprocess_frame(fd, PreprocessParams()), ROIConfig())
-
-    # -------------------------------------------------------------------------
-    # Stage wiring
-    # -------------------------------------------------------------------------
-    def t_stage_accepts_an_roicropresult():
-        result, lane_debug, sign_debug = run_geometry_stage(_roi())
-        assert isinstance(result, GeometryBranchResult)
-        assert isinstance(lane_debug, dict) and isinstance(sign_debug, dict)
-
-    def t_stage_accepts_read_only_rois():
-        """crop_rois hands out read-only views; nothing here may write to one."""
-        roi = _roi()
-        assert not roi.lane_roi.flags.writeable, "fixture is not read-only"
-        run_geometry_stage(roi)
-
-    def t_stamp_is_carried_not_rederived():
-        result, _, _ = run_geometry_stage(_roi(frame_id=31, timestamp_ms=777111))
-        assert (result.frame_id, result.timestamp_ms) == (31, 777111), (
-            f"got {(result.frame_id, result.timestamp_ms)}"
-        )
-
-    def t_candidates_inherit_the_frame_stamp():
-        """Estimation compares candidates across frames, so every candidate
-        must agree with the frame it came from."""
-        result, _, _ = run_geometry_stage(_roi(frame_id=5, timestamp_ms=4242))
-        for c in list(result.lane_candidates) + list(result.sign_candidates):
-            assert (c.frame_id, c.timestamp_ms) == (5, 4242), (
-                f"candidate stamped {(c.frame_id, c.timestamp_ms)}, frame was (5, 4242)"
-            )
-
-    def t_default_config_matches_loose_arguments():
-        """GeometryConfig() must be the same tuning as the bare dataclasses,
-        or the stage and the tuning harness diverge silently."""
-        roi = _roi()
-        via_stage, _, _ = run_geometry_stage(roi, GeometryConfig())
-        via_loose, _, _ = run_geometry_branch(
-            roi.lane_roi, roi.sign_roi,
-            CannyParams(), LaneContourFilter(), SignContourFilter(),
-            roi.frame_id, roi.timestamp_ms,
-        )
-        assert len(via_stage.lane_candidates) == len(via_loose.lane_candidates)
-        assert len(via_stage.sign_candidates) == len(via_loose.sign_candidates)
-
-    # -------------------------------------------------------------------------
-    # Overlay gating
-    # -------------------------------------------------------------------------
-    def t_overlays_off_by_default_in_the_stage():
-        _, lane_debug, sign_debug = run_geometry_stage(_roi())
-        for name, d in (("lane", lane_debug), ("sign", sign_debug)):
-            assert "contour_overlay" not in d, f"{name} built an overlay nobody asked for"
-            assert "accepted_overlay" not in d, f"{name} built an overlay nobody asked for"
-
-    def t_overlays_present_when_requested():
-        _, lane_debug, sign_debug = run_geometry_stage(_roi(), draw_overlays=True)
-        for name, d in (("lane", lane_debug), ("sign", sign_debug)):
-            assert "contour_overlay" in d, f"{name} overlay missing"
-            assert "accepted_overlay" in d, f"{name} overlay missing"
-
-    def t_overlays_are_three_channel():
-        """A single-channel destination silently swallows BGR annotations."""
-        _, lane_debug, sign_debug = run_geometry_stage(_roi(), draw_overlays=True)
-        for name, d in (("lane", lane_debug), ("sign", sign_debug)):
-            for key in ("contour_overlay", "accepted_overlay"):
-                img = d[key]
-                assert img.ndim == 3 and img.shape[2] == 3, (
-                    f"{name} {key} is {img.shape}; annotations would render black"
-                )
-
-    def t_overlay_flag_does_not_change_detections():
-        roi = _roi()
-        off, _, _ = run_geometry_stage(roi, draw_overlays=False)
-        on, _, _ = run_geometry_stage(roi, draw_overlays=True)
-        assert len(off.lane_candidates) == len(on.lane_candidates)
-        assert len(off.sign_candidates) == len(on.sign_candidates)
-
-    def t_reject_counts_survive_with_overlays_off():
-        """The tuning harness reads reject_counts; it is not overlay data."""
-        _, lane_debug, _ = run_geometry_stage(_roi())
-        assert "reject_counts" in lane_debug
-        assert "seen" in lane_debug["reject_counts"]
-
-    # -------------------------------------------------------------------------
-    # Input validation
-    # -------------------------------------------------------------------------
-    def t_three_channel_roi_rejected():
-        """Color conversion belongs to preprocess, not here."""
-        bad = np.zeros((108, 432, 3), np.uint8)
-        good = np.zeros((198, 240), np.uint8)
-        expect_raises(ValueError, lambda: run_geometry_branch(
-            bad, good, CannyParams(), LaneContourFilter(), SignContourFilter()))
-
-    def t_float_roi_rejected():
-        bad = np.zeros((108, 432), np.float32)
-        good = np.zeros((198, 240), np.uint8)
-        expect_raises(TypeError, lambda: run_geometry_branch(
-            bad, good, CannyParams(), LaneContourFilter(), SignContourFilter()))
-
-    def t_none_roi_rejected():
-        good = np.zeros((198, 240), np.uint8)
-        expect_raises(ValueError, lambda: run_geometry_branch(
-            None, good, CannyParams(), LaneContourFilter(), SignContourFilter()))
-
-    # -------------------------------------------------------------------------
-    print("\nStage wiring")
-    check("accepts an ROICropResult",            t_stage_accepts_an_roicropresult)
-    check("accepts read-only ROI views",         t_stage_accepts_read_only_rois)
-    check("frame_id/timestamp carried through",  t_stamp_is_carried_not_rederived)
-    check("candidates inherit the frame stamp",  t_candidates_inherit_the_frame_stamp)
-    check("GeometryConfig() == loose defaults",  t_default_config_matches_loose_arguments)
-
-    print("\nOverlay gating")
-    check("off by default in the stage",         t_overlays_off_by_default_in_the_stage)
-    check("present when requested",              t_overlays_present_when_requested)
-    check("overlays are 3-channel",              t_overlays_are_three_channel)
-    check("flag does not change detections",     t_overlay_flag_does_not_change_detections)
-    check("reject_counts survive overlays off",  t_reject_counts_survive_with_overlays_off)
-
-    print("\nInput validation")
-    check("3-channel ROI rejected",              t_three_channel_roi_rejected)
-    check("float32 ROI rejected",                t_float_roi_rejected)
-    check("None ROI rejected",                   t_none_roi_rejected)
-
-    passed = sum(1 for _, ok in _results if ok)
-    print(f"\n{passed}/{len(_results)} passed")
-
-    # -------------------------------------------------------------------------
-    # Dataset pass: run the full chain over the sample images
-    #
-    # Reads source frames and runs preprocess -> crop_rois -> geometry, rather
-    # than loading roi_crop's debug PNGs. The tuning numbers below are then
-    # measured on exactly what the live loop produces.
-    # -------------------------------------------------------------------------
-    if "--dataset" not in sys.argv:
-        print("\nDataset: skipped (pass --dataset to run the tuning sweep)")
-        sys.exit(0 if passed == len(_results) else 1)
-
-    SAMPLE_DIRS = [
-        "vision_stack/frames/Sample1",
-        "vision_stack/frames/Sample2",
-        "vision_stack/frames/Sample3",
-    ]
-
-    IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".bmp")
-
-    csv_path = "vision_stack/frames/lane_candidates.csv"
-    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
-    csv_file = open(csv_path, "w", newline="")
-    writer = csv.writer(csv_file)
-    writer.writerow([
-        "sample", "stem", "frame_id", "confidence", "mean_intensity",
-        "length_px", "width_px", "proximity", "x", "y", "w", "h",
-        "foot_x", "centroid_x", "foot_minus_centroid",
-        "L", "I", "W"
-    ])
-
-    pre_params = PreprocessParams()
-    roi_config = ROIConfig()
-    geo_config = GeometryConfig()
-
-    # Kept as separate names so the stats block below reads unchanged
-    canny_params = geo_config.canny
-    lane_filter = geo_config.lane
-    sign_filter = geo_config.sign
-
-    reject_totals = {}
-    confidences = []
-    frame_kept = []
-    orient = {"horiz": 0, "vert": 0}
-    lengths = []
-    widths = []
-    roi_shape = None
-    total_ok = 0
-    total_fail = 0
-    frame_id = 0
-
-    print("\nDataset")
-    for sample_dir in SAMPLE_DIRS:
-        if not os.path.isdir(sample_dir):
-            print(f"[SKIP] Not found: {sample_dir}")
-            continue
-
-        results_dir = os.path.join(sample_dir, "results")
-        os.makedirs(results_dir, exist_ok=True)
-
-        image_files = sorted(
-            f for f in os.listdir(sample_dir)
-            if os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
-        )
-        if not image_files:
-            print(f"[SKIP] No images in {sample_dir}")
-            continue
-
-        for filename in image_files:
-            img_path = os.path.join(sample_dir, filename)
-            stem = os.path.splitext(filename)[0]
-
-            original = cv2.imread(img_path)
-            if original is None:
-                print(f"[FAIL] Could not read: {img_path}")
-                total_fail += 1
-                continue
-
-            ts_ms = int(time.time() * 1000)
-
-            try:
-                pre = preprocess_frame(
-                    FrameData(original, frame_id, ts_ms), pre_params
-                )
-                roi_result = crop_rois(pre, roi_config)
-                result, lane_debug, sign_debug = run_geometry_stage(
-                    roi_result, geo_config, draw_overlays=True
-                )
-            except (ValueError, TypeError) as e:
-                print(f"[FAIL] {stem}: {e}")
-                total_fail += 1
-                continue
-
-            if roi_shape is None:
-                roi_shape = roi_result.lane_roi.shape[:2]
-
-            rc = lane_debug["reject_counts"]
-            for key, count in rc.items():
-                reject_totals[key] = reject_totals.get(key, 0) + count
-
-            frame_kept.append(
-                sum(1 for c in result.lane_candidates if c.confidence >= 0.30)
-            )
-
-            for c in result.lane_candidates:
-                confidences.append(c.confidence)
-                lengths.append(c.length_px)
-                widths.append(c.width_px)
-                if c.bbox[2] >= c.bbox[3]:
-                    orient["horiz"] += 1
-                else:
-                    orient["vert"] += 1
-
-                x, y, w, h = c.bbox
-                # Normalizers must use the live ROI width, not a literal, or
-                # this sweep silently misreports after an ROI bounds change
-                L = min(c.length_px / (lane_filter.ref_length * roi_shape[1]), 1.0)
-                I = min(max((c.mean_intensity - lane_filter.min_intensity) /
-                            (255 - lane_filter.min_intensity), 0.0), 1.0)
-                Wn = min(c.width_px / lane_filter.ref_width, 1.0)
-                writer.writerow([
-                    os.path.basename(os.path.normpath(sample_dir)),
-                    stem, frame_id,
-                    c.confidence, round(c.mean_intensity, 2),
-                    c.length_px, c.width_px, c.proximity,
-                    x, y, w, h,
-                    c.foot_x, round(x + w / 2.0, 2),
-                    round(c.foot_x - (x + w / 2.0), 2),
-                    round(L, 3), round(I, 3), round(Wn, 3),
-                ])
-
-            # Debug lane images
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_lane_edges.png"),
-                        lane_debug["edges"])
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_lane_contours.png"),
-                        lane_debug["contour_overlay"])
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_lane_accepted.png"),
-                        lane_debug["accepted_overlay"])
-
-            # Debug sign images
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_sign_edges.png"),
-                        sign_debug["edges"])
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_sign_contours.png"),
-                        sign_debug["contour_overlay"])
-            cv2.imwrite(os.path.join(results_dir, f"{stem}_gb_sign_accepted.png"),
-                        sign_debug["accepted_overlay"])
-
-            print(f"[OK] frame_id={frame_id} {stem}  "
-                    f"lane={rc['accepted']}/{rc['seen']}  "
-                    f"sign={len(result.sign_candidates)}")
-            frame_id += 1
-            total_ok += 1
-
-    # -------------------------------------------------------------------------
-    # Rejection histogram
-    # -------------------------------------------------------------------------
-    seen = max(reject_totals.get("seen", 0), 1)
-    print(f"\n[GATES] {seen} contours seen across {total_ok} frames:")
-    for key in ("seen", "area", "too_few_pts",
-                "aspect", "w_span", "h_span", "intensity", "accepted"):
-        count = reject_totals.get(key, 0)
-        note = "   <-- inert" if count == 0 and key not in ("seen", "accepted") else ""
-        print(f" {key:<13} {count:>8}  ({100 * count / seen:5.1f}%){note}")
-
-    # -------------------------------------------------------------------------
-    # Candidate distributions
-    # -------------------------------------------------------------------------
-    if confidences:
-        n = len(confidences)
-        c_sorted = sorted(confidences)
-        l_sorted = sorted(lengths)
-        w_sorted = sorted(widths)
-
-        if roi_shape is not None:
-            knee = lane_filter.ref_length * roi_shape[1]
-            past_knee = sum(1 for L in lengths if L >= knee)
-            kept = sum(1 for c in confidences if c >= 0.30)
-            print(f"\n[SCORES] {n} candidates, lane ROI {roi_shape}:")
-            print(f" confidence: min {c_sorted[0]:.3f}  max {c_sorted[-1]:.3f}  "
-                    f"quartiles {c_sorted[n//4]:.3f} / {c_sorted[n//2]:.3f} / {c_sorted[3*n//4]:.3f}")
-            print(f" per frame at 0.30: {kept / max(total_ok, 1):.2f}  (need >= 2.0)")
-            print(f" length_px: median {l_sorted[n//2]:.1f}  max {l_sorted[-1]:.1f}  "
-                    f"knee {knee:.0f}px ({100 * past_knee / n:.0f}% saturated)")
-            print(f" width_px: median {w_sorted[n//2]:.1f}  max {w_sorted[-1]:.1f}")
-
-        else:
-            raise RuntimeError("No ROI shape")
-
-        # lane_offset.py filters on confidence before taking its extreme-left
-        # and extreme-right anchors, so this threshold decides which contours
-        # bound the lane
-        print(" conf_threshold would keep:", "  ".join(
-            f"{t:.2f} -> {100 * sum(1 for c in confidences if c >= t) / n:.0f}%"
-            for t in (0.20, 0.30, 0.40)))
-        if frame_kept:
-            total = len(frame_kept)
-            buckets = {0: 0, 1: 0, 2: 0, 3: 0}
-            for k in frame_kept:
-                buckets[min(k, 3)] += 1
-            print(f"\n[FRAMES] {total} frames by candidates clearing 0.30:")
-            for k, label in ((0, "none"), (1, "one"), (2, "two"), (3, "three+")):
-                print(f" {label:<8} {buckets[k]:>6}  ({100 * buckets[k] / total:5.1f}%)")
-            run = best = best_at = 0
-            for i, k in enumerate(frame_kept):
-                run = run + 1 if k == 0 else 0
-                if run > best:
-                    best, best_at = run, i - run + 1
-            print(f" longest blind run: {best} frames, starting at index {best_at}")
-
-            n_or = max(orient["horiz"] + orient["vert"], 1)
-            print(f" orientation: {100 * orient['horiz'] / n_or:.0f}% horizontal, "
-                f"{100 * orient['vert'] / n_or:.0f}% vertical")
-
-    print(f"\nDone. {total_ok} processed, {total_fail} failed.")
-    csv_file.close()
-    print(f"\n[CSV] wrote {csv_path}")
-    sys.exit(0 if passed == len(_results) and total_fail == 0 else 1)

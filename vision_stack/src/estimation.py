@@ -66,9 +66,9 @@ from dataclasses import dataclass
 from typing import Deque, List, Optional
 
 sys.path.insert(0, "vision_stack/src")
-from phase2_out import Phase2Output
-from imu import IMUFrame
-from encoder import EncoderFrame
+from src.perception.phase2_out import Phase2Output
+from src.peripherals.imu import IMUFrame
+# from src.peripherals.encoder import EncoderFrame?
 
 # ============================================================================
 # Sensor Input

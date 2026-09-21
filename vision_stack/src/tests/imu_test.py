@@ -21,7 +21,7 @@ import time
 import statistics
 
 sys.path.insert(0, "vision_stack/src")
-from imu import IMUReader, IMUFrame  # noqa: E402
+from src.peripherals.imu import IMUReader, IMUFrame  # noqa: E402
 
 # =============================================================================
 # Config

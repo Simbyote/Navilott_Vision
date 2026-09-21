@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "navilott-vision"
+version = "0.1.0"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "adafruit-circuitpython-mpu6050",
+    "adafruit-blinka",
+    "raspberrypi-tm1637",
+]
+
+[tool.setuptools.packages.find]
+where = ["vision_stack"]
+include = ["src*"]

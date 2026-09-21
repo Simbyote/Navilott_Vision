@@ -47,37 +47,37 @@ import pigpio
 # =============================================================================
 sys.path.insert(0, "vision_stack/src")
 
-from system import System                                   # System Interfaces (Button & Display)
-from imu import IMUReader, IMUFrame                         # IMU Reader
-from encoder import EncoderReader, EncoderFrame             # Encoder Reader
+from src.peripherals.system import System                                   # System Interfaces (Button & Display)
+from src.peripherals.imu import IMUReader, IMUFrame                         # IMU Reader
+from src.peripherals.encoder import EncoderReader, EncoderFrame             # Encoder Reader
 
-from capture import (
+from src.capture.camera import (
     CameraSource,
     CaptureError,
     VideoSink
 )
 
-from preprocess import preprocess_frame                     # Phase 2, Stage 1: Preprocessing
-from roi_crop import (                                      # Phase 2, Stage 2: ROI Cropping
+from src.perception.preprocess import preprocess_frame                     # Phase 2, Stage 1: Preprocessing
+from src.perception.roi_crop import (                                      # Phase 2, Stage 2: ROI Cropping
     crop,
     ROICropResult,
     LANE, TRAFFIC, SIGN
 )                              
-from color_branch import (                                  # Phase 2, Stage 3a: Color Identification
+from src.perception.color_branch import (                                  # Phase 2, Stage 3a: Color Identification
     extract_traffic_light_candidates,
     HSVRanges, 
     BlobFilter,
     load_hsv_ranges
 )
-from geometry import (                                      # Phase 2, Stage 3b: Contour Detection
+from src.perception.geometry import (                                      # Phase 2, Stage 3b: Contour Detection
     run_geometry_branch,
     CannyParams, 
     LaneContourFilter, 
     SignContourFilter
 )
-from feature_fusion import fuse_detections, SourceROIInfo    # Phase 2, Stage 4: Fusing Detection Results
-from lane_offset import compute_lane_offset                  # Phase 2, Stage 5: Lane Offset Calculations 
-from phase2_out import Phase2Output                          # Phase 2, Stage 6: Packaging for Phase3 - Estimation
+from src.perception.feature_fusion import fuse_detections, SourceROIInfo    # Phase 2, Stage 4: Fusing Detection Results
+from src.perception.lane_offset import compute_lane_offset                  # Phase 2, Stage 5: Lane Offset Calculations 
+from src.perception.phase2_out import Phase2Output                          # Phase 2, Stage 6: Packaging for Phase3 - Estimation
 from estimation import (                                     # Phase 3: Navigation Signal Processing
     Phase3Processor, 
     Phase3Config,

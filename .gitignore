@@ -10,17 +10,30 @@ sample_img/
 /workspace/
 **/workspace/
 workspace/
+/workspace
 
 # Templates
 /temp/
 **/temp/
 temp/
+/temp
 
 # Python
 /__pycache__/
 **/__pycache__/
 __pycache__/
+/__pycache__
 *.pyc
+
+/.venv/
+**/.venv/
+.venv/
+/.venv
+
+/navilott_vision.egg-info/
+**/navilott_vision.egg-info/
+navilott_vision.egg-info/
+/navilott_vision.egg-info
 
 # Videos
 /video/
@@ -56,4 +69,8 @@ results/
 **/logs/
 logs/
 /logs
+/specs/
+**/specs/
+specs/
+/specs
 commit_log.md
