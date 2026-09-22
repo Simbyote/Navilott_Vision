@@ -10,15 +10,7 @@ Purpose:
 Pipeline stages
   1. Motion consistency check  — suppress candidates whose bbox centroid jumped
                                   farther than a speed-scaled threshold between frames
-  2. Temporal filtering        — EMA smoothing of lane_offset and heading_error
-                                  over a configurable window; majority vote on
-                                  discrete states (drive_state, stop_sign_detected)
-  3. Confidence thresholding   — reject any detection whose smoothed confidence
-                                  is below the configured floor
-                               — dead reckoning fallback if no confident detections
-                                  are found
-  4. State estimation          — fuse vision outputs with inertial sensor readings
-                                  to produce final validated navigation signals
+
   5. Final Navigation Packet   — assemble EstimationPacket for Navigation subsystem
 
 Inputs:
