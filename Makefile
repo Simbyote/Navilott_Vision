@@ -1,27 +1,24 @@
 # =============================================================================
-# Navilott_Vision — Pi Zero 2W bootstrap Makefile
+# Navilott_Vision — Pi Zero 2W Bootrapper
 # =============================================================================
-# Drop this in the repo root (or point PROJECT_DIR elsewhere) and run:
 #   make setup          # everything except the final reboot
 #   make reboot         # reboot once you're happy
-# or just:
 #   make all            # setup + reboot, no pause
 #
-# Targets are idempotent — re-running after a partial failure just skips
-# work that's already done, instead of re-cloning/re-building everything.
+# Targets are idempotent
 # Run `make help` to see all targets.
 # =============================================================================
 
 SHELL := /bin/bash
 .SHELLFLAGS := -eu -o pipefail -c
 
-# --- Configurable paths --------------------------------------------------
+# --- Custom Paths --------------------------------------------------
 VENV_DIR      ?= $(HOME)/.venv/navilott
 PIGPIO_DIR    ?= $(HOME)/pigpio
 PIGPIO_TAG    ?= v79
 PROJECT_DIR   ?= $(HOME)/Navilott_Vision
 
-# Marker files so we don't redo expensive steps (apt/build) every run
+# Marker files
 STAMP_DIR     := .make-stamps
 APT_STAMP     := $(STAMP_DIR)/apt-base
 CAM_STAMP     := $(STAMP_DIR)/apt-camera
@@ -57,7 +54,7 @@ all: setup reboot
 $(STAMP_DIR):
 	@mkdir -p $(STAMP_DIR)
 
-# --- Base system -------------------------------------------------------
+# --- Base System -------------------------------------------------------
 
 update:
 	sudo apt update && sudo apt full-upgrade -y
@@ -71,7 +68,7 @@ base-deps: $(STAMP_DIR)
 		touch $(APT_STAMP); \
 	fi
 
-# --- Camera stack --------------------------------------------------------
+# --- Camera Stack --------------------------------------------------------
 
 camera-deps: $(STAMP_DIR)
 	@if [ -f $(CAM_STAMP) ]; then \
@@ -85,9 +82,7 @@ camera-deps: $(STAMP_DIR)
 		touch $(CAM_STAMP); \
 	fi
 
-# Sanity checks from the setup doc's "Camera Stack Checklist" — not
-# installs, just verification. Non-fatal on purpose so you can see
-# every result instead of stopping at the first failure.
+# Check Commands
 check:
 	@echo "--- rpicam-hello ---"
 	-rpicam-hello --list-cameras
@@ -126,13 +121,15 @@ pigpio: $(STAMP_DIR)
 		sudo systemctl enable --now pigpiod; \
 		touch $(PIGPIO_STAMP); \
 	fi
+
+# Check Commands
 	@echo "--- pigpiod status ---"
 	-which pigpiod
 	-ldconfig -p | grep pigpio
 	-systemctl status pigpiod --no-pager
 	-pigs t
 
-# --- Python environment / project install --------------------------------
+# --- Python Environment Install --------------------------------
 
 venv:
 	@if [ -d $(VENV_DIR) ]; then \
@@ -146,7 +143,7 @@ venv:
 	@echo ""
 	@echo "==> Remember: 'source $(VENV_DIR)/bin/activate' in new shells."
 
-# --- Housekeeping ----------------------------------------------------------
+# --- Cleaning ----------------------------------------------------------
 
 reboot:
 	sudo reboot
