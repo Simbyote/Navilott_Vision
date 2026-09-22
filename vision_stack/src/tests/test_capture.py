@@ -254,4 +254,3 @@ def test_capture_characterization(request, artifacts):
     # Soft flag only: data collection, not a gate.
     if effective_fps < 0.95 * CAMERA["fps"]:
         warnings.warn(f"effective fps {effective_fps:.1f} below target {CAMERA['fps']}")
-        
