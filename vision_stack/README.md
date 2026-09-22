@@ -24,18 +24,7 @@ Navilott is a fully autonomous robot that navigates a street map course without 
 - Stop signs
 - (Object detection may be an additional feature in the future)
 
-The architecture is undecided between **high-level perception** on the Pi and **low-level motor control**
-on an MCU or that everything runs on the Pi:
-
-### Raspberry Pi Zero 2 W + MCU Architecture
-
-```
-┌─────────────────────────────────┐     ┌──────────────────────────────────┐
-│  High-Level Computer            │     │  Low-Level Controller            │
-│  Raspberry Pi Zero 2 W          │────▶│  Microcontroller (MCU)           │
-│  Perception + Decision Logic    │     │  Motor Drivers + PID Steering    │
-└─────────────────────────────────┘     └──────────────────────────────────┘
-```
+The architecture is decided as **high-level perception** on the Pi:
 
 ### Raspberry Pi Zero 2 W only Architecture
 
@@ -47,12 +36,6 @@ on an MCU or that everything runs on the Pi:
 │ Motor Drivers + PID Steering    │
 └─────────────────────────────────┘
 ```   
-
-Reasons to split the architecture between an MCU and the Pi would be to ensure that real-time motor control
-is never stalled by the perception workload made on the Pi. However, alternatives suggest a workaround may be
-possible. More details are discussed in [Architecture & Design Decisions](docs/architecture.md).
-
----
 
 ## Hardware Constraints
 
@@ -70,25 +53,6 @@ unnecessary frame copies, no bulk buffering. Digital frames are organized in a r
 processing.
 
 ---
-
-## Estimated Memory Budget
-
-### Single Process Footprint
-
-| Component                          | Estimated Usage  |
-|------------------------------------|------------------|
-| Camera frame (640×480 YUV)         | ≈ 0.92 MB        |
-| Working frame buffers              | ≈ 2.8 MB         |
-| Edge detection buffers             | ≈ 1.0 MB         |
-| HSV masks                          | ≈ 1.0 MB         |
-| Detection structures               | < 1 MB           |
-| OpenCV runtime                     | ≈ 50 MB          |
-| Python interpreter                 | ≈ 30 MB          |
-| GStreamer pipeline                 | ≈ 20 MB          |
-| **Estimated pipeline footprint**   | **≈ 110–150 MB** |
-
-**Note:** The 3 working frame buffer estimate assumes worst-case simultaneous copies across pipeline stages. Disciplined use of in-place OpenCV operations may reduce
-this to 1–2 live buffers at any time.
 
 ### System-Level Budget
 
@@ -159,17 +123,13 @@ most recent frame.
                     |  Ring buffer (1 frame max)             | Nav Sig. |  |
                     |  Drop policy: drop=true                | Process. |  |
                     |  No frame copies                       +----+-----+  |
-                    +----------------------------------------------------+-+
-                                                                 |
-                    +--------------------------------------------+---------------------+
-                    |                                                                  |
-                    v  [Option A]                               [Option B]             v
-         +------------------------+                          +------------------------------+
-         |  UART -> MCU           |                          |  Pi GPIO / pigpio daemon     |
-         |  PID loop @ ~1 kHz     |                          |  Python PID loop             |
-         |  HW PWM, no jitter     |                          |  Motor drivers (direct GPIO) |
-         |  Fault isolated        |                          |  Timing: OS best-effort      |
-         +------------------------+                          +------------------------------+
+                    +------------------------------------------------------+
+                                   +------------------------------+ 《----------|
+                                   |  Pi GPIO / pigpio daemon     |
+                                   |  Python PID loop             |
+                                   |  Motor drivers (direct GPIO) |
+                                   |  Timing: OS best-effort      |
+                                   +------------------------------+
 ```
 
 ### Image Processing Pipeline (High-Level)
