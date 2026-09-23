@@ -228,7 +228,7 @@ def build_gst_pipeline(
             GStreamer pipeline string to pass to cv2.VideoCapture() for Phase 1 camera acquisition
         """
     return (
-        "libcamerasrc ! "
+        'libcamerasrc sensor-config="sensor/config,width=1920,height=1080,depth=10" ! '
         f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
         "videoconvert ! "
         "videoflip method=rotate-180 ! "

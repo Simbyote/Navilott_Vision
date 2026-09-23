@@ -238,7 +238,7 @@ def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
 # =============================================================================
 # Synthetic Frame Construction
 # =============================================================================
-FRAME_H, FRAME_W = 360, 480
+FRAME_H, FRAME_W = 270, 480
 LANE_RECT = (24, 252, 432, 108)          # crop_rois output at 480x360
 ROI_W, ROI_H = LANE_RECT[2], LANE_RECT[3]
 ROI_CENTER = ROI_W / 2.0                 # 216.0
