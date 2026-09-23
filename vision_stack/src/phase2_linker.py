@@ -186,7 +186,7 @@ def run_chain(
     )
     lap("geometry")
 
-    traffic, traffic_debug = run_color_stage(roi, frame_bgr, config.color, trace)
+    traffic, traffic_debug = run_color_stage(roi, roi.traffic_roi, config.color, trace)
     lap("color")
 
     offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)

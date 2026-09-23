@@ -1,650 +1,476 @@
 """
 estimation.py
 
-Navigation Signal Processing
+Phase 3 - Estimation
 
 Purpose:
-    Receives Phase2Output from the vision pipeline and produces an EstimationPacket
-    for the Navigation subsystem
+    Turns one Phase2Output per frame, plus the sensor readings from the same
+    frame window, into an EstimationPacket for the Navigation subsystem.
 
-Pipeline stages
-  1. Motion consistency check  — suppress candidates whose bbox centroid jumped
-                                  farther than a speed-scaled threshold between frames
+    Phase 2 answers "what is in this frame". Phase 3 answers "what is true
+    across the last few frames, given the sensors". A stage belongs here only
+    if it uses history (smoothing, voting, holding) or sensor data. Anything
+    that is a per-frame judgment about pixels belongs in Phase 2.
 
-  5. Final Navigation Packet   — assemble EstimationPacket for Navigation subsystem
+Stages:
+    1. LaneFilter          lane_offset_results[0] -> smoothed offset
+                           EMA, a per-frame jump gate, and a dropout hold
+    2. HeadingTracker      IMU yaw integrated while vision is lost. Zero while
+                           the lane filter is on vision
+    3. TrafficClassifier   traffic_light detection -> "go" | "caution" | "stop"
+                           confidence gate + majority vote
+    4. StopSignClassifier  stop_sign detection -> bool
+                           confidence gate + majority vote
+    5. Packet assembly     Phase3Processor.process()
+
+    Each stage is a small class that owns only its own state, so stages can be
+    tested alone and cannot reach into each other. Phase3Processor owns one of
+    each and is the only place the stage order is written down.
 
 Inputs:
-  phase2_out: Phase2Output
-      .detections        list[DetectionObject]
-          Each element has .type, .label, .position_x, .position_y,
-          .confidence, .timestamp
-          Types: "traffic_light" | "stop_sign" | "lane_boundary"
-          For "traffic_light": .label carries "red" | "yellow" | "green"
-          For "lane_boundary": .position_x is the signed pixel offset of the
-                               lane center from the image center column.
-                               Phase 3 converts to meters via px_per_meter.
-      .frame_id          int
-      .timestamp_ms      int
+    Phase2Output from perception.phase2_out.package_phase2()
+    SensorSample for the same frame window; every field is optional
 
-  sensor_sample: SensorSample
-      Odometry and IMU readings captured during the same frame window.
-      All fields are optional (None = sensor not yet available or not fitted).
-      .wheel_speed        float | None   m/s
-      .distance_traveled  float | None   m (cumulative since reset)
-      .yaw_rate           float | None   deg/s  (mean over frame window)
-      .lateral_accel      float | None   m/s²   (peak over frame window)
+Units:
+    lane_offset stays normalized, [-1, 1] of half the lane ROI width, positive
+    when the robot is right of lane center. It is already a usable steering
+    error. lane_offset_cm is filled only when Phase3Config has both
+    lane_roi_width_px and cm_per_px set, and is None otherwise.
 
-Outputs:
-  EstimationPacket:
-    .lane_offset          float   Lateral distance from lane center (m).
-                                    Positive = robot is right of center.
-                                    Vision-primary; encoder dead-reckoning fallback.
-    .heading_error        float   Angular deviation from target heading (deg).
-                                    Vision-primary; IMU yaw integration fallback.
-    .drive_state          str     "go" | "caution" | "stop"
-    .stop_sign_detected   bool
-    .yaw_rate             float   Pass-through from SensorSample (0.0 if None).
-    .lateral_accel        float   Pass-through from SensorSample (0.0 if None).
-    .wheel_speed          float   Pass-through from SensorSample (0.0 if None).
-    .frame_id             int
-    .timestamp_ms         int
+Sensor seams:
+    Wheel encoders are not wired yet. wheel_speed_mps is carried through when
+    present; nothing depends on it. The dropout hold repeats the last good
+    offset rather than dead-reckoning from odometry. That is the place to add
+    encoder-based prediction once the data exists.
+
+    This module does not import peripherals.imu, which pulls in the board
+    drivers at import time. SensorSample.from_imu() reads an IMUFrame by its
+    fields instead, so estimation runs and tests off the Pi.
 """
-
-from __future__ import annotations
-
-import sys
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass
 from typing import Deque, List, Optional
 
-sys.path.insert(0, "vision_stack/src")
+from src.perception.feature_fusion import DetectionObject
+from src.perception.lane_offset import LaneOffsetResult
 from src.perception.phase2_out import Phase2Output
-from src.peripherals.imu import IMUFrame
-# from src.peripherals.encoder import EncoderFrame?
 
-# ============================================================================
-# Sensor Input
-# ============================================================================
+# =============================================================================
+# Constants
+# =============================================================================
+# LaneOffsetResult modes that carry a measurement. "none" and
+# "single_uncalibrated" report offset 0.0 with no information behind it
+USABLE_LANE_MODES = ("two_boundary", "left_only", "right_only")
 
-@dataclass
-class SensorSample:
-    """Odometry and IMU readings for one frame window."""
-    frame_id: int = 0
-    timestamp_ms: float = 0.0
-    imu: IMUFrame = field(default_factory=IMUFrame)
-    encoder: EncoderFrame = field(default_factory=EncoderFrame)
+# Lane status reported to Navigation
+LANE_VISION = "vision"   # this frame's offset is a fresh measurement
+LANE_HOLD = "hold"       # vision dropped; repeating the last good offset
+LANE_STALE = "stale"     # held too long; Navigation must not steer by it
 
-# ============================================================================
-# Phase 3 Contract - Final Output
-# ============================================================================
+# Drive states
+GO, CAUTION, STOP = "go", "caution", "stop"
+_DRIVE_FOR_COLOR = {"red": STOP, "yellow": CAUTION, "green": GO}
 
-# Phase 3 Contract
-@dataclass
-class EstimationPacket:
-    """
-    Validated navigation signals produced by Phase 3
-    This is the handoff contract to the Navigation subsystem
-
-    .lane_offset: normalized pixel distance from lane center
-                  Positive = robot is right of center
-                  Negative = robot is left of center
-    .heading_error: Angular deviation from target heading (deg)
-    .drive_state:   Traffic light HSV 
-                    "go" | "caution" | "stop"
-    .stop_sign_detected: 
-    .yaw_rate: Pass-through from SensorSample.imu (0.0 if None)
-    .lateral_accel: Pass-through from SensorSample.encoder (0.0 if None)
-    .wheel_speed: Pass-through from SensorSample.encoder (0.0 if None)
-    .frame_id: frame identifier from capture loop
-    .timestamp_ms: timestamp from capture loop
-    """
-    lane_offset:        float
-    heading_error:      float
-    drive_state:        str
-    stop_sign_detected: bool
-    yaw_rate:           float
-    lateral_accel:      float
-    wheel_speed:        float
-    frame_id:           int
-    timestamp_ms:       int
-
-
-# ============================================================================
+# =============================================================================
 # Configuration
-# ============================================================================
-
-@dataclass
+# =============================================================================
+@dataclass(frozen=True)
 class Phase3Config:
     """
-    All tuning parameters for Phase 3
+    Tuning for Phase 3
 
-    1) Temporal Filtering:
-        ema_alpha: EMA smoothing factor for lane_offset and heading_error
-                    Higher = faster response, less smoothing
-                    Range [0.1, 0.9]; start at 0.35 for 18 FPS
-        vote_window: Number of frames over which majority vote is taken
-                    Used for discrete states
-
-    2) Confidence Thresholding:
-        min_confidence_lane: Minimum confidence to accept a lane boundary detection
-        min_confidence_traffic: Minimum confidence to accept a traffic light detection
-        min_confidence_sign: Minimum confidence to accept a stop sign detection
-
-    3) Lane offset:
-        px_per_meter: Pixel-to-meter conversion for lane_offset
-                At 480x360 with ~35 cm visible lane half-width,
-                a starting estimate is (480/2) / 0.35 ≈ 686 px/m
-
-    4) Motion consistency:
-        max_centroid_jump_px: Maximum allowed centroid displacement between
-                consecutive frames for the same detection class
-
-    5) Dead-reckoning:
-        deadreck_max_frames: Maximum frames to hold last lane_offset before
-                the estimate is considered stale
+    ema_alpha: lane offset smoothing. Higher follows faster, smooths less
+    max_offset_jump: largest believable change in normalized offset between
+                     consecutive frames. A bigger jump is treated as a dropout
+                     frame, not a measurement. None disables the gate
+    hold_max_frames: frames to repeat the last good offset before reporting
+                     it stale. At 20 FPS, 7 frames is about 350 ms
+    lane_roi_width_px: lane ROI width, to undo the offset normalization.
+                       None leaves lane_offset_cm unset
+    cm_per_px: ground scale at the bottom of the lane ROI, where lane offset
+               measures. Hand-measured until calibration exists. None leaves
+               lane_offset_cm unset
+    vote_window: frames in the traffic light and stop sign majority votes.
+                 A state changes only when it holds a strict majority of the
+                 window, so 3 means 2 of the last 3 frames
+    min_confidence_traffic: gate on the fused traffic light confidence
+    min_confidence_sign: gate on the fused stop sign confidence
+    gyro_bias_dps: gyro Z reading at standstill, subtracted before integrating
+    heading_limit_deg: clamp on the integrated heading
+    max_dt_s: a frame gap longer than this is clamped, so a stalled frame
+              does not integrate a large heading step
     """
-    ema_alpha:              float = 0.35
-    vote_window:            int   = 3
+    ema_alpha: float = 0.35
+    max_offset_jump: Optional[float] = 0.5
+    hold_max_frames: int = 7
+    lane_roi_width_px: Optional[int] = None
+    cm_per_px: Optional[float] = None
 
-    min_confidence_lane:    float = 0.30
+    vote_window: int = 3
     min_confidence_traffic: float = 0.40
-    min_confidence_sign:    float = 0.45
+    min_confidence_sign: float = 0.45
 
-    px_per_meter:           float = 686.0
+    gyro_bias_dps: float = 0.0
+    heading_limit_deg: float = 90.0
+    max_dt_s: float = 0.5
 
-    max_centroid_jump_px:   float = 80.0
-
-    deadreck_max_frames:    int   = 7
-
-
-# ============================================================================
-# Internal Filter State
-# ============================================================================
-
-@dataclass
-class _EMAState:
+# =============================================================================
+# Input / Output Dataclasses
+# =============================================================================
+@dataclass(frozen=True)
+class SensorSample:
     """
-    Exponential moving average for a single scalar
+    Sensor readings for one frame window. None means not available
 
-    value: current EMA value; None if uninitialized
+    yaw_rate_dps: mean gyro Z over the window, deg/s, + = turning right
+    lateral_accel_mps2: peak |accel Y| over the window, m/s^2
+    wheel_speed_mps: from the wheel encoders, m/s (not wired yet)
     """
-    value: Optional[float] = None
+    yaw_rate_dps: Optional[float] = None
+    lateral_accel_mps2: Optional[float] = None
+    wheel_speed_mps: Optional[float] = None
 
-    def update(
-            self, 
-            sample: float, 
-            alpha: float
-        ) -> float:
+    @classmethod
+    def from_imu(
+            cls,
+            imu_frame,
+            wheel_speed_mps: Optional[float] = None,
+        ) -> "SensorSample":
         """
         Purpose:
-            Update EMA with new sample
+            Build a SensorSample from a peripherals.imu.IMUFrame
 
-        Inputs:
-            sample: new measurement to incorporate
-            alpha: smoothing factor in [0.0, 1.0]
-
-        Output:
-            Updated EMA value
+        Notes:
+            Duck-typed on the IMUFrame fields so this module never imports the
+            IMU driver. An invalid frame (no samples) gives None readings
         """
+        if imu_frame is None or not imu_frame.valid:
+            return cls(wheel_speed_mps=wheel_speed_mps)
+        return cls(
+            yaw_rate_dps = imu_frame.mean_yaw_rate_dps,
+            lateral_accel_mps2 = imu_frame.peak_lateral_accel,
+            wheel_speed_mps = wheel_speed_mps,
+        )
+
+@dataclass(frozen=True)
+class LaneEstimate:
+    """
+    Output of the lane filter for one frame
+
+    offset: smoothed normalized offset; the last good value while holding or
+            stale, 0.0 before any measurement
+    offset_cm: offset in cm, None unless Phase3Config sets the scale
+    status: LANE_VISION | LANE_HOLD | LANE_STALE
+    """
+    offset: float
+    offset_cm: Optional[float]
+    status: str
+
+@dataclass(frozen=True)
+class EstimationPacket:
+    """
+    Phase 3 -> Navigation handoff for one frame
+
+    lane_offset: smoothed normalized offset from lane center, [-1, 1]
+                 + = robot right of center. Steer only when lane_status is
+                 "vision" or "hold"
+    lane_offset_cm: same in cm, None until a scale is configured
+    lane_status: "vision" | "hold" | "stale"
+    heading_error: deg turned since the last frame on vision, from the IMU.
+                   0.0 while on vision. + = turned right
+    drive_state: "go" | "caution" | "stop", from the traffic light vote
+    stop_sign_detected: from the stop sign vote
+    yaw_rate: pass-through, deg/s, 0.0 if unavailable
+    lateral_accel: pass-through, m/s^2, 0.0 if unavailable
+    wheel_speed: pass-through, m/s, 0.0 if unavailable
+    frame_id: carried from Phase2Output, never re-derived
+    timestamp_ms: carried from Phase2Output, never re-derived
+    """
+    lane_offset: float
+    lane_offset_cm: Optional[float]
+    lane_status: str
+    heading_error: float
+    drive_state: str
+    stop_sign_detected: bool
+    yaw_rate: float
+    lateral_accel: float
+    wheel_speed: float
+    frame_id: int
+    timestamp_ms: int
+
+# =============================================================================
+# Shared Filters
+# =============================================================================
+class _EMA:
+    """Exponential moving average of one scalar. value is None until seeded"""
+    def __init__(self) -> None:
+        self.value: Optional[float] = None
+
+    def update(self, sample: float, alpha: float) -> float:
         if self.value is None:
             self.value = sample
         else:
             self.value = alpha * sample + (1.0 - alpha) * self.value
         return self.value
 
-@dataclass
-class _CentroidTracker:
+    def reset(self) -> None:
+        self.value = None
+
+class _Vote:
     """
-    Tracks last known centroid per detection class for consistency check
-    
-    last_x: last known x position
-    last_y: last known y position
+    Majority vote with hold
+
+    The state changes only when one value holds a strict majority of the full
+    window. Otherwise the previous state stands. Measuring against the window
+    rather than the samples seen so far means one frame at startup cannot flip
+    the state, and a three-way split does not pick a winner at random
     """
-    last_x: Optional[float] = None
-    last_y: Optional[float] = None
+    def __init__(self, window: int, initial) -> None:
+        self._window = max(1, window)
+        self._buf: Deque = deque(maxlen=self._window)
+        self.state = initial
+
+    def update(self, sample):
+        self._buf.append(sample)
+        value, count = Counter(self._buf).most_common(1)[0]
+        if 2 * count > self._window:
+            self.state = value
+        return self.state
+
+# =============================================================================
+# Stage 1: Lane Filter
+# =============================================================================
+class LaneFilter:
+    """
+    Smooths lane offset and bridges short vision dropouts
+
+    Notes:
+        A frame counts as a measurement only if its mode is usable and its
+        offset is within max_offset_jump of the current estimate. Anything
+        else is a dropout frame. When the hold runs out the EMA is cleared,
+        so the next usable frame re-seeds the estimate instead of being
+        rejected by the jump gate forever
+    """
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._ema = _EMA()
+        self._last = 0.0
+        self._missed = cfg.hold_max_frames + 1   # stale until first measurement
+
+    def _to_cm(self, offset: float) -> Optional[float]:
+        cfg = self._cfg
+        if cfg.lane_roi_width_px is None or cfg.cm_per_px is None:
+            return None
+        return round(offset * (cfg.lane_roi_width_px / 2.0) * cfg.cm_per_px, 2)
 
     def update(
-            self, 
-            x: float, 
-            y: float, 
-            threshold: float
-        ) -> bool:
+            self,
+            results: List[LaneOffsetResult],
+            log: list,
+        ) -> LaneEstimate:
         """
         Purpose:
-            Check if centroid is within threshold of last known position
+            Fold this frame's lane offset result into the estimate
 
         Inputs:
-            x: current x position
-            y: current y position
-            threshold: maximum allowed jump in pixels
+            results: Phase2Output.lane_offset_results (zero or one entry)
+            log: debug log, appended to
 
-        Output:
-            True if within threshold; False to break
-        lock the tracker
+        Outputs:
+            LaneEstimate
         """
-        if self.last_x is None:
-            self.last_x, self.last_y = x, y
-            return True
-        if self.last_y is None:
-            self.last_x, self.last_y = x, y
-            return True
-        dx = x - self.last_x
-        dy = y - self.last_y
-        dist = (dx * dx + dy * dy) ** 0.5
-        self.last_x, self.last_y = x, y
-        return dist <= threshold
+        cfg = self._cfg
+        result = results[0] if results else None
+        accepted = False
 
+        if result is None:
+            log.append("[LANE] no lane offset result supplied")
+        elif result.mode not in USABLE_LANE_MODES:
+            log.append(f"[LANE] mode {result.mode} carries no measurement")
+        elif (cfg.max_offset_jump is not None and self._ema.value is not None
+                and abs(result.offset - self._ema.value) > cfg.max_offset_jump):
+            log.append(f"[LANE] jump {result.offset - self._ema.value:+.3f} "
+                       f"exceeds {cfg.max_offset_jump}; treated as dropout")
+        else:
+            accepted = True
 
-# ============================================================================
-# Phase3Processor
-# ============================================================================
+        if accepted:
+            self._last = self._ema.update(result.offset, cfg.ema_alpha)
+            self._missed = 0
+            status = LANE_VISION
+        else:
+            self._missed += 1
+            if self._missed <= cfg.hold_max_frames:
+                status = LANE_HOLD
+            else:
+                status = LANE_STALE
+                self._ema.reset()
 
+        offset = round(self._last, 4)
+        return LaneEstimate(offset, self._to_cm(offset), status)
+
+# =============================================================================
+# Stage 2: Heading Tracker
+# =============================================================================
+class HeadingTracker:
+    """
+    Integrates gyro yaw while vision is lost
+
+    Notes:
+        While the lane filter is on vision, the offset already carries the
+        correction, so the heading reference resets to zero. Once vision
+        drops, integrating yaw rate says how far the robot has turned since
+        the last good frame, which is what a recovery maneuver needs. This is
+        a change in heading, not an absolute heading relative to the lane
+    """
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._heading = 0.0
+
+    def update(
+            self,
+            lane_status: str,
+            yaw_rate_dps: Optional[float],
+            dt: float,
+            log: list,
+        ) -> float:
+        cfg = self._cfg
+        if lane_status == LANE_VISION:
+            self._heading = 0.0
+        elif yaw_rate_dps is None:
+            log.append("[HEADING] no yaw rate this frame; heading held")
+        elif dt > 0.0:
+            self._heading += (yaw_rate_dps - cfg.gyro_bias_dps) * dt
+            limit = cfg.heading_limit_deg
+            self._heading = max(-limit, min(limit, self._heading))
+        return round(self._heading, 3)
+
+# =============================================================================
+# Stage 3: Traffic Classifier
+# =============================================================================
+class TrafficClassifier:
+    """
+    Traffic light detection -> voted drive state
+
+    Notes:
+        Fusion already keeps at most one traffic light per frame, so there is
+        no candidate selection here. A frame with no gated light votes "go"
+    """
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._vote = _Vote(cfg.vote_window, GO)
+
+    def update(
+            self,
+            detections: List[DetectionObject],
+            log: list,
+        ) -> str:
+        raw = GO
+        for d in detections:
+            if d.type != "traffic_light":
+                continue
+            if d.confidence < self._cfg.min_confidence_traffic:
+                log.append(f"[TRAFFIC] {d.label_detail} conf={d.confidence:.3f} "
+                           f"below {self._cfg.min_confidence_traffic}")
+                continue
+            raw = _DRIVE_FOR_COLOR.get(d.label_detail, GO)
+        return self._vote.update(raw)
+
+# =============================================================================
+# Stage 4: Stop Sign Classifier
+# =============================================================================
+class StopSignClassifier:
+    """Stop sign detection -> voted bool"""
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._vote = _Vote(cfg.vote_window, False)
+
+    def update(
+            self,
+            detections: List[DetectionObject],
+            log: list,
+        ) -> bool:
+        raw = False
+        for d in detections:
+            if d.type != "stop_sign":
+                continue
+            if d.confidence < self._cfg.min_confidence_sign:
+                log.append(f"[SIGN] conf={d.confidence:.3f} "
+                           f"below {self._cfg.min_confidence_sign}")
+                continue
+            raw = True
+        return self._vote.update(raw)
+
+# =============================================================================
+# Phase 3 Processor
+# =============================================================================
 class Phase3Processor:
     """
-    Instantiate once at pipeline startup; call process() on every frame
+    Runs every Phase 3 stage for one frame. Create once; call process() on
+    every frame in order
     """
-    def __init__(
-            self, 
-            config: Optional[Phase3Config] = None
-        ):
+    def __init__(self, config: Optional[Phase3Config] = None) -> None:
         self._cfg = config or Phase3Config()
+        self.lane = LaneFilter(self._cfg)
+        self.heading = HeadingTracker(self._cfg)
+        self.traffic = TrafficClassifier(self._cfg)
+        self.stop_sign = StopSignClassifier(self._cfg)
+        self._last_ts: Optional[int] = None
 
-        # EMA states
-        self._lane_offset_ema   = _EMAState()
-        self._heading_error_ema = _EMAState()
+    def _dt(self, timestamp_ms: int, log: list) -> float:
+        """Seconds since the previous frame, clamped to [0, max_dt_s]"""
+        prev, self._last_ts = self._last_ts, timestamp_ms
+        if prev is None:
+            return 0.0
+        dt = (timestamp_ms - prev) / 1000.0
+        if dt < 0.0 or dt > self._cfg.max_dt_s:
+            log.append(f"[DT] {dt:.3f}s outside [0, {self._cfg.max_dt_s}]; clamped")
+        return max(0.0, min(dt, self._cfg.max_dt_s))
 
-        # Majority vote buffers
-        self._drive_state_buf: Deque[str]  = deque(maxlen=self._cfg.vote_window)
-        self._stop_sign_buf:   Deque[bool] = deque(maxlen=self._cfg.vote_window)
-
-        # Centroid trackers (one per detection class)
-        self._lane_tracker:    _CentroidTracker = _CentroidTracker()
-        self._traffic_tracker: _CentroidTracker = _CentroidTracker()
-        self._sign_tracker:    _CentroidTracker = _CentroidTracker()
-
-        # Dead-reckoning state
-        self._last_timestamp_ms:  int   = 0
-        self._deadreck_frames:    int   = 0
-        self._last_lane_offset_m: float = 0.0
-
-        # IMU heading integration state
-        self._heading_from_imu: float = 0.0
-
-    # ===========================================================================
-    # Entry Point
-    # ===========================================================================
     def process(
-        self,
-        phase2_out:    Phase2Output,
-        sensor_sample: SensorSample,
-    ) -> EstimationPacket:
+            self,
+            phase2: Phase2Output,
+            sensors: Optional[SensorSample] = None,
+        ) -> tuple:
         """
         Purpose:
             Run one Phase 3 cycle
 
-        Input:
-            phase2_out: Phase2Output from the vision pipeline
-            sensor_sample: SensorSample for this frame window
+        Inputs:
+            phase2: Phase2Output for this frame
+            sensors: SensorSample for the same window; None means no sensors
 
-        Output:
-            EstimationPacket ready for Navigation
+        Outputs:
+            packet: EstimationPacket
+            debug_summary: dict --- "frame_id", "timestamp_ms", "dt", "log"
         """
-        cfg = self._cfg
+        if phase2 is None:
+            raise ValueError("Phase3Processor.process: phase2 output is None")
+        sensors = sensors or SensorSample()
+        log = []
 
-        # dt for integration
-        dt = 0.0
-        if self._last_timestamp_ms > 0 and phase2_out.timestamp_ms > 0:
-            dt = (phase2_out.timestamp_ms - self._last_timestamp_ms) / 1000.0
-            dt = max(0.0, min(dt, 0.5))   # clamp: ignore stale/jumped timestamps
-        self._last_timestamp_ms = phase2_out.timestamp_ms
+        dt = self._dt(phase2.timestamp_ms, log)
+        lane = self.lane.update(phase2.lane_offset_results, log)
+        heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
+        drive_state = self.traffic.update(phase2.detections, log)
+        stop_sign = self.stop_sign.update(phase2.detections, log)
 
-        # Compute jump threshold
-        jump_thresh = cfg.max_centroid_jump_px
-        if sensor_sample.wheel_speed is not None and dt > 0.0:
-            speed_scale = 1.0 + sensor_sample.wheel_speed * dt * cfg.px_per_meter
-            jump_thresh = cfg.max_centroid_jump_px * min(speed_scale, 3.0)
-
-        # Stage 1: Motion consistency check
-        consistent = self._motion_consistency(phase2_out.detections, jump_thresh)
-
-        # Stages 2 & 3: Temporal filtering & confidence threshold
-        lane_offset_m, lane_confident = self._filter_lane(consistent, dt, sensor_sample)
-        heading_error_deg             = self._filter_heading(consistent, dt,
-                                                              sensor_sample, lane_confident)
-        raw_drive_state               = self._classify_traffic(consistent)
-        raw_stop_sign                 = self._classify_stop_sign(consistent)
-
-        # Majority vote on discrete states
-        self._drive_state_buf.append(raw_drive_state)
-        self._stop_sign_buf.append(raw_stop_sign)
-
-        drive_state        = _majority_vote_str(self._drive_state_buf, default="go")
-        stop_sign_detected = _majority_vote_bool(self._stop_sign_buf)
-
-        # Final contract for Navigation subsystem handoff
-        return EstimationPacket(
-            lane_offset = round(lane_offset_m, 4),
-            heading_error = round(heading_error_deg, 3),
+        packet = EstimationPacket(
+            lane_offset = lane.offset,
+            lane_offset_cm = lane.offset_cm,
+            lane_status = lane.status,
+            heading_error = heading,
             drive_state = drive_state,
-            stop_sign_detected = stop_sign_detected,
-            yaw_rate = sensor_sample.yaw_rate      or 0.0,
-            lateral_accel = sensor_sample.lateral_accel or 0.0,
-            wheel_speed = sensor_sample.wheel_speed   or 0.0,
-            frame_id = phase2_out.frame_id,
-            timestamp_ms = phase2_out.timestamp_ms,
+            stop_sign_detected = stop_sign,
+            yaw_rate = sensors.yaw_rate_dps or 0.0,
+            lateral_accel = sensors.lateral_accel_mps2 or 0.0,
+            wheel_speed = sensors.wheel_speed_mps or 0.0,
+            frame_id = phase2.frame_id,
+            timestamp_ms = phase2.timestamp_ms,
         )
-
-    # ===========================================================================
-    # Stage 1: Motion Consistency Check
-    # ===========================================================================
-
-    def _motion_consistency(
-        self,
-        detections:  List[DetectionObject],
-        jump_thresh: float,
-    ) -> List[DetectionObject]:
-        """
-        Purpose:
-            Discard detections whose centroid jumped more than jump_thresh pixels
-            from their last known position for the same detection class
-
-        Inputs:
-            detections: list of DetectionObject from Phase 2
-            jump_thresh: maximum allowed centroid jump in pixels
-
-        Output:
-            filtered detections; also updates the internal centroid trackers
-        """
-        result = []
-        for det in detections:
-            if det.type == "lane_boundary":
-                ok = self._lane_tracker.update(
-                    det.position_x, det.position_y, jump_thresh)
-            elif det.type == "traffic_light":
-                ok = self._traffic_tracker.update(
-                    det.position_x, det.position_y, jump_thresh)
-            elif det.type == "stop_sign":
-                ok = self._sign_tracker.update(
-                    det.position_x, det.position_y, jump_thresh)
-            else:
-                ok = True
-            if ok:
-                result.append(det)
-        return result
-
-    # ===========================================================================
-    # Stage 2 & 3: Lane Offset 
-    # ===========================================================================
-    def _filter_lane(
-        self,
-        detections:    List[DetectionObject],
-        dt:            float,
-        sensor_sample: SensorSample,
-    ) -> tuple:
-        """
-        Purpose:
-            Compute lane offset
-
-        Inputs:
-            detections: list of DetectionObject from Phase 2
-            dt: time delta in seconds between this frame and the previous one
-            sensor_sample: SensorSample for this frame
-
-        Output:
-            lane_offset_m: lateral offset from lane center in meters
-            lane_confident: True if the lane offset is based on a confident vision detection;
-                            False if it's a dead-reckoning fallback
-        """
-        cfg = self._cfg
-        lane_dets = [
-            d for d in detections
-            if d.type == "lane_boundary" and d.confidence >= cfg.min_confidence_lane
-        ]
-
-        if lane_dets:
-            avg_px   = sum(d.position_x for d in lane_dets) / len(lane_dets)
-            offset_m = avg_px / cfg.px_per_meter
-            smoothed = self._lane_offset_ema.update(offset_m, cfg.ema_alpha)
-            self._last_lane_offset_m = smoothed
-            self._deadreck_frames    = 0
-            return smoothed, True
-
-        # Dead-reckoning: hold last estimate within the allowed window
-        if self._deadreck_frames < cfg.deadreck_max_frames:
-            self._deadreck_frames += 1
-            return self._last_lane_offset_m, False
-
-        # Stale — hold silently; Navigation must not rely on this value
-        return self._last_lane_offset_m, False
-
-    # ===========================================================================
-    # Stage 2 & 3: Heading Error
-    # ===========================================================================
-    def _filter_heading(
-        self,
-        detections:     List[DetectionObject],
-        dt:             float,
-        sensor_sample:  SensorSample,
-        lane_confident: bool,
-    ) -> float:
-        """
-        Purpose:
-            Compute heading error from lane offset and/or IMU integration
-
-        Inputs:
-            detections: list of DetectionObject from Phase 2
-            dt: time delta in seconds between this frame and the previous one
-            sensor_sample: SensorSample for this frame
-            lane_confident: True if the lane offset is based on a confident vision detection;
-                            False if it's a dead-reckoning fallback
-
-        Output:
-            heading_error_deg: heading error in degrees
-        """
-        HEADING_SCALE = 30.0   # deg per meter of lateral offset; tune empirically
-
-        if lane_confident and self._lane_offset_ema.value is not None:
-            raw_heading = self._lane_offset_ema.value * HEADING_SCALE
-            smoothed    = self._heading_error_ema.update(raw_heading, self._cfg.ema_alpha)
-            self._heading_from_imu = smoothed   # sync accumulator to vision
-            return smoothed
-
-        if sensor_sample.yaw_rate is not None and dt > 0.0:
-            self._heading_from_imu += sensor_sample.yaw_rate * dt
-            self._heading_from_imu  = max(-90.0, min(90.0, self._heading_from_imu))
-            return self._heading_from_imu
-
-        return self._heading_error_ema.value or 0.0
-
-    # ===========================================================================
-    # Stage 2 & 3: Traffic Light State
-    # ===========================================================================
-    def _classify_traffic(
-            self, 
-            detections: List[DetectionObject]
-        ) -> str:
-        """
-        Purpose:
-            Classify traffic light state
-
-        Inputs:
-            detections: list of DetectionObject from Phase 2
-
-        Output:
-            traffic_state: "go", "caution", or "stop"
-        """
-        cfg = self._cfg
-        tl_dets = [
-            d for d in detections
-            if d.type == "traffic_light" and d.confidence >= cfg.min_confidence_traffic
-        ]
-        if not tl_dets:
-            return "go"
-
-        best = max(tl_dets, key=lambda d: d.confidence)
-        if best.label == "red":
-            return "stop"
-        elif best.label == "yellow":
-            return "caution"
-        return "go"
-
-    # ===========================================================================
-    # Stage 2 & 3: Stop Sign Detection
-    # ===========================================================================
-    def _classify_stop_sign(
-            self, 
-            detections: List[DetectionObject]
-        ) -> bool:
-        """
-        Purpose:
-            Detect stop sign presence
-
-        Inputs:
-            detections: list of DetectionObject from Phase 2
-
-        Output:
-            stop_sign_present: True if a stop sign is present with confidence above threshold; False otherwise
-        """
-        cfg = self._cfg
-        return any(
-            d for d in detections
-            if d.type == "stop_sign" and d.confidence >= cfg.min_confidence_sign
-        )
-
-# ============================================================================
-# Helper functions for majority voting
-# ============================================================================
-
-def _majority_vote_str(
-        buf: Deque[str], 
-        default: str
-    ) -> str:
-    """
-    Purpose:
-        Return the most common string in buf; if tie, return the one that appears first
-
-    Inputs:
-        buf: Deque of strings to vote on
-        default: String to return if buf is empty
-
-    Output:
-        Most common string in buf, or default if buf is empty
-    """
-    if not buf:
-        return default
-    counts: dict = {}
-    for v in buf:
-        counts[v] = counts.get(v, 0) + 1
-    return max(counts, key=lambda k: (counts[k], list(buf).index(k) if k in buf else 0))
-
-def _majority_vote_bool(buf: Deque[bool]) -> bool:
-    """
-    Purpose:
-        Return True if the majority of values in buf are True; False otherwise
-    
-    Inputs:
-        buf: Deque of bools to vote on
-
-    Output:
-        True if the majority of values in buf are True; False otherwise
-    """
-    if not buf:
-        return False
-    return sum(1 for v in buf if v) > len(buf) / 2
-
-# ============================================================================
-# Testing
-# ============================================================================
-
-if __name__ == "__main__":
-    """
-    Mock Test:
-        Runs the Phase3Processor through a synthetic 9-frame sequence
-
-    Test Cases:
-        Frames 0-2 : steady green light + centered lane (normal operation)
-        Frames 3-4 : red light appears
-        Frame  5   : no detections (dead-reckoning + IMU fallback)
-        Frames 6-8 : stop sign detected at course exit
-    """
-
-    def _make_det(
-        type_, 
-        label, 
-        px_x, 
-        px_y, 
-        conf
-    ):
-        """
-        Purpose:
-            Mock DetectionObject factory for testing
-
-        Inputs:
-            type_: "traffic_light" | "stop_sign" | "lane_boundary"
-            label: For traffic_light: "red" | "yellow" | "green"
-                   For stop_sign and lane_boundary: "stop_sign" and "lane_boundary"
-            px_x: For lane_boundary: signed pixel offset of lane center from image center column
-                  For traffic_light and stop_sign: bbox centroid x
-            px_y: bbox centroid y (pixels)
-            conf: confidence level from [0.0, 1.0]
-
-        Output:
-            DetectionObject instance with the specified properties and timestamp=0
-        """
-        return DetectionObject(
-            type=type_, label=label,
-            position_x=px_x, position_y=px_y,
-            confidence=conf, timestamp=0,
-        )
-
-    cfg = Phase3Config(
-        ema_alpha=0.35,
-        vote_window=3,
-        min_confidence_lane=0.30,
-        min_confidence_traffic=0.40,
-        min_confidence_sign=0.45,
-        px_per_meter=686.0,
-        deadreck_max_frames=5,
-    )
-    proc = Phase3Processor(cfg)
-
-    sequences = [
-        # (frame_id, ts_ms, detections, sensor_sample)
-        (0, 0,   [_make_det("traffic_light", "green", 240, 50, 0.85),
-                  _make_det("lane_boundary", "lane_boundary", 15, 300, 0.70)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.5)),
-        (1, 55,  [_make_det("traffic_light", "green", 241, 50, 0.88),
-                  _make_det("lane_boundary", "lane_boundary", -10, 300, 0.72)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.3)),
-        (2, 110, [_make_det("traffic_light", "green", 242, 50, 0.83),
-                  _make_det("lane_boundary", "lane_boundary", 5, 300, 0.68)],
-         SensorSample(wheel_speed=0.3, yaw_rate=0.2)),
-        (3, 165, [_make_det("traffic_light", "red", 242, 50, 0.92),
-                  _make_det("lane_boundary", "lane_boundary", 5, 300, 0.65)],
-         SensorSample(wheel_speed=0.2, yaw_rate=0.0)),
-        (4, 220, [_make_det("traffic_light", "red", 243, 50, 0.90)],
-         SensorSample(wheel_speed=0.1, yaw_rate=1.0)),
-        (5, 275, [],   # no detections — fallback frame
-         SensorSample(wheel_speed=0.1, yaw_rate=2.0)),
-        (6, 330, [_make_det("stop_sign", "stop_sign", 380, 200, 0.75)],
-         SensorSample(wheel_speed=0.0)),
-        (7, 385, [_make_det("stop_sign", "stop_sign", 381, 200, 0.78)],
-         SensorSample(wheel_speed=0.0)),
-        (8, 440, [_make_det("stop_sign", "stop_sign", 382, 200, 0.81),
-                  _make_det("traffic_light", "red", 243, 50, 0.88)],
-         SensorSample(wheel_speed=0.0)),
-    ]
-
-    print(f"{'f':>3} {'lane_off':>9} {'head_err':>9} {'drive':>7} {'stop':>5}")
-    print("-" * 42)
-
-    for frame_id, ts_ms, dets, sensors in sequences:
-        p2  = Phase2Output(detections=dets, frame_id=frame_id, timestamp_ms=ts_ms)
-        pkt = proc.process(p2, sensors)
-        print(
-            f"{pkt.frame_id:>3} "
-            f"{pkt.lane_offset:>+9.4f} "
-            f"{pkt.heading_error:>+9.3f} "
-            f"{pkt.drive_state:>7} "
-            f"{'T' if pkt.stop_sign_detected else 'F':>5}"
-        )
+        return packet, {
+            "frame_id": phase2.frame_id,
+            "timestamp_ms": phase2.timestamp_ms,
+            "dt": round(dt, 4),
+            "log": log,
+        }
