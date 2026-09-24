@@ -1,133 +1,101 @@
-"""
-geometry_branch.py
-
-Geometry Branch Stage
+"""Geometry branch: lane boundaries and stop-sign shapes from gray ROIs.
 
 Purpose:
-    The geometry branch answers two structural questions from the frame:
+    Answers two structural questions per frame. Lane boundaries: white tape
+    on a dark mat gives intensity edges that Canny finds, and contours are
+    kept when their area, elongation, span and brightness match tape. Stop
+    sign: polygon approximation reduces a contour to its dominant vertices,
+    an octagon gives about 8, and area and solidity reject noise. Both share
+    the Canny-contour structure but run on separate ROIs.
 
-  1. Where are the lane boundaries?
-     Lane markings are white tape on a dark mat; there are intensity discontinuities
-     that Canny can detect 
-     Contours are filtered by aspect ratio and area to accept long, thin, and roughly 
-     horizontal or vertical shapes that match lane line geometry, and reject most background 
-     clutter
+Main package:
+    GeometryBranchResult: one frame's accepted LaneCandidates and
+    SignCandidates, all coordinates ROI-relative, with the frame identity
+    carried from ROICropResult. Consumed by feature fusion.
 
-  2. Is there a stop sign shape present?
-     The stop sign is an octagon. Contour approximation reduces a contour to its dominant vertices 
-     An octagon produces approximately 8 vertices 
-     Area and convexity filtering further discriminate against noise contours
-
-These two detections operate on different ROIs and are logically separated
-even though they share the grayscale-Canny-contour pipeline structure
-The results of both are returned together for feature fusion
-
-All coordinates are ROI-relative.
-@NOTE Think about moving each calculation done in _extract_lane_candidates into its own function
-        similar to how _mean_contour_intensity is implemented
+Flow:
+    1. Validate that both ROIs are single-channel uint8.
+    2. Lane: Canny, close along-line gaps, filter contours, merge fragments.
+    3. Sign: Canny, filter contours by area, vertex count and solidity.
+    4. Package both candidate lists with the frame identity.
 """
 import cv2
 import numpy as np
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import List
 
+from src.params import FOOT_BAND_PX, LANE_BOUNDARY, STOP_SIGN
+from src.utils import clamp
 from src.perception.roi_crop import ROICropResult
 
-# ============================================================================
-# Input Dataclasses
-# ============================================================================
-@dataclass
-class CannyParams:  # Edge Detection
-    """
-    Parameters for cv2.Canny edge detection --- affects how many contours are extracted (edges.png)
 
-    threshold1: lower hysteresis threshold --- raising creates more fracturing
-    threshold2: upper hysteresis threshold --- raising reduces contours
-    aperture_size: Sobel kernel size (3, 5, or 7) --- higher kernel size smooths more noise
-    close_kernel: kernel size for morphological closing
-    """
-    threshold1: float = 80.0
-    threshold2: float = 200.0
+@dataclass
+class CannyParams:
+    """Edge detection settings. These set how many contours reach the filters."""
+    threshold1: float = 80.0        # hysteresis low; raising it fractures lines into more pieces
+    threshold2: float = 200.0       # hysteresis high; raising it seeds fewer contours
+    # Sobel aperture: 3, 5 or 7. Larger smooths more but scales gradient
+    # magnitudes up, so the thresholds need retuning with it.
     aperture_size: int = 3
-    close_kernel: tuple = (9, 3)
+    # (width, height) px of the closing rectangle, lane branch only. Wider than
+    # tall bridges gaps along horizontal lines. Width < 2 disables closing.
+    close_kernel: tuple[int, int] = (9, 3)
 
 @dataclass
-class LaneContourFilter:    # Lane Boundary
-    """
-    Geometric acceptance criteria for lane-boundary contours
-
-    min_area: The minimum area a detected contour must have
-    max_area: The maximum area a detected contour can have
-    min_aspect: lower bound of a long/short side from minAreaRect
-    max_aspect: upper bound of a long/short side from minAreaRect
-    min_intensity: Minimum intensity (0-255) inside the contour. Rejects dark blobs
-    ref_length: The contour long side, as a fraction of the ROI extent along that axis
-    ref_width: The contour short side, as pixels of the ROI extent along that axis
-    """
-    min_area: float = 1.0
-    max_area: float = 1000.0
-    min_aspect: float = 0.0
+class LaneContourFilter:
+    """Acceptance gates and confidence references for lane-boundary contours."""
+    min_area: float = 1.0           # px^2
+    max_area: float = 1000.0        # px^2
+    min_aspect: float = 0.0         # elongation: minAreaRect long / short side
     max_aspect: float = 60.0
-    max_roi_span: float = 1.0
-    min_intensity: float = 120.0
-    ref_length: float = 0.25
-    ref_width: float = 30.0
+    max_roi_span: float = 1.0       # max fraction of the ROI a contour may span along its own axis
+    min_intensity: float = 120.0    # 0-255 mean inside the contour; rejects dark blobs such as seams
+    ref_length: float = 0.25        # long side, as a fraction of ROI extent, that scores full length confidence
+    ref_width: float = 30.0         # short side, px, that scores full width confidence
 
 @dataclass
-class SignContourFilter:    # Stop Sign
-    """
-    Geometric acceptance criteria for sign-shape contours
-
-    min_area: minimum contour area
-    max_area: maximum contour area
-    min_vertices: approxPolyDP vertex count lower bound
-    max_vertices: approxPolyDP vertex count upper bound
-    min_solidity: contour_area / convex_hull_area
-    epsilon_factor: approxPolyDP epsilon = epsilon_factor * arc_length
-                     smaller = more vertices retained; larger = fewer
-    ref_area: area treated as confidence area_score = 1.0
-    """
-    min_area: float = 200.0
-    max_area: float = 30000.0
-    min_vertices: int = 8
+class SignContourFilter:
+    """Acceptance gates and confidence references for sign-shape contours."""
+    min_area: float = 200.0         # px^2
+    max_area: float = 30000.0       # px^2
+    min_vertices: int = 8           # approxPolyDP vertex count
     max_vertices: int = 10
-    min_solidity: float = 0.80
+    min_solidity: float = 0.80      # contour area / convex hull area
+    # approxPolyDP epsilon as a fraction of arc length. Smaller keeps more
+    # vertices; larger collapses the outline toward fewer.
     epsilon_factor: float = 0.03
-    ref_area: float = 5000.0
+    ref_area: float = 5000.0        # px^2 that scores full area confidence
 
 @dataclass(frozen=True)
 class GeometryConfig:
     """
-    The geometry branch's tuning as one unit, so the stage takes a single
-    config argument like every other stage
-
-    canny: edge detection parameters, shared by both branches
-    lane: lane-boundary contour acceptance criteria
-    sign: sign-shape contour acceptance criteria
-
-    The individual dataclasses are unchanged and can still be passed
-    directly to run_geometry_branch()
+    Geometry tuning as one unit, so the stage takes a single config like every
+    other stage. The parts can still be passed to run_geometry_branch() directly.
     """
-    canny: CannyParams = field(default_factory=CannyParams)
+    canny: CannyParams = field(default_factory=CannyParams)     # shared by both branches
     lane: LaneContourFilter = field(default_factory=LaneContourFilter)
     sign: SignContourFilter = field(default_factory=SignContourFilter)
-
-FOOT_BAND_PX = 6      # height of the band at a contour's base used for foot_x
 
 def contour_foot_x(
         contour: np.ndarray,
         band_px: int = FOOT_BAND_PX,
     ) -> float:
     """
-    Purpose:
-        ROI-local x of a contour at its nearest approach to the robot: the
-        mean x of the points within band_px of its lowest row
+    ROI-local x of a contour at its nearest approach to the robot.
 
-    Notes:
-        This is the anchor lane offset estimation should steer by. A bbox
-        centroid answers "where is the middle of this box", which for a marking
-        running diagonally across the ROI is displaced from where the marking
-        actually crosses the near edge --- by up to half the bbox width
+    Purpose:
+        The anchor lane offset should steer by. For a marking running
+        diagonally across the ROI, the bbox center is displaced from where
+        the marking crosses the near edge by up to half the bbox width.
+
+    Inputs:
+        contour: OpenCV (N, 1, 2) or flat (N, 2) points.
+        band_px: Rows above the lowest point that count as the base. Wider
+            averages out a ragged edge; narrower tracks a steep diagonal
+            more tightly. 0 or less uses only the lowest row.
+
+    Outputs:
+        Mean x of the base points in px, rounded to 0.01. -1.0 for an empty contour.
     """
     if contour is None or len(contour) == 0:
         return -1.0
@@ -136,236 +104,122 @@ def contour_foot_x(
     band = pts[pts[:, 1] >= y_max - max(band_px, 0)]
     return round(float(band[:, 0].mean()), 2)
 
-# ============================================================================
-# Output Dataclasses
-# ===========================================================================
+
 @dataclass
 class LaneCandidate:
-    """
-    Lane boundary candidate
-
-    label: lane boundary type
-    bbox: (x, y, w, h) of the candidate's bounding box
-    contour: lane boundary contour
-    confidence: detection confidence
-    frame_id: frame identifier
-    timestamp_ms: time at which the detection was made
-    proximity: vertical position prior [0,1], 1.0 == bottom of ROI
-    width_px: minAreaRect short side in px @NOTE is a raw measurement, 
-    length_px: minAreaRect long side in px @NOTE is a raw measurement,
-    mean_intensity: mean pixel intensity within the candidate's bounding box
-    foot_x: ROI-local x where the marking sits at its nearest approach to the
-            robot --- the mean x of the contour points in its lowest rows. The
-            bbox centroid is the midpoint of a box, which for an angled marking
-            is not where the marking crosses the near edge of the ROI. -1.0
-            means not computed
-    """
-    label: str
-    bbox: tuple
-    contour: np.ndarray
-    confidence: float
+    """Lane-boundary candidate, ROI-relative. frame_id and timestamp_ms are carried from capture."""
+    label: str                          # always "lane_boundary"
+    bbox: tuple[int, int, int, int]     # (x, y, w, h)
+    contour: np.ndarray                 # (N, 1, 2); a merged candidate holds every member's points
+    confidence: float                   # [0, 1] measurement quality, used as a weight
     frame_id: int
     timestamp_ms: int
-    proximity: float = 0.0
-    width_px: float = 0.0
-    length_px: float = 0.0
-    mean_intensity: float = 0.0
-    foot_x: float = -1.0
+    proximity: float = 0.0              # [0, 1] bottom-edge position; 1.0 = bottom of ROI, nearest the robot
+    width_px: float = 0.0               # minAreaRect short side, px; raw, not floored to 1 like the aspect gate
+    length_px: float = 0.0              # minAreaRect long side, px
+    mean_intensity: float = 0.0         # 0-255 inside the filled contour; length-weighted when merged
+    foot_x: float = -1.0                # see contour_foot_x; -1.0 = not computed
 
 @dataclass
 class SignCandidate:
-    """
-    Stop sign candidate
-
-    label: stop sign type
-    bbox: (x, y, w, h) of the candidate's bounding box
-    contour: stop sign contour
-    vertex_count: number of vertices in the contour
-    confidence: detection confidence
-    frame_id: frame identifier
-    timestamp_ms: time at which the detection was made
-    area: contour area in px^2 (ROI-relative). 0.0 means not computed
-    solidity: contour_area / convex_hull_area. 0.0 means not computed
-    """
-    label: str
-    bbox: tuple
-    contour: np.ndarray
-    vertex_count: int
-    confidence: float
+    """Stop-sign candidate, ROI-relative. frame_id and timestamp_ms are carried from capture."""
+    label: str                          # always "stop_sign"
+    bbox: tuple[int, int, int, int]     # (x, y, w, h) of the raw contour
+    contour: np.ndarray                 # the approxPolyDP polygon, not the raw contour
+    vertex_count: int                   # == len(contour)
+    confidence: float                   # [0, 1]
     frame_id: int
     timestamp_ms: int
-    area: float = 0.0
-    solidity: float = 0.0
+    area: float = 0.0                   # raw contour area, px^2; 0.0 = not computed
+    solidity: float = 0.0               # area / convex hull area; 0.0 = not computed
 
 @dataclass
 class GeometryBranchResult:
-    """
-    Output of the geometry branch
-
-    lane_candidates: list of lane boundary candidates
-    sign_candidates: list of stop sign candidates
-    frame_id: frame identifier
-    timestamp_ms: time at which the detection was made
-    """
-    lane_candidates: List[LaneCandidate]
-    sign_candidates: List[SignCandidate]
+    """One frame's geometry detections, ROI-relative. Identity copied from ROICropResult."""
+    lane_candidates: list[LaneCandidate]
+    sign_candidates: list[SignCandidate]
     frame_id: int
     timestamp_ms: int
 
-# ============================================================================
-# Utility Functions
-# ============================================================================
+
 def _close_edges(
         edges: np.ndarray,
-        kernel_size: tuple
+        kernel_size: tuple[int, int]
     ) -> np.ndarray:
-    """
-    Purpose:
-        Bridge along-line gaps in a Canny edge map so a fragmented lane line
-        traces as one contour instead of several
-        @NOTE detections have been broken and fragmented
-
-    Inputs:
-        edges: Canny edge image
-        kernel_size: (width, height) of the morphological kernel
-
-    Outputs:
-        edges: Canny edge image
-    """
+    """Bridge along-line gaps in an edge map so a fragmented lane line traces as one contour."""
     if not kernel_size or kernel_size[0] < 2:
         return edges
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
     return cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
 
-def _clamp(
-        value: float, 
-        lo: float, 
-        hi: float
-    ) -> float:
-    """
-    Purpose:
-        Clamp value to range [lo, hi]
-
-    Inputs:
-        value: value to clamp
-        lo: lower bound
-        hi: upper bound
-
-    Outputs:
-        clamped value
-    """
-    return max(lo, min(hi, value))
-
 def _canny(
-        gray: np.ndarray, 
+        gray: np.ndarray,
         params: CannyParams
     ) -> np.ndarray:
-    """
-    Purpose:
-        Apply Canny edge detection to an assumed grayscale image with the given parameters
-
-    Inputs:
-        gray: grayscaled image
-        params : CannyParams configuration
-
-    Outputs:
-        edges: Canny edge image
-    """
+    """0/255 Canny edge map of a gray image."""
     return cv2.Canny(gray, params.threshold1, params.threshold2,
                         apertureSize=params.aperture_size)
 
 def _contours(
         edges: np.ndarray
-    ):
-    """
-    Purpose:
-        Extract external contours from a Canny edge image
-
-    Inputs:
-        edges: Canny edge image
-
-    Outputs:
-        contours: detected contours
-    """
+    ) -> Sequence[np.ndarray]:
+    """External contours of an edge map."""
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     return contours
 
 def _extreme_points(
         contour: np.ndarray
-    ) -> tuple:
-    """
-    Purpose:
-        Gives each contour a leftmost and rightmost point
-        @NOTE used to combine possible fragmented contours
-
-    Inputs:
-        contour: detected contour
-
-    Outputs:
-        left : [x, y]
-        right : [x, y]
-    """
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """Leftmost and rightmost [x, y] of a contour; fragment merging measures the gap between them."""
     pts = contour.reshape(-1, 2)
     return pts[pts[:, 0].argmin()], pts[pts[:, 0].argmax()]
 
-# ============================================================================
-# Internal Functions
-# ============================================================================
+
+# @TODO integrate into _extract_lane_candidates. Kept separate so it can be tested in isolation.
 def _mean_contour_intensity(
-        gray: np.ndarray, 
+        gray: np.ndarray,
         contour: np.ndarray
     ) -> float:
-    """
-    Purpose:
-        Computes the mean pixel intensity within a contour, used to reject dark blobs such as seams
-        @NOTE operation is separate from _extract_lane_candidates to isolate during testing
-        @TODO integrate with _extract_lane_candidates operation
-
-    Inputs:
-        gray: grayscaled image
-        contour: detected contour
-
-    Outputs:
-        mean_intensity: mean pixel intensity within the contour
-    """
+    """Mean gray level inside the filled contour, or 0.0 if it lies entirely off the image."""
     x, y, w, h = cv2.boundingRect(contour)
 
-    # Clamp to image bounds
     x1, y1 = max(x, 0), max(y, 0)
     x2, y2 = min(x + w, gray.shape[1]), min(y + h, gray.shape[0])
 
-    # Reject contours that are too small
     if x2 <= x1 or y2 <= y1:
         return 0.0
-    
-    # Compute mean intensity
+
     roi_patch = gray[y1:y2, x1:x2]
     mask = np.zeros(roi_patch.shape, dtype=np.uint8)
+    # The mask is patch-sized, so move the contour into patch coordinates
     shifted = contour - np.array([[[x1, y1]]])
     cv2.drawContours(mask, [shifted], -1, 255, thickness=cv2.FILLED)
     pixels = roi_patch[mask == 255]
     return float(np.mean(pixels)) if len(pixels) > 0 else 0.0
 
 def _merge_collinear(
-        candidates: List[LaneCandidate],
+        candidates: list[LaneCandidate],
         lane_filter: LaneContourFilter,
-        roi_shape: tuple,
+        roi_shape: tuple[int, int],
         max_gap_px: float = 40.0,
-    ) -> List[LaneCandidate]:
+    ) -> list[LaneCandidate]:
     """
+    Join fragments of one horizontal lane line into a single candidate.
+
     Purpose:
-        Join fragments of one lane line into a single candidate so lane_offset
-        cannot select two pieces of the same line as opposite boundaries
+        Without this, lane_offset could select two pieces of the same line
+        as opposite boundaries.
 
     Inputs:
-        candidates: Accepted lane candidates
-        lane_filter: LaneContourFilter configuration
-        roi_shape: the shape of the roi image (roi_h, roi_w --- 2 dimensional)
-        max_gap_px: The maximum distance between two points to be considered contiguous
+        roi_shape: (h, w) of the lane ROI.
+        max_gap_px: Largest endpoint gap, px, still treated as the same line
+            (inclusive). Larger heals wider breaks but risks joining two
+            separate lines.
 
     Outputs:
-        candidates : Appended to the original list
+        Merged horizontal candidates followed by the vertical ones, which
+        pass through untouched. A fragment with no neighbor is returned as is.
     """
     roi_h, roi_w = roi_shape
     horiz = [c for c in candidates if c.bbox[2] >= c.bbox[3]]
@@ -401,32 +255,29 @@ def _merge_collinear(
             c.mean_intensity * c.length_px for c in g
         ) / total_len
 
-        # csv output
         merged.append(LaneCandidate(
-            label = "lane_boundary",
+            label = LANE_BOUNDARY,
             bbox = (x, y, w, h),
             contour = pts.reshape(-1, 1, 2),
             confidence = _lane_confidence(
-                long_side, 
-                raw_short, 
-                w >= h, 
+                long_side,
+                raw_short,
+                w >= h,
                 mean_intensity,
-                roi_h, roi_w, 
+                roi_h, roi_w,
                 lane_filter),
             length_px = round(long_side, 2),
             width_px = round(raw_short, 2),
             frame_id = g[0].frame_id,
             timestamp_ms = g[0].timestamp_ms,
-            proximity = round(_clamp((y + h) / max(roi_h, 1), 0.0, 1.0), 4),
+            proximity = round(clamp((y + h) / max(roi_h, 1), 0.0, 1.0), 4),
             mean_intensity = mean_intensity,
             foot_x = contour_foot_x(pts.reshape(-1, 1, 2)),
         ))
 
     return merged + other
 
-# ============================================================================
-# Lane Boundary Detection
-# ============================================================================
+
 def _lane_confidence(
         long: float,
         short: float,
@@ -437,100 +288,83 @@ def _lane_confidence(
         f: LaneContourFilter
     ) -> float:
     """
-    Purpose:
-        Compute a confidence score for a lane candidate based on the measurement quality. Ranks contours
-        by how much their geometry can be trusted and should be treated as a weight
+    Score how far a lane candidate's measurements can be trusted.
 
     Inputs:
-        long: minAreaRect long dimension in px --- the long side of the candidate's bounding box
-        short: minAreaRect short dimension in px --- the short side of the candidate's bounding box
-        horizontal: True if a contours lines runs across the ROI horizontally
-        mean_intensity: mean pixel intensity within the candidate's bounding box
-        roi_h: lane ROI height
-        roi_w: lane ROI width
-        f: LaneContourFilter
+        long, short: minAreaRect sides, px.
+        horizontal: Whether the marking runs across the ROI. Picks which ROI
+            extent the length is normalized against.
+        mean_intensity: 0-255 mean inside the contour.
 
     Outputs:
-        confidence: clamped score between 0.0 and 1.0
+        [0, 1], rounded to 4 places: 50% length, 30% intensity margin above
+        min_intensity, 20% thickness.
     """
-
     # Normalized against the ROI span in the direction of the contour
     extent = roi_w if horizontal else roi_h
     ref_len = max(f.ref_length * max(extent, 1), 1.0)
-    length_score = _clamp(long / ref_len, 0.0, 1.0)
+    length_score = clamp(long / ref_len, 0.0, 1.0)
 
     # Thickness separates tape from hairline edge traces
-    width_score = _clamp(short / max(f.ref_width, 1.0), 0.0, 1.0)
+    width_score = clamp(short / max(f.ref_width, 1.0), 0.0, 1.0)
 
-    # Intensity is ranked based on how far above the threshold it is
+    # Ranked by how far above the acceptance threshold it sits
     denom = max(255.0 - f.min_intensity, 1.0)
-    intensity_score = _clamp((mean_intensity - f.min_intensity) / denom, 0.0, 1.0)
+    intensity_score = clamp((mean_intensity - f.min_intensity) / denom, 0.0, 1.0)
 
     score = 0.5 * length_score + 0.3 * intensity_score + 0.2 * width_score
-    return round(_clamp(score, 0.0, 1.0), 4)
+    return round(clamp(score, 0.0, 1.0), 4)
 
+# @TODO split each gate into its own function, the way _mean_contour_intensity is
 def _extract_lane_candidates(
-    contours,
+    contours: Sequence[np.ndarray],
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
-    roi_shape: tuple,
+    roi_shape: tuple[int, int],
     gray: np.ndarray,
-    reject_counts: dict | None = None   # @TODO move debug output into a dedicated logging version
-) -> List[LaneCandidate]:
-    """ Private Interface
-    Purpose:
-        Extracts contours that meet the input criteria
-        @NOTE handles the filtering of detected contours
-        @TODO remove debug outputs before sending to production (move to a dedicated debug operation)
+    reject_counts: dict | None = None
+) -> list[LaneCandidate]:
+    """
+    Run contours through the lane gates and build a candidate for each survivor.
 
     Inputs:
-        contours: detected contours
-        lane_filter: LaneFilter configuration parameters
-        frame_id
-        timestamp_ms
-        roi_shape: The shaoe of the roi image (roi_h, roi_w --- 2 dimensional)
-        gray: Grayscaled roi image --- used to compare intensities v. detected contours
-
-        reject_counts: dict
+        roi_shape: (h, w) of the lane ROI; normalizes span and proximity.
+        gray: The lane ROI, sampled by the intensity gate.
+        reject_counts: Filled with one count per gate. Every contour lands in
+            exactly one bucket, so the buckets sum to "seen".
 
     Outputs:
-        candidates : list[LaneCandidate]
+        Accepted candidates, not yet merged.
+
+    Side effects:
+        Mutates reject_counts.
     """
     candidates = []
     roi_h, roi_w = roi_shape
 
-    # Reject counters @TODO move debug output into a dedicated logging version
+    # @TODO move reject counting into a dedicated debug/logging path
     rc = reject_counts if reject_counts is not None else {}
     for _k in ("seen", "area", "degenerate", "too_few_pts",
                 "aspect", "w_span", "h_span", "intensity", "accepted"):
         rc.setdefault(_k, 0)
 
-    # =============================
-    # Contour Filtering Loop
-    # =============================
     for contour in contours:
-        rc["seen"] += 1     # Total number of seen contours
+        rc["seen"] += 1
 
-        # ===============
-        # Contour Area
         area = cv2.contourArea(contour)
         if area < lane_filter.min_area or area > lane_filter.max_area:
             rc["area"] += 1
             continue
 
-        # ===============
-        # Bounding Rect
         x, y, w, h = cv2.boundingRect(contour)
         if h == 0 or w == 0:
-            rc["degenerate"] += 1    # Reject degenerate contours
+            rc["degenerate"] += 1
             continue
         if len(contour) < 5:
-            rc["too_few_pts"] += 1   # Reject contours with too few points
+            rc["too_few_pts"] += 1
             continue
 
-        # ===============
-        # Elongation
         _, (rect_w, rect_h), _ = cv2.minAreaRect(contour)
         long_side = max(rect_w, rect_h)
         raw_short = min(rect_w, rect_h)
@@ -540,25 +374,19 @@ def _extract_lane_candidates(
             rc["aspect"] += 1
             continue
 
-        # ===============
-        # Span
         horizontal = w >= h
         if horizontal and (w / roi_w) > lane_filter.max_roi_span:
-            rc["w_span"] += 1   # Reject contours that are too wide
+            rc["w_span"] += 1
             continue
         if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
-            rc["h_span"] += 1   # Reject contours that are too tall
+            rc["h_span"] += 1
             continue
 
-        # ===============
-        # Intensity
         mean_intensity = _mean_contour_intensity(gray, contour)
         if mean_intensity < lane_filter.min_intensity:
             rc["intensity"] += 1
             continue
 
-        # ===============
-        # Confidence
         confidence = _lane_confidence(
             long = long_side,
             short = raw_short,
@@ -569,13 +397,11 @@ def _extract_lane_candidates(
             f = lane_filter
         )
 
-        # ===============
-        # Proximity
-        proximity = _clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
+        proximity = clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
 
-        rc["accepted"] += 1 # Total number of accepted contours
+        rc["accepted"] += 1
         candidates.append(LaneCandidate(
-            label = "lane_boundary",
+            label = LANE_BOUNDARY,
             bbox = (x, y, w, h),
             contour = contour,
             confidence = round(confidence, 4),
@@ -597,22 +423,19 @@ def extract_lane_candidates(
     frame_id: int,
     timestamp_ms: int,
     draw_overlays: bool = True
-) -> tuple:
-    """ Public Interface
-    Purpose:
-        Extracts lane candidates from lane ROI using grayscale-Canny-contour pipeline and lane contour filter
-        @NOTE handles the final candidate merging of data
-        @TODO remove debug outputs before sending to production (move to a dedicated debug operation)
+) -> tuple[list[LaneCandidate], dict]:
+    """
+    Find lane-boundary candidates in the lane ROI.
 
     Inputs:
-        lane_roi: np.ndarray
-        canny_params: CannyParams
-        lane_filter: LaneContourFilter
-        frame_id: int
-        timestamp_ms: int
+        lane_roi: (h, w) uint8 gray.
+        draw_overlays: Also build contour_overlay and accepted_overlay. False
+            skips two full-ROI allocations and a contour rasterization per frame.
 
     Outputs:
-        candidates : list[LaneCandidate]
+        (candidates, debug). Candidates are merged and ROI-relative. debug
+        always holds lane_roi, edges, edges_raw and reject_counts (including
+        merged_into, the post-merge count).
     """
     edges_raw = _canny(lane_roi, canny_params)
     edges = _close_edges(edges_raw, canny_params.close_kernel)
@@ -620,33 +443,30 @@ def extract_lane_candidates(
     reject_counts = {}
 
     candidates = _extract_lane_candidates(
-        contours, 
-        lane_filter, 
-        frame_id, 
+        contours,
+        lane_filter,
+        frame_id,
         timestamp_ms,
-        lane_roi.shape[:2], 
+        lane_roi.shape[:2],
         lane_roi,
         reject_counts
     )
 
-    # Merges fragmented detections into a single contour shape
-    candidates = _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])  # 40 max_gap
+    candidates = _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])
     reject_counts["merged_into"] = len(candidates)
 
-    # =========================================================
-    # Debugging:    @TODO: Move to a dedicated debug operation
-    # =========================================================
+    # @TODO move debug output to a dedicated debug operation
     debug_images = {
         "lane_roi": lane_roi,
         "edges": edges,
         "edges_raw": edges_raw,
         "reject_counts": reject_counts,
-    } 
+    }
     if draw_overlays:
-        # Return images to color for debugging
+        # 3-channel so the BGR annotations render (see extract_sign_candidates)
         contour_overlay = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR)
         accepted_overlay = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR)
-        cv2.drawContours(   # Draw all contours
+        cv2.drawContours(
             contour_overlay,
             contours,
             -1,
@@ -654,53 +474,45 @@ def extract_lane_candidates(
             1
         )
 
-        # Move through the candidates list
         for c in candidates:
-            cv2.drawContours(   # Draw accepted contours
-                accepted_overlay, 
-                [c.contour], 
-                -1, 
-                (0, 255, 0), 
+            cv2.drawContours(
+                accepted_overlay,
+                [c.contour],
+                -1,
+                (0, 255, 0),
                 2
             )
             x, y, w, h = c.bbox
-            cv2.rectangle(  # Draw bounding box
-                accepted_overlay, 
-                (x, y), 
-                (x + w - 1, y + h - 1), 
-                (0, 200, 0), 
+            cv2.rectangle(
+                accepted_overlay,
+                (x, y),
+                (x + w - 1, y + h - 1),
+                (0, 200, 0),
                 2
             )
-            cv2.putText(    # Draw confidence and proximity
-                accepted_overlay, 
-                f"{c.confidence:.2f}/{c.proximity:.2f}", 
-                (x, y), 
+            cv2.putText(    # confidence/proximity
+                accepted_overlay,
+                f"{c.confidence:.2f}/{c.proximity:.2f}",
+                (x, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1,
                 cv2.LINE_AA
             )
 
-        # Add images to debug dict
         debug_images["contour_overlay"] = contour_overlay
         debug_images["accepted_overlay"] = accepted_overlay
 
-    # @TODO remove debug_images
     return candidates, debug_images
 
-# ==============================================================================
-# Sign Shape Extraction
-# ==============================================================================
+
 def _sign_confidence(
-        area: float, 
-        vertex_count: int, 
+        area: float,
+        vertex_count: int,
         f: SignContourFilter
     ) -> float:
-    """
-    Purpose: 
-        Composite confidence score based on area and vertex count
-    """
-    vertex_score = _clamp(1.0 - abs(vertex_count - 8) / 8.0, 0.0, 1.0)
+    """Equal blend of closeness to 8 vertices (an octagon) and area up to ref_area, in [0, 1]."""
+    vertex_score = clamp(1.0 - abs(vertex_count - 8) / 8.0, 0.0, 1.0)
     denom = max(f.ref_area - f.min_area, 1.0)
-    area_score = _clamp((area - f.min_area) / denom, 0.0, 1.0)
+    area_score = clamp((area - f.min_area) / denom, 0.0, 1.0)
     return round(0.5 * vertex_score + 0.5 * area_score, 4)
 
 
@@ -713,27 +525,14 @@ TRACE_MIN_BBOX_FRAC = 1.0
 
 def _trace_entry(
         contour: np.ndarray,
-        gate,
+        gate: str | None,
         area: float,
-        vertices=None,
-        solidity=None,
-        confidence=None,
-        poly=None,
+        vertices: int | None = None,
+        solidity: float | None = None,
+        confidence: float | None = None,
+        poly: np.ndarray | None = None,
     ) -> dict:
-    """
-    Purpose:
-        One row of the sign trace: a contour the detector looked at and what
-        it decided. Fields not measured before the contour was rejected are None
-
-    Inputs:
-        contour: the raw contour, used only for its bounding box
-        gate: None if accepted, else "area", "vertices", "hull" or "solidity"
-        area, vertices, solidity, confidence: measurements so far
-        poly: the approxPolyDP polygon
-
-    Outputs:
-        dict with bbox, gate, area, vertices, solidity, confidence, poly
-    """
+    """One sign-trace row: bbox plus the gate that decided (None = accepted); unmeasured fields stay None."""
     return {
         "bbox": cv2.boundingRect(contour),
         "gate": gate,
@@ -745,26 +544,28 @@ def _trace_entry(
     }
 
 def _extract_sign_candidates(
-    contours,
+    contours: Sequence[np.ndarray],
     sign_filter: SignContourFilter,
     frame_id: int,
     timestamp_ms: int,
     reject_counts: dict | None = None,
-    trace: list | None = None,
-) -> List[SignCandidate]:
+    trace: list[dict] | None = None,
+) -> list[SignCandidate]:
     """
-    Purpose:
-        Extract stop sign candidates from contours based on vertex count, area, and solidity
+    Run contours through the sign gates: area, vertex count, convex hull, solidity.
 
     Inputs:
-        contours: detected contours
-        sign_filter: SignContourFilter configuration
-        frame_id
-        timestamp_ms
-        reject_counts: dict, filled with a count per gate
-        trace: list, or None to skip. Given a list, one _trace_entry() is
-               appended per contour that reached a gate, accepted or not, so
-               a view can show what the detector saw and why it decided
+        reject_counts: Filled with one count per gate. Every contour lands in
+            exactly one bucket, so the buckets sum to "seen".
+        trace: A list to receive one _trace_entry() per contour that reached a
+            gate, accepted or not, or None to skip tracing. Area rejects are
+            traced only when their bbox clears TRACE_MIN_BBOX_FRAC.
+
+    Outputs:
+        Accepted candidates, each holding its approxPolyDP polygon.
+
+    Side effects:
+        Mutates reject_counts and trace.
     """
     candidates = []
 
@@ -783,7 +584,6 @@ def _extract_sign_candidates(
                     trace.append(_trace_entry(contour, "area", area))
             continue
 
-        # Polygon approximation
         arc_len = cv2.arcLength(contour, closed=True)
         epsilon = sign_filter.epsilon_factor * arc_len
         approx = cv2.approxPolyDP(contour, epsilon, closed=True)
@@ -821,7 +621,7 @@ def _extract_sign_candidates(
         rc["accepted"] += 1
 
         candidates.append(SignCandidate(
-            label = "stop_sign",
+            label = STOP_SIGN,
             bbox = (x, y, w, h),
             contour = approx,
             vertex_count = n_verts,
@@ -846,40 +646,23 @@ def extract_sign_candidates(
     timestamp_ms: int,
     draw_overlays: bool = True,
     trace: bool = False,
-) -> tuple:
-    """ Public interface
-    Purpose:
-        Extracts sign candidates from sign ROI using grayscale-Canny-contour pipeline and sign contour filter
+) -> tuple[list[SignCandidate], dict]:
+    """
+    Find stop-sign-shaped candidates in the sign ROI.
 
     Inputs:
-        sign_roi : np.ndarray
-            Shape : (H_sign, W_sign)
-            Dtype : uint8
-            Color : Grayscale
-
-        canny_params : CannyParams
-            Threshold1, threshold2, and aperture size for cv2.Canny
-
-        sign_filter : SignContourFilter
-            Area, vertex count, and solidity thresholds
-
-        draw_overlays : bool
-            Build the contour and accepted overlays. False skips two full-ROI
-            allocations and the contour rasterization per frame; the overlay
-            keys are then absent from debug_images
-
-        trace : bool
-            Record every contour that reached a gate, with the gate that
-            rejected it, under debug_images["trace"]. Off by default: the
-            live loop does not read it
+        sign_roi: (h, w) uint8 gray.
+        draw_overlays: Also build contour_overlay and accepted_overlay. False
+            skips two full-ROI allocations and a contour rasterization per frame.
+        trace: Record every contour that reached a gate, and the gate that
+            decided it, under debug["trace"]. Off by default; the live loop
+            doesn't read it.
 
     Outputs:
-        candidates : List[SignCandidate]
-        debug_images : dict
-            Always: sign_roi, edges, reject_counts.
-            With trace: trace, a list of dicts (bbox, gate, area, vertices,
-            solidity, confidence, poly), ROI-relative like every coordinate
-            here. gate is None for the candidates that were accepted.
+        (candidates, debug). debug always holds sign_roi, edges and
+        reject_counts. With trace, debug["trace"] is a list of dicts (bbox,
+        gate, area, vertices, solidity, confidence, poly), ROI-relative; gate
+        is None for accepted candidates.
     """
     edges = _canny(sign_roi, canny_params)
     contours = _contours(edges)
@@ -888,9 +671,9 @@ def extract_sign_candidates(
     trace_log = [] if trace else None
 
     candidates = _extract_sign_candidates(
-        contours, 
-        sign_filter, 
-        frame_id, 
+        contours,
+        sign_filter,
+        frame_id,
         timestamp_ms,
         reject_counts,
         trace_log,
@@ -905,10 +688,8 @@ def extract_sign_candidates(
         debug_images["trace"] = trace_log
 
     if draw_overlays:
-        # Both overlays must be 3-channel. Annotations are drawn with BGR
-        # colors, and a single-channel destination takes only the first
-        # component, which rendered every accepted contour, box and label
-        # as black.
+        # Both overlays must be 3-channel: a single-channel destination keeps
+        # only the first BGR component, so every annotation would render black
         contour_overlay = cv2.cvtColor(sign_roi, cv2.COLOR_GRAY2BGR)
         accepted_overlay = cv2.cvtColor(sign_roi, cv2.COLOR_GRAY2BGR)
 
@@ -926,9 +707,7 @@ def extract_sign_candidates(
 
     return candidates, debug_images
 
-# =============================================================================
-# Geometry Branch
-# =============================================================================
+
 def run_geometry_branch(
     lane_roi: np.ndarray,
     sign_roi: np.ndarray,
@@ -939,61 +718,55 @@ def run_geometry_branch(
     timestamp_ms: int = 0,
     draw_overlays: bool = True,
     trace: bool = False,
-) -> tuple:
+) -> tuple[GeometryBranchResult, dict, dict]:
     """
+    Run lane and sign detection on loose ROI arrays.
+
     Purpose:
-        Runs the geometry branch on the given lane and sign ROIs with the specified parameters, returning
-        the detected lane and sign candidates along with debug images.
+        The entry point for tuning work. The pipeline calls run_geometry_stage().
 
     Inputs:
-        lane_roi: uint8 grayscaled from ROICropResult.lane_roi
-        sign_roi: uint8 grayscaled from ROICropResult.sign_roi
-        canny_params: CannyParams configuration
-        lane_filter: LaneContourFilter configuration
-        sign_filters: SignContourFilter configuration
-        frame_id
-        timestamp_ms
-        draw_overlays: build the debug overlays in both branches. False skips
-                       four full-ROI allocations and two contour
-                       rasterizations per frame
-        trace: record every sign contour and the gate that decided it (see
-               extract_sign_candidates)
+        lane_roi, sign_roi: (h, w) uint8 gray, e.g. from ROICropResult.
+        draw_overlays: Build the debug overlays in both branches. False skips
+            four full-ROI allocations and two contour rasterizations per frame.
+        trace: Record the per-contour sign trace (see extract_sign_candidates).
 
     Outputs:
-        result: GeometryBranchResult
-        lane_debug: dict of debug images for lane ROI
-        sign_debug: dict of debug images for sign ROI
+        (result, lane_debug, sign_debug).
+
+    Raises:
+        ValueError / TypeError: If either ROI is None, not uint8, or not 2-D.
+            The message names the offending ROI.
     """
-    # Input validation
     for name, roi in [("lane_roi", lane_roi), ("sign_roi", sign_roi)]:
         if roi is None:
-            raise ValueError(   # Ensure the ROI is not empty
+            raise ValueError(
                 f"run_geometry_branch: {name} is None"
             )
         if roi.dtype != np.uint8:
-            raise TypeError(    # Ensure the ROI is the correct shape
+            raise TypeError(
                 f"run_geometry_branch: {name} expected uint8, got {roi.dtype}"
             )
         if roi.ndim != 2:
-            raise ValueError(   # Ensure the ROI is a single-channel grayscale image
+            raise ValueError(
                 f"run_geometry_branch: {name} expected single-channel grayscale "
                 f"(H,W), got {roi.shape}. Color conversion belongs to preprocess."
             )
 
     lane_candidates, lane_debug = extract_lane_candidates(
-        lane_roi, 
-        canny_params, 
-        lane_filter, 
-        frame_id, 
+        lane_roi,
+        canny_params,
+        lane_filter,
+        frame_id,
         timestamp_ms,
         draw_overlays
     )
 
     sign_candidates, sign_debug = extract_sign_candidates(
-        sign_roi, 
-        canny_params, 
-        sign_filter, 
-        frame_id, 
+        sign_roi,
+        canny_params,
+        sign_filter,
+        frame_id,
         timestamp_ms,
         draw_overlays,
         trace
@@ -1008,44 +781,30 @@ def run_geometry_branch(
 
     return result, lane_debug, sign_debug
 
-# ============================================================================
-# Geometry Branch Stage
-# ============================================================================
+
 def run_geometry_stage(
         roi: ROICropResult,
         config: GeometryConfig = GeometryConfig(),
         draw_overlays: bool = False,
         trace: bool = False,
-    ) -> tuple:
+    ) -> tuple[GeometryBranchResult, dict, dict]:
     """
-    Purpose:
-        Stage entry point. Takes the previous stage's result and its config,
-        the same shape as preprocess_frame() and crop_rois(), so the
-        orchestrator chains single-argument calls instead of unpacking and
-        re-threading the stamp by hand.
+    Stage entry point: run the geometry branch on one ROICropResult.
 
-        This is a thin adapter over run_geometry_branch(). The detection
-        path is unchanged and run_geometry_branch() remains callable
-        directly with loose arrays for tuning work.
+    Purpose:
+        Same shape as preprocess_frame() and crop_rois(), so the orchestrator
+        chains single-argument calls instead of re-threading the frame
+        identity by hand. A thin adapter over run_geometry_branch().
 
     Inputs:
-        roi: ROICropResult from crop_rois()
-        config: GeometryConfig tuning
-        draw_overlays: default False. The live loop discards the debug dicts,
-                       so building them costs allocations nothing reads.
-                       The dataset harness passes True
-        trace: default False. Records the per-contour sign trace for the
-               debug views; see extract_sign_candidates
+        draw_overlays: Off by default; the live loop discards the debug dicts,
+            so building them would cost allocations nothing reads. The
+            dataset harness passes True.
+        trace: Off by default. Records the sign trace for the debug views.
 
     Outputs:
-        result: GeometryBranchResult
-        lane_debug: dict of debug images for lane ROI
-        sign_debug: dict of debug images for sign ROI
-
-    Notes:
-        frame_id and timestamp_ms come from the ROICropResult, which carried
-        them from PreprocessResult, which carried them from FrameData. No
-        stage re-derives either value.
+        (result, lane_debug, sign_debug), with frame_id and timestamp_ms
+        carried from the ROICropResult.
     """
     return run_geometry_branch(
         lane_roi = roi.lane_roi,

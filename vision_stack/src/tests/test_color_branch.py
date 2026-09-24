@@ -1,5 +1,5 @@
 """
-test_color_branch.py  --  color branch (traffic-light color candidates)
+test_color_branch.py  --  src/perception/color_branch.py
 
 Detection tests use their own explicit HSV bands and blob filter (never the
 shipped scaffold or your calibration), synthetic ROIs with known blob positions,
@@ -29,11 +29,10 @@ from src.perception.color_branch import (
 )
 from src.perception.preprocess import PreprocessResult, preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
-# =============================================================================
-# Explicit test parameters
-# =============================================================================
+# Explicit rather than the scaffold or a calibration, so retuning never breaks detection tests
 TEST_HSV = HSVRanges(
     red_low=ColorRange((0, 120, 120), (10, 255, 255)),
     red_high=ColorRange((170, 120, 120), (180, 255, 255)),
@@ -44,16 +43,14 @@ TEST_CFG = ColorConfig(TEST_HSV, TEST_BLOB)
 
 LABELS = ("red", "yellow", "green")
 PURE = {"red": (0, 0, 255), "yellow": (0, 255, 255), "green": (0, 255, 0)}   # BGR
-BG = 20
+BG = 20                                                                       # dark background, below every band's V floor
 GATES = ("seen", "area", "aspect", "accepted")
 TRACE_KEYS = {"label", "bbox", "gate", "area", "aspect", "fill", "confidence", "hsv"}
 CALIB = Path(__file__).resolve().parents[2] / "calibration" / "hsv_ranges.json"
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 def bgr_from_hsv(h, s=255, v=255):
+    """BGR tuple for one OpenCV HSV color."""
     return tuple(int(c) for c in cv2.cvtColor(np.array([[[h, s, v]]], np.uint8), cv2.COLOR_HSV2BGR)[0, 0])
 
 
@@ -69,6 +66,7 @@ THREE = [("red", 40, 60, 10), ("yellow", 120, 60, 10), ("green", 200, 60, 10)]
 
 
 def rect_mask(shape, *rects):
+    """0/255 mask with filled (x, y, w, h) rectangles."""
     m = np.zeros(shape, np.uint8)
     for x, y, w, h in rects:
         m[y:y + h, x:x + w] = 255
@@ -76,16 +74,19 @@ def rect_mask(shape, *rects):
 
 
 def blobs_of(mask, flt=TEST_BLOB, label="red", trace=None, hsv=None, rc=None):
+    """One mask straight through the blob gates; returns (candidates, reject_counts)."""
     rc = {} if rc is None else rc
     return cb._blobs_to_candidates(mask, label, flt, 3, 4, rc, trace, hsv), rc
 
 
 def hsv_json(hsv=TEST_HSV):
+    """HSVRanges in the calibration file's JSON layout."""
     return {k: {"lower": list(getattr(hsv, k).lower), "upper": list(getattr(hsv, k).upper)}
             for k in ("red_low", "red_high", "yellow", "green")}
 
 
 def assert_color_contract(cands, dbg, fid, ts):
+    """Everything the extractor documents about its candidates and debug dict."""
     h, w = dbg["roi"].shape[:2]
     for c in cands:
         x, y, bw, bh = c.bbox
@@ -111,7 +112,7 @@ ROI_CONFIGS = {
 }
 
 
-def build_traffic_scene(roi_cfg, frame_id=11, ts=222, H=360, W=480):
+def build_traffic_scene(roi_cfg, frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     """Colored blobs drawn inside the traffic rect; returns the crop result and the drawn blob centers."""
     frame = np.full((H, W, 3), BG, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), roi_cfg)
@@ -127,9 +128,6 @@ def build_traffic_scene(roi_cfg, frame_id=11, ts=222, H=360, W=480):
     return roi, expect
 
 
-# =============================================================================
-# Software: configuration objects
-# =============================================================================
 @pytest.mark.software
 def test_hsv_ranges_start_uncalibrated_and_instances_are_independent():
     a, b = HSVRanges(), HSVRanges()
@@ -146,10 +144,8 @@ def test_color_config_default_leaves_the_branch_off_and_is_frozen():
         cfg.hsv_ranges = TEST_HSV
 
 
-# =============================================================================
-# Software: calibration loader
-# =============================================================================
 def write_json(tmp_path, data):
+    """Write a calibration dict to a temp file; returns its path."""
     p = tmp_path / "hsv.json"
     p.write_text(json.dumps(data))
     return str(p)
@@ -178,12 +174,14 @@ def test_missing_file_raises_file_not_found(tmp_path):
 
 
 def _set(band, key, value):
+    """Mutator that overwrites one bound in a calibration dict."""
     def mutate(d):
         d[band][key] = value
     return mutate
 
 
 def _drop(band, key=None):
+    """Mutator that removes a band, or one bound of it."""
     def mutate(d):
         d.pop(band) if key is None else d[band].pop(key)
     return mutate
@@ -215,9 +213,6 @@ def test_load_color_config_wires_ranges_and_blob(tmp_path):
     assert load_color_config(path, custom).blob is custom
 
 
-# =============================================================================
-# Software: HSV conversion and thresholds
-# =============================================================================
 @pytest.mark.software
 def test_to_hsv_known_values():
     px = np.array([[PURE["red"], PURE["yellow"], PURE["green"], (255, 0, 0), (255, 255, 255)]], np.uint8)
@@ -250,9 +245,6 @@ def test_mean_hsv_of_a_uniform_region():
     assert cb._mean_hsv(hsv, contour) == (30.0, 200.0, 180.0)
 
 
-# =============================================================================
-# Software: blob gates on hand-drawn masks
-# =============================================================================
 SHAPE = (120, 240)
 
 
@@ -305,9 +297,6 @@ def test_confidence_is_area_only_monotonic_and_saturating():
     assert len({blobs_of(mask, label=lb)[0][0].confidence for lb in LABELS}) == 1     # color plays no part
 
 
-# =============================================================================
-# Software: the blob trace
-# =============================================================================
 @pytest.mark.software
 def test_trace_covers_accepted_and_rejected_blobs_with_the_documented_fields():
     flt = replace(TEST_BLOB, min_area=200.0)
@@ -333,9 +322,6 @@ def test_trace_mean_hsv_is_filled_only_when_an_hsv_image_is_given():
     assert without[0]["hsv"] is None and with_[0]["hsv"] == (30.0, 200.0, 180.0)
 
 
-# =============================================================================
-# Software: extraction on synthetic scenes
-# =============================================================================
 @pytest.mark.software
 def test_each_color_is_found_once_where_it_was_drawn():
     img = scene(blobs=THREE)
@@ -344,8 +330,8 @@ def test_each_color_is_found_once_where_it_was_drawn():
     for label, cx, cy, r in THREE:
         (c,) = [c for c in cands if c.label == label]
         x, y, w, h = c.bbox
-        assert abs(x + w / 2 - cx) <= 2 and abs(y + h / 2 - cy) <= 2
-        assert dbg["mask_px"][label] == pytest.approx(np.pi * r * r, rel=0.10)
+        assert abs(x + w / 2 - cx) <= 2 and abs(y + h / 2 - cy) <= 2              # rasterized circle is off-center by a pixel at most
+        assert dbg["mask_px"][label] == pytest.approx(np.pi * r * r, rel=0.10)    # rasterization vs pi r^2 at r = 10
     assert_color_contract(cands, dbg, 7, 8)
 
 
@@ -455,9 +441,6 @@ def test_trace_is_only_present_when_requested():
     assert "trace" not in off and [t["gate"] for t in on["trace"]] == [None, None, None]
 
 
-# =============================================================================
-# Software: input validation
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("bad, exc", [
     (None, ValueError),
@@ -476,13 +459,10 @@ def test_missing_hsv_ranges_are_rejected_with_a_pointer_to_the_loader():
         extract_traffic_light_candidates(scene(), None, TEST_BLOB)
 
 
-# =============================================================================
-# Software: stage entry point
-# =============================================================================
 @pytest.mark.software
 def test_stage_is_off_without_ranges_and_never_touches_the_image():
     roi, _ = build_traffic_scene(ROIConfig())
-    assert run_color_stage(roi, None, ColorConfig()) == ([], {"enabled": False})
+    assert run_color_stage(roi, ColorConfig()) == ([], {"enabled": False})
 
 
 @pytest.mark.software
@@ -490,7 +470,7 @@ def test_stage_is_off_without_ranges_and_never_touches_the_image():
 def test_chain_finds_each_color_at_its_frame_coordinates(roi_cfg):
     roi, expect = build_traffic_scene(roi_cfg)
     assert not roi.traffic_roi.flags.writeable                        # read-only view must be accepted
-    cands, dbg = run_color_stage(roi, roi.traffic_roi, TEST_CFG)
+    cands, dbg = run_color_stage(roi, TEST_CFG)
     assert dbg["enabled"] is True
     assert_color_contract(cands, dbg, roi.frame_id, roi.timestamp_ms)
     assert (roi.frame_id, roi.timestamp_ms) == (11, 222)
@@ -499,14 +479,14 @@ def test_chain_finds_each_color_at_its_frame_coordinates(roi_cfg):
     for c in cands:                                                   # ROI-relative -> add the rect origin
         x, y, w, h = c.bbox
         ex, ey = expect[c.label]
-        assert abs(tx + x + w / 2 - ex) <= 3 and abs(ty + y + h / 2 - ey) <= 3
+        assert abs(tx + x + w / 2 - ex) <= 3 and abs(ty + y + h / 2 - ey) <= 3   # wider than direct: preprocess blurs the edges
 
 
 @pytest.mark.software
 def test_stage_config_components_reach_the_extractor():
     roi, _ = build_traffic_scene(ROIConfig())
-    strict, _ = run_color_stage(roi, roi.traffic_roi, ColorConfig(TEST_HSV, replace(TEST_BLOB, min_area=1e9)))
-    moved, _ = run_color_stage(roi, roi.traffic_roi, ColorConfig(replace(TEST_HSV, red_low=ColorRange((100, 120, 120), (110, 255, 255)),
+    strict, _ = run_color_stage(roi, ColorConfig(TEST_HSV, replace(TEST_BLOB, min_area=1e9)))
+    moved, _ = run_color_stage(roi, ColorConfig(replace(TEST_HSV, red_low=ColorRange((100, 120, 120), (110, 255, 255)),
                                                                 red_high=ColorRange((111, 120, 120), (120, 255, 255))), TEST_BLOB))
     assert strict == [] and sorted(c.label for c in moved) == ["green", "yellow"]
 
@@ -514,24 +494,21 @@ def test_stage_config_components_reach_the_extractor():
 @pytest.mark.software
 def test_stage_trace_is_passed_through():
     roi, _ = build_traffic_scene(ROIConfig())
-    _, off = run_color_stage(roi, roi.traffic_roi, TEST_CFG)
-    _, on = run_color_stage(roi, roi.traffic_roi, TEST_CFG, trace=True)
+    _, off = run_color_stage(roi, TEST_CFG)
+    _, on = run_color_stage(roi, TEST_CFG, trace=True)
     assert "trace" not in off and len(on["trace"]) == 3
 
 
 @pytest.mark.software
 @pytest.mark.parametrize("roi_cfg", ROI_CONFIGS.values(), ids=ROI_CONFIGS.keys())
-def test_stage_analyzes_exactly_the_image_it_is_handed_and_adds_nothing(roi_cfg):
-    """
-    The stage is fed roi.traffic_roi (the cropped, blurred BGR). Boxes stay
-    ROI-relative, the array analyzed is that crop, and the stage is the extractor
-    plus the frame stamp: no offsets, no second source for the pixels.
-    """
+def test_stage_analyzes_the_traffic_roi_and_adds_nothing(roi_cfg):
+    # The stage is the extractor plus the frame stamp: boxes stay ROI-relative,
+    # the array analyzed is roi.traffic_roi, and nothing is re-cropped or offset.
     roi, _ = build_traffic_scene(roi_cfg)
     crop = roi.traffic_roi
     h, w = roi.traffic_rect[3], roi.traffic_rect[2]
 
-    cands, dbg = run_color_stage(roi, crop, TEST_CFG)
+    cands, dbg = run_color_stage(roi, TEST_CFG)
     assert np.array_equal(dbg["roi"], crop) and dbg["roi"].shape[:2] == (h, w)
     assert len(cands) == 3
 
@@ -539,13 +516,10 @@ def test_stage_analyzes_exactly_the_image_it_is_handed_and_adds_nothing(roi_cfg)
     key = lambda cs: sorted((c.label, c.bbox, c.confidence, c.frame_id, c.timestamp_ms) for c in cs)
     assert key(cands) == key(direct)
 
-    blank, _ = run_color_stage(roi, np.zeros_like(crop), TEST_CFG)     # proves the argument, not the roi, supplies pixels
-    assert blank == []
+    blank, _ = run_color_stage(replace(roi, traffic_roi=np.zeros_like(crop)), TEST_CFG)
+    assert blank == []                                                # the pixels come from roi.traffic_roi
 
 
-# =============================================================================
-# Software: debug drawing
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("label, color", [("red", (0, 0, 255)), ("yellow", (0, 200, 255)),
                                           ("green", (0, 200, 0)), ("mystery", (255, 255, 255))])
@@ -567,9 +541,6 @@ def test_draw_candidates_returns_a_copy_and_leaves_the_input_alone():
     assert np.array_equal(empty, roi) and empty is not roi
 
 
-# =============================================================================
-# Software: real data
-# =============================================================================
 @pytest.mark.software
 def test_every_recorded_frame_meets_the_color_contract(dataset_frames):
     if not dataset_frames:
@@ -577,16 +548,13 @@ def test_every_recorded_frame_meets_the_color_contract(dataset_frames):
     cfg = ColorConfig(HSVRanges(), BlobFilter())                      # scaffold: the contract, not the tuning
     for fd in dataset_frames:
         roi = crop_rois(preprocess_frame(fd))
-        cands, dbg = run_color_stage(roi, roi.traffic_roi, cfg)
+        cands, dbg = run_color_stage(roi, cfg)
         try:
             assert_color_contract(cands, dbg, roi.frame_id, roi.timestamp_ms)
         except AssertionError as e:
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Hardware: color characterization
-# =============================================================================
 def _hardware_config():
     """Calibrated ranges if the calibration file exists, else the scaffold (and the run says so)."""
     if CALIB.exists():
@@ -595,6 +563,7 @@ def _hardware_config():
 
 
 def _jsonable_trace(trace):
+    """Blob trace with tuples converted to lists for JSON."""
     return [{**t, "bbox": list(t["bbox"]), "hsv": None if t["hsv"] is None else list(t["hsv"])} for t in trace]
 
 
@@ -609,7 +578,7 @@ def test_color_characterization(request, frames, artifacts):
         roi = crop_rois(preprocess_frame(fd))                         # upstream, not timed
 
         t0 = time.perf_counter_ns()
-        cands, dbg = run_color_stage(roi, roi.traffic_roi, cfg)      # live-loop settings: no trace
+        cands, dbg = run_color_stage(roi, cfg)      # live-loop settings: no trace
         stage_ms = (time.perf_counter_ns() - t0) / 1e6
 
         assert_color_contract(cands, dbg, roi.frame_id, roi.timestamp_ms)   # outside the timing window
@@ -634,7 +603,7 @@ def test_color_characterization(request, frames, artifacts):
     artifacts.csv("color_timing.csv", header, rows)
     artifacts.json("summary.json", {
         "hsv_source": source, "calibrated": cfg.hsv_ranges.is_calibrated,
-        "stage_ms": summarize(stage), "frames_over_33ms": sum(1 for s in stage if s > 33.3),
+        "stage_ms": summarize(stage), "frames_over_33ms": sum(1 for s in stage if s > 33.3),   # one frame period at MAX_FPS (30)
         "frames_with_candidate": {lb: sum(1 for r in rows if r[4 + LABELS.index(lb)]) for lb in LABELS},
         "mean_mask_px": {lb: float(np.mean([r[7 + LABELS.index(lb)] for r in rows])) for lb in LABELS},
         "gate_totals": gate_totals,
@@ -642,9 +611,9 @@ def test_color_characterization(request, frames, artifacts):
     artifacts.histogram("stage_ms_hist.png", stage, "run_color_stage latency", "ms")
 
     for fid, roi in samples.items():                         # untimed, with the debug views
-        cands, dbg = run_color_stage(roi, roi.traffic_roi, cfg, trace=True)
+        cands, dbg = run_color_stage(roi, cfg, trace=True)
         artifacts.image(f"{fid:06d}_traffic_roi.png", dbg["roi"])
         for lb in LABELS:
             artifacts.image(f"{fid:06d}_mask_{lb}.png", dbg[lb])
         artifacts.image(f"{fid:06d}_overlay.png", draw_candidates(dbg["roi"], cands))
-        artifacts.json(f"{fid:06d}_blob_trace.json", _jsonable_trace(dbg["trace"])) 
+        artifacts.json(f"{fid:06d}_blob_trace.json", _jsonable_trace(dbg["trace"]))

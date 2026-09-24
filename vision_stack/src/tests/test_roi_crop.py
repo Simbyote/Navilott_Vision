@@ -1,19 +1,11 @@
 """
-test_roi_crop.py  --  ROI cropping stage
+test_roi_crop.py  --  src/perception/roi_crop.py
 
-The ROI bounds are tunable, so nothing here pins the default LANE / TRAFFIC /
-SIGN coordinates. The tests assert relations that must hold for ANY valid
-bounds: rects lie inside the frame, each ROI is an exact read-only view of the
-rect it reports, identity is carried, and the branch sources are the right
-ones. Frame sizes and bounds are parametrized rather than hard-coded.
-
-Dimensionality: crop is a catch-all, so an ROI has the same ndim as the array it
-was cut from. Stage-level tests are therefore relational (ROI follows its
-source). "Branch-ready" shapes (lane/sign 2-D, traffic 3-D) are checked where
-real data flows: chained preprocess output, the recorded dataset, and hardware.
-
-The one place hard checks remain is ROIBounds itself (its [0,1] and x0<x1
-rules are the class's own contract, not a tuning choice).
+ROI bounds are tunable, so no test pins the default LANE / TRAFFIC / SIGN
+coordinates. Tests assert relations that hold for any valid bounds and frame
+size. crop() preserves its input's ndim, so branch-ready shapes (lane/sign
+2-D, traffic 3-D) are only checked where real preprocess output flows.
+ROIBounds' own [0, 1] and x0 < x1 rules are the one hard contract.
 
 --software  Contract tests on hand-built and chained (preprocess -> crop) input.
 --hardware  Times crop_rois per frame (live camera or --replay) and writes CSV,
@@ -33,11 +25,13 @@ from src.perception.roi_crop import (
     ROIBounds, ROIConfig, ROICropResult,
     crop, crop_rois, draw_roi_overlay, resolve,
 )
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
-H, W = 360, 480
-SHAPES = [(360, 480), (240, 320), (361, 479), (48, 64)]      # includes odd sizes
+H, W = FRAME_H, FRAME_W
+SHAPES = [(360, 480), (240, 320), (361, 479), (48, 64)]      # odd sizes expose rounding at the edges
 
+# narrow and full_frame bracket the defaults: small ROIs and ROIs touching every edge
 CONFIGS = {
     "default": ROIConfig(),
     "narrow": ROIConfig(
@@ -57,9 +51,6 @@ DISJOINT = ROIConfig(
     sign=ROIBounds(0.55, 0.05, 0.95, 0.40))
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 def hand_pre(shape=(H, W), seed=0, frame_id=7, ts=1234):
     """PreprocessResult with independent random gray/color, so source mix-ups show."""
     rng = np.random.default_rng(seed)
@@ -103,9 +94,6 @@ def assert_branch_ready(res):
     assert res.traffic_roi.ndim == 3 and res.traffic_roi.shape[2] == 3
 
 
-# =============================================================================
-# Software: output contract, for any bounds and any frame size
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("shape", SHAPES)
 @pytest.mark.parametrize("cfg", CONFIGS.values(), ids=CONFIGS.keys())
@@ -145,6 +133,7 @@ def test_identity_is_carried_not_rederived():
 
 @pytest.mark.software
 def test_rois_are_views_of_the_right_sources():
+    # shares_memory also catches an ROI cut from the wrong source
     pre = hand_pre()
     res = crop_rois(pre)
     assert np.shares_memory(res.lane_roi, pre.gray)
@@ -156,6 +145,7 @@ def test_rois_are_views_of_the_right_sources():
 @pytest.mark.software
 @pytest.mark.parametrize("name", ["lane_roi", "traffic_roi", "sign_roi"])
 def test_rois_are_read_only(name):
+    # Lane and sign share the gray frame; a write through one would corrupt the other
     roi = getattr(crop_rois(hand_pre()), name)
     assert not roi.flags.writeable
     with pytest.raises(ValueError):
@@ -164,7 +154,7 @@ def test_rois_are_read_only(name):
 
 @pytest.mark.software
 def test_read_only_rois_do_not_lock_the_source_frames():
-    """Debug drawing and later stages still need to write to the preprocessed arrays."""
+    # Debug drawing and later stages still write to the preprocessed arrays
     pre = hand_pre()
     crop_rois(pre)
     assert pre.gray.flags.writeable and pre.color.flags.writeable
@@ -193,9 +183,6 @@ def test_result_is_frozen():
         res.frame_id = 0
 
 
-# =============================================================================
-# Software: resolve() invariants
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("shape", SHAPES + [(1, 1), (2, 2), (3, 5), (360, 480, 3)])
 def test_full_bounds_resolve_to_the_whole_frame(shape):
@@ -205,6 +192,7 @@ def test_full_bounds_resolve_to_the_whole_frame(shape):
 
 @pytest.mark.software
 def test_sliver_bounds_still_resolve_to_at_least_one_pixel():
+    # Both narrower than 1 px on a 10x10 frame; the second also sits on the far edge
     for bounds in (ROIBounds(0.5, 0.5, 0.5001, 0.5001), ROIBounds(0.999, 0.999, 1.0, 1.0)):
         x, y, w, h = resolve(bounds, (10, 10))
         assert w >= 1 and h >= 1 and x + w <= 10 and y + h <= 10
@@ -212,7 +200,7 @@ def test_sliver_bounds_still_resolve_to_at_least_one_pixel():
 
 @pytest.mark.software
 def test_resolve_invariants_hold_for_random_bounds_and_sizes():
-    rng = np.random.default_rng(1234)
+    rng = np.random.default_rng(1234)                  # seeded so a failure reproduces
     for _ in range(2000):
         h, w = int(rng.integers(1, 800)), int(rng.integers(1, 800))
         x0, x1 = np.sort(rng.uniform(0, 1, 2))
@@ -225,15 +213,13 @@ def test_resolve_invariants_hold_for_random_bounds_and_sizes():
         assert 0 <= x < w and 0 <= y < h and rw >= 1 and rh >= 1, ctx
         assert x + rw <= w and y + rh <= h, ctx
         # Whenever the bounds span at least a pixel, rounding costs at most 1 px
+        # (1e-9 is float slack on the product)
         if (x1 - x0) * w >= 1:
             assert abs(rw - (x1 - x0) * w) <= 1.0 + 1e-9, ctx
         if (y1 - y0) * h >= 1:
             assert abs(rh - (y1 - y0) * h) <= 1.0 + 1e-9, ctx
 
 
-# =============================================================================
-# Software: rejection behaviour
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("kwargs", [
     dict(x0=-0.1, y0=0.0, x1=1.0, y1=1.0),
@@ -263,13 +249,10 @@ def test_crop_rejects_invalid_frames(bad):
 @pytest.mark.software
 def test_gray_color_shape_mismatch_is_rejected():
     pre = replace(hand_pre((360, 480)), color=hand_pre((240, 320)).color)
-    with pytest.raises(ValueError, match="disagree"):
+    with pytest.raises(ValueError, match="disagree"):   # error must say why it was rejected
         crop_rois(pre)
 
 
-# =============================================================================
-# Software: crop is dimension-preserving
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("ndim", [2, 3])
 def test_crop_preserves_source_dimensionality(ndim):
@@ -284,11 +267,8 @@ def test_crop_preserves_source_dimensionality(ndim):
 
 @pytest.mark.software
 def test_stage_output_dimensionality_follows_its_inputs():
-    """
-    crop_rois does not police which array is "gray" and which is "color".
-    That is enforced upstream (preprocess) and downstream (each branch's own
-    input validation), so here the ROIs simply follow their sources.
-    """
+    # crop_rois doesn't police which array is gray and which is color; preprocess
+    # and each branch's own validation do. Here the ROIs just follow their sources.
     pre = hand_pre()
     swapped = replace(pre, gray=pre.color, color=pre.gray)      # 3-D "gray", 2-D "color"
     res = crop_rois(swapped)
@@ -297,9 +277,6 @@ def test_stage_output_dimensionality_follows_its_inputs():
     assert res.traffic_roi.ndim == 2
 
 
-# =============================================================================
-# Software: debug overlay
-# =============================================================================
 @pytest.mark.software
 def test_overlay_returns_an_unmodified_source_and_a_marked_copy():
     frame = np.random.default_rng(5).integers(0, 256, (H, W, 3), dtype=np.uint8)
@@ -320,13 +297,10 @@ def test_overlay_draws_each_rect_in_its_color_and_nothing_elsewhere():
                                 (res.sign_rect, SIGN_COLOR)):
         assert tuple(ov[y, x]) == color                  # top-left corner
         assert tuple(ov[y + h - 1, x + w - 1]) == color  # bottom-right corner
-    band = ov[int(0.45 * H):int(0.65 * H)]               # between the ROIs
+    band = ov[int(0.45 * H):int(0.65 * H)]               # inside DISJOINT's gap (0.40 to 0.70)
     assert band.max() == 0
 
 
-# =============================================================================
-# Hardware: crop characterization
-# =============================================================================
 @pytest.mark.hardware
 def test_roi_crop_characterization(request, frames, artifacts):
     n = request.config.getoption("--frames")

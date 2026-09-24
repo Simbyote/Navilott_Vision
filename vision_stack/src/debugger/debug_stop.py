@@ -1,81 +1,41 @@
-"""
-debug_stop.py -- Stop-sign view for the debug tooling
+"""Stop-sign view: what the sign detector saw and decided on the sign ROI.
 
-Shows what the geometry branch's sign detector saw and decided on the sign ROI,
-so the sign filter can be calibrated on its own, separate from the lane view.
+Purpose:
+    Lets the sign filter be calibrated on its own, apart from the lane view.
+    Fusion forwards the best valid stop sign at any confidence; the threshold
+    here stands in for whatever Phase 3 applies, so a sign can be amber here
+    and still be in Phase2Output.detections. Without a trace (the chain ran
+    with trace=False) the view still draws accepted candidates and says so,
+    but can't show rejected contours. Coordinates are sign-ROI-relative.
 
-Inputs (from a chain result, via StopView.extract):
-    chain.geometry.sign_candidates   the accepted SignCandidates
-    chain.sign_debug                 sign_roi, edges, reject_counts, and the
-                                     per-contour "trace" when the chain was
-                                     run with trace=True
-    chain.fusion, chain.fusion_debug the stop sign fusion kept, if any, and
-                                     how many it suppressed. Absent when the
-                                     process callable has no fusion
+Main package:
+    The rendered panel pair: the sign ROI with every traced contour beside
+    the Canny edge map it came from, under a header with pass / low /
+    rejected counts, the best candidate and whether fusion passed a stop
+    sign on, over a footer of this frame's per-gate rejection counts.
 
-Picture:
-    left panel   the sign ROI (grayscale crop) with every traced contour
-    right panel  the Canny edge map the contours came from
-    header       frame id, pass / low / rejected counts, best candidate, and
-                 whether fusion passed a stop sign on to Phase 3
-    footer       this frame's per-gate rejection counts
-
-Fusion does not apply a confidence threshold: it forwards the best valid
-candidate at any confidence in [0, 1]. The threshold in this view stands in
-for whatever Phase 3 applies, so a sign can be amber here and still be in
-Phase2Output.detections.
-
-Contour colors:
-    green   accepted, and at or above the confidence threshold if one is set
-    amber   accepted by the geometry gates but below the confidence threshold,
-            i.e. the detector found it and the threshold is what hides it
-    red     rejected; the label names the gate and the value that failed it
-
-A sign-sized box labeled "area" with a tiny area value is an open outline: a
-gap in the Canny edge made the contour double back on itself, so it enclosed
-almost nothing. The sign path does not close edges the way the lane path does.
-
-Without a trace (the chain was run with trace=False) the view still draws the
-accepted candidates and says so, but cannot show rejected contours.
-
-Coordinates are sign-ROI-relative, as in geometry. This module imports only
-debug_video, so any runner can use it.
+Flow:
+    1. Pull the sign debug, accepted candidates and fused stop sign from the chain.
+    2. Classify each traced contour as pass, low or reject.
+    3. Draw both panels, the header and the footer.
 """
 import cv2
 import numpy as np
 
 import src.debugger.debug_video as dv
+from src.params import STOP_SIGN
 
-# =============================================================================
-# Configuration
-# =============================================================================
+# geometry sign gate names, shortened for labels
 GATE_SHORT = {"area": "area", "vertices": "vert", "hull": "hull",
               "solidity": "sol"}
-REPORT_THRESHOLDS = (0.30, 0.40, 0.50, 0.60, 0.70)
-GAP_PX = 6                                # between the two panels, before zoom
 
-STATE_COLORS = {"pass": dv.C_USABLE, "low": dv.C_AMBER, "reject": dv.C_RED}
-
-# =============================================================================
-# View
-# =============================================================================
-class StopView:
+class StopView(dv.CandidateView):
     """
-    Stop-sign view. Implements the view interface live_view runs:
+    Stop-sign view; implements the view interface in debug_video, drawing on its own ROI.
 
-        name, CSV_FIELDS
-        extract(chain, frame=None) -> data
-                                    pull this target's data out of a chain
-                                    result; frame is unused, this view draws
-                                    on its own ROI
-        observe(data)               accumulate run statistics
-        render(data, scale) -> img  the annotated picture
-        row(data) -> list           one CSV row
-        report() -> [str]           lines for summary.txt
-
-    conf_threshold: the confidence the sign has to reach downstream. None
-                    draws no threshold and no amber state
-    zoom: extra magnification on top of the run's scale; the sign ROI is small
+    conf_threshold: The confidence the sign has to reach downstream. None
+        draws no threshold and no amber state.
+    zoom: Extra magnification on top of the run's scale; the sign ROI is small.
     """
     name = "stop"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "seen", "traced", "passed",
@@ -84,8 +44,7 @@ class StopView:
                   "rej_solidity", "fused", "fused_conf")
 
     def __init__(self, conf_threshold=None, zoom=2):
-        self.conf_threshold = conf_threshold
-        self.zoom = max(1, int(zoom))
+        super().__init__(conf_threshold, zoom)
         self._frames = 0
         self._with_candidate = 0
         self._with_pass = 0
@@ -94,19 +53,25 @@ class StopView:
         self._best_conf = []
         self._counts = {}
 
-    # -- data -----------------------------------------------------------------
-    def extract(self, chain, frame=None):
+    def extract(self, chain, frame=None) -> dict:
+        """
+        This frame's sign data from a chain result.
+
+        Reads chain.geometry.sign_candidates, chain.sign_debug (sign_roi,
+        edges, reject_counts, and "trace" when the chain ran with trace=True),
+        and chain.fusion / fusion_debug when the process callable has fusion.
+        """
         dbg = getattr(chain, "sign_debug", None) or {}
         geo = chain.geometry
         fusion = getattr(chain, "fusion", None)
         fdbg = getattr(chain, "fusion_debug", None) or {}
         # None means the chain has no fusion; [] means fusion ran and kept none
         fused = (None if fusion is None
-                 else [d for d in fusion.detections if d.type == "stop_sign"])
+                 else [d for d in fusion.detections if d.type == STOP_SIGN])
         return {
             "fused": fused,
             "suppressed": sum(1 for e in fdbg.get("log", ())
-                              if e.startswith("[SUPPRESSED] stop_sign")),
+                              if e.startswith(f"[SUPPRESSED] {STOP_SIGN}")),
             "frame_id": geo.frame_id,
             "timestamp_ms": geo.timestamp_ms,
             "roi": dbg.get("sign_roi"),
@@ -125,28 +90,6 @@ class StopView:
                  "confidence": c.confidence, "poly": c.contour}
                 for c in data["accepted"]]
 
-    def _state(self, e):
-        if e["gate"] is not None:
-            return "reject"
-        thr = self.conf_threshold
-        if thr is not None and (e["confidence"] or 0.0) < thr:
-            return "low"
-        return "pass"
-
-    def _summary(self, data):
-        entries = self._entries(data)
-        accepted = [e for e in entries if e["gate"] is None]
-        states = [self._state(e) for e in entries]
-        best = max(accepted, key=lambda e: e["confidence"] or 0.0, default=None)
-        return {
-            "entries": entries,
-            "best": best,
-            "passed": states.count("pass"),
-            "low": states.count("low"),
-            "rejected": states.count("reject"),
-        }
-
-    # -- statistics -----------------------------------------------------------
     def observe(self, data):
         sm = self._summary(data)
         self._frames += 1
@@ -192,14 +135,7 @@ class StopView:
             out.append(f" frames where fusion passed a stop sign on   "
                        f"{self._fused_frames:6}  "
                        f"({100 * self._fused_frames / n:5.1f}%)")
-        if self._best_conf:
-            s = sorted(self._best_conf)
-            out.append(f" best confidence per frame: min {s[0]:.3f}  "
-                       f"med {s[len(s) // 2]:.3f}  max {s[-1]:.3f}")
-            out.append(" frames that would pass at a threshold of:")
-            out.append("  " + "   ".join(
-                f"{t:.2f} -> {100 * sum(1 for c in s if c >= t) / n:.0f}%"
-                for t in REPORT_THRESHOLDS))
+        out += self._threshold_report(self._best_conf, n)
         rej = {k: v for k, v in self._counts.items()
                if k in GATE_SHORT and v}
         if rej:
@@ -208,13 +144,8 @@ class StopView:
                 out.append(f"  {gate:<20}{v:6}")
         return out
 
-    # -- picture --------------------------------------------------------------
     def render(self, data, scale=1):
-        s = max(1, int(scale)) * self.zoom
-        fs = max(0.34, 0.18 * s)
-        th = 1 if s < 4 else 2
-        lh = int(38 * fs)
-        hh, fh = 2 * lh + 8, lh + 6
+        s, fs, th, lh, hh, fh = self._metrics(scale)
 
         roi = data["roi"]
         if roi is None:
@@ -224,7 +155,7 @@ class StopView:
             return img
 
         H, W = roi.shape[:2]
-        pw, ph, gap = W * s, H * s, GAP_PX * s
+        pw, ph, gap = W * s, H * s, dv.GAP_PX * s
         canvas = np.zeros((hh + ph + fh, 2 * pw + gap, 3), np.uint8)
 
         left = cv2.resize(cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR), (pw, ph),
@@ -242,7 +173,7 @@ class StopView:
         thr = self.conf_threshold
         for e in sm["entries"]:
             state = self._state(e)
-            color = STATE_COLORS[state]
+            color = dv.STATE_COLORS[state]
             x, y, w, h = e["bbox"]
             x0, y0 = x * s, hh + y * s
             cv2.rectangle(canvas, (x0, y0), ((x + w) * s - 1, hh + (y + h) * s - 1),
@@ -255,17 +186,11 @@ class StopView:
             dv.draw_text(canvas, self._label(e, state), (x0, max(y0 - 3, hh + lh)),
                          color, fs, th)
 
-        # header
         b = sm["best"]
-        head_color = (dv.C_USABLE if sm["passed"]
-                      else dv.C_AMBER if sm["low"] else dv.C_WHITE)
+        head_color, counts = self._header(sm)
         title = f"#{data['frame_id']}  stop_sign"
         dv.draw_text(canvas, title, (6, lh), head_color, fs * 1.15, th)
         (tw, _), _ = cv2.getTextSize(title, dv.FONT, fs * 1.15, th)
-        counts = f"pass {sm['passed']}"
-        if thr is not None:
-            counts += f"  low {sm['low']}"
-        counts += f"  rejected {sm['rejected']}"
         dv.draw_text(canvas, counts, (6 + tw + 14, lh), dv.C_WHITE, fs, th)
         if b is not None:
             best = (f"best conf {b['confidence']:.2f}  v{b['vertices']}  "
@@ -284,7 +209,6 @@ class StopView:
                 best += "   fusion: none"
         dv.draw_text(canvas, best, (6, 2 * lh + 2), dv.C_WHITE, fs, th)
 
-        # footer
         rc = data["counts"]
         foot = (f"seen {rc.get('seen', 0)}  area {rc.get('area', 0)}  "
                 f"vert {rc.get('vertices', 0)}  hull {rc.get('hull', 0)}  "
@@ -294,7 +218,8 @@ class StopView:
         dv.draw_text(canvas, foot, (6, hh + ph + lh), dv.C_GRAY, fs, th)
         return canvas
 
-    def _label(self, e, state):
+    def _label(self, e: dict, state: str) -> str:
+        """Contour label: the failing gate and value when rejected, else vertices and confidence."""
         if state == "reject":
             g = e["gate"]
             if g == "vertices":
@@ -302,6 +227,9 @@ class StopView:
             if g == "solidity":
                 return f"sol {e['solidity']:.2f}"
             if g == "area":
+                # A sign-sized box with a tiny area is an open outline: a gap in the
+                # Canny edge made the contour double back on itself, enclosing almost
+                # nothing. The sign path doesn't close edges the way the lane path does.
                 return f"area {e['area']:.0f}"
             return GATE_SHORT.get(g, g)
         label = f"v{e['vertices']} c{e['confidence']:.2f}"

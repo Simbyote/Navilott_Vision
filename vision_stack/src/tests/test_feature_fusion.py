@@ -1,5 +1,5 @@
 """
-test_feature_fusion.py  --  feature fusion (Detection Object normalization)
+test_feature_fusion.py  --  src/perception/feature_fusion.py
 
 fuse_detections consumes GeometryBranchResult plus a duck-typed list of color
 candidates (label, bbox, confidence, frame_id), so software tests build both
@@ -34,8 +34,10 @@ from src.perception.feature_fusion import (
 from src.perception.geometry import GeometryBranchResult, GeometryConfig, LaneCandidate, SignCandidate, run_geometry_stage
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, ROICropResult, crop_rois
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
+# Explicit color tuning for the chained test, independent of the scaffold and any calibration
 TEST_HSV = HSVRanges(
     red_low=ColorRange((0, 120, 120), (10, 255, 255)),
     red_high=ColorRange((170, 120, 120), (180, 255, 255)),
@@ -47,9 +49,6 @@ TEST_COLOR_CFG = ColorConfig(TEST_HSV, TEST_BLOB)
 TYPES = ("traffic_light", "lane_boundary", "stop_sign")
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 class FakeTrafficCandidate:
     """Minimal duck type fuse_detections actually reads: label, bbox, confidence, frame_id."""
     def __init__(self, label, bbox, confidence, frame_id=1, timestamp_ms=2):
@@ -58,32 +57,39 @@ class FakeTrafficCandidate:
 
 
 def lane(fx, confidence=0.9, bbox=(10, 10, 8, 8), frame_id=1, ts=2):
+    """Hand-built LaneCandidate with foot_x = fx; no contour, since fusion never reads it."""
     return LaneCandidate("lane_boundary", bbox, None, confidence, frame_id, ts, 0.5, 3.0, 20.0, 200.0, fx)
 
 
 def sign(confidence=0.9, vertex_count=8, bbox=(30, 30, 20, 20), area=300.0, solidity=0.95, frame_id=1, ts=2):
+    """Hand-built SignCandidate; no contour, since fusion never reads it."""
     return SignCandidate("stop_sign", bbox, None, vertex_count, confidence, frame_id, ts, area, solidity)
 
 
 def make_roi(frame_id=1, ts=2, lane_rect=(0, 0, 300, 50), traffic_rect=(10, 10, 200, 150), sign_rect=(300, 0, 150, 150)):
+    """ROICropResult carrying only rects and a stamp; the 1x1 ROI arrays are placeholders fusion never reads."""
     return ROICropResult(np.zeros((1, 1), np.uint8), np.zeros((1, 1, 3), np.uint8), np.zeros((1, 1), np.uint8),
-                         lane_rect, traffic_rect, sign_rect, frame_id, ts, (360, 480))
+                         lane_rect, traffic_rect, sign_rect, frame_id, ts, (FRAME_H, FRAME_W))
 
 
 def geo(lanes=(), signs=(), frame_id=1, ts=2):
+    """GeometryBranchResult from candidate lists."""
     return GeometryBranchResult(list(lanes), list(signs), frame_id, ts)
 
 
 def run(lanes=(), signs=(), tls=(), roi=None, frame_id=1, ts=2):
+    """fuse_detections on hand-built inputs sharing one frame stamp."""
     roi = roi or make_roi(frame_id=frame_id, ts=ts)
     return fuse_detections(geo(lanes, signs, frame_id, ts), list(tls), roi)
 
 
 def by_type(detections, t):
+    """Detections of one class, in output order."""
     return [d for d in detections if d.type == t]
 
 
 def assert_fusion_contract(result, dbg, roi):
+    """Everything FusionResult, DetectionObject and the debug summary document."""
     assert isinstance(result, FusionResult)
     assert (result.frame_id, result.timestamp_ms) == (roi.frame_id, roi.timestamp_ms) == \
            (dbg["frame_id"], dbg["timestamp_ms"])
@@ -109,9 +115,6 @@ def assert_fusion_contract(result, dbg, roi):
     assert dbg["suppressed"] == sum(1 for line in dbg["log"] if "[SUPPRESSED]" in line)
 
 
-# =============================================================================
-# Software: _centroid
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("bbox, expect", [
     ((10, 20, 8, 4), {"x": 14.0, "y": 22.0}),
@@ -128,9 +131,6 @@ def test_centroid_rounds_to_two_places():
     assert ff._centroid((0, 0, 3, 3)) == {"x": 1.5, "y": 1.5}
 
 
-# =============================================================================
-# Software: _valid_confidence
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("c, ok", [(0.0, True), (1.0, True), (0.5, True),
                                    (-0.0001, False), (1.0001, False), (float("nan"), False)])
@@ -138,9 +138,6 @@ def test_valid_confidence_boundaries(c, ok):
     assert ff._valid_confidence(c) is ok
 
 
-# =============================================================================
-# Software: _best_candidate
-# =============================================================================
 @pytest.mark.software
 def test_best_candidate_of_empty_list_is_none_and_logs_nothing():
     log = []
@@ -171,12 +168,9 @@ def test_best_candidate_breaks_ties_by_keeping_the_first():
     assert ff._best_candidate([b, a], [], "traffic_light") is b
 
 
-# =============================================================================
-# Software: color candidates are duck-typed, not a specific class
-# =============================================================================
 @pytest.mark.software
 def test_color_branch_module_is_never_imported():
-    """The module docstring's stated reason: fusion loads lane/sign detections without it."""
+    # Fusion must load and fuse lane/sign detections without the color branch
     import sys
     assert "src.perception.color_branch" not in getattr(ff, "__dict__", {}).values()
     assert not hasattr(ff, "color_branch")
@@ -189,9 +183,6 @@ def test_a_plain_duck_typed_object_is_accepted_as_a_color_candidate():
     assert result.detections[0].label_detail == "red"
 
 
-# =============================================================================
-# Software: ordering, source wiring, and the fused contract
-# =============================================================================
 @pytest.mark.software
 def test_detections_are_ordered_traffic_then_lane_desc_then_sign():
     lanes = [lane(10, confidence=0.3), lane(200, confidence=0.8), lane(150, confidence=0.5)]
@@ -226,9 +217,6 @@ def test_empty_input_gives_no_detections_and_an_empty_debug_summary():
     }
 
 
-# =============================================================================
-# Software: conflict resolution per class
-# =============================================================================
 @pytest.mark.software
 def test_traffic_light_keeps_only_the_winner_and_suppresses_the_rest():
     tls = [FakeTrafficCandidate("red", (0, 0, 5, 5), 0.6), FakeTrafficCandidate("green", (5, 5, 5, 5), 0.9),
@@ -288,12 +276,9 @@ def test_a_class_with_one_valid_and_one_invalid_forwards_only_the_valid_one():
     assert dbg["discarded"] == 1
 
 
-# =============================================================================
-# Software: frame identity
-# =============================================================================
 @pytest.mark.software
 def test_stamp_comes_from_roi_not_from_any_candidates_clock():
-    """The module docstring's stated guarantee against per-branch clock drift."""
+    # A branch sampling its own clock must not split one capture's detections
     roi = make_roi(frame_id=1, ts=2)
     spoofed_tl = FakeTrafficCandidate("red", (0, 0, 1, 1), 0.9, frame_id=555, timestamp_ms=777)
     result, dbg = fuse_detections(geo([], []), [spoofed_tl], roi)
@@ -315,9 +300,6 @@ def test_none_geometry_or_roi_is_rejected():
         fuse_detections(geo([], []), [], None)
 
 
-# =============================================================================
-# Software: contract on realistic mixes and dataclass immutability
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("lanes, signs, tls", [
     ([], [], []),
@@ -352,9 +334,6 @@ def test_deterministic():
     assert a == b
 
 
-# =============================================================================
-# Software: debug overlay
-# =============================================================================
 @pytest.mark.software
 def test_overlay_returns_a_copy_and_leaves_the_canvas_alone():
     canvas = np.zeros((150, 200, 3), np.uint8)
@@ -393,10 +372,8 @@ def test_overlay_title_is_only_drawn_when_given():
     assert not np.array_equal(plain, titled)
 
 
-# =============================================================================
-# Software: chained  geometry (+ color) -> fusion, in frame coordinates
-# =============================================================================
-def build_fusion_scene(frame_id=11, ts=222, H=360, W=480):
+def build_fusion_scene(frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
+    """Frame with a tape, an octagon and a green light placed from the default rects; returns (roi, expected frame coords)."""
     frame = np.full((H, W, 3), 30, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig())
     lx, ly, lw, lh = probe.lane_rect
@@ -418,14 +395,14 @@ def build_fusion_scene(frame_id=11, ts=222, H=360, W=480):
 def test_chain_fuses_real_geometry_and_color_output_at_frame_coordinates():
     roi, expect = build_fusion_scene()
     geometry, _, _ = run_geometry_stage(roi, GeometryConfig())
-    tls, _ = run_color_stage(roi, roi.traffic_roi, TEST_COLOR_CFG)
+    tls, _ = run_color_stage(roi, TEST_COLOR_CFG)
     result, dbg = fuse_detections(geometry, tls, roi)
     assert_fusion_contract(result, dbg, roi)
 
     lane_dets = by_type(result.detections, "lane_boundary")
     assert len(lane_dets) == 1
     fx = lane_dets[0].position["x"] + lane_dets[0].source_rect[0]
-    assert abs(fx - expect["lane_x"]) <= 8
+    assert abs(fx - expect["lane_x"]) <= 8           # 8 px tape, blurred by preprocess before Canny
 
     sign_dets = by_type(result.detections, "stop_sign")
     assert len(sign_dets) == 1
@@ -447,7 +424,7 @@ def test_every_recorded_frame_meets_the_fusion_contract(dataset_frames):
     for fd in dataset_frames:
         roi = crop_rois(preprocess_frame(fd))
         geometry, _, _ = run_geometry_stage(roi, GeometryConfig())
-        tls, _ = run_color_stage(roi, roi.traffic_roi, ColorConfig(HSVRanges(), BlobFilter()))
+        tls, _ = run_color_stage(roi, ColorConfig(HSVRanges(), BlobFilter()))
         try:
             result, dbg = fuse_detections(geometry, tls, roi)
             assert_fusion_contract(result, dbg, roi)
@@ -455,10 +432,8 @@ def test_every_recorded_frame_meets_the_fusion_contract(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Hardware: fusion characterization
-# =============================================================================
 def _hardware_color_config():
+    """Calibrated color config if the calibration file exists, else the scaffold; returns (config, source)."""
     from pathlib import Path
     calib = Path(__file__).resolve().parents[2] / "calibration" / "hsv_ranges.json"
     if calib.exists():
@@ -477,7 +452,7 @@ def test_fusion_characterization(request, frames, artifacts):
     for i, fd in enumerate(frames(n)):
         roi = crop_rois(preprocess_frame(fd))
         geometry, _, _ = run_geometry_stage(roi, geo_cfg)
-        tls, _ = run_color_stage(roi, roi.traffic_roi, color_cfg)     # upstream, not timed
+        tls, _ = run_color_stage(roi, color_cfg)     # upstream, not timed
 
         t0 = time.perf_counter_ns()
         result, dbg = fuse_detections(geometry, tls, roi)

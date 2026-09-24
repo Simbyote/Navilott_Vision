@@ -1,70 +1,49 @@
-"""
-color_branch.py
-
-Color Branch Stage
+"""Color branch: traffic-light color candidates from the traffic ROI.
 
 Purpose:
-    The color branch isolates traffic-light state candidates by color before any
-    spatial or structural analysis occurs:
+    Isolates traffic-light state by color before any structural analysis.
+    Runs after the geometry stage in phase2_linker.run_chain(); its
+    candidates go to feature_fusion.fuse_detections() alongside the lane and
+    sign candidates. The branch stays off until HSV ranges calibrated under
+    course lighting are loaded; the built-in ranges are only a scaffold.
 
-        traffic ROI (BGR) -> HSV -> red / yellow / green masks
-                          -> blobs -> geometric filters -> candidates
+Main package:
+    TrafficLightCandidate: a color label, a traffic-ROI-relative bbox and an
+    area-based confidence for one blob. An empty list means no blob survived.
 
-    Returns an empty list if no candidates survive blob filtering.
-    Coordinates are relative to the traffic-light ROI.
-
-Where it runs:
-    phase2_linker.run_chain() calls run_color_stage() after the geometry stage
-    and passes the candidates to feature_fusion.fuse_detections(), which merges
-    them with the geometry branch's lane and sign candidates. This module does
-    not import fusion or the linker.
-
-Calibration:
-    The branch needs HSV ranges calibrated under the real course lighting,
-    loaded with load_hsv_ranges(). ColorConfig() with no ranges leaves the
-    branch OFF: run_color_stage() returns no candidates and says so in its
-    debug dict. The HSVRanges() defaults are a scaffold, not a calibration.
-
-Confidence:
-    Area only: (blob area - min_area) / (ref_area - min_area), clamped to
-    [0, 1]. It saturates at ref_area, and fusion keeps the highest-confidence
-    traffic light across all three colors, so among several blobs the largest
-    wins regardless of color or shape.
-
-Debug:
-    extract_traffic_light_candidates() always returns the masks, blob counts
-    and mask pixel counts. With trace=True it also records every blob that
-    reached a gate, and the gate that decided it, for the debug views.
+Flow:
+    1. Convert the BGR traffic ROI to HSV.
+    2. Threshold into red, yellow and green masks (red spans the hue wrap).
+    3. Find blobs in each mask and gate them by area and aspect.
+    4. Score survivors by area and package them with the frame identity.
 """
 import json
 from dataclasses import dataclass, field
-from typing import List, Optional
 
 import cv2
 import numpy as np
 
-# =============================================================================
-# Configuration Dataclasses
-# =============================================================================
-DEFAULT_HSV_PATH = "vision_stack/calibration/hsv_ranges.json"
+from src.params import GREEN, HSV_RANGES_PATH, RED, YELLOW
+from src.utils import clamp
+from src.perception.roi_crop import ROICropResult
+
+DEFAULT_HSV_PATH = str(HSV_RANGES_PATH)
 
 @dataclass
 class ColorRange:
-    """One HSV color band: lower and upper bounds as (H, S, V) uint8 tuples."""
-    lower: tuple   # (H_min, S_min, V_min)
-    upper: tuple   # (H_max, S_max, V_max)
+    """One HSV color band, bounds inclusive."""
+    lower: tuple[int, int, int]   # (H_min, S_min, V_min)
+    upper: tuple[int, int, int]   # (H_max, S_max, V_max)
 
 @dataclass
 class HSVRanges:
     """
-    HSV thresholds for traffic light color detection
+    HSV thresholds per light color.
 
-    Load calibrated values from calibration/hsv_ranges.json using
-    load_hsv_ranges(). The defaults below are a structural scaffold only
-
-    Hue is in OpenCV units, 0 to 179 (degrees / 2). Red needs two bands
-    because hue wraps: red_low covers the bottom of the range, red_high the
-    top
+    The defaults are a structural scaffold; load calibrated values with
+    load_hsv_ranges(). Hue is in OpenCV units, 0-179 (degrees / 2). Red needs
+    two bands because hue wraps: red_low covers the bottom of the range,
+    red_high the top.
     """
     red_low: ColorRange = field(default_factory=lambda: ColorRange((0, 100, 100), (10, 255, 255)))
     red_high: ColorRange = field(default_factory=lambda: ColorRange((170, 100, 100), (180, 255, 255)))
@@ -72,69 +51,46 @@ class HSVRanges:
     green: ColorRange = field(default_factory=lambda: ColorRange((40, 100, 100), (80, 255, 255)))
 
     def __post_init__(self):
-        """
-        Purpose:
-            Verifies load_hsv_ranges() was used
-        """
         self._validated = False   # True only after load_hsv_ranges() is used
 
     @property
     def is_calibrated(self) -> bool:
         """
-        Purpose:
-            True if load_hsv_ranges() was used. Informational: extraction does
-            not refuse uncalibrated ranges, so they can be used while tuning,
-            and the debug view flags them
+        True only for ranges built by load_hsv_ranges(). Informational:
+        extraction still accepts scaffold ranges for tuning, and the debug
+        dict flags them.
         """
         return self._validated
 
 @dataclass
 class BlobFilter:
-    """
-    Geometric constraints for accepting a blob as a traffic-light candidate
-
-    min_area: discard blobs smaller than this. Rejects noise
-    max_area: discard blobs larger than this. Rejects large
-                    background regions mistakenly masked
-    min_aspect: w/h lower bound. Rejects elongated streaks
-    max_aspect: w/h upper bound. Rejects elongated streaks
-    ref_area: blob area treated as confidence = 1.0 at expected
-                    detection range; used in confidence normalization
-
-    Starting defaults below are placeholders
-    """
-    min_area: float = 50.0
-    max_area: float = 5000.0
-    min_aspect: float = 0.3
+    """Blob gates for traffic-light candidates. Defaults are placeholders, not tuned."""
+    min_area: float = 50.0      # px^2; rejects mask speckle
+    max_area: float = 5000.0    # px^2; rejects large background regions caught by a band
+    min_aspect: float = 0.3     # w/h; together with max_aspect, rejects elongated streaks
     max_aspect: float = 3.0
-    ref_area: float = 800.0
+    ref_area: float = 800.0     # px^2 scoring confidence 1.0: the expected lamp size at detection range
 
 @dataclass(frozen=True)
 class ColorConfig:
-    """
-    The color branch's tuning as one unit, so the stage takes a single config
-    argument like every other stage
-
-    hsv_ranges: calibrated HSVRanges, or None to leave the branch off
-    blob: BlobFilter
-    """
-    hsv_ranges: Optional[HSVRanges] = None
+    """Color tuning as one unit, so the stage takes a single config like every other stage."""
+    hsv_ranges: HSVRanges | None = None     # None leaves the branch off
     blob: BlobFilter = field(default_factory=BlobFilter)
 
-# =============================================================================
-# Output Dataclasses
-# =============================================================================
+
 @dataclass
 class TrafficLightCandidate:
-    label: str    # "red" | "yellow" | "green"
-    bbox: tuple  # (x, y, w, h) in traffic-light ROI coords
-    confidence: float  # [0.0, 1.0] by area-based heuristic
+    """One color blob that passed the gates. frame_id and timestamp_ms are carried from capture."""
+    label: str                          # "red" | "yellow" | "green"
+    bbox: tuple[int, int, int, int]     # (x, y, w, h) in traffic-ROI px
+    # [0, 1], area only, saturating at ref_area. Fusion keeps the highest
+    # confidence across all three colors, so the largest blob wins regardless
+    # of color or shape.
+    confidence: float
     frame_id: int
     timestamp_ms: int
 
-# =============================================================================
-# Calibration Loader
-# =============================================================================
+
 _HSV_CAPS = (180, 255, 255)     # H allows 180 as an upper bound for the red wrap
 
 def _band(data: dict, key: str) -> ColorRange:
@@ -153,20 +109,29 @@ def _band(data: dict, key: str) -> ColorRange:
 
 def load_hsv_ranges(json_path: str) -> HSVRanges:
     """
-    Load calibrated HSV thresholds from calibration/hsv_ranges.json
+    Load calibrated HSV thresholds and mark them calibrated.
 
-    JSON structure:
-    {
-      "red_low": {"lower": [H, S, V], "upper": [H, S, V]},
-      "red_high": {"lower": [H, S, V], "upper": [H, S, V]},
-      "yellow": {"lower": [H, S, V], "upper": [H, S, V]},
-      "green": {"lower": [H, S, V], "upper": [H, S, V]}
-    }
+    Inputs:
+        json_path: JSON with a lower/upper [H, S, V] pair per band:
+            {
+              "red_low": {"lower": [H, S, V], "upper": [H, S, V]},
+              "red_high": {"lower": [H, S, V], "upper": [H, S, V]},
+              "yellow": {"lower": [H, S, V], "upper": [H, S, V]},
+              "green": {"lower": [H, S, V], "upper": [H, S, V]}
+            }
 
-    Raises FileNotFoundError if the file does not exist
-    Raises KeyError if any required key is missing
-    Raises ValueError if a band is malformed: not 3 values, or a channel
-    outside 0 <= lower <= upper <= 255 (hue: 180), naming the band and channel
+    Outputs:
+        HSVRanges with is_calibrated True.
+
+    Side effects:
+        Reads json_path.
+
+    Raises:
+        FileNotFoundError: If the file doesn't exist.
+        KeyError: If a band or bound is missing.
+        ValueError: If a bound doesn't have 3 values, or a channel falls
+            outside 0 <= lower <= upper <= 255 (hue: 180). The message names
+            the band and channel.
     """
     with open(json_path, "r") as f:
         data = json.load(f)
@@ -182,38 +147,30 @@ def load_hsv_ranges(json_path: str) -> HSVRanges:
 
 def load_color_config(
         json_path: str = DEFAULT_HSV_PATH,
-        blob: Optional[BlobFilter] = None,
+        blob: BlobFilter | None = None,
     ) -> ColorConfig:
     """
-    Purpose:
-        ColorConfig with calibrated ranges from json_path, ready to switch the
-        branch on in a PipelineConfig
+    ColorConfig with calibrated ranges, ready to switch the branch on in a PipelineConfig.
+
+    Inputs:
+        json_path: Calibration file; see load_hsv_ranges().
+        blob: Blob gates. None uses the BlobFilter() placeholders.
     """
     return ColorConfig(load_hsv_ranges(json_path), blob or BlobFilter())
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
+
+# @TODO assumes BGR; does not handle a YUV frame
 def _to_hsv(
         roi_bgr: np.ndarray
     ) -> np.ndarray:
-    """
-    Purpose:
-        Convert BGR ROI to HSV
-
-    Note:
-        @TODO Does not convert from a YUV image; it assumes BGR
-    """
+    """BGR to OpenCV HSV (H in 0-179)."""
     return cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
 
 def _threshold_red(
-        hsv: np.ndarray, 
+        hsv: np.ndarray,
         ranges: HSVRanges
     ) -> np.ndarray:
-    """
-    Purpose:
-        Produce red binary mask
-    """
+    """Red mask: the union of red_low and red_high, since red straddles the hue wrap."""
     mask_low = cv2.inRange(hsv,
                             np.array(ranges.red_low.lower, dtype=np.uint8),
                             np.array(ranges.red_low.upper, dtype=np.uint8))
@@ -223,41 +180,19 @@ def _threshold_red(
     return cv2.bitwise_or(mask_low, mask_high)
 
 def _threshold_single(
-        hsv: np.ndarray, 
+        hsv: np.ndarray,
         color_range: ColorRange
     ) -> np.ndarray:
-    """
-    Purpose:
-        Produce binary mask for a single non-wrapping hue range
-    """
+    """0/255 mask for one band that doesn't wrap."""
     return cv2.inRange(hsv,
                        np.array(color_range.lower, dtype=np.uint8),
                        np.array(color_range.upper, dtype=np.uint8))
 
-def _clamp(
-        value: float, 
-        lo: float, 
-        hi: float
-    ) -> float:
-    """
-    Purpose:
-        Clamp value to range [lo, hi]
-    """
-    return max(lo, min(hi, value))
-
 def _mean_hsv(
         hsv: np.ndarray,
         contour: np.ndarray
-    ) -> tuple:
-    """
-    Purpose:
-        Mean (H, S, V) inside a contour, to show where a blob sits relative to
-        the calibrated bands. Trace mode only
-
-    Inputs:
-        hsv: HSV image of the ROI
-        contour: the blob's contour
-    """
+    ) -> tuple[float, float, float]:
+    """Mean (H, S, V) inside a contour, to show where a blob sits against the bands. Trace only."""
     x, y, w, h = cv2.boundingRect(contour)
     mask = np.zeros((h, w), dtype=np.uint8)
     cv2.drawContours(mask, [contour - np.array([[[x, y]]])], -1, 255,
@@ -275,24 +210,29 @@ def _blobs_to_candidates(
     blob_filter: BlobFilter,
     frame_id: int,
     timestamp_ms: int,
-    reject_counts: Optional[dict] = None,
-    trace: Optional[list] = None,
-    hsv: Optional[np.ndarray] = None,
-) -> List[TrafficLightCandidate]:
+    reject_counts: dict | None = None,
+    trace: list[dict] | None = None,
+    hsv: np.ndarray | None = None,
+) -> list[TrafficLightCandidate]:
     """
-    Purpose:
-        Extract blobs from a binary mask, apply geometric filters, and return
-        surviving blobs as TrafficLightCandidate objects
+    Find blobs in one color mask, run them through the area and aspect gates, and build candidates.
 
     Inputs:
-        mask: binary mask for one color
-        label: "red" | "yellow" | "green"
-        reject_counts: dict, filled with seen / area / aspect / accepted
-        trace: list, or None to skip. Given a list, one entry per blob that
-               reached a gate is appended: label, bbox, gate (None if
-               accepted, else "area" or "aspect"), area, aspect, fill,
-               confidence, hsv
-        hsv: HSV image, used only to fill the trace's mean HSV
+        mask: 0/255 mask for one color.
+        label: "red" | "yellow" | "green".
+        reject_counts: Filled with seen / area / aspect / accepted. Every blob
+            lands in exactly one bucket, so the buckets sum to "seen".
+        trace: A list to receive one entry per blob that reached a gate
+            (label, bbox, gate, area, aspect, fill, confidence, hsv), or None
+            to skip. gate is None if accepted, else "area" or "aspect". Area
+            rejects are traced only if their bbox clears TRACE_MIN_BBOX_FRAC.
+        hsv: HSV image of the ROI, used only for the trace's mean HSV.
+
+    Outputs:
+        Accepted candidates.
+
+    Side effects:
+        Mutates reject_counts and trace.
     """
     candidates = []
 
@@ -321,7 +261,6 @@ def _blobs_to_candidates(
         rc["seen"] += 1
         area = cv2.contourArea(contour)
 
-        # Area filter
         if area < blob_filter.min_area or area > blob_filter.max_area:
             rc["area"] += 1
             if trace is not None:
@@ -332,14 +271,13 @@ def _blobs_to_candidates(
 
         x, y, w, h = cv2.boundingRect(contour)
 
-        # Aspect ratio filter that guards against a zero height
-        if h == 0:
+        if h == 0:      # guard the w / h below
             rc["aspect"] += 1
             continue
         aspect = w / h
 
-        # Confidence is the normalized area relative to reference area
-        confidence = round(_clamp(
+        # Scored before the aspect gate so aspect rejects still trace a confidence
+        confidence = round(clamp(
             (area - blob_filter.min_area) / max(blob_filter.ref_area - blob_filter.min_area, 1.0),
             0.0, 1.0
         ), 4)
@@ -361,9 +299,7 @@ def _blobs_to_candidates(
 
     return candidates
 
-# =============================================================================
-# Core Function
-# =============================================================================
+
 def extract_traffic_light_candidates(
     roi: np.ndarray,
     hsv_ranges: HSVRanges,
@@ -371,36 +307,29 @@ def extract_traffic_light_candidates(
     frame_id: int = 0,
     timestamp_ms: int = 0,
     trace: bool = False,
-) -> tuple:
+) -> tuple[list[TrafficLightCandidate], dict]:
     """
-    Purpose:
-        Extract traffic-light color candidates from the traffic-light ROI
+    Find traffic-light color candidates in the traffic ROI.
 
     Inputs:
-        roi: uint8 roi cropped BGR ndarray
-        hsv_ranges: HSVRanges, normally calibrated and loaded with
-                    load_hsv_ranges(). Uncalibrated ranges are accepted so
-                    they can be tuned; debug["calibrated"] reports which
-        blob_filter: BlobFilter geometric constraints
-        frame_id: integer frame counter from capture loop
-        timestamp_ms: millisecond timestamp from capture loop
-        trace: also record every blob that reached a gate, under
-               debug["trace"]. Off by default: the live loop does not read it
+        roi: (h, w, 3) uint8 BGR, e.g. ROICropResult.traffic_roi. Read-only
+            views are fine.
+        hsv_ranges: Normally from load_hsv_ranges(). Scaffold ranges are
+            accepted for tuning; debug["calibrated"] reports which.
+        trace: Also record every blob that reached a gate under
+            debug["trace"]. Off by default; the live loop doesn't read it.
 
     Outputs:
-        (candidates, debug)
+        (candidates, debug). debug is for inspection; the pipeline doesn't
+        pass it on. It always holds hsv, the red / yellow / green masks, roi
+        (the input), mask_px ({color: nonzero px}), reject_counts ({color:
+        {seen, area, aspect, accepted}}) and calibrated. With trace, it also
+        holds trace (see _blobs_to_candidates).
 
-        candidates: list[TrafficLightCandidate]
-        debug: dict
-            Always: hsv, red, yellow, green (images), roi (the input),
-            mask_px ({color: nonzero pixels}), reject_counts
-            ({color: {seen, area, aspect, accepted}}), calibrated (bool)
-            With trace: trace, a list of dicts (see _blobs_to_candidates)
-
-    Note:
-        debug is not a part of the final output in the pipeline
+    Raises:
+        ValueError / TypeError: If roi is None, not uint8 or not (h, w, 3),
+            or hsv_ranges is None.
     """
-    # Guards and input validation
     if roi is None:
         raise ValueError("extract_traffic_light_candidates: received None")
     if roi.dtype != np.uint8:
@@ -413,17 +342,14 @@ def extract_traffic_light_candidates(
             "Load from calibration/hsv_ranges.json via load_hsv_ranges()."
         )
 
-    # Step 1: BGR → HSV 
     hsv = _to_hsv(roi)
 
-    # Step 2: Per-color thresholding -> binary masks
     masks = {
-        "red": _threshold_red(hsv, hsv_ranges),
-        "yellow": _threshold_single(hsv, hsv_ranges.yellow),
-        "green": _threshold_single(hsv, hsv_ranges.green),
+        RED: _threshold_red(hsv, hsv_ranges),
+        YELLOW: _threshold_single(hsv, hsv_ranges.yellow),
+        GREEN: _threshold_single(hsv, hsv_ranges.green),
     }
 
-    # Step 3: Blob filtering -> candidates
     candidates = []
     reject_counts = {}
     trace_log = [] if trace else None
@@ -436,9 +362,9 @@ def extract_traffic_light_candidates(
 
     debug = {
         "hsv": hsv,
-        "red": masks["red"],
-        "yellow": masks["yellow"],
-        "green": masks["green"],
+        RED: masks[RED],
+        YELLOW: masks[YELLOW],
+        GREEN: masks[GREEN],
         "roi": roi,
         "mask_px": {k: int(cv2.countNonZero(m)) for k, m in masks.items()},
         "reject_counts": reject_counts,
@@ -449,36 +375,30 @@ def extract_traffic_light_candidates(
 
     return candidates, debug
 
-# =============================================================================
-# Color Branch Stage
-# ============================================================================
+
 def run_color_stage(
-        roi,
-        frame_bgr: np.ndarray,
+        roi: ROICropResult,
         config: ColorConfig = ColorConfig(),
         trace: bool = False,
-    ) -> tuple:
+    ) -> tuple[list[TrafficLightCandidate], dict]:
     """
-    Purpose:
-        Stage entry point, the same shape as run_geometry_stage(): takes the
-        crop stage's result and a config, and carries the frame stamp from the
-        ROICropResult instead of re-deriving it
+    Stage entry point: run the color branch on one frame's traffic ROI.
 
     Inputs:
-        roi: ROICropResult from crop_rois()
-        frame_bgr: The roi cropped bgr frame
-        config: ColorConfig. With no hsv_ranges the branch is off
-        trace: record the per-blob trace (see extract_traffic_light_candidates)
+        roi: Supplies traffic_roi, the image analyzed, and the frame identity.
+        config: Tuning. With hsv_ranges None the branch is off and the ROI
+            is never read.
+        trace: Record the per-blob trace (see extract_traffic_light_candidates).
 
     Outputs:
-        (candidates, debug). Off: ([], {"enabled": False}). On: the debug dict
-        from extract_traffic_light_candidates plus "enabled": True
+        Off: ([], {"enabled": False}). On: (candidates, debug) from
+        extract_traffic_light_candidates, with debug["enabled"] True.
     """
     if config.hsv_ranges is None:
         return [], {"enabled": False}
 
     candidates, debug = extract_traffic_light_candidates(
-        frame_bgr,
+        roi.traffic_roi,
         config.hsv_ranges,
         config.blob,
         roi.frame_id,
@@ -488,23 +408,18 @@ def run_color_stage(
     debug["enabled"] = True
     return candidates, debug
 
-# =============================================================================
-# Debug Visualization
-# =============================================================================
-_LABEL_COLORS = {
-    "red": (0, 0, 255),
-    "yellow": (0, 200, 255),
-    "green": (0, 200, 0),
+
+_LABEL_COLORS = {   # BGR
+    RED: (0, 0, 255),
+    YELLOW: (0, 200, 255),
+    GREEN: (0, 200, 0),
 }
 
 def draw_candidates(
-        roi_bgr: np.ndarray, 
-        candidates: List[TrafficLightCandidate]
+        roi_bgr: np.ndarray,
+        candidates: list[TrafficLightCandidate]
     ) -> np.ndarray:
-    """
-    Purpose:
-        Return a copy of roi_bgr with candidate bounding boxes and labels drawn
-    """
+    """Copy of roi_bgr with each candidate's bbox and label drawn in its color (white if unknown)."""
     vis = roi_bgr.copy()
     for c in candidates:
         x, y, w, h = c.bbox

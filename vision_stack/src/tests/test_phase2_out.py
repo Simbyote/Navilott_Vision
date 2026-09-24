@@ -1,8 +1,8 @@
 """
-test_phase2_out.py  --  Phase 2 output packaging (the Phase 2 / Phase 3 boundary)
+test_phase2_out.py  --  src/perception/phase2_out.py
 
 package_phase2 and Phase2Output do no computation, filtering, or re-sorting --
-PR-1 through PR-4 and failure cases F1-F5 in the module docstring are the
+PR-1 through PR-4 and failure cases F1-F5 in Phase2Output's docstring are the
 entire contract. Every test here is named after the rule or failure case it
 pins, and F2/F5 use minimal duck-typed fakes (SimpleNamespace) rather than
 real DetectionObject/LaneOffsetResult instances, since a "missing field" or
@@ -30,28 +30,26 @@ from src.perception.lane_offset import LaneOffsetConfig, LaneOffsetResult, compu
 from src.perception.phase2_out import DETECTION_FIELDS, LANE_OFFSET_FIELDS, Phase2Output, package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 def det(frame_id=1, ts=2, det_type="lane_boundary", confidence=0.9, source_roi="lane", source_rect=(0, 0, 10, 10)):
+    """Real DetectionObject with a chosen stamp, type, confidence and ROI."""
     return DetectionObject(det_type, "x", confidence, {"x": 1.0, "y": 2.0}, (0, 0, 1, 1),
                            source_roi, source_rect, frame_id, ts)
 
 
 def offset_result(frame_id=1, ts=2, mode="two_boundary", offset=0.1):
+    """Real LaneOffsetResult with a chosen stamp, mode and offset."""
     return LaneOffsetResult(offset, 10.0, 20.0, 10.0, 0.5, 2, mode, frame_id, ts)
 
 
 def fields_of(obj):
+    """An object's attributes as a dict."""
     return {k: v for k, v in vars(obj).items()}
 
 
-# =============================================================================
-# Software: F1 - non-list detections / lane_offset_results
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("bad", [None, "x", {}, (det(),), 5])
 def test_f1_non_list_detections_raises_typeerror_naming_the_field(bad):
@@ -72,9 +70,6 @@ def test_f1_message_tells_the_caller_to_pass_an_empty_list():
         Phase2Output(None, [], 1, 2)
 
 
-# =============================================================================
-# Software: F2 - a required field is missing
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("missing", DETECTION_FIELDS)
 def test_f2_a_missing_detection_field_raises_attributeerror_naming_it(missing):
@@ -106,16 +101,13 @@ def test_f2_error_names_the_index_of_the_offending_item():
 
 @pytest.mark.software
 def test_f2_presence_is_the_only_check_a_none_valued_field_still_counts():
-    """This stage checks field presence, not field validity - that's upstream's job."""
+    # This stage checks field presence, not validity; validity is upstream's job
     partial = SimpleNamespace(type="lane_boundary", position=None, confidence=0.5,
                               timestamp=2, frame_id=1, source_roi="lane", source_rect=None)
     p = Phase2Output([partial], [], 1, 2)
     assert p.detection_count == 1
 
 
-# =============================================================================
-# Software: F3 - detection_count
-# =============================================================================
 @pytest.mark.software
 def test_f3_detection_count_is_computed_when_omitted():
     assert Phase2Output([det(), det()], [], 1, 2).detection_count == 2
@@ -133,9 +125,6 @@ def test_f3_an_explicit_wrong_count_is_rejected():
         Phase2Output([det()], [], 1, 2, detection_count=5)
 
 
-# =============================================================================
-# Software: F4 - frame_id / timestamp_ms have no default
-# =============================================================================
 @pytest.mark.software
 def test_f4_frame_id_has_no_default():
     with pytest.raises(TypeError, match="frame_id"):
@@ -154,9 +143,6 @@ def test_f4_neither_argument_silently_defaults_to_zero():
         Phase2Output([], [])
 
 
-# =============================================================================
-# Software: F5 - a per-item stamp disagrees with the container
-# =============================================================================
 @pytest.mark.software
 def test_f5_a_detection_from_a_different_frame_id_is_rejected():
     with pytest.raises(ValueError, match="different frames"):
@@ -188,12 +174,9 @@ def test_f5_a_correctly_stamped_mix_of_several_detections_is_accepted():
     assert p.detection_count == 3 and len(p.lane_offset_results) == 1
 
 
-# =============================================================================
-# Software: PR-1 through PR-4
-# =============================================================================
 @pytest.mark.software
 def test_pr1_items_are_kept_as_is_no_reordering_no_filtering():
-    """Deliberately NOT in confidence order, to prove nothing re-sorts them."""
+    # Deliberately not in confidence order, so any re-sorting would show
     weak, strong = det(confidence=0.1), det(confidence=0.9)
     p = Phase2Output([weak, strong], [], 1, 2)
     assert p.detections[0] is weak and p.detections[1] is strong
@@ -207,7 +190,7 @@ def test_pr1_lane_offset_results_are_kept_as_is():
 
 @pytest.mark.software
 def test_pr1_more_than_one_lane_offset_result_is_not_rejected():
-    """PR-1 takes the list as-is; enforcing exactly one is the caller's job (see package_phase2)."""
+    # PR-1 takes the list as-is; enforcing exactly one is the caller's job (see package_phase2)
     p = Phase2Output([], [offset_result(mode="two_boundary"), offset_result(mode="left_only")], 1, 2)
     assert len(p.lane_offset_results) == 2
 
@@ -242,9 +225,6 @@ def test_deterministic():
     assert a == b
 
 
-# =============================================================================
-# Software: package_phase2 wiring
-# =============================================================================
 @pytest.mark.software
 def test_package_wires_fusion_detections_through_unchanged():
     d = det(frame_id=7, ts=8)
@@ -276,15 +256,13 @@ def test_package_propagates_f5_when_the_lane_offset_is_from_a_different_frame():
 
 @pytest.mark.software
 def test_package_never_touches_detection_count_explicitly():
-    """package_phase2 leaves detection_count to compute itself (PR-2)."""
+    # package_phase2 leaves detection_count to compute itself (PR-2)
     fusion = FusionResult([det(frame_id=1, ts=1), det(frame_id=1, ts=1)], 1, 1)
     assert package_phase2(fusion, None).detection_count == 2
 
 
-# =============================================================================
-# Software: chained  real fusion (+ lane offset) -> packaging
-# =============================================================================
-def build_frame(frame_id=21, ts=222, H=360, W=480):
+def build_frame(frame_id=21, ts=222, H=FRAME_H, W=FRAME_W):
+    """ROICropResult for a frame with two lane tapes at 20% and 80% of the lane ROI."""
     frame = np.full((H, W, 3), 30, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig())
     lx, ly, lw, lh = probe.lane_rect
@@ -298,7 +276,7 @@ def build_frame(frame_id=21, ts=222, H=360, W=480):
 def test_chain_real_fusion_and_lane_offset_package_cleanly():
     roi = build_frame()
     geometry, _, _ = run_geometry_stage(roi, GeometryConfig())
-    tls, _ = run_color_stage(roi, roi.traffic_roi, ColorConfig(HSVRanges(), BlobFilter()))
+    tls, _ = run_color_stage(roi, ColorConfig(HSVRanges(), BlobFilter()))
     fusion, _ = fuse_detections(geometry, tls, roi)
     lo, _ = compute_lane_offset(geometry, roi, LaneOffsetConfig())
 
@@ -311,7 +289,7 @@ def test_chain_real_fusion_and_lane_offset_package_cleanly():
 
 @pytest.mark.software
 def test_chain_a_blind_frame_still_packages_with_identity_intact():
-    roi = crop_rois(preprocess_frame(FrameData(np.full((360, 480, 3), 30, np.uint8), 30, 300)), ROIConfig())
+    roi = crop_rois(preprocess_frame(FrameData(np.full((FRAME_H, FRAME_W, 3), 30, np.uint8), 30, 300)), ROIConfig())
     geometry, _, _ = run_geometry_stage(roi, GeometryConfig())
     fusion, _ = fuse_detections(geometry, [], roi)
     lo, _ = compute_lane_offset(geometry, roi, LaneOffsetConfig())
@@ -328,7 +306,7 @@ def test_every_recorded_frame_packages_without_a_stamp_mismatch(dataset_frames):
     for fd in dataset_frames:
         roi = crop_rois(preprocess_frame(fd))
         geometry, _, _ = run_geometry_stage(roi, GeometryConfig())
-        tls, _ = run_color_stage(roi, roi.traffic_roi, ColorConfig(HSVRanges(), BlobFilter()))
+        tls, _ = run_color_stage(roi, ColorConfig(HSVRanges(), BlobFilter()))
         fusion, _ = fuse_detections(geometry, tls, roi)
         lo, _ = compute_lane_offset(geometry, roi, LaneOffsetConfig())
         try:
@@ -339,10 +317,8 @@ def test_every_recorded_frame_packages_without_a_stamp_mismatch(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Hardware: packaging characterization
-# =============================================================================
 def _jsonable(out: Phase2Output) -> dict:
+    """Phase2Output reduced to the fields worth snapshotting, as plain JSON types."""
     return {
         "frame_id": out.frame_id, "timestamp_ms": out.timestamp_ms,
         "detection_count": out.detection_count,
@@ -362,7 +338,7 @@ def test_phase2_out_characterization(request, frames, artifacts):
     for i, fd in enumerate(frames(n)):
         roi = crop_rois(preprocess_frame(fd))
         geometry, _, _ = run_geometry_stage(roi, geo_cfg)
-        tls, _ = run_color_stage(roi, roi.traffic_roi, color_cfg)
+        tls, _ = run_color_stage(roi, color_cfg)
         fusion, _ = fuse_detections(geometry, tls, roi)
         lo, _ = compute_lane_offset(geometry, roi, lo_cfg)             # upstream, not timed
 

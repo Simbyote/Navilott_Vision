@@ -1,28 +1,22 @@
-"""
-roi_crop.py
-
-ROI Cropping Stage
+"""Region-of-interest cropping that splits each frame into per-branch inputs.
 
 Purpose:
-    Partitions the preprocessed frame into three spatially distinct regions
-    before the pipeline splits into parallel branches
+    Partitions the preprocessed frame into three regions before the pipeline
+    splits into parallel branches. Cropping shrinks the pixel area each
+    branch processes and removes irrelevant scenery, which lowers the
+    false-positive rate before any threshold is applied.
 
-    1. Reduce the pixel area each downstream operation must process
+Main package:
+    ROICropResult: lane and sign ROIs cut from the gray frame (the geometry
+    branch rejects 3-channel input), a traffic ROI cut from the color frame
+    (HSV thresholding needs chroma), and each ROI's rect in source pixels so
+    ROI-space detections can be mapped back to the frame. ROIs are read-only
+    views, not copies.
 
-    2. Eliminate irrelevant regions from each branch's input input reduces false positive rate before any threshold is
-       applied
-
-Sources:
-    lane_roi and sign_roi come from PreprocessResult.gray, because the
-    geometry branch validates ndim == 2 and raises on a 3-channel input.
-
-    traffic_roi comes from PreprocessResult.color, because the color branch
-    thresholds in HSV and needs the chroma.
-
-Aliasing:
-    Each ROI is a NumPy view into the preprocessed frame
-
-All ROI coordinates are computed deterministically from (H, W).
+Flow:
+    1. Check that the gray and color frames share (H, W).
+    2. Resolve each fractional ROIBounds to pixel coordinates.
+    3. Slice each ROI as a read-only view; carry the frame identity forward.
 """
 import numpy as np
 import cv2
@@ -30,28 +24,19 @@ from dataclasses import dataclass
 
 from src.perception.preprocess import PreprocessResult
 
-# ============================================================================
-# Debug Names
-# ============================================================================
-OVERLAY_SUFFIX = "_roi_overlay.png"
-LANE_ROI_SUFFIX = "_roi_lane.png"
-TRAFFIC_ROI_SUFFIX = "_roi_traffic.png"
-SIGN_ROI_SUFFIX = "_roi_sign.png"
+from src.params import ROI_LANE, ROI_SIGN, ROI_TRAFFIC
+# Re-exported so debug harnesses can keep importing the suffixes from here
+from src.params import (
+    LANE_ROI_SUFFIX, ROI_OVERLAY_SUFFIX as OVERLAY_SUFFIX, SIGN_ROI_SUFFIX, TRAFFIC_ROI_SUFFIX,
+)
 
-# ============================================================================
-# ROI Configuration
-# ============================================================================
+
 @dataclass(frozen=True)
 class ROIBounds:
-    """
-    Fractional bounds in [0, 1] of frame width/height
-
-    x0, y0: top-left corner as a fraction of (W, H)
-    x1, y1: bottom-right corner as a fraction of (W, H)
-    """
-    x0: float
+    """Fractional ROI bounds, each in [0, 1] of frame width/height. x0 < x1 and y0 < y1."""
+    x0: float   # top-left
     y0: float
-    x1: float
+    x1: float   # bottom-right
     y1: float
 
     def __post_init__(self):
@@ -73,61 +58,39 @@ TRAFFIC = ROIBounds(x0=0.25, y0=0.00, x1=0.75, y1=0.50)
 # Upper-right: signs are posted right of the lane
 SIGN = ROIBounds(x0=0.50, y0=0.00, x1=1.00, y1=0.55)
 
+
 @dataclass(frozen=True)
 class ROIConfig:
-    """
-    Configuration for the ROI cropping stage
-
-    lane: bounds for the lane ROI, taken from the grayscale frame
-    traffic: bounds for the traffic ROI, taken from the color frame
-    sign: bounds for the sign ROI, taken from the grayscale frame
-    """
+    """Bounds for each ROI. Lane and sign are cut from the gray frame, traffic from the color frame."""
     lane: ROIBounds = LANE
     traffic: ROIBounds = TRAFFIC
     sign: ROIBounds = SIGN
 
-# ============================================================================
-# Result Container
-# ============================================================================
+
 @dataclass(frozen=True)
 class ROICropResult:
     """
-    Output of the ROI cropping stage
+    Output of the ROI cropping stage.
 
-    lane_roi: (h, w) uint8 read-only view of the grayscale frame
-    traffic_roi: (h, w, 3) uint8 read-only view of the color frame
-    sign_roi: (h, w) uint8 read-only view of the grayscale frame
-    lane_rect: (x, y, w, h) of lane_roi in source-frame pixels
-    traffic_rect: (x, y, w, h) of traffic_roi in source-frame pixels
-    sign_rect: (x, y, w, h) of sign_roi in source-frame pixels
-    frame_id: carried from PreprocessResult
-    timestamp_ms: carried from PreprocessResult
-    source_shape: (H, W) of the frame the ROIs were cut from
-
-    The *_rect fields are what converts an ROI-relative detection back into
-    frame coordinates. Every branch works in ROI space, so without these a
-    detection cannot be placed in the original image.
+    ROIs are read-only views into the preprocessed frames. Every branch works
+    in ROI space; the rects are what place its detections back in the frame.
+    frame_id and timestamp_ms are copied from PreprocessResult.
     """
-    lane_roi: np.ndarray
-    traffic_roi: np.ndarray
-    sign_roi: np.ndarray
-    lane_rect: tuple
-    traffic_rect: tuple
-    sign_rect: tuple
+    lane_roi: np.ndarray                        # (h, w) uint8 view of the gray frame
+    traffic_roi: np.ndarray                     # (h, w, 3) uint8 BGR view of the color frame
+    sign_roi: np.ndarray                        # (h, w) uint8 view of the gray frame
+    lane_rect: tuple[int, int, int, int]        # (x, y, w, h) in source-frame px
+    traffic_rect: tuple[int, int, int, int]     # (x, y, w, h) in source-frame px
+    sign_rect: tuple[int, int, int, int]        # (x, y, w, h) in source-frame px
     frame_id: int
     timestamp_ms: int
-    source_shape: tuple
+    source_shape: tuple[int, int]               # (H, W) the ROIs were cut from
 
-# ============================================================================
-# Validation
-# ============================================================================
+
 def _validate(
         frame: np.ndarray
     ) -> None:
-    """
-    Purpose:
-        Reject frames that cannot be cropped, naming what arrived
-    """
+    """Reject frames that can't be cropped, naming what arrived."""
     if frame is None:
         raise ValueError("crop: frame is None")
     if frame.ndim not in (2, 3):
@@ -135,28 +98,25 @@ def _validate(
     if frame.ndim == 3 and frame.shape[2] != 3:
         raise ValueError(f"crop: expected (H,W) gray or (H,W,3) BGR, got {frame.shape}")
 
-# ============================================================================
-# Utility Functions
-# ============================================================================
+
 def resolve(
         bounds: ROIBounds,
-        shape: tuple
-    ) -> tuple:
+        shape: tuple[int, ...]
+    ) -> tuple[int, int, int, int]:
     """
-    Purpose:
-        Convert fractional bounds into integer pixel coordinates for a given
-        frame size, clamped to the frame
+    Convert fractional bounds to integer pixel coordinates, clamped to the frame.
 
     Inputs:
-        bounds: ROIBounds
-        shape: (H, W) or (H, W, C); only the first two are read
+        shape: (H, W) or (H, W, C); only (H, W) is read.
 
     Outputs:
-        (x, y, w, h) in source-frame pixels
+        (x, y, w, h) in source-frame px. Always at least 1x1, inside the
+        frame, and the same for the same (bounds, H, W).
     """
     H, W = shape[:2]
     x = min(max(round(bounds.x0 * W), 0), W - 1)
     y = min(max(round(bounds.y0 * H), 0), H - 1)
+    # max(..., x + 1): sliver bounds narrower than a pixel still yield 1 px
     x_end = min(max(round(bounds.x1 * W), x + 1), W)
     y_end = min(max(round(bounds.y1 * H), y + 1), H)
     return (x, y, x_end - x, y_end - y)
@@ -164,53 +124,47 @@ def resolve(
 def crop(
         frame: np.ndarray,
         bounds: ROIBounds
-    ) -> tuple:
+    ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
     """
-    Purpose:
-        Cut one ROI out of a frame as a read-only view
+    Cut one ROI out of a frame as a read-only view.
 
     Inputs:
-        frame: (H, W) or (H, W, 3) uint8
-        bounds: ROIBounds
+        frame: (H, W) gray or (H, W, 3) BGR, uint8. The ROI keeps the same layout.
 
     Outputs:
-        (roi_view, rect) where rect is (x, y, w, h) in source-frame pixels.
-        roi_view is not writeable --- call .copy() if the consumer needs to
-        modify it
+        (roi, rect). roi is a read-only view; call .copy() to modify it.
+        rect is (x, y, w, h) in source-frame px.
+
+    Raises:
+        ValueError: If the frame is None or not (H, W) / (H, W, 3).
     """
     _validate(frame)
     x, y, w, h = resolve(bounds, frame.shape)
     view = frame[y : y + h, x : x + w]
-    view.flags.writeable = False
+    view.flags.writeable = False    # locks only the view; the source stays writeable
     return view, (x, y, w, h)
 
-# ============================================================================
-# ROI Cropping Stage
-# ============================================================================
+
 def crop_rois(
         pre: PreprocessResult,
         config: ROIConfig = ROIConfig()
     ) -> ROICropResult:
     """
-    Purpose:
-        Cut the three branch ROIs from one preprocessed frame and carry the
-        frame's identity forward unchanged
+    Cut the three branch ROIs from one preprocessed frame.
 
     Inputs:
-        pre: PreprocessResult from preprocess_frame()
-        config: ROIConfig bounds
+        config: ROI bounds. Defaults to LANE, TRAFFIC and SIGN.
 
     Outputs:
-        ROICropResult
+        ROICropResult, with frame_id and timestamp_ms carried forward unchanged.
 
-    Notes:
-        source_shape is taken from the grayscale frame. Both preprocessed
-        frames come from the same capture, so their (H, W) agree; the
-        mismatch check exists to catch a caller that assembled a
-        PreprocessResult by hand from two different frames
+    Raises:
+        ValueError: If either frame is malformed, or gray and color differ in (H, W).
     """
     _validate(pre.gray)
     _validate(pre.color)
+    # preprocess_frame can't produce a mismatch; this catches a hand-assembled
+    # PreprocessResult mixing two frames, which would misplace every rect
     if pre.gray.shape[:2] != pre.color.shape[:2]:
         raise ValueError(
             f"crop: gray {pre.gray.shape[:2]} and color {pre.color.shape[:2]} "
@@ -233,9 +187,8 @@ def crop_rois(
         source_shape = pre.gray.shape[:2],
     )
 
-# ============================================================================
-# Debug Visualization
-# ============================================================================
+
+# BGR order: lane red, traffic green, sign blue
 LANE_COLOR = (0, 0, 255)
 TRAFFIC_COLOR = (0, 255, 0)
 SIGN_COLOR = (255, 0, 0)
@@ -246,26 +199,25 @@ def draw_roi_overlay(
         result: ROICropResult
     ) -> np.ndarray:
     """
-    Purpose:
-        Return a copy of frame with the three ROI rectangles drawn on it
+    Draw the three ROI rectangles, labeled, on a copy of the frame.
 
     Inputs:
-        frame: (H, W, 3) BGR frame to draw on, at source resolution
-        result: ROICropResult whose rects are drawn
+        frame: (H, W, 3) BGR at the resolution the ROIs were cut from.
 
     Outputs:
-        annotated copy; the input is not modified
+        Annotated copy; the input is untouched.
     """
     overlay = frame.copy()
 
     def _draw(rect, color, label):
         x, y, w, h = rect
         cv2.rectangle(overlay, (x, y), (x + w - 1, y + h - 1), color, RECT_THICKNESS)
+        # (x + 4, y + 18) is the text baseline: keeps a 0.55-scale label inside the rect
         cv2.putText(overlay, label, (x + 4, y + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
 
-    _draw(result.lane_rect, LANE_COLOR, "lane")
-    _draw(result.traffic_rect, TRAFFIC_COLOR, "traffic")
-    _draw(result.sign_rect, SIGN_COLOR, "sign")
+    _draw(result.lane_rect, LANE_COLOR, ROI_LANE)
+    _draw(result.traffic_rect, TRAFFIC_COLOR, ROI_TRAFFIC)
+    _draw(result.sign_rect, SIGN_COLOR, ROI_SIGN)
 
     return overlay

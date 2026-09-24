@@ -1,192 +1,115 @@
-"""
-lane_offset.py
-
-Lane Offset Estimation
+"""Lane offset: the robot's lateral error from the center of its own lane.
 
 Purpose:
-    Compute the lateral offset of the robot from the center of its own lane,
-    using the lane boundary candidates produced by the geometry branch.
-
-    This stage consumes GeometryBranchResult rather than fusion output.
-    Fusion normalizes detections into the Phase 2 publishing contract and
-    keeps only a bbox centroid and a confidence. Estimation needs the geometry
-    that normalization discards. The two are siblings over the same frame, not
-    a sequence:
+    Turns the geometry branch's lane candidates into a steering error. It
+    reads GeometryBranchResult rather than fusion output, because fusion
+    keeps only a centroid and a confidence, and estimation needs the geometry
+    that normalization discards. The two are siblings over the same frame:
 
         crop_rois -> geometry -+-> fuse_detections     -> Phase2Output
                                +-> compute_lane_offset -> steering error
 
-Offsets:
-     0.0: robot is centered in its lane
-    -1.0: robot is fully left of the lane center
-    +1.0: robot is fully right of the lane center
+Main package:
+    LaneOffsetResult: offset in [-1, 1], normalized by half the lane ROI
+    width (0 = centered, + = robot right of lane center, - = left), the
+    boundary anchors used, a confidence, and the mode the estimate came from.
+    Usable directly as the Phase 3 steering error.
 
-    Normalized to the lane ROI width, so it stays resolution-independent and
-    is usable directly as a Phase 3 steering error.
-
-What each candidate field is used for:
-    contour        the anchor x is the mean x of the contour points in its
-                   lowest rows --- where the marking sits at its nearest point
-                   to the robot. A bbox centroid puts an angled line's anchor
-                   halfway up the ROI, which is not where the robot is about
-                   to arrive
-    proximity      gates out candidates too far up the ROI to be near-field
-                   evidence, and weights the ones that remain, so a boundary
-                   at the bottom of the ROI counts for more than one at the top
-    width_px       minAreaRect short side. A marking far wider than a painted
-                   line is a blob, a glare patch or a merged pair, not a
-                   boundary to steer by
-    length_px      minAreaRect long side. Short fragments cannot anchor a
-                   boundary; this is the gate that keeps dashed-center-line
-                   fragments from being treated as lane edges
-    mean_intensity separates real bright tape from dim contours picked up off
-                   shadow edges and mat seams
-
-Boundary selection:
-    The robot sits at the horizontal center of the lane ROI, so its own lane
-    is bounded by the nearest usable boundary on each side of ROI center, not
-    by the outermost pair. On a two-lane street with a dividing line visible,
-    taking the extremes centers the robot on the street rather than on its
-    lane, which is a systematically directional error.
-
-Calibration seam:
-    Single-boundary mode needs to know how far the lane center sits from a
-    boundary. That number comes from camera calibration (cm-per-pixel against
-    a known lane width), so LaneOffsetConfig.expected_half_lane_px has no
-    default. Until it is set, a frame with only one usable boundary reports
-    mode "single_uncalibrated" with zero confidence rather than emitting a
-    steering error whose scale is unknown.
+Flow:
+    1. Gate each lane candidate: is it trustworthy enough to steer by?
+    2. Reduce survivors to anchors: foot x and a proximity-scaled weight.
+    3. Pick the nearest boundary on each side of ROI center.
+    4. Two boundaries with plausible spacing: offset from their midpoint.
+    5. Otherwise one boundary: project the lane center from it, if calibrated.
 """
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Optional
 
+from src.params import (
+    FOOT_BAND_PX, MODE_LEFT_ONLY, MODE_NONE, MODE_RIGHT_ONLY,
+    MODE_SINGLE_UNCALIBRATED, MODE_TWO_BOUNDARY,
+)
+from src.utils import check_same_frame, clamp
 from src.perception.geometry import GeometryBranchResult, LaneCandidate
 from src.perception.roi_crop import ROICropResult
 
-# =============================================================================
-# Input Dataclass
-# =============================================================================
+
 @dataclass(frozen=True)
 class LaneOffsetConfig:
     """
-    Tuning for lane offset estimation
+    Tuning for lane offset estimation.
 
     These gates are a second, stricter pass than LaneContourFilter. Geometry
-    decides "is this a lane marking"; this decides "is this trustworthy enough
+    decides "is this a lane marking"; this decides "is it trustworthy enough
     to steer by". A candidate can legitimately pass the first and fail this.
-
-    conf_threshold: minimum candidate confidence to anchor a boundary
-    min_proximity: minimum proximity [0,1]. Below this the candidate sits too
-                   far up the ROI to describe where the robot is now
-    min_length_px: minimum minAreaRect long side for a usable boundary
-    min_width_px: minimum minAreaRect short side; below this is noise
-    max_width_px: maximum short side; above this the contour is a blob or a
-                  merged pair rather than a single marking
-    min_intensity: minimum mean intensity inside the bbox
-    min_lane_width_px: minimum spacing between two boundaries for them to be
-                       opposite sides of one lane. Two contours closer than
-                       this are fragments of the same marking
-    max_lane_width_px: maximum spacing. Wider than this and the pair spans
-                       more than one lane
-    expected_half_lane_px: distance from a boundary to the lane center, in
-                           lane-ROI pixels. From calibration; see the module
-                           docstring. None disables single-boundary mode
-    foot_band_px: height of the band at the bottom of a contour used to
-                  compute its anchor x
     """
-    conf_threshold: float = 0.30
-    min_proximity: float = 0.25
-    min_length_px: float = 25.0
-    min_width_px: float = 1.0
-    max_width_px: float = 25.0
-    min_intensity: float = 90.0
-    min_lane_width_px: float = 60.0
-    max_lane_width_px: float = 400.0
-    expected_half_lane_px: Optional[float] = 228        # Half of 95% of a single lane frame
-    foot_band_px: int = 6
+    conf_threshold: float = 0.30        # min candidate confidence
+    min_proximity: float = 0.25         # [0, 1]; below this the candidate is too far up the ROI to describe where the robot is now
+    min_length_px: float = 25.0         # minAreaRect long side; keeps dashed-center-line fragments from anchoring a boundary
+    min_width_px: float = 1.0           # minAreaRect short side; below this is noise
+    max_width_px: float = 25.0          # above this it's a blob, glare patch or merged pair, not one painted line
+    min_intensity: float = 90.0         # 0-255 mean inside the contour; rejects shadow edges and mat seams
+    min_lane_width_px: float = 60.0     # anchors closer than this are fragments of one marking
+    max_lane_width_px: float = 400.0    # anchors wider apart than this span more than one lane
+    # Distance from a boundary to the lane center, lane-ROI px. Belongs to
+    # camera calibration (cm-per-px against a known lane width). None disables
+    # single-boundary mode: one usable boundary then reports
+    # "single_uncalibrated" with zero confidence, not a steering error of unknown scale.
+    expected_half_lane_px: float | None = 228        # Half of 95% of a single lane frame
+    foot_band_px: int = FOOT_BAND_PX    # band height for foot_x; only used when geometry didn't store one
 
-# =============================================================================
-# Output Dataclasses
-# =============================================================================
+
 @dataclass(frozen=True)
 class BoundaryAnchor:
-    """
-    One lane boundary reduced to the quantities the offset math uses
-
-    foot_x: anchor x in lane-ROI pixels, from the contour's lowest rows
-    weight: confidence scaled by proximity; how much this anchor counts
-    candidate: the LaneCandidate it came from, kept for debug and for the
-               scene state machine to reach back into later
-    """
-    foot_x: float
-    weight: float
-    candidate: LaneCandidate
+    """One lane boundary reduced to the quantities the offset math uses."""
+    foot_x: float               # lane-ROI px, from the contour's lowest rows
+    weight: float               # confidence scaled by proximity; how much this anchor counts
+    candidate: LaneCandidate    # kept for debug, and for the scene state machine to reach back into
 
 @dataclass(frozen=True)
 class LaneOffsetResult:
     """
-    Lane offset estimate for a single frame
+    Lane offset estimate for one frame. frame_id and timestamp_ms are carried
+    from capture, never re-derived.
 
-    offset: normalized lateral offset from the lane center
-            Negative = robot is left of lane center
-            Positive = robot is right of lane center
-    left_x: anchor x of the left boundary, None if unused
-    right_x: anchor x of the right boundary, None if unused
-    lane_width_px: spacing between the two anchors, None in single-sided modes
-    confidence: weighted confidence of the anchors actually used
-    boundary_count: lane_boundary candidates that passed every usability gate
-    mode: "two_boundary" | "left_only" | "right_only" |
-          "single_uncalibrated" | "none"
-    frame_id: carried from GeometryBranchResult, never re-derived
-    timestamp_ms: carried from GeometryBranchResult, never re-derived
-
-    boundary_count reports usable boundaries, not raw detections. A frame with
-    four contours and no usable boundary reports 0 here, which is what
-    distinguishes "saw nothing" from "saw nothing it could steer by".
+    boundary_count counts usable boundaries, not raw detections. A frame with
+    four contours and none usable reports 0, which separates "saw nothing"
+    from "saw nothing it could steer by".
     """
-    offset: float
-    left_x: Optional[float]
-    right_x: Optional[float]
-    lane_width_px: Optional[float]
-    confidence: float
+    offset: float                   # [-1, 1] of half the lane ROI width; + = robot right of lane center
+    left_x: float | None            # left anchor x, lane-ROI px; None if unused
+    right_x: float | None           # right anchor x, lane-ROI px; None if unused
+    lane_width_px: float | None     # right_x - left_x; None in single-sided modes
+    confidence: float               # mean weight of the anchors actually used
     boundary_count: int
-    mode: str
+    mode: str                       # "two_boundary" | "left_only" | "right_only" | "single_uncalibrated" | "none"
     frame_id: int
     timestamp_ms: int
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
 
 def foot_x(
         candidate: LaneCandidate,
-        band_px: int = 6
+        band_px: int = FOOT_BAND_PX
     ) -> float:
     """
+    Anchor x for a boundary: where the marking sits at its closest approach to the robot.
+
     Purpose:
-        Anchor x for a boundary: the mean x of the contour points sitting in
-        the lowest band of that contour. This is where the marking is at its
-        closest approach to the robot
+        A bbox centroid puts an angled line's anchor halfway up the ROI,
+        which isn't where the robot is about to arrive. A near-vertical
+        marking gives the same answer either way.
 
     Inputs:
-        candidate: LaneCandidate with an ROI-local contour
-        band_px: height of the band measured up from the contour's lowest point
+        band_px: Rows above the contour's lowest point averaged in the
+            contour fallback. Unused when the candidate carries a foot_x.
 
     Outputs:
-        anchor x in lane-ROI pixels
-
-    Notes:
-        Falls back to the bbox horizontal center when no contour is present,
-        so hand-built candidates still work. A near-vertical marking gives the
-        same answer either way; an angled one does not, which is the whole
-        reason this exists
+        Lane-ROI px, in order of preference: the candidate's stored foot_x
+        (any value >= 0), the mean x of the contour's lowest band, or the
+        bbox horizontal center when there's no contour (hand-built candidates).
     """
-    # Prefer the anchor geometry computed from the full contour. It owns the
-    # contour, so it can measure this without the candidate having to carry
-    # one -- which matters for CSV replay, where the contour is gone.
+    # Geometry computed foot_x from the full contour. Preferring it also covers
+    # CSV replay, where candidates arrive without a contour to recompute from.
     stored = getattr(candidate, "foot_x", -1.0)
     if stored is not None and stored >= 0.0:
         return float(stored)
@@ -204,16 +127,13 @@ def foot_x(
 def _usable(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
-        log: list,
+        log: list[str],
     ) -> bool:
     """
-    Purpose:
-        Decide whether a candidate is trustworthy enough to anchor a boundary,
-        logging the specific gate that rejected it
+    Whether a candidate is trustworthy enough to anchor a boundary.
 
-    Notes:
-        Every rejection is logged with its gate name so the debug summary
-        answers "why did this frame go blind" without a rerun
+    Logs the gate that rejected it, so the debug summary answers "why did
+    this frame go blind" without a rerun.
     """
     c = candidate
     if c.confidence < config.conf_threshold:
@@ -241,15 +161,9 @@ def _anchor(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
     ) -> BoundaryAnchor:
-    """
-    Purpose:
-        Reduce a usable candidate to its anchor x and steering weight
-
-    Notes:
-        weight blends confidence with proximity rather than replacing it. A
-        high-confidence marking at the top of the ROI is real, it just says
-        less about where the robot is right now
-    """
+    """Reduce a usable candidate to its anchor x and steering weight."""
+    # Proximity scales confidence rather than replacing it: a strong marking at
+    # the top of the ROI is real, it just says less about where the robot is now
     weight = candidate.confidence * (0.5 + 0.5 * candidate.proximity)
     return BoundaryAnchor(
         foot_x = foot_x(candidate, config.foot_band_px),
@@ -258,32 +172,31 @@ def _anchor(
     )
 
 def _lane_pair(
-        anchors: List[BoundaryAnchor],
+        anchors: list[BoundaryAnchor],
         center_x: float,
-    ) -> tuple:
+    ) -> tuple[BoundaryAnchor | None, BoundaryAnchor | None]:
     """
-    Purpose:
-        Select the two boundaries of the lane nearest the robot
+    Select the two boundaries of the lane nearest the robot.
 
-    Outputs:
-        (left, right) ordered by x, either of which may be None
+    Purpose:
+        The robot sits at ROI center, so its lane is bounded by the nearest
+        usable boundary on each side, not the outermost pair. On a two-lane
+        street with a visible divider, the outermost pair centers the robot
+        on the street: an error that always points the same way.
 
     Rules:
-        1. If anchors exist on both sides of ROI center, take the nearest on
-           each side. Those bracket the robot, so they are its own lane
-        2. If every anchor is on one side, the robot has drifted out of the
-           lane. The two nearest center still describe the nearest lane, and
-           the resulting offset is the error that steers back. Requiring a
-           straddling pair would discard a usable measurement on exactly the
-           frames where it matters most
-        3. One anchor total falls through to single-sided handling
+        1. Anchors on both sides of center: take the nearest on each side.
+           They bracket the robot, so they are its own lane.
+        2. Every anchor on one side: the robot has drifted out of its lane.
+           The two nearest center still describe the nearest lane, and the
+           offset is the error that steers back. Requiring a straddling pair
+           would drop a usable measurement on exactly the frames where it
+           matters most.
+        3. One anchor: falls through to single-sided handling.
+        An anchor exactly at center counts as the right side.
 
-    Notes:
-        Rule 1 is what separates the robot's lane from the street. Taking the
-        outermost pair instead centers the robot on whatever the widest pair
-        of markings spans, which on a two-lane street with a visible dividing
-        line is the street center --- an error that always points the same
-        direction
+    Outputs:
+        (left, right) ordered by x; either may be None.
     """
     left_side = sorted((a for a in anchors if a.foot_x < center_x),
                        key=lambda a: -a.foot_x)   # nearest center first
@@ -310,17 +223,20 @@ def _single_sided(
         frame_id: int,
         timestamp_ms: int,
         boundary_count: int,
-        log: list,
+        log: list[str],
     ) -> LaneOffsetResult:
     """
-    Purpose:
-        Offset from one boundary, by projecting where the lane center must be
+    Offset from one boundary, by projecting where the lane center must be.
 
-    Notes:
-        Returns the same quantity as two-boundary mode --- deviation from the
-        lane center --- rather than distance from the visible line. Without
-        expected_half_lane_px those are different quantities on different
-        scales feeding the same PID, so the mode is disabled until it is set
+    Purpose:
+        Returns the same quantity as two-boundary mode (deviation from the
+        lane center), not distance from the visible line. Without
+        expected_half_lane_px those would be different quantities on
+        different scales feeding the same controller, so the mode reports
+        "single_uncalibrated" with zero confidence until it's set.
+
+    Side effects:
+        Appends to log when uncalibrated.
     """
     half = config.expected_half_lane_px
     if half is None:
@@ -331,18 +247,18 @@ def _single_sided(
         return LaneOffsetResult(
             offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
             confidence = 0.0, boundary_count = boundary_count,
-            mode = "single_uncalibrated",
+            mode = MODE_SINGLE_UNCALIBRATED,
             frame_id = frame_id, timestamp_ms = timestamp_ms,
         )
 
     if side == "left":
         implied_center = anchor.foot_x + half
-        mode, left_x, right_x = "left_only", anchor.foot_x, None
+        mode, left_x, right_x = MODE_LEFT_ONLY, anchor.foot_x, None
     else:
         implied_center = anchor.foot_x - half
-        mode, left_x, right_x = "right_only", None, anchor.foot_x
+        mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
 
-    offset = _clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
     return LaneOffsetResult(
         offset = round(offset, 4),
         left_x = left_x,
@@ -355,42 +271,30 @@ def _single_sided(
         timestamp_ms = timestamp_ms,
     )
 
-# =============================================================================
-# Lane Offset Stage
-# =============================================================================
+
 def compute_lane_offset(
         geometry: GeometryBranchResult,
         roi: ROICropResult,
         config: LaneOffsetConfig = LaneOffsetConfig(),
-    ) -> tuple:
+    ) -> tuple[LaneOffsetResult, dict]:
     """
-    Purpose:
-        Estimate the robot's lateral offset from its own lane center
+    Estimate the robot's lateral offset from its own lane center.
 
     Inputs:
-        geometry: GeometryBranchResult from run_geometry_stage()
-        roi: ROICropResult, for the lane ROI width and the frame stamp
-        config: LaneOffsetConfig tuning
+        geometry: From run_geometry_stage().
+        roi: Supplies the lane ROI width (the robot sits at half of it) and
+            the frame stamp.
 
     Outputs:
-        result: LaneOffsetResult
-        debug_summary: dict --- "frame_id", "timestamp_ms", "mode",
-                       "raw_count", "usable_count", "anchors", "log"
+        (result, debug_summary). Anchors are in lane-ROI px; add
+        roi.lane_rect[0] for frame coordinates. debug_summary holds frame_id,
+        timestamp_ms, mode, raw_count, usable_count, anchors
+        ([(foot_x, weight)]) and log.
 
-    Notes:
-        Anchors and offsets are in lane-ROI pixel coordinates. Add
-        roi.lane_rect[0] to convert an anchor x to frame coordinates
+    Raises:
+        ValueError: If either input is None, or their frame stamps disagree.
     """
-    if geometry is None:
-        raise ValueError("compute_lane_offset: geometry result is None")
-    if roi is None:
-        raise ValueError("compute_lane_offset: roi result is None")
-    if (geometry.frame_id, geometry.timestamp_ms) != (roi.frame_id, roi.timestamp_ms):
-        raise ValueError(
-            f"compute_lane_offset: geometry stamp "
-            f"{(geometry.frame_id, geometry.timestamp_ms)} does not match roi stamp "
-            f"{(roi.frame_id, roi.timestamp_ms)} — candidates are from different frames"
-        )
+    check_same_frame(geometry, roi, "compute_lane_offset")
 
     log = []
     frame_id = geometry.frame_id
@@ -415,27 +319,20 @@ def compute_lane_offset(
             "log": log,
         }
 
-    # ========================================================================
-    # No usable boundary
-    # ========================================================================
     if not anchors:
         if raw:
             log.append(f"[BLIND] {len(raw)} candidates, none usable as a boundary")
         return _summary(LaneOffsetResult(
             offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
-            confidence = 0.0, boundary_count = 0, mode = "none",
+            confidence = 0.0, boundary_count = 0, mode = MODE_NONE,
             frame_id = frame_id, timestamp_ms = timestamp_ms,
         ))
 
-    # ========================================================================
-    # Select the boundaries of the robot's own lane
-    # ========================================================================
     left, right = _lane_pair(anchors, center_x)
 
-    # ========================================================================
-    # Two boundaries - validate the spacing before trusting the pair
-    # ========================================================================
     if left is not None and right is not None:
+        # Check the spacing before trusting the pair. Implausible spacing falls
+        # back to the strongest single anchor.
         lane_width_px = right.foot_x - left.foot_x
 
         if lane_width_px < config.min_lane_width_px:
@@ -461,7 +358,7 @@ def compute_lane_offset(
                                           boundary_count, log))
 
         lane_center = (left.foot_x + right.foot_x) / 2.0
-        offset = _clamp((center_x - lane_center) / center_x, -1.0, 1.0)
+        offset = clamp((center_x - lane_center) / center_x, -1.0, 1.0)
         total_weight = left.weight + right.weight
         mean_weight = total_weight / 2.0 if total_weight > 0 else 0.0
 
@@ -472,14 +369,11 @@ def compute_lane_offset(
             lane_width_px = round(lane_width_px, 2),
             confidence = round(mean_weight, 4),
             boundary_count = boundary_count,
-            mode = "two_boundary",
+            mode = MODE_TWO_BOUNDARY,
             frame_id = frame_id,
             timestamp_ms = timestamp_ms,
         ))
 
-    # ========================================================================
-    # One side only
-    # ========================================================================
     anchor = left if left is not None else right
     side = "left" if left is not None else "right"
     log.append(f"[ONE-SIDED] only a {side} boundary is usable this frame")

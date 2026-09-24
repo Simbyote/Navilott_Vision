@@ -1,6 +1,4 @@
 """
-conftest.py
-
 Test-mode selection and shared fixtures for the vision stack.
 
     pytest                         -> --software (default)
@@ -29,18 +27,15 @@ import cv2
 import pytest
 
 from src.capture.camera import CameraSource, CaptureError, FrameData
+from src.params import FPS, FRAME_H, FRAME_W
 from src.tests.artifacts import Artifacts
 
 TESTS_DIR = Path(__file__).parent
 DATA_DIR = TESTS_DIR / "data" / "frames"
 
-# Target camera configuration for the vision stack.
-CAMERA = dict(width=480, height=360, fps=20)
+CAMERA = dict(width=FRAME_W, height=FRAME_H, fps=FPS)    # keyword args for CameraSource
 
 
-# =============================================================================
-# CLI + mode selection
-# =============================================================================
 def pytest_addoption(parser):
     g = parser.getgroup("vision-pipeline")
     g.addoption("--software", action="store_true",
@@ -62,7 +57,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "hardware: characterization test, writes artifacts")
 
 
-def _selected_modes(config) -> set:
+def _selected_modes(config) -> set[str]:
+    """Modes chosen on the command line; software when none is given."""
     modes = set()
     if config.getoption("--software"):
         modes.add("software")
@@ -85,10 +81,7 @@ def pytest_collection_modifyitems(config, items):
         items[:] = kept
 
 
-# =============================================================================
-# Frame sources
-# =============================================================================
-def load_recorded_frames(directory: Path, limit: int = None):
+def load_recorded_frames(directory: Path, limit: int | None = None):
     """
     Yield FrameData from a directory of PNGs. If manifest.csv (frame_id,
     timestamp_ms) exists it supplies identity; otherwise ids are the sort
@@ -115,6 +108,7 @@ def load_recorded_frames(directory: Path, limit: int = None):
 
 
 def _live_frames(n: int):
+    """n frames from the real camera; skips the test if it can't open. Failed reads don't count."""
     src = CameraSource(**CAMERA)
     try:
         src.open()
@@ -156,10 +150,8 @@ def dataset_frames():
     return list(load_recorded_frames(DATA_DIR))
 
 
-# =============================================================================
-# Artifacts
-# =============================================================================
 def _git_state() -> dict:
+    """Short commit hash and dirty flag for run_meta.json; None fields outside a repo."""
     try:
         rev = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
                              capture_output=True, text=True, timeout=2).stdout.strip()
@@ -192,4 +184,5 @@ def run_root(request):
 
 @pytest.fixture
 def artifacts(run_root, request):
+    """Artifacts writer for this test's own subdirectory of the session run."""
     return Artifacts(run_root / request.node.name)

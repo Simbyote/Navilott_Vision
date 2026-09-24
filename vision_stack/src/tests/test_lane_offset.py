@@ -1,5 +1,5 @@
 """
-test_lane_offset.py  --  lane offset estimation
+test_lane_offset.py  --  src/perception/lane_offset.py
 
 compute_lane_offset consumes GeometryBranchResult directly (a sibling of
 fusion, not downstream of it), so these tests build LaneCandidate and
@@ -32,8 +32,10 @@ from src.perception.lane_offset import (
 )
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
+# Explicit rather than the shipped defaults, so retuning never breaks these tests
 TEST_CFG = LaneOffsetConfig(
     conf_threshold=0.30, min_proximity=0.25, min_length_px=25.0,
     min_width_px=1.0, max_width_px=25.0, min_intensity=90.0,
@@ -42,13 +44,10 @@ TEST_CFG = LaneOffsetConfig(
 UNCALIBRATED = replace(TEST_CFG, expected_half_lane_px=None)
 
 ROI_W = 300
-CENTER_X = ROI_W / 2.0          # 150.0
+CENTER_X = ROI_W / 2.0          # where the robot sits in the lane ROI
 MODES = ("two_boundary", "left_only", "right_only", "single_uncalibrated", "none")
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 def make_roi(lane_rect=(0, 0, ROI_W, 50), frame_id=1, ts=2):
     """Minimal ROICropResult: compute_lane_offset only reads lane_rect and the stamp."""
     from src.perception.roi_crop import ROICropResult
@@ -56,7 +55,7 @@ def make_roi(lane_rect=(0, 0, ROI_W, 50), frame_id=1, ts=2):
         lane_roi=np.zeros((1, 1), np.uint8), traffic_roi=np.zeros((1, 1, 3), np.uint8),
         sign_roi=np.zeros((1, 1), np.uint8), lane_rect=lane_rect,
         traffic_rect=(0, 0, 1, 1), sign_rect=(0, 0, 1, 1),
-        frame_id=frame_id, timestamp_ms=ts, source_shape=(360, 480))
+        frame_id=frame_id, timestamp_ms=ts, source_shape=(FRAME_H, FRAME_W))
 
 
 def cand(fx, confidence=0.9, proximity=0.9, length_px=100.0, width_px=8.0,
@@ -71,16 +70,19 @@ def cand(fx, confidence=0.9, proximity=0.9, length_px=100.0, width_px=8.0,
 
 
 def geo(cands, frame_id=1, ts=2, signs=()):
+    """GeometryBranchResult from candidate lists."""
     return GeometryBranchResult(lane_candidates=list(cands), sign_candidates=list(signs),
                                 frame_id=frame_id, timestamp_ms=ts)
 
 
 def run(cands, cfg=TEST_CFG, roi=None, frame_id=1, ts=2):
+    """compute_lane_offset on hand-built candidates sharing one frame stamp."""
     roi = roi or make_roi(frame_id=frame_id, ts=ts)
     return compute_lane_offset(geo(cands, frame_id, ts), roi, cfg)
 
 
 def assert_offset_contract(result, dbg, roi):
+    """Everything LaneOffsetResult and the debug summary document."""
     assert isinstance(result, LaneOffsetResult)
     assert (result.frame_id, result.timestamp_ms) == (roi.frame_id, roi.timestamp_ms)
     assert result.mode in MODES
@@ -96,9 +98,6 @@ def assert_offset_contract(result, dbg, roi):
     assert isinstance(dbg["log"], list)
 
 
-# =============================================================================
-# Software: foot_x fallback chain
-# =============================================================================
 @pytest.mark.software
 def test_foot_x_prefers_the_stored_value():
     assert foot_x(cand(150.0, foot=150.0)) == 150.0
@@ -126,14 +125,11 @@ def test_foot_x_ignores_a_stored_negative_sentinel_not_just_exactly_minus_one():
 
 @pytest.mark.software
 def test_foot_x_stored_at_exactly_zero_is_a_real_value_not_the_sentinel():
-    """0.0 is a legitimate anchor x (the left ROI edge); only < 0.0 means "unset".
-    fx=200 puts the bbox center far from 0, so a fallback would be caught."""
+    # 0.0 is a legitimate anchor x (the left ROI edge); only < 0.0 means unset.
+    # fx=200 puts the bbox center far from 0, so a fallback would be caught.
     assert foot_x(cand(200.0, foot=0.0)) == 0.0
 
 
-# =============================================================================
-# Software: usability gates, each triggered on its own, at the documented edges
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("field, value, usable", [
     ("confidence", 0.29, False), ("confidence", 0.30, True),
@@ -154,15 +150,12 @@ def test_gate_edges_are_inclusive_on_the_documented_side(field, value, usable):
 
 @pytest.mark.software
 def test_a_candidate_can_pass_geometry_and_still_fail_this_stricter_gate():
-    """The module docstring's stated relationship to LaneContourFilter."""
+    # These gates are stricter than LaneContourFilter by design
     weak = cand(100, confidence=0.15)             # a low but nonzero geometry confidence
     log = []
     assert lo._usable(weak, TEST_CFG, log) is False
 
 
-# =============================================================================
-# Software: anchor weight
-# =============================================================================
 @pytest.mark.software
 def test_anchor_weight_blends_confidence_and_proximity_without_replacing_confidence():
     a = lo._anchor(cand(100, confidence=0.8, proximity=0.6), TEST_CFG)
@@ -176,10 +169,8 @@ def test_full_proximity_gives_full_weight_zero_proximity_gives_half():
     assert lo._anchor(cand(100, confidence=1.0, proximity=0.0), TEST_CFG).weight == 0.5
 
 
-# =============================================================================
-# Software: _lane_pair, all six branches, called directly
-# =============================================================================
 def anc(fx, **kw):
+    """BoundaryAnchor at foot x = fx, built through _anchor with TEST_CFG."""
     return lo._anchor(cand(fx, **kw), TEST_CFG)
 
 
@@ -223,19 +214,13 @@ def test_pair_exactly_at_center_counts_as_the_right_side():
 
 @pytest.mark.software
 def test_extreme_pair_would_give_a_different_answer_than_nearest_pair():
-    """
-    Regression for the docstring's stated failure mode: taking the outermost
-    anchors instead of the nearest-to-center pair centers on the street, not
-    the robot's own lane.
-    """
+    # Taking the outermost anchors instead of the nearest-to-center pair
+    # centers the robot on the street, not its own lane
     left, right = lo._lane_pair([anc(10), anc(100), anc(200), anc(290)], CENTER_X)
     assert (left.foot_x, right.foot_x) == (100.0, 200.0)
     assert (left.foot_x, right.foot_x) != (10.0, 290.0)
 
 
-# =============================================================================
-# Software: two-boundary mode
-# =============================================================================
 @pytest.mark.software
 def test_symmetric_pair_around_center_gives_zero_offset():
     res, dbg = run([cand(100), cand(200)])
@@ -247,7 +232,7 @@ def test_symmetric_pair_around_center_gives_zero_offset():
 
 @pytest.mark.software
 def test_lane_center_left_of_roi_center_gives_a_positive_offset():
-    """center_x=150, lane_center=130 -> offset=(150-130)/150, per the sign convention."""
+    # center_x=150, lane_center=130 -> offset=(150-130)/150, per the sign convention
     res, _ = run([cand(80), cand(180)])
     assert res.offset == pytest.approx((CENTER_X - 130) / CENTER_X, abs=1e-4)
     assert res.offset > 0
@@ -283,9 +268,6 @@ def test_center_x_comes_from_lane_rect_width_not_the_rects_x_origin():
     assert res.offset == 0.0                                  # identical to the x=0 case
 
 
-# =============================================================================
-# Software: merge / span fallback out of two-boundary mode
-# =============================================================================
 @pytest.mark.software
 def test_anchors_too_close_together_merge_into_a_single_sided_read():
     a, b = cand(140, confidence=0.9), cand(160, confidence=0.3)   # 20px apart, < min_lane_width_px
@@ -320,9 +302,6 @@ def test_anchors_at_exactly_max_lane_width_are_not_a_span():
     assert not any("[SPAN]" in line for line in dbg["log"])
 
 
-# =============================================================================
-# Software: single-sided mode
-# =============================================================================
 @pytest.mark.software
 def test_left_only_projects_the_lane_center_to_the_right_of_the_boundary():
     res, dbg = run([cand(100)], cfg=TEST_CFG)
@@ -352,14 +331,11 @@ def test_uncalibrated_single_boundary_emits_no_steering_signal():
 
 @pytest.mark.software
 def test_uncalibrated_two_boundary_mode_is_unaffected():
-    """expected_half_lane_px only gates the single-boundary path."""
+    # expected_half_lane_px only gates the single-boundary path
     res, _ = run([cand(100), cand(200)], cfg=UNCALIBRATED)
     assert res.mode == "two_boundary"
 
 
-# =============================================================================
-# Software: no usable boundary
-# =============================================================================
 @pytest.mark.software
 def test_no_candidates_at_all_is_mode_none_with_an_empty_log():
     res, dbg = run([])
@@ -382,9 +358,6 @@ def test_boundary_count_reports_usable_not_raw_detections():
     assert res.boundary_count == 2 and dbg["raw_count"] == 3
 
 
-# =============================================================================
-# Software: contract, identity, determinism
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("cands", [[], [cand(100)], [cand(100), cand(200)],
                                    [cand(100, confidence=0.01)], [cand(-50), cand(400)]])
@@ -417,9 +390,6 @@ def test_result_and_anchor_are_frozen():
         anchor.weight = 0.0
 
 
-# =============================================================================
-# Software: input validation
-# =============================================================================
 @pytest.mark.software
 def test_none_geometry_or_roi_is_rejected():
     with pytest.raises(ValueError, match="geometry"):
@@ -435,10 +405,7 @@ def test_mismatched_frame_stamps_are_rejected():
         compute_lane_offset(geo([cand(100)], frame_id=1, ts=2), mismatched_roi, TEST_CFG)
 
 
-# =============================================================================
-# Software: chained real geometry -> lane offset
-# =============================================================================
-def build_lane_scene(cx_frac, H=360, W=480):
+def build_lane_scene(cx_frac, H=FRAME_H, W=FRAME_W):
     """A single vertical tape at cx_frac of the lane ROI's width, run through real geometry."""
     frame = np.full((H, W, 3), 30, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig())
@@ -459,12 +426,12 @@ def test_chain_a_single_real_boundary_yields_a_one_sided_read_near_its_true_posi
     assert res.mode in ("left_only", "right_only", "single_uncalibrated")
     got_x = res.left_x if res.left_x is not None else res.right_x
     if got_x is not None:
-        assert abs(got_x - expected_x) <= 6
+        assert abs(got_x - expected_x) <= 6       # 8 px tape, blurred by preprocess before Canny
 
 
 @pytest.mark.software
 def test_chain_two_real_boundaries_bracket_a_centered_robot():
-    frame = np.full((360, 480, 3), 30, np.uint8)
+    frame = np.full((FRAME_H, FRAME_W, 3), 30, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig())
     lx, ly, lw, lh = probe.lane_rect
     for frac in (0.15, 0.85):
@@ -492,10 +459,8 @@ def test_every_recorded_frame_meets_the_offset_contract(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Hardware: lane offset characterization
-# =============================================================================
 def draw_anchor_overlay(lane_roi, dbg, result):
+    """Lane ROI with the center line (cyan), each anchor (green if weight >= 0.5, else orange) and the result label."""
     vis = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR) if lane_roi.ndim == 2 else lane_roi.copy()
     h = vis.shape[0]
     cx = int(vis.shape[1] / 2)

@@ -1,5 +1,5 @@
 """
-test_estimation.py  --  Phase 3 estimation
+test_estimation.py  --  src/estimation.py
 
 Each stage is tested alone through its update(), then Phase3Processor is
 tested for ordering, stamps and pass-through. Inputs are built from the real
@@ -23,31 +23,29 @@ from src.perception.lane_offset import LaneOffsetResult
 from src.perception.phase2_out import Phase2Output
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 FID, TS = 1, 100
 
 def lane(offset=0.0, mode="two_boundary", frame_id=FID, ts=TS):
+    """Real LaneOffsetResult with a chosen offset, mode and stamp."""
     return LaneOffsetResult(offset, 10.0, 20.0, 10.0, 0.6, 2, mode, frame_id, ts)
 
 def det(det_type, label="", conf=0.9, frame_id=FID, ts=TS):
+    """Real DetectionObject of one type, with the ROI that type comes from."""
     roi = {"traffic_light": "traffic", "stop_sign": "sign"}.get(det_type, "lane")
     return DetectionObject(det_type, label, conf, {"x": 1.0, "y": 2.0}, (0, 0, 2, 4),
                            roi, (0, 0, 10, 10), frame_id, ts)
 
 def p2(dets=(), lanes=None, frame_id=FID, ts=TS):
+    """Phase2Output; lanes defaults to one centered two_boundary result."""
     lanes = [lane(frame_id=frame_id, ts=ts)] if lanes is None else lanes
     return Phase2Output(list(dets), list(lanes), frame_id, ts)
 
 def feed(stage, values):
+    """Run a classifier stage over a frame sequence; returns its state after each."""
     log = []
     return [stage.update(v, log) for v in values]
 
 
-# =============================================================================
-# Software: LaneFilter
-# =============================================================================
 @pytest.mark.software
 def test_lane_first_usable_frame_seeds_the_estimate():
     est = LaneFilter(Phase3Config()).update([lane(0.2)], [])
@@ -115,9 +113,6 @@ def test_lane_cm_undoes_the_half_width_normalization():
     assert LaneFilter(cfg).update([lane(0.5)], []).offset_cm == pytest.approx(0.5 * 240 * 0.05)
 
 
-# =============================================================================
-# Software: HeadingTracker
-# =============================================================================
 @pytest.mark.software
 def test_heading_is_zero_while_on_vision():
     h = HeadingTracker(Phase3Config())
@@ -151,9 +146,6 @@ def test_heading_holds_when_no_yaw_is_available():
     assert h.update(LANE_HOLD, None, 0.1, []) == pytest.approx(1.0)
 
 
-# =============================================================================
-# Software: TrafficClassifier
-# =============================================================================
 @pytest.mark.software
 def test_traffic_needs_two_of_three_frames_to_change_state():
     t = TrafficClassifier(Phase3Config(vote_window=3))
@@ -194,9 +186,6 @@ def test_traffic_ignores_other_detection_types():
     assert feed(t, [[det("stop_sign"), det("lane_boundary")]]) == [GO]
 
 
-# =============================================================================
-# Software: StopSignClassifier
-# =============================================================================
 @pytest.mark.software
 def test_sign_needs_a_majority_of_the_window():
     s = StopSignClassifier(Phase3Config(vote_window=3))
@@ -210,9 +199,6 @@ def test_sign_below_gate_is_ignored():
     assert feed(s, [[det("stop_sign", conf=0.3)]]) == [False]
 
 
-# =============================================================================
-# Software: SensorSample
-# =============================================================================
 @pytest.mark.software
 def test_from_imu_reads_a_valid_frame():
     frame = SimpleNamespace(valid=True, mean_yaw_rate_dps=3.0, peak_lateral_accel=-0.5)
@@ -226,9 +212,6 @@ def test_from_imu_invalid_frame_gives_no_readings():
     assert SensorSample.from_imu(frame) == SensorSample()
 
 
-# =============================================================================
-# Software: Phase3Processor
-# =============================================================================
 @pytest.mark.software
 def test_packet_carries_the_phase2_stamp():
     pkt, dbg = Phase3Processor().process(p2(frame_id=7, ts=350))

@@ -1,132 +1,85 @@
-"""
-feature_fusion.py
-
-Feature Fusion Stage
+"""Feature fusion: one frame's branch candidates as a single list of detections.
 
 Purpose:
-    The color branch and geometry branch run independently and produce
-    candidates in their own ROI coordinate spaces. Fusion has three
-    responsibilities:
+    The geometry and color branches run independently and emit their own
+    candidate types in their own ROI spaces. Fusion converts them into the
+    single Phase 2 DetectionObject schema, resolves conflicts within each
+    class, and logs every discard and suppression. color_branch is
+    deliberately not imported, so lane and sign fusion work without it.
 
-    1. Normalize representation:
-        convert all branch-specific candidate types into the single Detection
-        Object schema defined by Phase 2
+Main package:
+    FusionResult: the frame's surviving DetectionObjects, ordered traffic
+    light, lane boundaries by descending confidence, stop sign, and stamped
+    with the ROICropResult's frame identity. Positions are ROI-local; each
+    detection carries the rect that maps it into the frame.
 
-    2. Per-class conflict resolution:
-        each detection class could produce multiple candidates in a single
-        frame. Fusion resolves conflicts between candidates of the same class
-        and logs every discard or suppression in the debug summary
-
-    3. Assign position:
-        the centroid of the winning candidate's bounding box
-
-Coordinate spaces:
-    position and bounding_box are ROI-LOCAL, in the pixel coordinates of
-    whichever ROI the candidate came from. A lane_boundary at (200, 50) and a
-    stop_sign at (200, 50) are not the same place in the frame.
-
-    Each DetectionObject therefore names its own space: source_roi identifies
-    which ROI ("lane", "traffic", "sign") and source_rect is that ROI's
-    (x, y, w, h) in frame coordinates. A consumer that wants frame
-    coordinates adds the rect origin:
-
-        frame_x = detection.position["x"] + detection.source_rect[0]
-        frame_y = detection.position["y"] + detection.source_rect[1]
-
-    Carrying the rect on the detection rather than the envelope keeps each
-    detection self-describing once it crosses into navigation, where the
-    ROICropResult is no longer in scope.
-
-Frame identity:
-    frame_id and timestamp_ms come from the ROICropResult, the common ancestor
-    of both branches, so every detection fused from one frame carries the same
-    stamp. Nothing here re-derives either value from a candidate or a clock.
-
-Notes:
-    bounding_box is retained as an internal debug field and is used only for
-    the overlay visualization in this substage
+Flow:
+    1. Check that the geometry result and the ROI crop share a frame stamp.
+    2. Traffic light: keep the highest-confidence valid candidate.
+    3. Lane boundaries: forward every valid candidate, by descending confidence.
+    4. Stop sign: keep the highest-confidence valid candidate.
+    5. Package with the frame identity and a debug summary.
 """
 
 import cv2
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Optional
 
+from src.params import (
+    LANE_BOUNDARY, ROI_LANE, ROI_SIGN, ROI_TRAFFIC, STOP_SIGN, TRAFFIC_LIGHT,
+    FUSION_OVERLAY_SUFFIX as OVERLAY_SUFFIX, FUSION_SUMMARY_SUFFIX as SUMMARY_SUFFIX,
+)
 from src.perception.geometry import GeometryBranchResult
+from src.utils import check_same_frame
 from src.perception.roi_crop import ROICropResult
 
-# =============================================================================
-# Debug Artifact Names
-# =============================================================================
-OVERLAY_SUFFIX = "_overlay.png"
-SUMMARY_SUFFIX = "_summary.txt"
-
-# =============================================================================
-# Detection Classes
-# =============================================================================
 # Which ROI each detection class is cut from. Used to attach source_roi and
 # source_rect so a detection can be placed in the frame without a lookup
 # table on the consumer's side.
 ROI_FOR_TYPE = {
-    "traffic_light": "traffic",
-    "lane_boundary": "lane",
-    "stop_sign": "sign",
+    TRAFFIC_LIGHT: ROI_TRAFFIC,
+    LANE_BOUNDARY: ROI_LANE,
+    STOP_SIGN: ROI_SIGN,
 }
 
-# =============================================================================
-# Output Dataclasses
-# =============================================================================
+
 @dataclass(frozen=True)
 class DetectionObject:
     """
-    A single detection in Phase 2 output
+    One Phase 2 detection.
 
-    type: detection class --- "traffic_light", "lane_boundary", "stop_sign"
-    label_detail: branch-specific label (light color, boundary type, sign type)
-    confidence: detection confidence in [0, 1]
-    position: {"x", "y"} centroid of bounding_box, ROI-LOCAL
-    bounding_box: (x, y, w, h) ROI-local; internal debug field for the overlay
-    source_roi: which ROI this came from --- "lane", "traffic", "sign"
-    source_rect: (x, y, w, h) of that ROI in frame coordinates. Add the origin
-                 to position to get frame coordinates
-    frame_id: the frame this detection was made on
-    timestamp: the frame's capture timestamp in ms, not a per-branch clock
+    Coordinates are ROI-local: a lane_boundary at (200, 50) and a stop_sign at
+    (200, 50) are not the same place. To get frame coordinates, add the
+    source_rect origin:
+
+        frame_x = detection.position["x"] + detection.source_rect[0]
+        frame_y = detection.position["y"] + detection.source_rect[1]
+
+    The rect rides on each detection rather than the envelope so a detection
+    stays self-describing in navigation, where the ROICropResult is out of scope.
     """
-    type: str
-    label_detail: str
-    confidence: float
-    position: dict
-    bounding_box: tuple
-    source_roi: str
-    source_rect: tuple
+    type: str                                   # "traffic_light" | "lane_boundary" | "stop_sign"
+    label_detail: str                           # branch label: light color, boundary type, sign type
+    confidence: float                           # [0, 1]
+    position: dict[str, float]                  # {"x", "y"}: bounding_box centroid, ROI-local
+    bounding_box: tuple[int, int, int, int]     # (x, y, w, h), ROI-local; used only by the debug overlay
+    source_roi: str                             # "lane" | "traffic" | "sign"
+    source_rect: tuple[int, int, int, int]      # (x, y, w, h) of that ROI in frame px
     frame_id: int
-    timestamp: int
+    timestamp: int                              # the frame's capture time in ms, not a branch clock
 
 @dataclass(frozen=True)
 class FusionResult:
-    """
-    Output of the feature fusion stage
-
-    detections: every detection that survived conflict resolution, in the
-                order traffic_light, lane_boundary (descending confidence),
-                stop_sign
-    frame_id: carried from ROICropResult, never re-derived
-    timestamp_ms: carried from ROICropResult, never re-derived
-    """
-    detections: List[DetectionObject]
+    """Output of the fusion stage. frame_id and timestamp_ms are copied from ROICropResult, never re-derived."""
+    detections: list[DetectionObject]   # traffic_light, then lane_boundary by descending confidence, then stop_sign
     frame_id: int
     timestamp_ms: int
 
-# =============================================================================
-# Utility Functions
-# =============================================================================
+
 def _centroid(
-        bbox: tuple
-    ) -> dict:
-    """
-    Purpose:
-        Compute bounding box centroid. Guards against zero-size bbox.
-    """
+        bbox: tuple[int, int, int, int]
+    ) -> dict[str, float]:
+    """{"x", "y"} center of an (x, y, w, h) box, rounded to 0.01. A zero-size side falls back to its origin."""
     x, y, w, h = bbox
     cx = float(x) + float(w) / 2.0 if w > 0 else float(x)
     cy = float(y) + float(h) / 2.0 if h > 0 else float(y)
@@ -135,21 +88,15 @@ def _centroid(
 def _valid_confidence(
         c: float
     ) -> bool:
-    """
-    Purpose:
-        Guard against invalid confidence values
-    """
+    """True for a confidence in [0, 1]. NaN fails."""
     return 0.0 <= c <= 1.0
 
 def _best_candidate(
         candidates: list,
-        log: list,
+        log: list[str],
         class_name: str
     ):
-    """
-    Purpose:
-        Select the best candidate from a list of candidates
-    """
+    """Highest-confidence valid candidate (ties keep the first), or None. Appends a discard line to log for each invalid one."""
     valid = []
     for cand in candidates:
         if not _valid_confidence(cand.confidence):
@@ -166,34 +113,22 @@ def _best_candidate(
 
 def _rects(
         roi: ROICropResult
-    ) -> dict:
-    """
-    Purpose:
-        Map ROI name to its (x, y, w, h) in frame coordinates
-    """
+    ) -> dict[str, tuple[int, int, int, int]]:
+    """ROI name -> that ROI's (x, y, w, h) in frame px."""
     return {
-        "lane": roi.lane_rect,
-        "traffic": roi.traffic_rect,
-        "sign": roi.sign_rect,
+        ROI_LANE: roi.lane_rect,
+        ROI_TRAFFIC: roi.traffic_rect,
+        ROI_SIGN: roi.sign_rect,
     }
 
 def _detection(
         det_type: str,
         cand,
-        rects: dict,
+        rects: dict[str, tuple[int, int, int, int]],
         frame_id: int,
         timestamp_ms: int,
     ) -> DetectionObject:
-    """
-    Purpose:
-        Build one DetectionObject from a branch candidate, attaching the
-        coordinate space it belongs to and the frame's stamp
-
-    Notes:
-        The stamp comes from the frame, not from cand.timestamp_ms. The two
-        agree today, but taking it from the frame means three detections fused
-        from one capture cannot disagree if a branch ever samples its own clock
-    """
+    """One DetectionObject from a branch candidate, with its ROI's rect and the frame's stamp."""
     roi_name = ROI_FOR_TYPE[det_type]
     return DetectionObject(
         type = det_type,
@@ -204,72 +139,41 @@ def _detection(
         source_roi = roi_name,
         source_rect = rects[roi_name],
         frame_id = frame_id,
+        # From the frame, not cand.timestamp_ms. The two agree today, but this
+        # keeps one capture's detections consistent if a branch ever samples its own clock.
         timestamp = timestamp_ms,
     )
 
-# =============================================================================
-# Validation
-# =============================================================================
-def _validate(
-        geometry: GeometryBranchResult,
-        roi: ROICropResult,
-    ) -> None:
-    """
-    Purpose:
-        Reject inputs that cannot be fused, naming what is wrong
 
-    Notes:
-        The stamp check is the one that matters. Both branches descend from the
-        same ROICropResult, so a disagreement means candidates from two
-        different frames reached one fusion call, which would produce a
-        DetectionObject labelled with a frame it did not come from
-    """
-    if geometry is None:
-        raise ValueError("fuse_detections: geometry result is None")
-    if roi is None:
-        raise ValueError("fuse_detections: roi result is None")
-    if (geometry.frame_id, geometry.timestamp_ms) != (roi.frame_id, roi.timestamp_ms):
-        raise ValueError(
-            f"fuse_detections: geometry stamp "
-            f"{(geometry.frame_id, geometry.timestamp_ms)} does not match roi stamp "
-            f"{(roi.frame_id, roi.timestamp_ms)} — candidates are from different frames"
-        )
-
-# =============================================================================
-# Feature Fusion Stage
-# =============================================================================
 def fuse_detections(
         geometry: GeometryBranchResult,
         traffic_candidates: list,
         roi: ROICropResult,
-    ) -> tuple:
+    ) -> tuple[FusionResult, dict]:
     """
+    Fuse one frame's branch candidates into DetectionObjects.
+
     Purpose:
-        Fuse candidates from the color and geometry branches into unified
-        DetectionObjects
+        Conflict resolution per class. traffic_light and stop_sign: the
+        highest confidence wins and the rest are suppressed. lane_boundary:
+        every valid candidate is forwarded, sorted descending. In every
+        class, a confidence outside [0, 1] is discarded and logged.
 
     Inputs:
-        geometry: GeometryBranchResult from run_geometry_stage()
-        traffic_candidates: list of TrafficLightCandidate from the color branch,
-                            or [] while it is not wired. Duck-typed: a
-                            candidate must expose label, bbox, confidence and
-                            frame_id. color_branch is deliberately not
-                            imported here, so this stage loads and fuses lane
-                            and stop-sign detections without it
-        roi: ROICropResult, the source of the frame stamp and the ROI rects
+        geometry: From run_geometry_stage().
+        traffic_candidates: From run_color_stage(), or [] while the color
+            branch is off. Duck-typed: each needs label, bbox, confidence
+            and frame_id.
+        roi: Supplies the frame identity and the ROI rects.
 
     Outputs:
-        result: FusionResult
-        debug_summary: dict --- "frame_id", "timestamp_ms", "counts", "total",
-                       "discarded", "suppressed", "log"
+        (result, debug_summary). debug_summary holds frame_id, timestamp_ms,
+        counts (per type), total, discarded, suppressed and log.
 
-    Conflict resolution:
-        traffic_light: highest confidence wins, the rest are suppressed
-        stop_sign: highest confidence wins, the rest are suppressed
-        lane_boundary: every valid candidate is forwarded, sorted descending
-        Any candidate with a confidence outside [0, 1] is discarded and logged
+    Raises:
+        ValueError: If either input is None, or their frame stamps disagree.
     """
-    _validate(geometry, roi)
+    check_same_frame(geometry, roi, "fuse_detections")
 
     log = []
     detections = []
@@ -281,14 +185,9 @@ def fuse_detections(
     lane_candidates = geometry.lane_candidates
     sign_candidates = geometry.sign_candidates
 
-    # ========================================================================
-    # Traffic Light Fusion
-    # Determine best traffic light candidate, if any, and log discards
-    # ========================================================================
-    best_tl = _best_candidate(traffic_candidates, log, "traffic_light")
+    best_tl = _best_candidate(traffic_candidates, log, TRAFFIC_LIGHT)
 
     if best_tl is not None:
-        # Log losers
         for c in traffic_candidates:
             if c is not best_tl and _valid_confidence(c.confidence):
                 log.append(
@@ -296,13 +195,9 @@ def fuse_detections(
                     f"(lost to {best_tl.label} conf={best_tl.confidence:.4f})"
                 )
         detections.append(
-            _detection("traffic_light", best_tl, rects, frame_id, timestamp_ms)
+            _detection(TRAFFIC_LIGHT, best_tl, rects, frame_id, timestamp_ms)
         )
 
-    # ========================================================================
-    # Lane Boundary Fusion
-    # Every valid candidate is forwarded; only invalid ones are discarded
-    # ========================================================================
     valid_lanes = [c for c in lane_candidates if _valid_confidence(c.confidence)]
     invalid_lanes = [c for c in lane_candidates if not _valid_confidence(c.confidence)]
 
@@ -312,17 +207,13 @@ def fuse_detections(
             f"frame_id={c.frame_id}"
         )
 
-    # Sort descending by confidence (LB-2)
+    # LB-2: descending confidence. sorted() is stable, so ties keep input order.
     for c in sorted(valid_lanes, key=lambda x: x.confidence, reverse=True):
         detections.append(
-            _detection("lane_boundary", c, rects, frame_id, timestamp_ms)
+            _detection(LANE_BOUNDARY, c, rects, frame_id, timestamp_ms)
         )
 
-    # ========================================================================
-    # Stop Sign Fusion
-    # Determine best stop sign candidate, if any, and log discards
-    # ========================================================================
-    best_sign = _best_candidate(sign_candidates, log, "stop_sign")
+    best_sign = _best_candidate(sign_candidates, log, STOP_SIGN)
 
     if best_sign is not None:
         for c in sign_candidates:
@@ -332,12 +223,9 @@ def fuse_detections(
                     f"(lost to conf={best_sign.confidence:.4f} v={best_sign.vertex_count})"
                 )
         detections.append(
-            _detection("stop_sign", best_sign, rects, frame_id, timestamp_ms)
+            _detection(STOP_SIGN, best_sign, rects, frame_id, timestamp_ms)
         )
 
-    # ========================================================================
-    # Debug Results
-    # ========================================================================
     type_counts = {}
     for d in detections:
         type_counts[d.type] = type_counts.get(d.type, 0) + 1
@@ -358,38 +246,33 @@ def fuse_detections(
         timestamp_ms = timestamp_ms,
     ), debug_summary
 
-# =============================================================================
-# Debug Visualization
-# =============================================================================
+
 _TYPE_COLORS = {
-    "traffic_light": (255,  0,  0),   # blue
-    "lane_boundary": (0,  255,  0),   # green
-    "stop_sign":     (0,    0, 255),  # red
+    TRAFFIC_LIGHT: (255,  0,  0),   # blue
+    LANE_BOUNDARY: (0,  255,  0),   # green
+    STOP_SIGN:     (0,    0, 255),  # red
 }
 
 def draw_fusion_overlay(
         canvas: np.ndarray,
-        detections: List[DetectionObject],
+        detections: list[DetectionObject],
         title: str = "",
-        source_roi: Optional[str] = None,
+        source_roi: str | None = None,
     ) -> np.ndarray:
     """
-    Purpose:
-        Draw bounding boxes, type labels, and confidence scores on a copy of
-        canvas. Uses bounding_box for debugging purposes
+    Draw each detection's box, label, confidence and centroid on a copy of canvas.
 
     Inputs:
-        canvas: image to draw on, at the resolution of one ROI
-        detections: detections to draw
-        title: optional caption
-        source_roi: draw only detections from this ROI ("lane", "traffic",
-                    "sign"). Coordinates are ROI-local, so drawing a sign
-                    detection on a lane canvas places the box at a meaningless
-                    position. None draws everything, which is only correct when
-                    every detection shares one ROI
+        canvas: (h, w, 3) BGR at one ROI's resolution. A gray canvas takes only
+            the first BGR component, so most annotations would draw black.
+        title: Caption drawn top-left; empty draws none.
+        source_roi: Draw only detections from this ROI ("lane", "traffic",
+            "sign"). Coordinates are ROI-local, so a sign detection drawn on
+            a lane canvas lands somewhere meaningless. None draws everything,
+            which is only right when every detection shares one ROI.
 
     Outputs:
-        annotated copy; the input is not modified
+        Annotated copy; the input is untouched.
     """
     vis = canvas.copy()
     for d in detections:
@@ -401,7 +284,6 @@ def draw_fusion_overlay(
         label_text = f"{d.type}:{d.label_detail} {d.confidence:.2f}"
         cv2.putText(vis, label_text, (x, max(y - 4, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.40, color, 1, cv2.LINE_AA)
-        # Mark centroid
         cx = int(d.position["x"])
         cy = int(d.position["y"])
         cv2.drawMarker(vis, (cx, cy), color, cv2.MARKER_CROSS, 8, 1)

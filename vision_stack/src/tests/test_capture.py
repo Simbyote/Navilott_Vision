@@ -23,10 +23,8 @@ from src.tests.conftest import CAMERA, DATA_DIR
 W, H, FPS = CAMERA["width"], CAMERA["height"], CAMERA["fps"]
 
 
-# =============================================================================
-# Fakes
-# =============================================================================
 def good():
+    """One successful read: a uniform frame at the configured size."""
     return True, np.full((H, W, 3), 7, dtype=np.uint8)
 
 BAD = (False, None)
@@ -50,14 +48,12 @@ class FakeCap:
 
 
 def opened_source(monkeypatch, script, **kw):
+    """CameraSource opened against a FakeCap playing `script`; returns (source, fake)."""
     fake = FakeCap(script)
     monkeypatch.setattr(camera.cv2, "VideoCapture", lambda *a, **k: fake)
     return CameraSource(W, H, FPS, **kw).open(), fake
 
 
-# =============================================================================
-# Software: CameraSource contract
-# =============================================================================
 @pytest.mark.software
 def test_read_before_open_raises():
     with pytest.raises(CaptureError):
@@ -96,6 +92,7 @@ def test_failed_read_returns_none_and_costs_no_frame_id(monkeypatch):
 
 @pytest.mark.software
 def test_failure_budget_exhaustion_raises_at_exact_count(monkeypatch):
+    # Budget of 3: reads 1 and 2 are absorbed, read 3 exhausts it
     src, _ = opened_source(monkeypatch, [BAD, BAD, BAD], max_consecutive_failures=3)
     assert src.read() is None
     assert src.read() is None
@@ -128,6 +125,7 @@ def test_frame_id_survives_reopen(monkeypatch):
 
 @pytest.mark.software
 def test_timestamps_never_decrease(monkeypatch):
+    # Downstream dt math assumes this; a wall clock would go negative on NTP steps
     src, _ = opened_source(monkeypatch, [good() for _ in range(50)])
     ts = [src.read().timestamp_ms for _ in range(50)]
     assert ts == sorted(ts)
@@ -156,13 +154,12 @@ def test_gst_pipeline_string_carries_parameters():
     p = build_gst_pipeline(width=640, height=480, fps=30, color_space="BGR")
     assert "width=640" in p and "height=480" in p and "framerate=30/1" in p
     assert "format=BGR" in p
+    # drop/max-buffers is what keeps read() from returning a stale backlog
     assert p.rstrip().endswith("appsink drop=true max-buffers=1 sync=false")
 
 
-# =============================================================================
-# Software: VideoSink contract
-# =============================================================================
 class FakeWriter:
+    """Records written frames instead of encoding them."""
     def __init__(self, opened=True):
         self._opened, self.frames, self.released = opened, [], False
     def isOpened(self): return self._opened
@@ -189,13 +186,29 @@ def test_sink_rejects_wrong_size_and_accepts_right_size(monkeypatch):
 
 
 @pytest.mark.software
-def test_sink_write_before_open_is_a_noop():
-    VideoSink("x.avi", FPS, W, H).write(np.zeros((H, W, 3), np.uint8))
+def test_sink_write_before_open_raises():
+    with pytest.raises(CaptureError):
+        VideoSink("x.avi", FPS, W, H).write(np.zeros((H, W, 3), np.uint8))
+
+@pytest.mark.software
+@pytest.mark.parametrize("fps", [camera.MIN_FPS - 1, camera.MAX_FPS + 1])
+def test_out_of_band_fps_warns(fps):
+    with pytest.warns(RuntimeWarning, match="fps"):
+        CameraSource(W, H, fps)
+
+@pytest.mark.software
+def test_in_band_fps_does_not_warn():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")      # any warning fails the test
+        CameraSource(W, H, camera.MIN_FPS)  # the band edges are inclusive
+        CameraSource(W, H, camera.MAX_FPS)
+
+@pytest.mark.software
+def test_explicit_zero_budget_is_not_replaced_by_fps():
+    # Guards against `max_consecutive_failures or fps`, which treated 0 as unset
+    assert CameraSource(W, H, FPS, max_consecutive_failures=0).max_consecutive_failures == 0
 
 
-# =============================================================================
-# Hardware: capture characterization
-# =============================================================================
 @pytest.mark.hardware
 def test_capture_characterization(request, artifacts):
     n = request.config.getoption("--frames")

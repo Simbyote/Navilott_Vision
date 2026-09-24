@@ -1,5 +1,5 @@
 """
-test_preprocess.py  --  preprocessing stage
+test_preprocess.py  --  src/perception/preprocess.py
 
 --software  Contract + known-answer tests on synthetic frames, plus every frame
             in src/tests/data/frames if a recorded dataset exists.
@@ -13,27 +13,26 @@ import cv2
 import numpy as np
 import pytest
 
-# Adjust this one import to wherever preprocess.py lives in your tree.
 from src.perception.preprocess import (
     COLOR_BLUR_SUFFIX, GRAY_BLUR_SUFFIX, GRAY_SUFFIX,
     PreprocessParams, PreprocessResult,
     gaussian_blur, histogram_equalization, preprocess_frame, to_grayscale,
 )
 from src.capture.camera import FrameData
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
-H, W = 360, 480
+H, W = FRAME_H, FRAME_W
 
 
-# =============================================================================
-# Helpers
-# =============================================================================
 def make_frame(seed=0, lo=0, hi=256):
+    """Seeded random BGR frame with every channel in [lo, hi)."""
     rng = np.random.default_rng(seed)
     return rng.integers(lo, hi, (H, W, 3), dtype=np.uint8)
 
 
 def fd_of(frame, frame_id=42, ts=123456):
+    """Wrap a bare frame as FrameData with a recognizable identity."""
     return FrameData(frame=frame, frame_id=frame_id, timestamp_ms=ts)
 
 
@@ -47,9 +46,6 @@ def assert_contract(result, fd):
     assert result.timestamp_ms == fd.timestamp_ms
 
 
-# =============================================================================
-# Software: output contract
-# =============================================================================
 @pytest.mark.software
 def test_output_contract_on_synthetic_frame():
     fd = fd_of(make_frame())
@@ -73,6 +69,7 @@ def test_input_frame_is_not_mutated():
 
 @pytest.mark.software
 def test_outputs_do_not_alias_input():
+    # Branches may work in place; they must not write through to the captured frame
     frame = make_frame()
     r = preprocess_frame(fd_of(frame))
     assert not np.shares_memory(r.gray, frame)
@@ -104,16 +101,13 @@ def test_every_recorded_frame_meets_contract(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Software: known-answer tests
-# =============================================================================
 @pytest.mark.software
 def test_pure_red_converts_to_expected_gray():
     frame = np.zeros((H, W, 3), np.uint8)
     frame[..., 2] = 255                              # BGR red
     gray = preprocess_frame(fd_of(frame)).gray
     assert abs(int(gray.mean()) - 76) <= 1           # 0.299 * 255
-    assert np.ptp(gray) <= 1
+    assert np.ptp(gray) <= 1                         # ±1 for rounding
 
 
 @pytest.mark.software
@@ -127,7 +121,7 @@ def test_uniform_frame_stays_uniform_through_blur():
 
 @pytest.mark.software
 def test_gray_kernel_is_anisotropic_as_documented():
-    """More smoothing across a lane line than along it."""
+    # Wider-across kernel spreads a vertical line more, so its peak drops further
     img = np.zeros((41, 41), np.uint8)
     img[:, 20] = 255                                 # 1 px vertical line
     across_heavy = gaussian_blur(img, (9, 3))
@@ -137,7 +131,7 @@ def test_gray_kernel_is_anisotropic_as_documented():
 
 @pytest.mark.software
 def test_equalize_widens_intensity_spread():
-    low_contrast = make_frame(seed=1, lo=100, hi=140)
+    low_contrast = make_frame(seed=1, lo=100, hi=140)   # 40-level band leaves room to stretch
     off = preprocess_frame(fd_of(low_contrast), PreprocessParams(equalize=False)).gray
     on = preprocess_frame(fd_of(low_contrast), PreprocessParams(equalize=True)).gray
     assert on.std() > off.std()
@@ -149,9 +143,6 @@ def test_equalize_default_is_off():
     assert PreprocessParams().equalize is False
 
 
-# =============================================================================
-# Software: rejection behaviour
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("bad, exc", [
     (None, ValueError),
@@ -169,7 +160,7 @@ def test_invalid_frames_are_rejected(bad, exc):
 @pytest.mark.parametrize("kernel", [(4, 3), (9, 0), (9,), (9, 3, 1), (-3, 3)])
 def test_invalid_kernels_are_rejected_and_named(field, kernel):
     params = PreprocessParams(**{field: kernel})
-    with pytest.raises(ValueError, match=field):
+    with pytest.raises(ValueError, match=field):     # error must name the bad parameter
         preprocess_frame(fd_of(make_frame()), params)
 
 
@@ -179,18 +170,12 @@ def test_equalize_rejects_multichannel():
         histogram_equalization(make_frame())
 
 
-# =============================================================================
-# Software: documented-contract gap (see xfail reason)
-# =============================================================================
 @pytest.mark.software
 def test_gray_input_is_rejected():
-    with pytest.raises(ValueError, match="BGR"):
+    with pytest.raises(ValueError, match="BGR"):      # error must say what was expected
         preprocess_frame(fd_of(make_frame()[..., 0]))
 
 
-# =============================================================================
-# Hardware: preprocess characterization
-# =============================================================================
 @pytest.mark.hardware
 def test_preprocess_characterization(request, frames, artifacts):
     n = request.config.getoption("--frames")

@@ -1,85 +1,46 @@
-"""
-debug_traffic.py -- Traffic-light view for the debug tooling
+"""Traffic-light view: what the color branch saw and decided on the traffic ROI.
 
-Shows what the color branch saw and decided on the traffic ROI, so the HSV
-ranges and blob filter can be calibrated on their own. The masks are the
-calibration surface, so they sit beside the picture, not behind it.
+Purpose:
+    Lets the HSV ranges and blob filter be calibrated on their own. The masks
+    are the calibration surface, so they sit beside the picture, not behind
+    it, and the best candidate's mean HSV shows how close it sits to a band
+    edge: a blob at the edge of a band is one lighting change from vanishing.
+    Fusion keeps the single highest-confidence light across all three colors
+    at any confidence, and confidence is area only, so the largest blob wins;
+    the threshold here stands in for whatever Phase 3 applies. With the color
+    branch off the view says so instead of drawing, and uncalibrated ranges
+    are flagged. Coordinates are traffic-ROI-relative.
 
-Inputs (from a chain result, via TrafficView.extract):
-    chain.traffic         the accepted TrafficLightCandidates
-    chain.traffic_debug   enabled, calibrated, roi (BGR), the red / yellow /
-                          green masks, mask_px, reject_counts, and the
-                          per-blob "trace" when the chain ran with trace=True
-    chain.fusion, chain.fusion_debug
-                          the traffic light fusion kept, if any, and how many
-                          it suppressed. Absent when the process callable has
-                          no fusion
+Main package:
+    The rendered panel: the traffic ROI with every traced blob, beside the
+    red, yellow and green masks, tinted, with pixel counts, under a header
+    with pass / low / rejected counts, the best candidate and whether fusion
+    passed a light on, over a footer of blobs seen / accepted per color.
 
-Picture:
-    left panel    the traffic ROI with every traced blob
-    right column  the red, yellow and green masks, tinted, with pixel counts
-    header        frame id, pass / low / rejected counts, the best candidate
-                  with its mean HSV, and whether fusion passed a light on
-    footer        this frame's blobs seen / accepted per color and rejects
-
-Blob colors (the light's own color is in the label):
-    green   accepted, and at or above the confidence threshold if one is set
-    amber   accepted by the blob filter but below the confidence threshold
-    red     rejected; the label names the gate and the value that failed it
-
-Labels on accepted blobs end in f<fill>: blob area over bounding-box area. A
-round light fills about 0.78, a streak or slab fills more. There is no fill
-gate today; the number is there to judge whether one would help.
-
-The best candidate's mean HSV shows where the blob sits relative to the
-calibrated bands: a blob whose hue is at the edge of a band is one lighting
-change from disappearing.
-
-If the color branch is off (no calibrated HSV ranges) the view says so instead
-of drawing. Uncalibrated ranges are flagged in the header.
-
-Fusion applies no confidence threshold and keeps the single highest-confidence
-light across all three colors. Confidence is area only, so the largest blob
-wins. The threshold in this view stands in for whatever Phase 3 applies.
-
-Coordinates are traffic-ROI-relative. This module imports only debug_video.
+Flow:
+    1. Pull the color debug, accepted candidates and fused light from the chain.
+    2. Classify each traced blob as pass, low or reject.
+    3. Draw the ROI panel, the mask column, the header and the footer.
 """
 import cv2
 import numpy as np
 
 import src.debugger.debug_video as dv
+from src.params import GREEN, RED, TRAFFIC_LIGHT, YELLOW
 
-# =============================================================================
-# Configuration
-# =============================================================================
-COLORS = ("red", "yellow", "green")
-LIGHT_COLORS = {"red": (0, 0, 255), "yellow": (0, 200, 255), "green": (0, 200, 0)}
+COLORS = (RED, YELLOW, GREEN)
+LIGHT_COLORS = {RED: (0, 0, 255), YELLOW: (0, 200, 255), GREEN: (0, 200, 0)}    # BGR mask tints
+# color branch gate names, shortened for labels
 GATE_SHORT = {"area": "area", "aspect": "asp"}
-REPORT_THRESHOLDS = (0.30, 0.40, 0.50, 0.60, 0.70)
-GAP_PX = 6                                # between the panels, before zoom
 
-STATE_COLORS = {"pass": dv.C_USABLE, "low": dv.C_AMBER, "reject": dv.C_RED}
-
-# =============================================================================
-# View
-# =============================================================================
-class TrafficView:
+class TrafficView(dv.CandidateView):
     """
-    Traffic-light view. Implements the view interface live_view runs:
+    Traffic-light view; implements the view interface in debug_video, drawing on its own ROI.
+    Blob outlines use dv.STATE_COLORS; the light's own color is in the label.
 
-        name, CSV_FIELDS
-        extract(chain, frame=None) -> data
-                                    pull this target's data out of a chain
-                                    result; frame is unused, this view draws
-                                    on its own ROI
-        observe(data)               accumulate run statistics
-        render(data, scale) -> img  the annotated picture
-        row(data) -> list           one CSV row
-        report() -> [str]           lines for summary.txt
-
-    conf_threshold: the confidence a light has to reach downstream. None
-                    draws no threshold and no amber state
-    zoom: extra magnification on top of the run's scale
+    conf_threshold: The confidence a light has to reach downstream. None
+        draws no threshold and no amber state.
+    zoom: Extra magnification on top of the run's scale.
     """
     name = "traffic"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "enabled", "seen", "traced",
@@ -89,8 +50,7 @@ class TrafficView:
                   "fused", "fused_label", "fused_conf")
 
     def __init__(self, conf_threshold=None, zoom=2):
-        self.conf_threshold = conf_threshold
-        self.zoom = max(1, int(zoom))
+        super().__init__(conf_threshold, zoom)
         self._frames = 0
         self._enabled_frames = 0
         self._uncalibrated = False
@@ -103,14 +63,21 @@ class TrafficView:
         self._rej = {}
         self._coverage = {c: [] for c in COLORS}
 
-    # -- data -----------------------------------------------------------------
-    def extract(self, chain, frame=None):
+    def extract(self, chain, frame=None) -> dict:
+        """
+        This frame's color data from a chain result.
+
+        Reads chain.traffic, chain.traffic_debug (enabled, calibrated, roi,
+        the three masks, mask_px, reject_counts, and "trace" when the chain
+        ran with trace=True), and chain.fusion / fusion_debug when the process
+        callable has fusion.
+        """
         dbg = getattr(chain, "traffic_debug", None) or {}
         fusion = getattr(chain, "fusion", None)
         fdbg = getattr(chain, "fusion_debug", None) or {}
         # None means the chain has no fusion; [] means fusion ran and kept none
         fused = (None if fusion is None
-                 else [d for d in fusion.detections if d.type == "traffic_light"])
+                 else [d for d in fusion.detections if d.type == TRAFFIC_LIGHT])
         return {
             "frame_id": chain.geometry.frame_id,
             "timestamp_ms": chain.geometry.timestamp_ms,
@@ -124,7 +91,7 @@ class TrafficView:
             "accepted": list(getattr(chain, "traffic", None) or []),
             "fused": fused,
             "suppressed": sum(1 for e in fdbg.get("log", ())
-                              if e.startswith("[SUPPRESSED] traffic_light")),
+                              if e.startswith(f"[SUPPRESSED] {TRAFFIC_LIGHT}")),
         }
 
     def _entries(self, data):
@@ -135,27 +102,6 @@ class TrafficView:
                  "aspect": None, "fill": None, "confidence": c.confidence,
                  "hsv": None} for c in data["accepted"]]
 
-    def _state(self, e):
-        if e["gate"] is not None:
-            return "reject"
-        thr = self.conf_threshold
-        if thr is not None and (e["confidence"] or 0.0) < thr:
-            return "low"
-        return "pass"
-
-    def _summary(self, data):
-        entries = self._entries(data)
-        accepted = [e for e in entries if e["gate"] is None]
-        states = [self._state(e) for e in entries]
-        best = max(accepted, key=lambda e: e["confidence"] or 0.0, default=None)
-        return {
-            "entries": entries,
-            "best": best,
-            "passed": states.count("pass"),
-            "low": states.count("low"),
-            "rejected": states.count("reject"),
-        }
-
     def _totals(self, data):
         """Blob counts summed over the three colors."""
         tot = {"seen": 0, "area": 0, "aspect": 0, "accepted": 0}
@@ -164,7 +110,6 @@ class TrafficView:
                 tot[k] += rc.get(k, 0)
         return tot
 
-    # -- statistics -----------------------------------------------------------
     def observe(self, data):
         self._frames += 1
         if not data["enabled"]:
@@ -204,7 +149,7 @@ class TrafficView:
             tot["seen"], len(sm["entries"]), sm["passed"], sm["low"],
             opt(b and b["label"]), opt(b and b["confidence"]),
             opt(b and b["area"]), hsv[0], hsv[1], hsv[2],
-            px.get("red", ""), px.get("yellow", ""), px.get("green", ""),
+            px.get(RED, ""), px.get(YELLOW, ""), px.get(GREEN, ""),
             tot["area"], tot["aspect"],
             "" if fused is None else len(fused),
             opt(fused[0].label_detail if fused else None),
@@ -235,14 +180,7 @@ class TrafficView:
             if self._fused_colors:
                 out.append("  fused light color: " + "  ".join(
                     f"{k} {v}" for k, v in sorted(self._fused_colors.items())))
-        if self._best_conf:
-            s = sorted(self._best_conf)
-            out.append(f" best confidence per frame: min {s[0]:.3f}  "
-                       f"med {s[len(s) // 2]:.3f}  max {s[-1]:.3f}")
-            out.append(" frames that would pass at a threshold of:")
-            out.append("  " + "   ".join(
-                f"{t:.2f} -> {100 * sum(1 for c in s if c >= t) / n:.0f}%"
-                for t in REPORT_THRESHOLDS))
+        out += self._threshold_report(self._best_conf, n)
         cov = {c: sorted(v) for c, v in self._coverage.items() if v}
         if cov:
             out.append(" median mask coverage of the ROI: " + "  ".join(
@@ -254,13 +192,8 @@ class TrafficView:
                        f"aspect {self._rej.get('aspect', 0)}")
         return out
 
-    # -- picture --------------------------------------------------------------
     def render(self, data, scale=1):
-        s = max(1, int(scale)) * self.zoom
-        fs = max(0.34, 0.18 * s)
-        th = 1 if s < 4 else 2
-        lh = int(38 * fs)
-        hh, fh = 2 * lh + 8, lh + 6
+        s, fs, th, lh, hh, fh = self._metrics(scale)
 
         roi = data["roi"]
         if not data["enabled"] or roi is None:
@@ -272,7 +205,7 @@ class TrafficView:
             return img
 
         H, W = roi.shape[:2]
-        pw, ph, gap = W * s, H * s, GAP_PX * s
+        pw, ph, gap = W * s, H * s, dv.GAP_PX * s
         mw, mh = pw // 3, ph // 3
         canvas = np.zeros((hh + ph + fh, pw + gap + mw, 3), np.uint8)
 
@@ -280,7 +213,6 @@ class TrafficView:
                                              interpolation=cv2.INTER_LINEAR)
         dv.draw_text(canvas, "traffic ROI", (4, hh + lh), dv.C_GRAY, fs, th)
 
-        # masks, tinted in the light's own color
         for i, c in enumerate(COLORS):
             mask = data["masks"][c]
             y0 = hh + i * mh
@@ -299,7 +231,7 @@ class TrafficView:
         thr = self.conf_threshold
         for e in sm["entries"]:
             state = self._state(e)
-            color = STATE_COLORS[state]
+            color = dv.STATE_COLORS[state]
             x, y, w, h = e["bbox"]
             x0, y0 = x * s, hh + y * s
             cv2.rectangle(canvas, (x0, y0), ((x + w) * s - 1, hh + (y + h) * s - 1),
@@ -307,21 +239,15 @@ class TrafficView:
             dv.draw_text(canvas, self._label(e, state),
                          (x0, max(y0 - 3, hh + lh)), color, fs, th)
 
-        # header
         b = sm["best"]
-        head_color = (dv.C_USABLE if sm["passed"]
-                      else dv.C_AMBER if sm["low"] else dv.C_WHITE)
+        head_color, counts = self._header(sm)
         title = f"#{data['frame_id']}  traffic_light"
         dv.draw_text(canvas, title, (6, lh), head_color, fs * 1.15, th)
         (tw, _), _ = cv2.getTextSize(title, dv.FONT, fs * 1.15, th)
-        counts = f"pass {sm['passed']}"
-        if thr is not None:
-            counts += f"  low {sm['low']}"
-        counts += f"  rejected {sm['rejected']}"
         dv.draw_text(canvas, counts, (6 + tw + 14, lh), dv.C_WHITE, fs, th)
         if not data["calibrated"]:
             dv.draw_text(canvas, "UNCALIBRATED HSV",
-                         (canvas.shape[1] - int(170 * fs / 0.36), lh),
+                         (canvas.shape[1] - int(170 * fs / 0.36), lh),   # ~170 px wide at fs 0.36
                          dv.C_RED, fs, th)
 
         if b is not None:
@@ -345,7 +271,6 @@ class TrafficView:
                 best += "   fusion: none"
         dv.draw_text(canvas, best, (6, 2 * lh + 2), dv.C_WHITE, fs, th)
 
-        # footer
         rc, tot = data["counts"], self._totals(data)
         per = "  ".join(
             f"{c} {rc.get(c, {}).get('seen', 0)}/{rc.get(c, {}).get('accepted', 0)}"
@@ -357,15 +282,17 @@ class TrafficView:
         dv.draw_text(canvas, foot, (6, hh + ph + lh), dv.C_GRAY, fs, th)
         return canvas
 
-    def _label(self, e, state):
+    def _label(self, e: dict, state: str) -> str:
+        """Blob label: the failing gate and value when rejected, else confidence and fill."""
         if state == "reject":
             if e["gate"] == "aspect":
                 return f"{e['label']} asp {e['aspect']:.2f}"
             return f"{e['label']} area {e['area']:.0f}"
         label = f"{e['label']} c{e['confidence']:.2f}"
+        # fill = blob area / bbox area. A round light fills about 0.78 (pi/4); a streak
+        # or slab fills more. There's no fill gate yet; this shows whether one would help.
         if e["fill"] is not None:
             label += f" f{e['fill']:.2f}"
         if state == "low":
             label += f"<{self.conf_threshold:.2f}"
         return label
-    

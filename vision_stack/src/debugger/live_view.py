@@ -1,49 +1,59 @@
-"""
-live_view.py
-
-Live View: run a frame source through the pipeline and show / record what it
-decided, frame by frame.
+"""Live view: run a frame source through the pipeline and show and record what it decided.
 
 Purpose:
-    Pulls frames from a source, hands each one to a process callable, draws
-    the decision with debug_video, records it, and optionally shows it:
+    The debug harness for whole-pipeline runs. Pulls frames from a camera,
+    video or image directory, hands each to a process callable, and runs
+    every view on the result: draws it with debug_video, records it, and
+    optionally shows it. The window and the recording show the same picture,
+    and output is written with or without a display, so a run on the robot
+    can be reviewed later. The stage order is injected as `process`, so
+    phase2_linker can import this module without a cycle, and nothing here
+    is specific to one view.
 
-        FrameSource -> process(frame) -> overlay -> DebugVideoWriter
-                                                 -> Display (optional)
+Main package:
+    RunStats: run-wide frame and detection counts, per-stage timings, and one
+    report section per view, rendered into summary.txt.
 
-    Overlays come from debug_video.annotate(), so the window and the recorded
-    video show the same picture. Output is written whether or not a display
-    is attached, which is the point: a run on the robot can be reviewed later.
+Flow:
+    1. Open the per-view video and CSV writers, stages.csv and the window.
+    2. Per frame: read, process, log the timings, then extract, observe,
+       render and record every view.
+    3. Close everything and collect each view's report into RunStats.
+"""
+import argparse
+import csv
+import os
+import sys
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 
-    Every picture is a view. The lane view always runs; further views
-    (--views stop,traffic) run beside it. Each gets its own window entry,
-    video, CSV and summary section, so one target can be tuned at a time.
+import cv2
+import numpy as np
 
-Layers (top depends on bottom, never the reverse):
-    cli()             argument parsing, source construction, summary file
-    run()             the loop: read, process, then every view in turn
-    Display           window, keys, headless fallback
-    StageLog          stages.csv
-    RunStats          run-wide counts and stage timings; each view reports its
-                      own statistics
-    FrameSource       camera / video file / image directory
+from src.capture.camera import CameraSource, CaptureError
+from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
+import src.debugger.debug_video as dv
+import src.debugger.debug_lane as debug_lane
+import src.debugger.debug_stop as debug_stop
+import src.debugger.debug_traffic as debug_traffic
 
-This module holds nothing specific to one view. The views are debug_lane,
-debug_stop and debug_traffic; the interface they share is in debug_video.
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
-Dependencies:
-    Imports debug_video, the three view modules and capture. It does NOT
-    import the linker: the stage order is injected as `process`, so
-    phase2_linker can import this module without a cycle. Any callable that
-    returns an object with .geometry, .roi.lane_rect, .offset and
-    .offset_debug will do, which is what the lane view reads.
+# Extra views selectable with --views. Each is built with conf_threshold=. The
+# lane view isn't here: it always runs, and needs the lane config.
+VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView}
 
-Sources (cli):
+# --help text. Kept apart from the module docstring, which documents the code.
+_CLI_HELP = """\
+Run a frame source through the pipeline and show / record what it decided.
+
+Sources:
     --camera            live capture through capture.CameraSource
     --video PATH        a recorded file
     --frames DIR        an image sequence, sorted by filename
 
-Output (--out DIR, default runs/<timestamp>):
+Output (--out DIR, default <root>/runs/<timestamp>):
     run.avi / run.csv   the lane view: annotated video and decision log
     run_<view>.avi/.csv one pair per extra view, e.g. run_stop.avi
     stages.csv          per-frame timings and counts
@@ -57,118 +67,85 @@ Views (--views a,b):
     traffic             color branch on the traffic ROI: the three HSV masks
                         and every blob (debug_traffic). Needs --hsv PATH; the
                         color branch is off without calibrated ranges
-    A view is any object with the interface in debug_video. Register it in
-    VIEWS to make it selectable.
-    Views that need the per-contour trace get it from run_live_view, which
-    turns trace on.
 
 Display:
-    On by default. Falls back to headless automatically if the window cannot
-    open, so the same command works over ssh and on the bench.
+    On by default; falls back to headless if the window can't open, so the
+    same command works over ssh and on the bench.
     q quits, space pauses, s saves a still of the current view,
     v or 1-9 switches view.
-
-Fusion:
-    Fusion and Phase 2 packaging run inside the chain, not here. This module
-    reads chain.fusion, chain.phase2 and chain.timings_ms when the process
-    callable provides them, and counts fused detections and per-stage timings
-    from them. A process callable without them still works: fusion columns
-    stay empty and the chain is timed as one unit.
 """
-import argparse
-import csv
-import os
-import sys
-import time
-from dataclasses import dataclass
 
-import cv2
 
-from src.capture.camera import CameraSource, CaptureError
-import src.debugger.debug_video as dv
-import src.debugger.debug_lane as debug_lane
-import src.debugger.debug_stop as debug_stop
-import src.debugger.debug_traffic as debug_traffic
+Stamped = tuple[np.ndarray, int, int]
 
-# =============================================================================
-# Configuration
-# =============================================================================
-DEFAULT_SIZE = (480, 360)       # (w, h)
-DEFAULT_FPS = 12
-IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
-# Extra views selectable with --views. Each is built with conf_threshold=. The
-# lane view is not here: it always runs, and needs the lane config
-VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView}
-
-# =============================================================================
-# Frame Sources
-# =============================================================================
 class FrameSource:
     """
     Common interface over the three sources.
 
-    read() yields (frame_bgr, frame_id, timestamp_ms), None when exhausted,
-    or (None, None, None) for a transient drop the caller should skip.
-    Only CameraSource mints its own stamp; file and directory sources
-    synthesize one from the frame index and the nominal frame interval, so a
-    replay carries the same fields a live run would.
+    read() returns (frame_bgr, frame_id, timestamp_ms), None when exhausted,
+    or (None, None, None) for a transient drop the caller should skip. Only
+    the camera mints its own stamp; file and directory sources synthesize one
+    from the frame index and the nominal frame interval, so a replay carries
+    the same fields a live run would.
     """
-    def __init__(self, label, fps):
+    def __init__(self, label: str, fps: float) -> None:
         self.label = label
         self.fps = fps
         self._i = 0
 
-    def _stamp(self):
+    def _stamp(self) -> tuple[int, int]:
         fid = self._i
         self._i += 1
         return fid, int(fid * 1000.0 / max(self.fps, 1))
 
-    def read(self):
+    def read(self) -> Stamped | tuple[None, None, None] | None:
         raise NotImplementedError
 
-    def close(self):
+    def close(self) -> None:
         pass
 
 class CameraFrameSource(FrameSource):
-    """Live capture. Keeps capture.py's stamp rather than making a new one."""
-    def __init__(self, width, height, fps):
+    """Live capture. Opens the camera on construction and keeps capture's own stamp."""
+    def __init__(self, width: int, height: int, fps: int) -> None:
         super().__init__("camera", fps)
         self.cam = CameraSource(width, height, fps)
         self.cam.open()
 
-    def read(self):
+    def read(self) -> Stamped | tuple[None, None, None]:
         fd = self.cam.read()
         if fd is None:
             return None, None, None          # transient drop; caller continues
         return fd.frame, fd.frame_id, fd.timestamp_ms
 
-    def close(self):
+    def close(self) -> None:
         self.cam.release()
 
 class VideoFrameSource(FrameSource):
-    """fps=None uses the file's own rate."""
-    def __init__(self, path, fps=None):
+    """Recorded video file. fps=None uses the file's own rate, or FPS if it doesn't report one."""
+    def __init__(self, path: str, fps: float | None = None) -> None:
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
             raise CaptureError(f"could not open video {path}")
         native = cap.get(cv2.CAP_PROP_FPS)
+        # Containers without a rate report 0 (sometimes 1), which would stamp every frame at t=0
         super().__init__(os.path.basename(path),
-                         fps or (native if native and native > 1 else DEFAULT_FPS))
+                         fps or (native if native and native > 1 else FPS))
         self.cap = cap
 
-    def read(self):
+    def read(self) -> Stamped | None:
         ok, frame = self.cap.read()
         if not ok or frame is None:
             return None
         fid, ts = self._stamp()
         return frame, fid, ts
 
-    def close(self):
+    def close(self) -> None:
         self.cap.release()
 
 class DirectoryFrameSource(FrameSource):
-    def __init__(self, path, fps=DEFAULT_FPS):
+    """Image sequence, sorted by filename. Unreadable files are skipped without using a frame id."""
+    def __init__(self, path: str, fps: float = FPS) -> None:
         super().__init__(os.path.basename(os.path.normpath(path)), fps)
         self.files = [
             os.path.join(path, f) for f in sorted(os.listdir(path))
@@ -178,7 +155,7 @@ class DirectoryFrameSource(FrameSource):
             raise CaptureError(f"no images in {path}")
         self._n = 0
 
-    def read(self):
+    def read(self) -> Stamped | None:
         while self._n < len(self.files):
             frame = cv2.imread(self.files[self._n])
             self._n += 1
@@ -187,27 +164,25 @@ class DirectoryFrameSource(FrameSource):
                 return frame, fid, ts
         return None
 
-# =============================================================================
-# Run Statistics
-# =============================================================================
+
 @dataclass
 class RunStats:
     """
     What the run as a whole reports: frame counts, fused detections and stage
-    timings. Everything about a target is reported by its view, and lands in
-    `sections`.
+    timings. Everything about one target is reported by its view and lands in
+    sections.
     """
     frames: int = 0
-    drops: int = 0
-    detections: int = 0
+    drops: int = 0                  # transient read failures, skipped
+    detections: int = 0             # fused detections over the run
     fusion_seen: bool = False       # True once any chain result carried fusion
 
     def __post_init__(self):
-        self.stage_ms = {}
+        self.stage_ms = {}          # stage name -> per-frame ms
         self.sections = {}          # view name -> report lines
 
-    def update(self, n_detections, timings):
-        """n_detections is None when the chain result carried no fusion."""
+    def update(self, n_detections: int | None, timings: dict[str, float]) -> None:
+        """Count one processed frame. n_detections is None when the chain result carried no fusion."""
         self.frames += 1
         if n_detections is not None:
             self.fusion_seen = True
@@ -215,8 +190,8 @@ class RunStats:
         for name, ms in timings.items():
             self.stage_ms.setdefault(name, []).append(ms)
 
-    def report(self):
-        """Render the summary as a list of lines: counts, views, timing."""
+    def report(self) -> list[str]:
+        """The summary as lines: counts, then each view's section, then stage timing medians and p95s."""
         out = []
         n = max(self.frames, 1)
         out.append(f"frames processed        {self.frames}")
@@ -242,15 +217,13 @@ class RunStats:
                        f"-> {1000/max(total_med, 0.001):5.1f} FPS")
         return out
 
-# =============================================================================
-# Outputs
-# =============================================================================
+
 class StageLog:
     """
     stages.csv: one row per processed frame.
 
     Per-stage columns come from the chain's timings_ms and stay blank for a
-    process callable that does not provide them; total_ms is always the
+    process callable that doesn't provide them; total_ms is always the
     measured wall time of the whole process call.
 
     accepted, usable, mode and offset are the lane signal, the pipeline's
@@ -261,13 +234,13 @@ class StageLog:
               "geometry_ms", "fusion_ms", "lane_offset_ms", "total_ms",
               "accepted", "usable", "mode", "offset", "detections", "color_ms")
 
-    def __init__(self, path):
+    def __init__(self, path: str) -> None:
         self._f = open(path, "w", newline="")
         self._w = csv.writer(self._f)
         self._w.writerow(self.FIELDS)
 
-    def write(self, frame_id, timestamp_ms, timings, t_total, chain,
-              n_detections):
+    def write(self, frame_id: int, timestamp_ms: int, timings: dict[str, float],
+              t_total: float, chain, n_detections: int | None) -> None:
         result, dbg = chain.offset, chain.offset_debug
         ms = lambda name: round(timings[name], 2) if name in timings else ""
         self._w.writerow([
@@ -280,20 +253,20 @@ class StageLog:
             ms("color"),
         ])
 
-    def close(self):
+    def close(self) -> None:
         self._f.close()
 
 class Display:
     """
     Preview window with pause, still capture and view switching.
 
-    names: the views, in order; the first is shown to start with.
-    Falls back to headless if the window cannot open (no display, or a
-    headless OpenCV build). show() returns False when the user asks to quit.
+    names: the views, in order; the first is shown to start with. Falls back
+    to headless if the window can't open (no display, or a headless OpenCV
+    build).
     """
     WINDOW = "pipeline"
 
-    def __init__(self, enabled, still_dir, names=("lane",)):
+    def __init__(self, enabled: bool, still_dir: str, names=("lane",)) -> None:
         self.still_dir = still_dir
         self.names = list(names)
         self.current = 0
@@ -311,23 +284,35 @@ class Display:
                 self.enabled = False
 
     @staticmethod
-    def _no_display_server():
+    def _no_display_server() -> bool:
         """
-        Qt builds of OpenCV abort the whole process, not raise, when there is
-        no X/Wayland server, so the try/except below never sees it over ssh.
+        Checked before trying the window: Qt builds of OpenCV abort the whole
+        process, not raise, when there is no X/Wayland server, so the
+        try/except in __init__ never sees it over ssh.
         """
         return (sys.platform.startswith("linux")
                 and not os.environ.get("DISPLAY")
                 and not os.environ.get("WAYLAND_DISPLAY"))
 
-    def _draw(self, shots):
+    def _draw(self, shots: dict[str, np.ndarray]) -> np.ndarray | None:
         img = shots.get(self.names[self.current])
         if img is not None:
             cv2.imshow(self.WINDOW, img)
         return img
 
-    def show(self, shots):
-        """shots: {view name: image} for the views rendered this frame."""
+    def show(self, shots: dict[str, np.ndarray]) -> bool:
+        """
+        Show the current view and handle keys.
+
+        Inputs:
+            shots: {view name: image} for the views rendered this frame.
+
+        Outputs:
+            False when the user asks to quit, else True. Blocks while paused.
+
+        Side effects:
+            s writes a still into still_dir.
+        """
         if not self.enabled:
             return True
         img = self._draw(shots)
@@ -358,40 +343,42 @@ class Display:
             elif not self.paused:
                 return True
 
-    def close(self):
+    def close(self) -> None:
         if self.enabled:
             cv2.destroyAllWindows()
 
-# =============================================================================
-# Runner
-# =============================================================================
-def _video_name(view):
+
+def _video_name(view) -> str:
     """The lane view keeps the historical run.avi / run.csv names."""
     return "run.avi" if view.name == "lane" else f"run_{view.name}.avi"
 
-def run(source, process, lane_config, out_dir, display=True, scale=1,
-        stride=1, limit=None, fps=None, views=()):
+def run(source: FrameSource, process: Callable, lane_config, out_dir: str,
+        display: bool = True, scale: int = 1, stride: int = 1,
+        limit: int | None = None, fps: float | None = None, views=()) -> RunStats:
     """
-    Purpose:
-        Pull frames from source, run them through process, then run every view
-        on the result: draw, record, and optionally show. Returns RunStats
+    Run every frame from source through process, then every view on the result.
 
     Inputs:
-        source: FrameSource
-        process: callable (frame_bgr, frame_id, timestamp_ms) -> chain result
-                 exposing .geometry, .roi.lane_rect, .offset, .offset_debug
-        lane_config: the lane_offset config, used by the lane view to classify
-                 candidates; must be the one process() runs with
-        out_dir: created if missing
-        fps: recorded video rate; None uses source.fps
-        views: extra views to run beside the lane view (see VIEWS). Each is
-               observed on every frame, but rendered and recorded only on the
-               frames the stride keeps
+        process: (frame_bgr, frame_id, timestamp_ms) -> chain result. The lane
+            view needs .geometry, .roi.lane_rect, .offset and .offset_debug.
+            .fusion and .timings_ms are optional: without them the fusion
+            columns stay empty and the chain is timed as one unit.
+        lane_config: The LaneOffsetConfig process() runs with; the lane view
+            uses it to classify candidates, so the two must match.
+        scale: Overlay magnification.
+        stride: Record and render every Nth frame. Every frame is still
+            processed and observed, so the statistics cover the whole run.
+        limit: Stop after this many processed frames; None runs to the end.
+        fps: Recorded video rate; None uses source.fps.
+        views: Extra views beside the lane view (see VIEWS).
 
-    Notes:
-        A dropped read is counted and skipped rather than ending the run.
-        CameraSource returns None for a transient failure and raises
-        CaptureError only when the pipeline is actually dead
+    Outputs:
+        RunStats, with each view's report in sections.
+
+    Side effects:
+        Writes into out_dir (created if missing), may open a window, and
+        closes the source. A dropped read is counted and skipped; only a
+        CaptureError (a dead camera pipeline) or q ends the run early.
     """
     os.makedirs(out_dir, exist_ok=True)
     stats = RunStats()
@@ -455,36 +442,37 @@ def run(source, process, lane_config, out_dir, display=True, scale=1,
         stats.sections[v.name] = v.report()
     return stats
 
-# =============================================================================
-# Command line
-# =============================================================================
-def write_summary(path, source, stats):
+
+def write_summary(path: str, source: FrameSource, stats: RunStats) -> None:
+    """Write summary.txt: the source, whether fusion ran, then the RunStats report."""
     with open(path, "w") as f:
         f.write(f"source: {source.label}\n")
         f.write(f"fusion: {'on' if stats.fusion_seen else 'off'}\n\n")
         f.write("\n".join(stats.report()) + "\n")
 
-def cli(runner, argv=None):
+def cli(runner: Callable, argv: list[str] | None = None) -> int:
     """
-    Purpose:
-        Parse arguments, open the chosen source, call runner, write the
-        summary. Returns a process exit code
+    Parse arguments, open the chosen source, call runner, write the summary.
 
     Inputs:
-        runner: callable (source, out_dir=, display=, scale=, stride=,
-                limit=, views=, hsv_path=) -> RunStats. phase2_linker.run_live_view
-                fits, which is how the linker supplies the stage order
-        argv: argument list, default sys.argv[1:]
+        runner: (source, out_dir=, display=, scale=, stride=, limit=, views=,
+            hsv_path=) -> RunStats. phase2_linker.run_live_view fits, which is
+            how the linker supplies the stage order.
+        argv: Argument list; None reads sys.argv[1:]. Empty prints help.
+
+    Outputs:
+        Process exit code: 0 on success, 2 for an unknown view or a source
+        that can't be opened.
     """
     ap = argparse.ArgumentParser(
-        prog="live_view", description=__doc__,
+        prog="live_view", description=_CLI_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--camera", action="store_true")
     src.add_argument("--video", metavar="PATH")
     src.add_argument("--frames", metavar="DIR")
-    ap.add_argument("--width", type=int, default=DEFAULT_SIZE[0])
-    ap.add_argument("--height", type=int, default=DEFAULT_SIZE[1])
+    ap.add_argument("--width", type=int, default=FRAME_W)
+    ap.add_argument("--height", type=int, default=FRAME_H)
     ap.add_argument("--fps", type=int, default=None,
                     help="capture/replay rate (video files default to their own)")
     ap.add_argument("--scale", type=int, default=1, help="overlay magnification")
@@ -526,17 +514,16 @@ def cli(runner, argv=None):
     try:
         if args.camera:
             source = CameraFrameSource(args.width, args.height,
-                                       args.fps or DEFAULT_FPS)
+                                       args.fps or FPS)
         elif args.video:
             source = VideoFrameSource(args.video, args.fps)
         else:
-            source = DirectoryFrameSource(args.frames, args.fps or DEFAULT_FPS)
+            source = DirectoryFrameSource(args.frames, args.fps or FPS)
     except (CaptureError, OSError) as exc:
         print(f"source error: {exc}")
         return 2
 
-    out_dir = args.out or os.path.join(
-        "vision_stack", "runs", time.strftime("%Y%m%d_%H%M%S"))
+    out_dir = args.out or str(RUNS_DIR / time.strftime("%Y%m%d_%H%M%S"))
 
     print(f"source   {source.label}")
     print(f"output   {out_dir}")

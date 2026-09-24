@@ -1,5 +1,5 @@
 """
-test_geometry.py  --  geometry branch (lane boundaries + stop sign shape)
+test_geometry.py  --  src/perception/geometry.py
 
 Detection tests use synthetic ROIs with known ground truth (white tape on a dark
 mat, a filled octagon) and their own explicit filter/Canny parameters, so
@@ -29,11 +29,10 @@ from src.perception.geometry import (
 )
 from src.perception.preprocess import PreprocessResult, preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
+from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize
 
-# =============================================================================
-# Explicit test parameters
-# =============================================================================
+# Explicit rather than the shipped defaults, so retuning never breaks detection tests
 TEST_CANNY = CannyParams(threshold1=80.0, threshold2=200.0, aperture_size=3, close_kernel=(9, 3))
 TEST_LANE = LaneContourFilter(min_area=1, max_area=1e6, min_aspect=0.0, max_aspect=1000.0,
                               max_roi_span=1.0, min_intensity=120.0, ref_length=0.25,
@@ -42,19 +41,17 @@ TEST_SIGN = SignContourFilter(min_area=200.0, max_area=30000.0, min_vertices=8, 
                               min_solidity=0.80, epsilon_factor=0.03, ref_area=5000.0)
 TEST_CFG = GeometryConfig(canny=TEST_CANNY, lane=TEST_LANE, sign=TEST_SIGN)
 
-LANE_SHAPE = (108, 432)       # (h, w) of a typical lane ROI
-SIGN_SHAPE = (198, 240)
-BG, FG = 30, 230
+LANE_SHAPE = (108, 432)       # synthetic lane ROI, sized so the drawn scenes fit; any size works
+SIGN_SHAPE = (198, 240)       # synthetic sign ROI, same
+BG, FG = 30, 230              # dark mat, white tape
 
 LANE_BUCKETS = ("area", "degenerate", "too_few_pts", "aspect", "w_span", "h_span", "intensity", "accepted")
 SIGN_BUCKETS = ("area", "vertices", "hull", "solidity", "accepted")
 TRACE_KEYS = {"bbox", "gate", "area", "vertices", "solidity", "confidence", "poly"}
 
 
-# =============================================================================
-# Synthetic scene helpers
-# =============================================================================
 def blank(shape, value=BG):
+    """Featureless ROI at one gray level."""
     return np.full(shape, value, np.uint8)
 
 
@@ -72,12 +69,14 @@ def slanted_tape(shape=LANE_SHAPE, cx=200, cy=80, length=200, thickness=8, angle
 
 
 def line_tape(p0, p1, shape=LANE_SHAPE, thickness=8):
+    """One straight tape stroke from p0 to p1 on a dark mat."""
     img = blank(shape)
     cv2.line(img, p0, p1, FG, thickness)
     return img
 
 
 def regular_polygon(n, radius=40, center=(120, 100), shape=SIGN_SHAPE, rot=np.pi / 8):
+    """Filled regular n-gon on a dark mat; rot=pi/8 gives an octagon flat on top, like a stop sign."""
     img = blank(shape)
     pts = np.array([(center[0] + radius*np.cos(rot + 2*np.pi*k/n),
                      center[1] + radius*np.sin(rot + 2*np.pi*k/n)) for k in range(n)], np.int32)
@@ -86,15 +85,18 @@ def regular_polygon(n, radius=40, center=(120, 100), shape=SIGN_SHAPE, rot=np.pi
 
 
 def cont(pts):
+    """Point list as an OpenCV (N, 1, 2) int32 contour."""
     return np.array(pts, np.int32).reshape(-1, 1, 2)
 
 
 def octagon_contour(radius=40, center=(120, 100)):
+    """Regular octagon contour, fed straight to the gates without Canny."""
     return cont([(center[0] + radius*np.cos(np.pi/8 + 2*np.pi*k/8),
                   center[1] + radius*np.sin(np.pi/8 + 2*np.pi*k/8)) for k in range(8)])
 
 
-def star_contour(center=(120, 100)):       # 8 vertices, concave: sign-like count, low solidity
+def star_contour(center=(120, 100)):
+    """8-vertex concave star: a sign-like vertex count with low solidity."""
     return cont([(center[0] + (40 if k % 2 == 0 else 15)*np.cos(2*np.pi*k/8),
                   center[1] + (40 if k % 2 == 0 else 15)*np.sin(2*np.pi*k/8)) for k in range(8)])
 
@@ -130,10 +132,8 @@ def noisy_scene(seed, shape):
     return img
 
 
-# =============================================================================
-# Contract helpers (shared by software, dataset, and hardware tests)
-# =============================================================================
 def assert_lane_candidates_ok(cands, shape, frame_id, ts):
+    """Every documented LaneCandidate field is in range and inside the ROI."""
     h, w = shape[:2]
     for c in cands:
         x, y, bw, bh = c.bbox
@@ -148,6 +148,7 @@ def assert_lane_candidates_ok(cands, shape, frame_id, ts):
 
 
 def assert_sign_candidates_ok(cands, shape, frame_id, ts, flt=None):
+    """Every documented SignCandidate field is in range; with flt, also within its gates."""
     h, w = shape[:2]
     for c in cands:
         x, y, bw, bh = c.bbox
@@ -155,24 +156,27 @@ def assert_sign_candidates_ok(cands, shape, frame_id, ts, flt=None):
         assert x >= 0 and y >= 0 and bw >= 1 and bh >= 1 and x + bw <= w and y + bh <= h, f"bbox {c.bbox} outside {shape}"
         assert 0.0 <= c.confidence <= 1.0
         assert c.vertex_count == len(c.contour)
-        assert c.area > 0.0 and 0.0 < c.solidity <= 1.0 + 1e-6
+        assert c.area > 0.0 and 0.0 < c.solidity <= 1.0 + 1e-6            # float slack on area / hull area
         assert (c.frame_id, c.timestamp_ms) == (frame_id, ts)
         if flt is not None:
             assert flt.min_vertices <= c.vertex_count <= flt.max_vertices
-            assert c.solidity >= flt.min_solidity - 1e-4
+            assert c.solidity >= flt.min_solidity - 1e-4                  # solidity is rounded to 4 places
 
 
 def assert_lane_counts(rc, n_final):
+    """Lane reject buckets sum to seen, and merging never adds candidates."""
     assert rc["seen"] == sum(rc[k] for k in LANE_BUCKETS), f"every contour must land in exactly one bucket: {rc}"
     assert rc["merged_into"] == n_final and n_final <= rc["accepted"]
 
 
 def assert_sign_counts(rc, n_final):
+    """Sign reject buckets sum to seen, and accepted matches what was returned."""
     assert rc["seen"] == sum(rc[k] for k in SIGN_BUCKETS), f"every contour must land in exactly one bucket: {rc}"
     assert rc["accepted"] == n_final
 
 
 def assert_edge_map(edges, roi):
+    """Edge map is a binary 0/255 image the size of its ROI."""
     assert edges.shape == roi.shape[:2] and edges.dtype == np.uint8
     assert set(np.unique(edges).tolist()) <= {0, 255}
 
@@ -189,16 +193,17 @@ def assert_geometry_contract(res, roi, lane_dbg, sign_dbg):
     assert_edge_map(sign_dbg["edges"], roi.sign_roi)
 
 
-# =============================================================================
-# Chained scene: frame -> preprocess -> crop -> geometry, shapes placed from rects
-# =============================================================================
 ROI_CONFIGS = {
     "default": ROIConfig(),
     "wide_lane": ROIConfig(lane=ROIBounds(0.0, 0.6, 1.0, 1.0)),
 }
 
 
-def build_scene(roi_cfg, frame_id=11, ts=222, H=360, W=480):
+def build_scene(roi_cfg, frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
+    """Full frame with a tape in the lane ROI and an octagon in the sign ROI, placed from the rects.
+
+    Returns the cropped ROIs and the shapes' expected centers in frame coordinates.
+    """
     frame = np.full((H, W, 3), BG, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), roi_cfg)   # rects only
     lx, ly, lw, lh = probe.lane_rect
@@ -211,15 +216,6 @@ def build_scene(roi_cfg, frame_id=11, ts=222, H=360, W=480):
     expect = {"tape_cx": tx + 2, "tape_cy": (y0 + y1) / 2, "sign_cx": ox, "sign_cy": oy}
     roi = crop_rois(preprocess_frame(FrameData(frame, frame_id, ts)), roi_cfg)
     return roi, expect
-
-
-# =============================================================================
-# Software: small pure helpers
-# =============================================================================
-@pytest.mark.software
-@pytest.mark.parametrize("v, lo, hi, want", [(5, 0, 10, 5), (-3, 0, 10, 0), (99, 0, 10, 10), (0, 0, 10, 0), (10, 0, 10, 10)])
-def test_clamp(v, lo, hi, want):
-    assert geo._clamp(v, lo, hi) == want
 
 
 @pytest.mark.software
@@ -292,10 +288,8 @@ def test_extreme_points_are_leftmost_and_rightmost():
     assert left.tolist() == [5, 9] and right.tolist() == [40, 2]
 
 
-# =============================================================================
-# Software: confidence scores (relations, not the weights)
-# =============================================================================
 def lane_conf(long=100, short=10, horiz=True, inten=200, roi_h=108, roi_w=432, f=TEST_LANE):
+    """_lane_confidence with mid-range defaults, so each test varies one input."""
     return geo._lane_confidence(long, short, horiz, inten, roi_h, roi_w, f)
 
 
@@ -343,9 +337,6 @@ def test_sign_confidence_grows_with_area_and_stays_in_unit_range():
     assert scores == sorted(scores) and all(0.0 <= s <= 1.0 for s in scores)
 
 
-# =============================================================================
-# Software: lane detector on synthetic ground truth
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("angle", [0.0, 3.0])
 def test_horizontal_tape_is_found_where_it_was_drawn(angle):
@@ -354,10 +345,11 @@ def test_horizontal_tape_is_found_where_it_was_drawn(angle):
     assert len(cands) == 1
     c = cands[0]
     x, y, w, h = c.bbox
+    # Tolerances: Canny traces the outline just outside the fill, and closing grows it
     assert abs((x + w / 2) - 200) <= 6 and abs((y + h / 2) - 80) <= 6
     assert abs(c.length_px - 200) <= 10 and 6 <= c.width_px <= 14
     assert c.proximity == round(min((y + h) / img.shape[0], 1.0), 4)
-    assert 150 <= c.mean_intensity <= 235
+    assert 150 <= c.mean_intensity <= 235            # the outline straddles the edge, so mat pixels pull it below FG
     assert 0.0 < c.confidence <= 1.0
     assert_lane_candidates_ok(cands, img.shape, 5, 6)
     assert_lane_counts(dbg["reject_counts"], 1)
@@ -376,7 +368,7 @@ def test_diagonal_marking_foot_is_where_it_reaches_the_near_edge_not_the_bbox_mi
     (c,), _ = extract_lane_candidates(img, TEST_CANNY, TEST_LANE, 1, 2, False)
     x, y, w, h = c.bbox
     assert abs(c.foot_x - 150) <= 10
-    assert c.foot_x > (x + w / 2) + 25
+    assert c.foot_x > (x + w / 2) + 25               # the bbox middle sits ~50 px left of the foot; 25 is half that
 
 
 @pytest.mark.software
@@ -458,9 +450,6 @@ def test_invariants_hold_on_cluttered_rois(seed):
     assert_sign_counts(sd["reject_counts"], len(sign))
 
 
-# =============================================================================
-# Software: merging fragments of one line
-# =============================================================================
 LANE_HW = LANE_SHAPE
 
 
@@ -529,9 +518,6 @@ def test_merging_never_increases_the_candidate_count():
         assert dbg["reject_counts"]["merged_into"] <= dbg["reject_counts"]["accepted"]
 
 
-# =============================================================================
-# Software: sign detector
-# =============================================================================
 @pytest.mark.software
 def test_octagon_is_found_where_it_was_drawn():
     img = regular_polygon(8, radius=40, center=(120, 100))
@@ -539,6 +525,7 @@ def test_octagon_is_found_where_it_was_drawn():
     x, y, w, h = c.bbox
     a = 2 * 40 * np.sin(np.pi / 8)
     assert abs((x + w / 2) - 120) <= 4 and abs((y + h / 2) - 100) <= 4
+    # Regular octagon area 2(1 + sqrt 2)a^2 for side a; 10% for the traced outline sitting off the fill
     assert c.area == pytest.approx(2 * (1 + np.sqrt(2)) * a * a, rel=0.10)
     assert 8 <= c.vertex_count <= 10 and c.solidity >= 0.9 and c.confidence > 0.5
     assert_sign_candidates_ok([c], img.shape, 5, 6, TEST_SIGN)
@@ -553,6 +540,7 @@ def test_polygons_with_the_wrong_vertex_count_are_rejected_as_vertices(sides):
 
 
 def run_sign_gates(contour, flt=TEST_SIGN):
+    """One contour straight through the sign gates; returns (candidates, reject_counts, trace)."""
     rc, trace = {}, []
     out = geo._extract_sign_candidates([contour], flt, 3, 4, rc, trace)
     return out, rc, trace
@@ -602,9 +590,6 @@ def test_trace_is_only_present_when_requested():
     assert isinstance(on["trace"], list) and [t["gate"] for t in on["trace"]] == [None]
 
 
-# =============================================================================
-# Software: debug overlays
-# =============================================================================
 @pytest.mark.software
 def test_overlays_exist_only_when_requested_and_are_three_channel():
     lane_img, sign_img = slanted_tape(), regular_polygon(8)
@@ -618,7 +603,7 @@ def test_overlays_exist_only_when_requested_and_are_three_channel():
 
 @pytest.mark.software
 def test_accepted_overlays_carry_the_color_annotations():
-    """Regression: a single-channel overlay once rendered every annotation black."""
+    # A single-channel overlay keeps only the first BGR component and renders annotations black
     _, ld = extract_lane_candidates(slanted_tape(), TEST_CANNY, TEST_LANE, 1, 2, True)
     _, sd = extract_sign_candidates(regular_polygon(8), TEST_CANNY, TEST_SIGN, 1, 2, True)
     has = lambda img, bgr: bool(np.any(np.all(img == bgr, axis=2)))
@@ -626,10 +611,8 @@ def test_accepted_overlays_carry_the_color_annotations():
     assert has(sd["accepted_overlay"], (0, 0, 255))
 
 
-# =============================================================================
-# Software: branch validation and stage wiring
-# =============================================================================
 def run_branch(lane, sign, **kw):
+    """run_geometry_branch with the explicit test configs."""
     return run_geometry_branch(lane, sign, TEST_CANNY, TEST_LANE, TEST_SIGN, **kw)
 
 
@@ -650,7 +633,7 @@ def test_invalid_rois_are_rejected_and_the_offender_is_named(which, bad, exc):
 
 @pytest.mark.software
 def test_stage_carries_identity_and_returns_the_documented_triple():
-    pre = PreprocessResult(gray=slanted_tape(shape=(360, 480)), color=np.zeros((360, 480, 3), np.uint8), frame_id=987654, timestamp_ms=555)
+    pre = PreprocessResult(gray=slanted_tape(shape=(FRAME_H, FRAME_W)), color=np.zeros((FRAME_H, FRAME_W, 3), np.uint8), frame_id=987654, timestamp_ms=555)
     roi = crop_rois(pre)
     out = run_geometry_stage(roi, TEST_CFG)
     assert len(out) == 3
@@ -696,9 +679,6 @@ def test_default_configs_do_not_share_mutable_inner_objects():
     assert a.canny is not b.canny and a.lane is not b.lane and a.sign is not b.sign
 
 
-# =============================================================================
-# Software: chained  frame -> preprocess -> crop -> geometry
-# =============================================================================
 @pytest.mark.software
 @pytest.mark.parametrize("roi_cfg", ROI_CONFIGS.values(), ids=ROI_CONFIGS.keys())
 def test_chain_finds_shapes_at_their_frame_coordinates(roi_cfg):
@@ -711,6 +691,7 @@ def test_chain_finds_shapes_at_their_frame_coordinates(roi_cfg):
     sx, sy = roi.sign_rect[:2]
     assert len(res.lane_candidates) == 1 and len(res.sign_candidates) == 1
     x, y, w, h = res.lane_candidates[0].bbox                    # ROI-relative -> add the rect origin
+    # Wider than the direct tests: preprocess blurs the shapes before Canny sees them
     assert abs(lx + x + w / 2 - exp["tape_cx"]) <= 8 and abs(ly + y + h / 2 - exp["tape_cy"]) <= 8
     x, y, w, h = res.sign_candidates[0].bbox
     assert abs(sx + x + w / 2 - exp["sign_cx"]) <= 6 and abs(sy + y + h / 2 - exp["sign_cy"]) <= 6
@@ -735,10 +716,8 @@ def test_every_recorded_frame_meets_the_geometry_contract(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Hardware: geometry characterization
-# =============================================================================
 def _jsonable_trace(trace):
+    """Sign trace with numpy bboxes and polygons converted to lists for JSON."""
     out = []
     for t in trace:
         t = dict(t)
@@ -791,7 +770,7 @@ def test_geometry_characterization(request, frames, artifacts):
     artifacts.csv("geometry_timing.csv", header, rows)
     artifacts.json("summary.json", {
         "stage_ms": summarize(stage), "lane_ms": summarize(r[3] for r in rows),
-        "sign_ms": summarize(r[4] for r in rows), "frames_over_33ms": sum(1 for s in stage if s > 33.3),
+        "sign_ms": summarize(r[4] for r in rows), "frames_over_33ms": sum(1 for s in stage if s > 33.3),   # one frame period at MAX_FPS (30)
         "frames_with_lane": sum(1 for r in rows if r[5]), "frames_with_sign": sum(1 for r in rows if r[6]),
         "gate_totals": gate_totals,
     })

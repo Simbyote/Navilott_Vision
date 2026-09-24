@@ -1,56 +1,25 @@
-"""
-phase2_linker.py
-
-Phase 1 and 2 Pipeline Linker, excluding sign and traffic integration
+"""Phase 1-2 linker: the one place the stage order is written down.
 
 Purpose:
-    Defines the stage order once, in run_chain():
-
-        FrameData -> preprocess_frame -> crop_rois -> run_geometry_stage
-                  -> run_color_stage -> compute_lane_offset
-                  -> fuse_detections -> package_phase2
-
-    The last stage's Phase2Output is the Phase 2 -> Phase 3 handoff. The
-    color branch feeds fusion here, not the other way round: fusion is where
-    its traffic-light candidates meet the geometry branch's lane and sign
-    candidates, so the linker, which owns the stage order, runs it and hands
-    the result on.
-
-    The color branch needs calibrated HSV ranges. PipelineConfig.color leaves
-    it OFF until they are supplied (see load_color_config), in which case
-    fusion receives no traffic candidates and Phase2Output has no
-    traffic_light detection. Lane boundaries and stop signs flow either way.
-
-    Everything else that needs the chain goes through here so nothing can
-    drift from it: the live view (run_live_view), and the tests under test/.
-
-Live view:
-    run_live_view() hands run_chain() to live_view.run() as a plain callable.
-    live_view never imports this module, so the dependency runs one way:
-
-        debug_video  <-  live_view  <-  phase2_linker
-
-    Command line (all options come from live_view.cli):
-        python3 phase2_linker.py --video clip.mp4 --no-display
-        python3 phase2_linker.py --frames frames/Sample1
-
-Tests:
-    Ground truth, metamorphic properties and replay live in test/. The
-    synthetic_frame() and expected_offset() fixtures below are kept here only
-    until those tests move; nothing in this module uses them.
-
-Configuration:
-    Every stage's tuning lives in PipelineConfig. A camera change moves the
-    cm-per-pixel scale, the ROI bounds and the gate thresholds together, so
-    re-tuning after a hardware change is meant to be a config swap and a
+    Runs a frame through every Phase 1-2 stage in order, so the live view and
+    the tests all go through one chain and can't drift from it. The color
+    branch stays off until calibrated HSV ranges are supplied; lane
+    boundaries and stop signs flow either way. Every stage's tuning lives in
+    PipelineConfig, so re-tuning after a camera change is a config swap and a
     re-run, not a code edit.
 
-What this cannot test:
-    Accuracy in centimetres against the +/-2cm requirement. That needs
-    captures at measured lateral offsets on a real course. Synthetic ground
-    truth proves the arithmetic recovers what was drawn; it says nothing
-    about whether the camera sees the world the way the synthetic frames
-    assume.
+Main package:
+    ChainResult: every stage's output and debug data for one frame, ending in
+    the Phase2Output handed to Phase 3, plus per-stage timings.
+
+Flow:
+    FrameData -> preprocess_frame -> crop_rois -> run_geometry_stage
+              -> run_color_stage -> compute_lane_offset
+              -> fuse_detections -> package_phase2
+
+Command line (options from live_view.cli):
+    python3 phase2_linker.py --video clip.mp4 --no-display
+    python3 phase2_linker.py --frames frames/Sample1
 """
 import time
 
@@ -59,33 +28,24 @@ import cv2
 from dataclasses import dataclass, field, replace
 
 from src.capture.camera import FrameData
-from src.perception.preprocess import preprocess_frame, PreprocessParams
-from src.perception.roi_crop import crop_rois, ROIConfig
-from src.perception.geometry import run_geometry_stage, GeometryConfig
+from src.params import FRAME_H, FRAME_W
+from src.perception.preprocess import preprocess_frame, PreprocessParams, PreprocessResult
+from src.perception.roi_crop import crop_rois, ROIConfig, ROICropResult, LANE, resolve
+from src.perception.geometry import run_geometry_stage, GeometryConfig, GeometryBranchResult
 from src.perception.color_branch import ColorConfig, run_color_stage, load_hsv_ranges
-from src.perception.lane_offset import compute_lane_offset, LaneOffsetConfig
-from src.perception.feature_fusion import fuse_detections
-from src.perception.phase2_out import package_phase2
+from src.perception.lane_offset import compute_lane_offset, LaneOffsetConfig, LaneOffsetResult
+from src.perception.feature_fusion import fuse_detections, FusionResult
+from src.perception.phase2_out import package_phase2, Phase2Output
 import src.debugger.live_view as live_view
 
-# =============================================================================
-# Pipeline Configuration
-# =============================================================================
+
 @dataclass(frozen=True)
 class PipelineConfig:
-    """
-    Every stage's tuning as one unit
-
-    preprocess: conditioning parameters
-    roi: ROI bounds
-    geometry: contour filters and edge detection
-    color: traffic-light HSV ranges and blob filter. Off until ranges are given
-    lane_offset: boundary gates and the calibration constant
-    """
+    """Every stage's tuning as one unit."""
     preprocess: PreprocessParams = field(default_factory=PreprocessParams)
     roi: ROIConfig = field(default_factory=ROIConfig)
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
-    color: ColorConfig = field(default_factory=ColorConfig)
+    color: ColorConfig = field(default_factory=ColorConfig)                 # off until HSV ranges are given
     lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
 
 # Gates revised from the 4827-candidate CSV sweep rather than from course
@@ -101,45 +61,29 @@ MEASURED = PipelineConfig(
     )
 )
 
-# =============================================================================
-# Chain Result
-# =============================================================================
+
 @dataclass(frozen=True)
 class ChainResult:
     """
     Every stage's output for one frame, so a failure can be traced to the
-    stage that produced it rather than only to the final number
-
-    Stop signs travel in geometry.sign_candidates. sign_debug carries the
-    sign branch's reject_counts and edge map, plus the per-contour trace when
-    run_chain was asked for it
-
-    fusion, fusion_debug: FusionResult and its debug summary
-    phase2: the Phase2Output handed to Phase 3
-    timings_ms: wall time of each stage in ms, keyed preprocess, roi,
-                geometry, color, lane_offset, fusion, package
-    traffic: TrafficLightCandidates from the color branch ([] when it is off)
-    traffic_debug: the color branch's masks, counts and trace; just
-                   {"enabled": False} when it is off
+    stage that produced it rather than only to the final number.
     """
     frame: FrameData
-    pre: object
-    roi: object
-    geometry: object
-    offset: object
-    lane_debug: dict
-    offset_debug: dict
-    sign_debug: dict = field(default_factory=dict)
-    fusion: object = None
+    pre: PreprocessResult
+    roi: ROICropResult
+    geometry: GeometryBranchResult          # stop signs travel in its sign_candidates
+    offset: LaneOffsetResult
+    lane_debug: dict                        # geometry's lane debug dict
+    offset_debug: dict                      # compute_lane_offset's debug summary
+    sign_debug: dict = field(default_factory=dict)      # reject_counts and edge map, plus the per-contour trace when requested
+    fusion: FusionResult | None = None
     fusion_debug: dict = field(default_factory=dict)
-    phase2: object = None
-    timings_ms: dict = field(default_factory=dict)
-    traffic: list = field(default_factory=list)
-    traffic_debug: dict = field(default_factory=dict)
+    phase2: Phase2Output | None = None      # the Phase 3 handoff
+    timings_ms: dict = field(default_factory=dict)      # wall ms per stage: preprocess, roi, geometry, color, lane_offset, fusion, package
+    traffic: list = field(default_factory=list)         # TrafficLightCandidates; [] when the color branch is off
+    traffic_debug: dict = field(default_factory=dict)   # masks, counts and trace; just {"enabled": False} when off
 
-# =============================================================================
-# The Chain
-# =============================================================================
+
 def run_chain(
         frame_bgr: np.ndarray,
         frame_id: int = 0,
@@ -149,24 +93,22 @@ def run_chain(
         trace: bool = False,
     ) -> ChainResult:
     """
-    Purpose:
-        Run one frame through every stage. This is the only place the stage
-        order is written down; the harnesses below and the live loop should
-        both come through here so they cannot drift
+    Run one frame through every Phase 1-2 stage.
 
     Inputs:
-        frame_bgr: (H, W, 3) uint8 BGR frame as CameraSource.read() delivers it
-        frame_id, timestamp_ms: the stamp capture would have assigned
-        config: PipelineConfig
-        draw_overlays: build the geometry debug overlays
-        trace: record the per-contour sign trace and the per-blob traffic
-               trace in the debug dicts
+        frame_bgr: (H, W, 3) uint8 BGR, as CameraSource.read() delivers it.
+        frame_id, timestamp_ms: The stamp capture would have assigned.
+        config: Defaults to PipelineConfig(), the shipped tuning.
+            run_live_view() defaults to MEASURED instead.
+        draw_overlays: Build the geometry debug overlays.
+        trace: Record the per-contour sign trace and the per-blob traffic
+            trace in the debug dicts.
 
     Outputs:
-        ChainResult
+        ChainResult, with each stage's wall time in timings_ms.
     """
     timings = {}
-    mark = [time.perf_counter()]
+    mark = [time.perf_counter()]    # a list so lap() can update it without nonlocal
 
     def lap(name):
         now = time.perf_counter()
@@ -186,7 +128,7 @@ def run_chain(
     )
     lap("geometry")
 
-    traffic, traffic_debug = run_color_stage(roi, roi.traffic_roi, config.color, trace)
+    traffic, traffic_debug = run_color_stage(roi, config.color, trace)
     lap("color")
 
     offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
@@ -202,29 +144,34 @@ def run_chain(
                        sign_debug, fusion, fusion_debug, phase2, timings,
                        traffic, traffic_debug)
 
-# =============================================================================
-# Live View
-# =============================================================================
+
 def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
-                  hsv_path=None, **options):
+                  hsv_path: str | None = None, **options) -> "live_view.RunStats":
     """
+    Run a live_view frame source through run_chain() with the debug overlay.
+
     Purpose:
-        Run a live_view frame source through run_chain() with the debug
-        overlay, optional window and on-disk recording
+        Hands run_chain() to live_view.run() as a plain callable. live_view
+        never imports this module, so the dependency runs one way:
+
+            debug_video  <-  live_view  <-  phase2_linker
 
     Inputs:
-        source: a live_view.FrameSource (camera, video file or image directory)
-        config: PipelineConfig; drives both the chain and the overlay gating
-        trace: record the per-contour sign trace and per-blob traffic trace
-               so the views can show rejected candidates. On by default here
-               because this is the debug entry point; run_chain leaves it off
-        hsv_path: calibrated HSV ranges JSON. Switches the color branch on for
-               this run; None keeps whatever config.color says
-        options: out_dir, display, scale, stride, limit, fps, views, passed
-                 to live_view.run()
+        source: A live_view.FrameSource: camera, video file or image directory.
+        config: Drives both the chain and the overlay gating. Defaults to MEASURED.
+        trace: On by default, since this is the debug entry point; run_chain()
+            leaves it off.
+        hsv_path: Calibrated HSV ranges JSON. Switches the color branch on for
+            this run; None keeps whatever config.color says.
+        options: out_dir, display, scale, stride, limit, fps, views; passed
+            to live_view.run().
 
     Outputs:
-        live_view.RunStats
+        live_view.RunStats.
+
+    Side effects:
+        Reads hsv_path. Whatever live_view.run() does with the options:
+        display windows and recordings under out_dir.
     """
     if hsv_path:
         config = replace(config, color=ColorConfig(load_hsv_ranges(hsv_path),
@@ -235,13 +182,11 @@ def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
 
     return live_view.run(source, process, config.lane_offset, **options)
 
-# =============================================================================
-# Synthetic Frame Construction
-# =============================================================================
-FRAME_H, FRAME_W = 270, 480
-LANE_RECT = (24, 252, 432, 108)          # crop_rois output at 480x360
+
+# @TODO move synthetic_frame() and expected_offset() into test/; nothing in this module uses them
+LANE_RECT = resolve(LANE, (FRAME_H, FRAME_W))   # what crop_rois will cut at this size
 ROI_W, ROI_H = LANE_RECT[2], LANE_RECT[3]
-ROI_CENTER = ROI_W / 2.0                 # 216.0
+ROI_CENTER = ROI_W / 2.0                 # where the robot sits in the lane ROI
 
 def synthetic_frame(
         marks,
@@ -251,24 +196,26 @@ def synthetic_frame(
         marking: int = 240,
     ) -> np.ndarray:
     """
+    BGR frame whose lane ROI holds markings at known ROI-local x, so the correct offset is known exactly.
+
     Purpose:
-        Build a BGR frame whose lane ROI contains markings at known
-        ROI-local x positions, so the correct lane offset is known exactly
+        Synthetic ground truth proves the arithmetic recovers what was drawn.
+        It says nothing about whether the camera sees the world the way these
+        frames assume, so it can't test accuracy in cm against the +/-2 cm
+        requirement; that needs captures at measured lateral offsets on a real
+        course.
 
     Inputs:
-        marks: iterable of ROI-local x positions, or of
-               (x, y_top, y_bottom) to control vertical extent for dash and
-               partial-visibility cases
-        mark_width: marking width in px
-        road, surround, marking: intensities for the road surface inside the
-               lane ROI, everything outside it, and the markings
+        marks: ROI-local x positions, or (x, y_top, y_bottom) tuples to
+            control vertical extent for dash and partial-visibility cases.
+        mark_width: Marking width in px.
+        road, surround, marking: Intensities for the road surface inside the
+            lane ROI, everything outside it, and the markings.
 
     Outputs:
-        (360, 480, 3) uint8 BGR
-
-    Notes:
-        A marking drawn at ROI x is recovered by the chain at ROI x. Verified
-        to the pixel: drawn at 150 and 290, detected at 150.0 and 290.0
+        (FRAME_H, FRAME_W, 3) uint8 BGR. A marking drawn at ROI x is recovered
+        within half a pixel: marks at 150 and 290 come back as 149.5 and 289.5
+        at 480x270 with MEASURED.
     """
     x0, y0, w, h = LANE_RECT
     frame = np.full((FRAME_H, FRAME_W, 3), surround, np.uint8)

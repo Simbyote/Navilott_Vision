@@ -1,57 +1,24 @@
-"""
-phase3_linker.py
-
-Phase 1, 2 and 3 Pipeline Linker
+"""Phase 1-3 linker: capture, perception and estimation in one headless process, reported as text.
 
 Purpose:
-    Runs capture -> perception -> estimation as one headless process and
-    reports what estimation decided, frame by frame, in text:
+    The estimation test harness. Phase 3's lane filter, dropout hold, heading
+    tracker and votes only mean something across frames, so this runs the
+    whole chain and shows each packet next to the Phase 2 input it came from;
+    a bad packet can then be traced to bad input or bad filtering. Phases 1-2
+    come from phase2_linker.run_chain(), the only place that order is
+    written, so the two linkers can't drift. It runs the chain itself, live or
+    from a replay, rather than reading phase2_linker's recordings, and it
+    doesn't draw or record video; live_view is the visual debugger.
 
-        FrameSource -> run_chain() -> Phase3Processor.process() -> EstimationPacket
-                       (Phases 1-2)   (Phase 3)
+Main package:
+    Phase3Result: one frame's ChainResult, the EstimationPacket handed to
+    Navigation, Phase 3's debug summary, and per-phase timings.
 
-    This is the estimation test harness. It does not draw or record video;
-    phase2_linker is the visual debugger. What this adds is history: the lane
-    filter, dropout hold, heading tracker and votes only mean something across
-    frames, so the output shows Phase 3's result next to the Phase 2 input it
-    came from. A bad packet can then be traced to bad input or bad filtering.
-
-Stage order:
-    Phases 1-2 come from phase2_linker.run_chain(), which is the only place
-    that order is written down. This module only adds Phase 3 after it, so the
-    two linkers cannot drift. This is a separate process, not a consumer of
-    phase2_linker's recorded output: it runs the chain itself, from a live
-    camera or a replay.
-
-Sources:
-    --camera        live capture through capture.CameraSource
-    --video PATH    a recorded clip, e.g. a phase2_linker run.avi
-    --frames DIR    an image sequence, sorted by filename
-    Replays are deterministic, so estimation config changes can be compared
-    on the same footage. Replay timestamps come from the nominal frame rate.
-
-Sensors:
-    --imu starts the MPU-6050 reader and feeds SensorSample.from_imu() each
-    frame. Without it, Phase 3 runs with no sensors: heading holds at 0 and
-    the pass-through fields read 0.0. The IMU driver is imported only when
-    --imu is given, so replays run off the Pi.
-
-Output (--out DIR, default vision_stack/runs/p3_<timestamp>):
-    Console     one status line every --print-every frames, plus an event
-                line on every lane_status, drive_state or stop_sign change
-    p3.csv      every frame: timings, the Phase 2 lane input, the packet, and
-                Phase 3's debug log
-    summary.txt timing percentiles, lane status and mode histograms, longest
-                hold and stale runs, and offset statistics while on vision
-
-Command line (run from the repo root, with the package installed):
-    python3 -m src.phase3_linker --video run.avi
-    python3 -m src.phase3_linker --camera --imu --fps 20
-    python3 -m src.phase3_linker --camera --limit 200 --print-every 1
-
-Sign convention (from lane_offset / estimation):
-    lane_offset    + = robot RIGHT of lane center, so steer left
-    heading_error  + = robot has turned RIGHT since the last vision frame
+Flow:
+    FrameSource -> run_chain() -> Phase3Processor.process() -> EstimationPacket
+                   (Phases 1-2)   (Phase 3)
+    Each result goes to p3.csv, the event tracker and the run statistics;
+    summary.txt is written when the source ends or the run is interrupted.
 """
 import argparse
 import csv
@@ -60,64 +27,90 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass, field, replace
-from typing import Optional
 
 import numpy as np
 
 from src.capture.camera import CaptureError
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.phase2_linker import MEASURED, PipelineConfig, run_chain
+from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
+from src.phase2_linker import MEASURED, ChainResult, PipelineConfig, run_chain
 from src.debugger.live_view import (
-    DEFAULT_FPS, DEFAULT_SIZE,
     CameraFrameSource, VideoFrameSource, DirectoryFrameSource,
 )
 from src.estimation import (
     LANE_VISION, LANE_HOLD, LANE_STALE,
-    Phase3Config, Phase3Processor, SensorSample,
+    EstimationPacket, Phase3Config, Phase3Processor, SensorSample,
 )
 
-# =============================================================================
-# Phase 3 Chain Result
-# =============================================================================
+# --help text. Kept apart from the module docstring, which documents the code.
+_CLI_HELP = """\
+Run capture -> perception -> estimation headless and report what estimation
+decided, frame by frame, next to the Phase 2 input it came from.
+
+Sources:
+    --camera        live capture through capture.CameraSource
+    --video PATH    a recorded clip, e.g. a live_view run.avi
+    --frames DIR    an image sequence, sorted by filename
+    Replays are deterministic, so estimation config changes can be compared
+    on the same footage. Replay timestamps come from the nominal frame rate.
+
+Sensors:
+    --imu starts the MPU-6050 reader and feeds it to Phase 3 each frame.
+    Without it, Phase 3 runs with no sensors: heading holds at 0 and the
+    pass-through fields read 0.0. The IMU driver is imported only with --imu,
+    so replays run off the Pi.
+
+Output (--out DIR, default <root>/runs/p3_<timestamp>):
+    console      one status line every --print-every frames, plus an event
+                 line on every lane_status, drive_state or stop_sign change
+    p3.csv       every frame: timings, the Phase 2 lane input, the packet,
+                 and Phase 3's debug log
+    summary.txt  timing percentiles, lane status and mode histograms, longest
+                 hold and stale runs, and offset statistics while on vision
+
+Examples (from the repo root):
+    python3 -m src.phase3_linker --video run.avi
+    python3 -m src.phase3_linker --camera --imu --fps 20
+    python3 -m src.phase3_linker --camera --limit 200 --print-every 1
+
+Sign convention:
+    lane_offset    + = robot RIGHT of lane center, so steer left
+    heading_error  + = robot has turned RIGHT since the last vision frame
+                   (per estimation; check against the IMU's own axis note)
+"""
+
+
 @dataclass(frozen=True)
 class Phase3Result:
-    """
-    One frame through all three phases
-
-    chain: phase2_linker.ChainResult (every Phase 1-2 stage output)
-    packet: EstimationPacket handed to Navigation
-    p3_debug: Phase3Processor's debug summary ("dt", "log", ...)
-    timings_ms: "capture", "phase2", "phase3", "total"
-    """
-    chain: object
-    packet: object
-    p3_debug: dict
-    timings_ms: dict = field(default_factory=dict)
+    """One frame through all three phases."""
+    chain: ChainResult              # every Phase 1-2 stage output
+    packet: EstimationPacket        # handed to Navigation
+    p3_debug: dict                  # Phase3Processor's debug summary: dt, log, ...
+    timings_ms: dict = field(default_factory=dict)      # capture, phase2, phase3, total
 
 def run_phase3_chain(
         frame_bgr: np.ndarray,
         frame_id: int,
         timestamp_ms: int,
         processor: Phase3Processor,
-        sensors: Optional[SensorSample] = None,
+        sensors: SensorSample | None = None,
         config: PipelineConfig = MEASURED,
         capture_ms: float = 0.0,
     ) -> Phase3Result:
     """
-    Purpose:
-        Run one frame through Phases 2 and 3. Phase 1 happens before this
-        call, in the frame source, so its time comes in as capture_ms
+    Run one frame through Phases 2 and 3.
 
     Inputs:
-        frame_bgr, frame_id, timestamp_ms: as the frame source delivered them
-        processor: the Phase3Processor for this run. Stateful: pass the same
-                   one every frame, in order
-        sensors: SensorSample for this frame window, None for no sensors
-        config: PipelineConfig for Phase 2
-        capture_ms: time spent in source.read() for this frame
+        frame_bgr, frame_id, timestamp_ms: As the frame source delivered them.
+        processor: This run's Phase3Processor. Stateful: pass the same one
+            every frame, in order.
+        sensors: Readings for this frame window; None runs without sensors.
+        config: Phase 2 tuning.
+        capture_ms: Time spent in source.read(). Phase 1 happens there,
+            before this call, so its time comes in rather than being measured.
 
     Outputs:
-        Phase3Result
+        Phase3Result.
     """
     t0 = time.perf_counter()
     chain = run_chain(frame_bgr, frame_id, timestamp_ms, config)
@@ -135,17 +128,14 @@ def run_phase3_chain(
     }
     return Phase3Result(chain, packet, p3_debug, timings)
 
-# =============================================================================
-# Formatting
-# =============================================================================
+
 def _fmt(v, spec: str, none: str = "--") -> str:
-    """Format an optional number"""
+    """Format an optional number."""
     return none if v is None else format(v, spec)
 
 def status_line(res: Phase3Result) -> str:
     """
-    Purpose:
-        One readable line: timing | Phase 2 lane input | Phase 3 output
+    One readable line: timing | Phase 2 lane input | Phase 3 output.
 
     Example:
         f0412 t=20.61s P1=6.1 P2=31.8 P3=0.9ms | two_boundary L=150 R=290 n=2
@@ -162,23 +152,23 @@ def status_line(res: Phase3Result) -> str:
         f"{pk.drive_state} stop={'T' if pk.stop_sign_detected else 'F'}"
     )
 
-# =============================================================================
-# Event Tracking
-# =============================================================================
+
 class EventTracker:
     """
-    Reports changes in the packet fields Navigation acts on
-
-    Notes:
-        Returns one line per change. lane_status changes also name the Phase 2
-        lane mode that caused them, which is usually the question when the
-        filter drops to hold
+    Reports changes in the packet fields Navigation acts on: lane_status,
+    drive_state and stop_sign_detected. counts holds transitions per field.
     """
     def __init__(self) -> None:
         self._prev = None
         self.counts: Counter = Counter()
 
-    def update(self, res: Phase3Result) -> list:
+    def update(self, res: Phase3Result) -> list[str]:
+        """
+        One line per field that changed since the previous frame; none on the first frame.
+
+        A lane_status change also names the Phase 2 lane mode behind it, since
+        that's usually the question when the filter drops to hold.
+        """
         pk = res.packet
         now = {
             "lane": pk.lane_status,
@@ -196,9 +186,7 @@ class EventTracker:
         self._prev = now
         return lines
 
-# =============================================================================
-# CSV Log
-# =============================================================================
+
 CSV_COLUMNS = (
     "frame_id", "timestamp_ms", "dt_s",
     "capture_ms", "phase2_ms", "phase3_ms", "total_ms",
@@ -210,7 +198,7 @@ CSV_COLUMNS = (
 )
 
 class CsvLog:
-    """Every frame, every field. One row per Phase3Result"""
+    """p3.csv: every field of every frame, one row per Phase3Result, in CSV_COLUMNS order."""
     def __init__(self, path: str) -> None:
         self._f = open(path, "w", newline="")
         self._w = csv.writer(self._f)
@@ -226,8 +214,8 @@ class CsvLog:
             off.mode, f"{off.offset:.4f}", off.left_x, off.right_x,
             off.lane_width_px, f"{off.confidence:.3f}", off.boundary_count,
             len(dets),
-            sum(d.type == "traffic_light" for d in dets),
-            sum(d.type == "stop_sign" for d in dets),
+            sum(d.type == TRAFFIC_LIGHT for d in dets),
+            sum(d.type == STOP_SIGN for d in dets),
             pk.lane_offset, pk.lane_offset_cm, pk.lane_status,
             pk.heading_error, pk.drive_state, int(pk.stop_sign_detected),
             pk.yaw_rate, pk.lateral_accel, pk.wheel_speed,
@@ -237,17 +225,16 @@ class CsvLog:
     def close(self) -> None:
         self._f.close()
 
-# =============================================================================
-# Run Statistics
-# =============================================================================
+
 class Phase3Stats:
     """
-    Run-wide statistics for the summary
+    Run-wide statistics for the summary.
 
-    Notes:
-        Offset statistics are taken only over frames on vision, so a held value
-        repeated for seven frames does not shrink the spread. With the robot
-        parked centered, offset std is the measurement noise floor
+    Offset statistics cover only frames on vision, so a held value repeated
+    for seven frames doesn't shrink the spread. With the robot parked
+    centered, the offset std is the measurement noise floor.
+
+    budget_ms: Per-frame processing budget, normally one frame period.
     """
     def __init__(self, budget_ms: float) -> None:
         self.budget_ms = budget_ms
@@ -257,11 +244,12 @@ class Phase3Stats:
         self.modes = Counter()
         self.vision_offsets = []
         self.over_budget = 0
-        self.longest = {LANE_HOLD: 0, LANE_STALE: 0}
+        self.longest = {LANE_HOLD: 0, LANE_STALE: 0}    # longest unbroken run, frames
         self._run_status, self._run_len = None, 0
         self._t_start = time.perf_counter()
 
     def update(self, res: Phase3Result) -> None:
+        """Fold one frame into the counts, timings and run lengths."""
         self.frames += 1
         for k, v in res.timings_ms.items():
             self.timings[k].append(v)
@@ -281,7 +269,8 @@ class Phase3Stats:
         if status in self.longest:
             self.longest[status] = max(self.longest[status], self._run_len)
 
-    def report(self) -> list:
+    def report(self) -> list[str]:
+        """The summary as lines: frames and budget, timing percentiles, lane status, lane modes, offsets."""
         n = max(self.frames, 1)
         wall = time.perf_counter() - self._t_start
         lines = [
@@ -318,12 +307,10 @@ class Phase3Stats:
             lines.append("  no frames on vision")
         return lines
 
-# =============================================================================
-# Sensors
-# =============================================================================
+
 class _NoSensors:
-    """Stand-in when --imu is not given"""
-    def sample(self) -> Optional[SensorSample]:
+    """Stand-in when --imu isn't given: every frame runs without sensors."""
+    def sample(self) -> SensorSample | None:
         return None
 
     def stop(self) -> None:
@@ -331,12 +318,13 @@ class _NoSensors:
 
 class _ImuSensors:
     """
-    MPU-6050 through peripherals.imu, imported here so replays never load the
-    board drivers
+    The MPU-6050 through peripherals.imu, imported here so replays never load
+    the board drivers. Uses IMU_I2C_ADDRESS and IMU_RATE_HZ from params, and
+    doesn't calibrate, so any gyro bias correction comes from --gyro-bias.
     """
     def __init__(self) -> None:
         from src.peripherals.imu import IMUReader
-        self._imu = IMUReader(address=0x68, rate_hz=100.0)
+        self._imu = IMUReader()
         self._imu.start()
         time.sleep(0.1)
         self._imu.snapshot()        # drop what accumulated during startup
@@ -347,38 +335,38 @@ class _ImuSensors:
     def stop(self) -> None:
         self._imu.stop()
 
-# =============================================================================
-# Main Loop
-# =============================================================================
+
 def run(
         source,
         config: PipelineConfig = MEASURED,
         p3_config: Phase3Config = Phase3Config(),
         use_imu: bool = False,
-        out_dir: str = "vision_stack/runs/p3",
+        out_dir: str = str(RUNS_DIR / "p3"),
         print_every: int = 20,
         verbose: bool = False,
-        limit: Optional[int] = None,
+        limit: int | None = None,
     ) -> Phase3Stats:
     """
-    Purpose:
-        Pull frames from source through all three phases until the source
-        ends, --limit is reached, or Ctrl-C. The CSV and summary are written
-        either way
+    Run every frame from source through all three phases.
 
     Inputs:
-        source: a live_view FrameSource (camera, video file, image directory)
-        config: PipelineConfig for Phase 2
-        p3_config: Phase3Config. When cm_per_px is set and lane_roi_width_px
-                   is not, the width is taken from the first frame's lane ROI
-        use_imu: start the IMU and feed it to Phase 3
-        out_dir: where p3.csv and summary.txt go
-        print_every: status line every N frames; 0 prints events only
-        verbose: also print Phase 3's per-frame debug log
-        limit: stop after this many frames
+        source: A live_view FrameSource: camera, video file or image directory.
+        config: Phase 2 tuning.
+        p3_config: Phase 3 tuning. When cm_per_px is set and
+            lane_roi_width_px isn't, the width is taken from the first
+            frame's lane ROI.
+        use_imu: Start the IMU and feed it to Phase 3.
+        print_every: Status line every N frames; 0 prints events only.
+        verbose: Also print Phase 3's per-frame debug log.
+        limit: Stop after this many frames; None runs until the source ends.
 
     Outputs:
-        Phase3Stats
+        Phase3Stats.
+
+    Side effects:
+        Writes p3.csv and summary.txt into out_dir (created if missing),
+        prints to the console, and closes the source. Ctrl-C ends the run
+        early; the CSV and summary are still written.
     """
     os.makedirs(out_dir, exist_ok=True)
     stats = Phase3Stats(budget_ms=1000.0 / max(source.fps, 1))
@@ -434,19 +422,26 @@ def run(
     print("\n" + "\n".join(summary))
     return stats
 
-# =============================================================================
-# Command Line
-# =============================================================================
-def cli(argv=None) -> int:
+
+def cli(argv: list[str] | None = None) -> int:
+    """
+    Parse arguments, open the source, and run.
+
+    Inputs:
+        argv: Argument list; None reads sys.argv[1:]. Empty prints help.
+
+    Outputs:
+        Process exit code: 0 on success, 2 if the source can't be opened.
+    """
     ap = argparse.ArgumentParser(
-        prog="phase3_linker", description=__doc__,
+        prog="phase3_linker", description=_CLI_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--camera", action="store_true")
     src.add_argument("--video", metavar="PATH")
     src.add_argument("--frames", metavar="DIR")
-    ap.add_argument("--width", type=int, default=DEFAULT_SIZE[0])
-    ap.add_argument("--height", type=int, default=DEFAULT_SIZE[1])
+    ap.add_argument("--width", type=int, default=FRAME_W)
+    ap.add_argument("--height", type=int, default=FRAME_H)
     ap.add_argument("--fps", type=int, default=None,
                     help="capture/replay rate (video files default to their own)")
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
@@ -472,11 +467,11 @@ def cli(argv=None) -> int:
 
     try:
         if args.camera:
-            source = CameraFrameSource(args.width, args.height, args.fps or DEFAULT_FPS)
+            source = CameraFrameSource(args.width, args.height, args.fps or FPS)
         elif args.video:
             source = VideoFrameSource(args.video, args.fps)
         else:
-            source = DirectoryFrameSource(args.frames, args.fps or DEFAULT_FPS)
+            source = DirectoryFrameSource(args.frames, args.fps or FPS)
     except (CaptureError, OSError) as exc:
         print(f"source error: {exc}")
         return 2
@@ -487,8 +482,7 @@ def cli(argv=None) -> int:
                                                    config.color.blob))
     p3_config = Phase3Config(gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
 
-    out_dir = args.out or os.path.join(
-        "vision_stack", "runs", "p3_" + time.strftime("%Y%m%d_%H%M%S"))
+    out_dir = args.out or str(RUNS_DIR / ("p3_" + time.strftime("%Y%m%d_%H%M%S")))
     print_every = args.print_every if args.print_every is not None \
         else max(1, int(round(source.fps)))
 

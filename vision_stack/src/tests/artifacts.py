@@ -1,7 +1,5 @@
 """
-artifacts.py
-
-Output helpers for --hardware runs: CSV, JSON, PNG, and (optionally) graphs.
+Output helpers for --hardware runs: CSV, JSON, PNG and, optionally, graphs.
 
 Everything here is write-only and cheap. Hardware tests should buffer rows in
 memory during the frame loop and call these AFTER the loop, so file I/O never
@@ -59,7 +57,7 @@ class Artifacts:
             raise IOError(f"cv2.imwrite failed for {out}")
         return out
 
-    def histogram(self, name, values, title, xlabel, bins=40):
+    def histogram(self, name: str, values, title: str, xlabel: str, bins: int = 40) -> Path | None:
         """
         Graph output. matplotlib is optional: the Pi usually doesn't have it,
         and the CSV carries the same data for plotting on a desktop. Returns

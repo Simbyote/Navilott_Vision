@@ -1,34 +1,25 @@
 #!/usr/bin/env python3
-"""
-calibrate_camera.py
-
-Lens calibration for the IMX290 + M12 lens
+"""Lens calibration for the IMX290 + M12 lens: measure the distortion once, write it for preprocess.
 
 Purpose:
-    Measures the lens distortion once and writes it to
-    calibration/camera_calib.json. preprocess.py loads that file and undistorts
-    every frame before the gray/color split, so straight tape stays straight
-    across the whole frame.
+    preprocess.py undistorts every frame before the gray/color split so
+    straight tape stays straight across the whole frame; this script produces
+    the calibration it loads. The camera is opened through capture's own
+    build_gst_pipeline(), and verify undistorts through preprocess's own
+    undistort(), so the script can't drift from what the pipeline does. A
+    calibration is only valid for the sensor mode, output size, flip and lens
+    focus it was captured with; the JSON records the first three, and turning
+    the lens means recalibrating.
 
-Modes:
-    capture   Grab checkerboard frames from the camera. Headless: the script
-              auto-saves a frame whenever it sees the whole board and the
-              board has moved since the last save, and prints coverage.
-    solve     Compute the camera matrix and distortion from the saved frames
-              and write the JSON.
-    verify    Save raw vs undistorted comparison images and print a
-              straightness score for each (lower is straighter).
-    all       capture, then solve, then verify (default). Starts fresh:
-              existing frames are moved to calib_frames_prev/.
+Main package:
+    calibration/camera_calib.json: image_size, camera_matrix and dist_coeffs
+    (what preprocess reads), plus the RMS reprojection error, the frames used
+    and dropped, the board pattern, and the sensor mode and flip it's valid for.
 
-Run from the project root (the folder containing src/), venv active:
-    python3 -m src.scripts.calibrate_camera
-
-Validity:
-    A calibration is only valid for the exact sensor mode, output size,
-    flip, and lens focus it was captured with. If any of SENSOR_CONFIG,
-    WIDTH/HEIGHT, or ROTATE_180 below stop matching src/capture/camera.py,
-    or someone turns the lens, recalibrate.
+Flow (mode "all"):
+    1. capture: auto-save checkerboard frames as the board moves around the view.
+    2. solve: calibrate from them, drop outlier frames once, write the JSON.
+    3. verify: save raw vs undistorted pairs and score line straightness.
 """
 
 import argparse
@@ -42,44 +33,52 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-# =============================================================================
-# Settings (must match src/capture/camera.py)
-# =============================================================================
+from src.capture.camera import build_gst_pipeline
+from src.params import (
+    CAMERA_CALIB_PATH, CAMERA_ROTATE_180, FPS, FRAME_H, FRAME_W, PIPELINE_ROOT, SENSOR_CONFIG,
+)
+from src.perception.preprocess import PreprocessParams, undistort
 
-SENSOR_CONFIG = "sensor/config,width=1920,height=1080,depth=10"
-WIDTH, HEIGHT, FPS = 480, 270, 30
-ROTATE_180 = True
-
-ROOT = Path(__file__).resolve().parents[2]          # src/scripts/ -> project root
-DEFAULT_OUT = ROOT / "calibration" / "camera_calib.json"
-DEFAULT_FRAMES = ROOT / "calib_frames"
-DEFAULT_VERIFY = ROOT / "calib_verify"
+DEFAULT_FRAMES = PIPELINE_ROOT / "calib_frames"
+DEFAULT_VERIFY = PIPELINE_ROOT / "calib_verify"
 
 FIND_FLAGS = (cv2.CALIB_CB_ADAPTIVE_THRESH
               | cv2.CALIB_CB_NORMALIZE_IMAGE
               | cv2.CALIB_CB_FAST_CHECK)
 SUBPIX_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-3)
 
+# --help text. Kept apart from the module docstring, which documents the code.
+_CLI_HELP = """\
+Lens calibration for the vision pipeline camera. Writes
+calibration/camera_calib.json, which preprocess.py uses to undistort frames.
 
-# =============================================================================
-# Helpers
-# =============================================================================
+Modes:
+    capture   Grab checkerboard frames from the camera. Headless: a frame is
+              saved whenever the whole board is in view and has moved since
+              the last save, and coverage of the view is printed.
+    solve     Compute the camera matrix and distortion from the saved frames
+              and write the JSON.
+    verify    Save raw vs undistorted comparison images and print a
+              straightness score for each (lower is straighter).
+    all       capture, then solve, then verify (default). Starts fresh:
+              existing frames are moved to calib_frames_prev/.
 
-def gst_pipeline(width: int, height: int, fps: int) -> str:
-    """Same pipeline shape as the live capture, forced to BGR for OpenCV."""
-    flip = "videoflip method=rotate-180 ! " if ROTATE_180 else ""
-    return (
-        f'libcamerasrc sensor-config="{SENSOR_CONFIG}" ! '
-        f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
-        "videoconvert ! "
-        f"{flip}"
-        "video/x-raw,format=BGR ! "
-        "appsink drop=true max-buffers=1 sync=false"
-    )
+Run from the project root (the folder containing src/), venv active:
+    python3 -m src.scripts.calibrate_camera
+
+Recalibrate after changing the sensor mode, output size or flip in
+params.py, or after anyone turns the lens.
+"""
 
 
 def open_camera(width: int, height: int) -> cv2.VideoCapture:
-    cap = cv2.VideoCapture(gst_pipeline(width, height, FPS), cv2.CAP_GSTREAMER)
+    """
+    Open the camera through the live pipeline's own GStreamer string, then let auto-exposure settle.
+
+    Side effects:
+        Claims the camera; exits the script with a hint if it can't.
+    """
+    cap = cv2.VideoCapture(build_gst_pipeline(width, height, FPS), cv2.CAP_GSTREAMER)
     if not cap.isOpened():
         sys.exit(
             "ERROR: could not open the camera.\n"
@@ -91,7 +90,8 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     return cap
 
 
-def parse_pattern(text: str) -> tuple:
+def parse_pattern(text: str) -> tuple[int, int]:
+    """"9x6" -> (9, 6): inner corners, cols x rows. Exits on anything else."""
     try:
         cols, rows = (int(v) for v in text.lower().split("x"))
     except ValueError:
@@ -99,7 +99,15 @@ def parse_pattern(text: str) -> tuple:
     return cols, rows
 
 
-def find_corners(gray: np.ndarray, pattern: tuple, fast: bool = True):
+def find_corners(gray: np.ndarray, pattern: tuple[int, int], fast: bool = True) -> np.ndarray | None:
+    """
+    Sub-pixel checkerboard corners, or None if the whole board isn't visible.
+
+    Inputs:
+        fast: Keep OpenCV's fast rejection check. Right for the live capture
+            loop, where most frames have no board; off for solve and verify,
+            where every saved frame should have one.
+    """
     flags = FIND_FLAGS if fast else FIND_FLAGS & ~cv2.CALIB_CB_FAST_CHECK
     ok, corners = cv2.findChessboardCorners(gray, pattern, flags)
     if not ok:
@@ -107,7 +115,7 @@ def find_corners(gray: np.ndarray, pattern: tuple, fast: bool = True):
     return cv2.cornerSubPix(gray, corners, (5, 5), (-1, -1), SUBPIX_CRITERIA)
 
 
-def straightness(corners: np.ndarray, pattern: tuple) -> float:
+def straightness(corners: np.ndarray, pattern: tuple[int, int]) -> float:
     """
     Mean, over every row and column of corners, of the worst deviation (px)
     from a best-fit straight line. Barrel distortion bows these lines, so
@@ -124,20 +132,21 @@ def straightness(corners: np.ndarray, pattern: tuple) -> float:
     return float(np.mean(worst))
 
 
-def undistort_maps(calib: dict, alpha: float):
-    """Same map construction preprocess.py uses."""
-    size = tuple(calib["image_size"])
-    K = np.array(calib["camera_matrix"], np.float64)
-    dist = np.array(calib["dist_coeffs"], np.float64)
-    new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, size, alpha, size)
-    return cv2.initUndistortRectifyMap(K, dist, None, new_K, size, cv2.CV_16SC2)
-
-
-# =============================================================================
-# Capture
-# =============================================================================
-
 def capture(args) -> None:
+    """
+    Save checkerboard frames until --count, --timeout or Ctrl-C, then print coverage.
+
+    A frame is saved only when the whole board is visible, at least
+    --interval seconds have passed, and the corners moved at least --min-move
+    px on average since the last save, so the set spreads across poses.
+    Coverage counts saves per third of the frame (3x3); an empty region
+    means the corners of the lens, where distortion is largest, went unmeasured.
+
+    Side effects:
+        Writes calib_NNN.png into --frames. With --fresh, first moves existing
+        frames to <frames>_prev/ (replacing an older backup). Refuses to mix
+        with existing frames unless --fresh or --append.
+    """
     pattern = parse_pattern(args.pattern)
     frames_dir = Path(args.frames)
     existing = sorted(frames_dir.glob("calib_*.png"))
@@ -224,11 +233,18 @@ def capture(args) -> None:
               "`capture --append` and hold the board in those regions.")
 
 
-# =============================================================================
-# Solve
-# =============================================================================
-
 def solve(args) -> None:
+    """
+    Calibrate from the saved frames and write the JSON.
+
+    Frames whose reprojection error is over 3x the median (at least 1 px) are
+    dropped once and the solve repeated, as long as 10 frames remain; those
+    are usually blurred or mis-detected boards.
+
+    Side effects:
+        Writes --out and prints the fit. Exits if the frames mix resolutions
+        or fewer than 10 have a detectable board.
+    """
     pattern = parse_pattern(args.pattern)
     cols, rows = pattern
     files = sorted(Path(args.frames).glob("calib_*.png"))
@@ -260,6 +276,7 @@ def solve(args) -> None:
         sys.exit(f"ERROR: only {len(used)} usable frames (need 10+, 20 is better).")
 
     def run(o, i):
+        """Calibrate; returns (rms, K, dist, per-frame reprojection RMS)."""
         rms, K, dist, rv, tv = cv2.calibrateCamera(o, i, size, None, None)
         errs = []
         for op, ip, r, t in zip(o, i, rv, tv):
@@ -269,7 +286,6 @@ def solve(args) -> None:
 
     rms, K, dist, errs = run(obj_pts, img_pts)
 
-    # One pass of outlier rejection: blurred or mis-detected frames
     limit = max(1.0, 3.0 * float(np.median(errs)))
     keep = errs <= limit
     dropped = [n for n, k in zip(used, keep) if not k]
@@ -291,13 +307,14 @@ def solve(args) -> None:
         "pattern": [cols, rows],
         "square_mm": args.square_mm,
         "sensor_config": SENSOR_CONFIG,
-        "rotate_180": ROTATE_180,
+        "rotate_180": CAMERA_ROTATE_180,
         "created": datetime.now().isoformat(timespec="seconds"),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(calib, indent=2))
 
+    # Common rule of thumb for OpenCV checkerboard calibration
     if rms < 0.5:
         verdict = "GOOD"
     elif rms < 1.0:
@@ -314,21 +331,26 @@ def solve(args) -> None:
     print(f"  distortion       {np.array2string(dist.ravel(), precision=4)}")
 
 
-# =============================================================================
-# Verify
-# =============================================================================
-
 def verify(args) -> None:
+    """
+    Undistort saved frames (and one live frame) through preprocess, and score how much straighter the board got.
+
+    Uses the --verify-count frames where the board sat farthest from center,
+    since that's where distortion shows and so where the fix should show.
+    PASS means the average bow dropped by 40%, or below 0.5 px.
+
+    Side effects:
+        Writes verify_*.png side-by-side pairs into --verify-dir. Opens the
+        camera for verify_live.png unless --no-live. Exits if --out is missing.
+    """
     pattern = parse_pattern(args.pattern)
     calib_path = Path(args.out)
     if not calib_path.is_file():
         sys.exit(f"ERROR: {calib_path} not found. Run solve first.")
     calib = json.loads(calib_path.read_text())
-    map1, map2 = undistort_maps(calib, args.alpha)
     size = tuple(calib["image_size"])
+    params = PreprocessParams(calibration_path=str(calib_path), undistort_alpha=args.alpha)
 
-    # Prefer the frames where the board sat farthest from center:
-    # that is where distortion shows, so that is where the fix should show
     scored = []
     for f in sorted(Path(args.frames).glob("calib_*.png")):
         img = cv2.imread(str(f))
@@ -347,8 +369,7 @@ def verify(args) -> None:
     print(f"\nStraightness (mean worst bow per board line, px; lower is straighter)")
     raw_scores, und_scores = [], []
     for _, name, img, c_raw in scored[:args.verify_count]:
-        und = cv2.remap(img, map1, map2, cv2.INTER_LINEAR,
-                        borderMode=cv2.BORDER_CONSTANT)
+        und = undistort(img, params)
         c_und = find_corners(cv2.cvtColor(und, cv2.COLOR_BGR2GRAY), pattern, fast=False)
         s_raw = straightness(c_raw, pattern)
         s_und = straightness(c_und, pattern) if c_und is not None else float("nan")
@@ -363,8 +384,7 @@ def verify(args) -> None:
         ok, frame = cap.read()
         cap.release()
         if ok:
-            und = cv2.remap(frame, map1, map2, cv2.INTER_LINEAR,
-                            borderMode=cv2.BORDER_CONSTANT)
+            und = undistort(frame, params)
             _save_pair(out_dir / "verify_live.png", frame, und)
             print("  verify_live.png  saved (live view: check that tape looks straight)")
 
@@ -378,6 +398,7 @@ def verify(args) -> None:
 
 
 def _save_pair(path: Path, raw: np.ndarray, und: np.ndarray) -> None:
+    """Write raw and undistorted side by side, labeled, with a white gap between."""
     def label(img, text):
         img = img.copy()
         cv2.putText(img, text, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
@@ -388,13 +409,11 @@ def _save_pair(path: Path, raw: np.ndarray, und: np.ndarray) -> None:
                                       label(und, "UNDISTORTED")]))
 
 
-# =============================================================================
-# CLI
-# =============================================================================
-
 def main() -> None:
+    """Parse arguments and run the chosen mode, or all three in order."""
     p = argparse.ArgumentParser(
-        description="Lens calibration for the vision pipeline camera")
+        prog="calibrate_camera", description=_CLI_HELP,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("mode", nargs="?", default="all",
                    choices=["capture", "solve", "verify", "all"])
     p.add_argument("--square-mm", type=float, default=25.0,
@@ -418,14 +437,18 @@ def main() -> None:
     p.add_argument("--verify-count", type=int, default=4)
     p.add_argument("--no-live", action="store_true",
                    help="verify from saved frames only, don't open the camera")
-    p.add_argument("--width", type=int, default=WIDTH)
-    p.add_argument("--height", type=int, default=HEIGHT)
+    p.add_argument("--width", type=int, default=FRAME_W)
+    p.add_argument("--height", type=int, default=FRAME_H)
     p.add_argument("--frames", default=str(DEFAULT_FRAMES))
-    p.add_argument("--out", default=str(DEFAULT_OUT))
+    p.add_argument("--out", default=str(CAMERA_CALIB_PATH))
     p.add_argument("--verify-dir", default=str(DEFAULT_VERIFY))
     args = p.parse_args()
     if args.mode == "all" and not args.append:
         args.fresh = True
+
+    if args.mode in ("capture", "solve", "all") and (args.width, args.height) != (FRAME_W, FRAME_H):
+        print(f"note: {args.width}x{args.height} differs from params.py ({FRAME_W}x{FRAME_H}); "
+              "preprocess will reject this calibration at the pipeline's size")
 
     if args.mode in ("capture", "all"):
         capture(args)
