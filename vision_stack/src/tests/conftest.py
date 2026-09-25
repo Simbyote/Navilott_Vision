@@ -9,7 +9,7 @@ Test-mode selection and shared fixtures for the vision stack.
                                    same, but fed from recorded frames instead of the camera
     pytest --hardware --record     capture tests also save their frames to
                                    tests/data/frames (the software dataset)
-    pytest --frames 300            frames per hardware run (default 100)
+    pytest --frames=300            frames per hardware run (default 100)
 
 Every test carries exactly one of @pytest.mark.software / @pytest.mark.hardware.
 Tests outside the selected mode are deselected rather than skipped, so the
