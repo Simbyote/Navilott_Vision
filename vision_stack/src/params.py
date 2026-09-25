@@ -34,7 +34,7 @@ MAX_FPS = 30
 # Resolved from this file (<root>/src/params.py) so the working directory never matters
 PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 CALIBRATION_DIR = PIPELINE_ROOT / "calibration"     # camera, HSV and IMU calibrations
-CAMERA_CALIB_PATH = CALIBRATION_DIR / "camera_calib.json"
+CAMERA_CALIB_PATH = CALIBRATION_DIR / "camera_calibration.json"
 HSV_RANGES_PATH = CALIBRATION_DIR / "hsv_ranges.json"
 RUNS_DIR = PIPELINE_ROOT / "runs"                   # live_view output, one timestamped folder per run
 

@@ -1,0 +1,60 @@
+{
+    "model": "pinhole",
+    "dummy": true,
+    "image_size": [
+        480,
+        270
+    ],
+    "camera_matrix": [
+        [
+            332.2,
+            0.0,
+            243.9
+        ],
+        [
+            0.0,
+            332.2,
+            132.6
+        ],
+        [
+            0.0,
+            0.0,
+            1.0
+        ]
+    ],
+    "dist_coeffs": [
+        -0.3223,
+        0.1241,
+        -0.0006,
+        -0.0002,
+        -0.0050
+    ],
+    "rms_px": 0.166,
+    "n_frames": 15,
+    "frames": [
+        "calib_000.png",
+        "calib_001.png",
+        "calib_002.png",
+        "calib_003.png",
+        "calib_004.png",
+        "calib_005.png",
+        "calib_006.png",
+        "calib_007.png",
+        "calib_008.png",
+        "calib_009.png",
+        "calib_010.png",
+        "calib_011.png",
+        "calib_012.png",
+        "calib_013.png",
+        "calib_014.png"
+    ],
+    "dropped_frames": [],
+    "pattern": [
+        9,
+        6
+    ],
+    "square_mm": 25.0,
+    "sensor_config": "sensor/config,width=1920,height=1080,depth=10",
+    "rotate_180": true,
+    "created": "2026-09-24T00:00:00"
+}
