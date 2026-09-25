@@ -19,6 +19,11 @@ workspace/
 temp/
 /temp
 
+/out/
+**/out/
+out/
+/out
+
 # Python
 /__pycache__/
 **/__pycache__/
