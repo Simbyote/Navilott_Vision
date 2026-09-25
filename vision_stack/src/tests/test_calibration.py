@@ -21,6 +21,7 @@ subpixel refinement has real gradients. solve() then has a right answer.
 import argparse
 import itertools
 import json
+import math
 import time
 from pathlib import Path
 
@@ -44,10 +45,6 @@ K_TRUE = np.array([[330.0, 0.0, 244.0], [0.0, 330.0, 131.0], [0.0, 0.0, 1.0]])
 D_TRUE = np.array([-0.32, 0.12, 0.0, 0.0, 0.0])
 UNDISTORT_CRITERIA = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 50, 1e-9)
 
-
-# =============================================================================
-# Synthetic scene
-# =============================================================================
 
 def render_board(rvec, tvec, K=K_TRUE, D=D_TRUE, size=(FRAME_W, FRAME_H), ss=2):
     """BGR frame of a PATTERN checkerboard at pose (rvec, tvec) seen through (K, D)."""
@@ -95,11 +92,13 @@ def board_corners(rvec, tvec, K=K_TRUE, D=D_TRUE):
 
 
 def solve_args(frames_dir, out):
+    """The argparse namespace solve() reads, for PATTERN boards in frames_dir."""
     return argparse.Namespace(pattern="x".join(map(str, PATTERN)), frames=str(frames_dir),
                               square_mm=SQUARE_MM, out=str(out))
 
 
 def write_frames(directory, poses):
+    """Render one calib_NNN.png per pose into directory, as capture() would name them."""
     directory.mkdir(parents=True, exist_ok=True)
     for i, (r, t) in enumerate(poses):
         cv2.imwrite(str(directory / f"calib_{i:03d}.png"), render_board(r, t))
@@ -112,6 +111,14 @@ def region_of(corners, w, h):
     return min(int(3 * cy / h), 2), min(int(3 * cx / w), 2)
 
 
+def reference_maps(calib, alpha=0.0):
+    """Independent map construction straight from OpenCV, the oracle for preprocess."""
+    size = tuple(calib["image_size"])
+    K, dist = np.array(calib["camera_matrix"]), np.array(calib["dist_coeffs"])
+    new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, size, alpha, size)
+    return cv2.initUndistortRectifyMap(K, dist, None, new_K, size, cv2.CV_16SC2)
+
+
 @pytest.fixture(scope="session")
 def solved(tmp_path_factory):
     """solve() run once on 18 synthetic frames covering all 9 cells; returns the JSON dict."""
@@ -120,10 +127,6 @@ def solved(tmp_path_factory):
     cc.solve(solve_args(frames_dir, root / "camera_calib.json"))
     return json.loads((root / "camera_calib.json").read_text())
 
-
-# =============================================================================
-# Helpers
-# =============================================================================
 
 @pytest.mark.software
 def test_straightness_of_an_undistorted_grid_is_zero():
@@ -139,14 +142,6 @@ def test_straightness_sees_barrel_bow_near_the_frame_edge():
     bowed = cc.straightness(board_corners(r, t), PATTERN)
     flat = cc.straightness(board_corners(r, t, D=np.zeros(5)), PATTERN)
     assert bowed > 0.3 and flat < 1e-3
-
-
-def reference_maps(calib, alpha=0.0):
-    """Independent map construction straight from OpenCV, the oracle for preprocess."""
-    size = tuple(calib["image_size"])
-    K, dist = np.array(calib["camera_matrix"]), np.array(calib["dist_coeffs"])
-    new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, size, alpha, size)
-    return cv2.initUndistortRectifyMap(K, dist, None, new_K, size, cv2.CV_16SC2)
 
 
 @pytest.mark.software
@@ -177,10 +172,6 @@ def test_parse_pattern_rejects_garbage():
     with pytest.raises(SystemExit, match="--pattern"):
         cc.parse_pattern("nine by six")
 
-
-# =============================================================================
-# solve() on a known lens
-# =============================================================================
 
 @pytest.mark.software
 def test_synthetic_frames_are_all_detectable():
@@ -237,12 +228,9 @@ def test_solve_refuses_mixed_resolutions(tmp_path):
         cc.solve(solve_args(tmp_path, tmp_path / "c.json"))
 
 
-# =============================================================================
-# Consumer: preprocess.undistort must apply exactly what the script verified
-# =============================================================================
-
 @pytest.fixture
 def calib_path(tmp_path, solved):
+    """The solved calibration written to a path unique to this test."""
     path = tmp_path / "camera_calib.json"                  # fresh path per test: preprocess caches by path
     path.write_text(json.dumps(solved))
     return path
@@ -273,11 +261,8 @@ def test_preprocess_passes_frames_through_when_the_file_is_missing(tmp_path):
     assert out is frame
 
 
-# =============================================================================
-# The team's calibration file
-# =============================================================================
-
 def _load_team_calibration():
+    """The team's calibration JSON, or skip the test if it hasn't been made yet."""
     if not CALIB_FILE.is_file():
         pytest.skip(f"no {CALIB_FILE.name} yet (run: python3 -m src.scripts.calibrate_camera)")
     return json.loads(CALIB_FILE.read_text())
@@ -321,11 +306,8 @@ def test_calibration_file_was_solved_from_frames_covering_the_whole_image():
     assert (cells > 0).sum() >= 7, f"only {(cells > 0).sum()}/9 cells covered:\n{table}"
 
 
-# =============================================================================
-# Hardware
-# =============================================================================
-
 def _side_by_side(raw, und):
+    """Raw and undistorted frames with a white gap between, for eyeballing the correction."""
     gap = np.full((raw.shape[0], 6, 3), 255, np.uint8)
     return np.hstack([raw, gap, und])
 
@@ -380,14 +362,15 @@ def test_undistortion_characterization(request, frames, artifacts):
         "frames_with_board": len(scored),
         "coverage": {ROWS[r]: cells[r].tolist() for r in range(3)},
         "straightness_by_region": {
-            k: {"raw": summarize(a for a, _ in v), "undistorted": summarize(b for _, b in v if b == b)}
+            k: {"raw": summarize(a for a, _ in v), "undistorted": summarize(b for _, b in v if not math.isnan(b))}
             for k, v in sorted(per_region.items())},
     })
     artifacts.histogram("stage_ms_hist.png", stage, "preprocess.undistort latency", "ms")
     for fid, (raw, und) in samples.items():
         artifacts.image(f"{fid:06d}_raw_vs_undistorted.png", _side_by_side(raw, und))
 
-    # Characterization, but one hard line: where a board was seen, correction must not make it worse
+    # Characterization, but one hard line: where a board was seen, correction must not make
+    # it worse. 0.5 px is the corner-detection noise floor, the same figure calibrate_camera uses
     for r in scored:
-        if r[5] == r[5]:
+        if not math.isnan(r[5]):
             assert r[5] <= r[4] + 0.5, f"frame {r[0]} ({r[3]}): undistorted {r[5]} px vs raw {r[4]} px"
