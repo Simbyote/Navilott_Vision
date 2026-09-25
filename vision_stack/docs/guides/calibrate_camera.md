@@ -1,6 +1,6 @@
 # Camera Calibration (IMX290)
 
-Measures lens distortion and writes `calibration/camera_calib.json`. The pipeline loads it and undistorts every frame in preprocessing.
+Measures lens distortion and writes `calibration/camera_calib.json`. Preprocessing can undistort every frame with it, but only when `PreprocessParams.calibration_path` is set; `MEASURED` and both linkers leave it unset, so the pipeline currently runs without undistortion. To check a calibration that's already been made, without redoing it, use `test_calibration.md`.
 
 ## Requirements
 
@@ -70,15 +70,14 @@ python3 -m src.scripts.calibrate_camera verify
 
 ## 4. Pipeline check
 
-On the course, ~30 s:
+The pipeline doesn't load the calibration yet (see the top of this guide), so a `phase2_linker` run won't show a difference. Check the calibration through the pipeline's own `undistort()` instead:
 
 ```
-python3 -m src.phase2_linker --camera
+pytest src/tests/test_calibration.py -k calibration_file
+pytest --hardware --frames=300 src/tests/test_calibration.py     # move the board around the frame
 ```
 
-- No `calibration ... not found` warning.
-- `preprocess` time in `summary.txt` within a few ms of the previous 3.4 ms.
-- Straight tape stays straight across the recorded frame, including the edges.
+`test_calibration.md` covers what each check means. `stage_ms` in its `summary.json` is the per-frame cost undistortion would add to preprocessing.
 
 ## 5. Results
 
@@ -86,7 +85,7 @@ python3 -m src.phase2_linker --camera
 tar -czf calib_results.tgz calibration/camera_calib.json calib_frames calib_verify
 ```
 
-Send `calib_results.tgz` and the run folder from step 4 (path printed as `output`), or commit `calibration/camera_calib.json` and push.
+Send `calib_results.tgz` and the `artifacts/<YYYYMMDD_HHMMSS>` folder from step 4, or commit `calibration/camera_calib.json` and push.
 
 ## Troubleshooting
 

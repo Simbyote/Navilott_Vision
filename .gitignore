@@ -1,18 +1,19 @@
-# Images
-/sample_img/
-**/sample_img/
-sample_img/
-/sample_img
-*.jpg
-*.png
+# Archives and Temp files
+/archD1/
+**/archD1/
+archD1/
+/archD1
 
-# Workspace
+/archD2/
+**/archD2/
+archD2/
+/archD2
+
 /workspace/
 **/workspace/
 workspace/
 /workspace
 
-# Templates
 /temp/
 **/temp/
 temp/
@@ -35,42 +36,41 @@ __pycache__/
 navilott_vision.egg-info/
 /navilott_vision.egg-info
 
-# Videos
-/video/
-**/video/
-video/
-/video
-*.avi
-
-# Frames
+# Videos, Frames, and Data
 /frame/
 **/frame/
 frame/
 /frame
-*.csv
 
-# Mock
-/mock/
-**/mock/
-mock/
+/logs/
+**/logs/
+logs/
+/logs
 
-# Results
 /results/
 **/results/
 results/
 /results
 
-# Miscellaneous
+/sample_img/
+**/sample_img/
+sample_img/
+/sample_img
+
+/verification/
+**/verification/
+verification/
+/verification
+
+/video/
+**/video/
+video/
+/video
+
+# File Types
+*.avi
+*.csv
+*.jpg
+*.png
 *.txt
 *.zip
-
-# Logs
-/logs/
-**/logs/
-logs/
-/logs
-/specs/
-**/specs/
-specs/
-/specs
-commit_log.md
