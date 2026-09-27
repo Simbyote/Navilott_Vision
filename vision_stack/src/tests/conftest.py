@@ -10,6 +10,8 @@ Test-mode selection and shared fixtures for the vision stack.
     pytest --hardware --record     capture tests also save their frames to
                                    tests/data/frames (the software dataset)
     pytest --frames=300            frames per hardware run (default 100)
+    pytest --hardware --soak-minutes=15 src/tests/test_soak.py
+                                   the soak test, which runs only when given a duration
 
 Every test carries exactly one of @pytest.mark.software / @pytest.mark.hardware.
 Tests outside the selected mode are deselected rather than skipped, so the
@@ -50,6 +52,8 @@ def pytest_addoption(parser):
                 help="capture test also saves frames to tests/data/frames")
     g.addoption("--artifact-dir", default="artifacts",
                 help="root for hardware-run output (default: ./artifacts)")
+    g.addoption("--soak-minutes", type=float, default=None,
+                help="run the soak test for this long; it is skipped without it")
 
 
 def pytest_configure(config):
@@ -178,6 +182,7 @@ def run_root(request):
         "camera_target": CAMERA,
         "frames_requested": request.config.getoption("--frames"),
         "replay": request.config.getoption("--replay"),
+        "soak_minutes": request.config.getoption("--soak-minutes"),
     })
     return root
 

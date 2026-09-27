@@ -157,6 +157,24 @@ def _usable(
         return False
     return True
 
+def _is_usable(
+        candidate: LaneCandidate,
+        config: LaneOffsetConfig,
+    ) -> bool:
+    """Production twin of _usable(): same gates in the same order, without the reject log."""
+    c = candidate
+    if c.confidence < config.conf_threshold:
+        return False
+    if c.proximity < config.min_proximity:
+        return False
+    if c.length_px < config.min_length_px:
+        return False
+    if not (config.min_width_px <= c.width_px <= config.max_width_px):
+        return False
+    if c.mean_intensity < config.min_intensity:
+        return False
+    return True
+
 def _anchor(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
@@ -244,6 +262,45 @@ def _single_sided(
             "[UNCALIBRATED] one usable boundary, but expected_half_lane_px is "
             "unset — emitting no steering signal rather than one of unknown scale"
         )
+        return LaneOffsetResult(
+            offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
+            confidence = 0.0, boundary_count = boundary_count,
+            mode = MODE_SINGLE_UNCALIBRATED,
+            frame_id = frame_id, timestamp_ms = timestamp_ms,
+        )
+
+    if side == "left":
+        implied_center = anchor.foot_x + half
+        mode, left_x, right_x = MODE_LEFT_ONLY, anchor.foot_x, None
+    else:
+        implied_center = anchor.foot_x - half
+        mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
+
+    offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    return LaneOffsetResult(
+        offset = round(offset, 4),
+        left_x = left_x,
+        right_x = right_x,
+        lane_width_px = None,
+        confidence = round(anchor.weight, 4),
+        boundary_count = boundary_count,
+        mode = mode,
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+    )
+
+def _project_single(
+        anchor: BoundaryAnchor,
+        side: str,
+        center_x: float,
+        config: LaneOffsetConfig,
+        frame_id: int,
+        timestamp_ms: int,
+        boundary_count: int,
+    ) -> LaneOffsetResult:
+    """Production twin of _single_sided(): same projection, without the uncalibrated log line."""
+    half = config.expected_half_lane_px
+    if half is None:
         return LaneOffsetResult(
             offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
             confidence = 0.0, boundary_count = boundary_count,
@@ -379,3 +436,74 @@ def compute_lane_offset(
     log.append(f"[ONE-SIDED] only a {side} boundary is usable this frame")
     return _summary(_single_sided(anchor, side, center_x, config,
                                   frame_id, timestamp_ms, boundary_count, log))
+
+
+def estimate_lane_offset(
+        geometry: GeometryBranchResult,
+        roi: ROICropResult,
+        config: LaneOffsetConfig = LaneOffsetConfig(),
+    ) -> LaneOffsetResult:
+    """
+    Production twin of compute_lane_offset(): same estimate, no debug summary or log.
+
+    Outputs:
+        LaneOffsetResult. Anchors are in lane-ROI px; add roi.lane_rect[0]
+        for frame coordinates.
+
+    Raises:
+        ValueError: If either input is None, or their frame stamps disagree.
+    """
+    check_same_frame(geometry, roi, "estimate_lane_offset")
+
+    frame_id = geometry.frame_id
+    timestamp_ms = geometry.timestamp_ms
+
+    roi_width = roi.lane_rect[2]
+    center_x = roi_width / 2.0
+
+    usable = [c for c in geometry.lane_candidates if _is_usable(c, config)]
+    anchors = [_anchor(c, config) for c in usable]
+    boundary_count = len(anchors)
+
+    if not anchors:
+        return LaneOffsetResult(
+            offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
+            confidence = 0.0, boundary_count = 0, mode = MODE_NONE,
+            frame_id = frame_id, timestamp_ms = timestamp_ms,
+        )
+
+    left, right = _lane_pair(anchors, center_x)
+
+    if left is not None and right is not None:
+        # Check the spacing before trusting the pair. Implausible spacing falls
+        # back to the strongest single anchor.
+        lane_width_px = right.foot_x - left.foot_x
+
+        if (lane_width_px < config.min_lane_width_px
+                or lane_width_px > config.max_lane_width_px):
+            best = max(anchors, key=lambda a: a.weight)
+            side = "left" if best.foot_x < center_x else "right"
+            return _project_single(best, side, center_x, config,
+                                   frame_id, timestamp_ms, boundary_count)
+
+        lane_center = (left.foot_x + right.foot_x) / 2.0
+        offset = clamp((center_x - lane_center) / center_x, -1.0, 1.0)
+        total_weight = left.weight + right.weight
+        mean_weight = total_weight / 2.0 if total_weight > 0 else 0.0
+
+        return LaneOffsetResult(
+            offset = round(offset, 4),
+            left_x = round(left.foot_x, 2),
+            right_x = round(right.foot_x, 2),
+            lane_width_px = round(lane_width_px, 2),
+            confidence = round(mean_weight, 4),
+            boundary_count = boundary_count,
+            mode = MODE_TWO_BOUNDARY,
+            frame_id = frame_id,
+            timestamp_ms = timestamp_ms,
+        )
+
+    anchor = left if left is not None else right
+    side = "left" if left is not None else "right"
+    return _project_single(anchor, side, center_x, config,
+                           frame_id, timestamp_ms, boundary_count)

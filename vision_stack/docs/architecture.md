@@ -172,12 +172,3 @@ Profile before changing anything. Run the full pipeline with navigation active a
 | Still over budget | Lower the load: smaller lane ROI, 15 FPS, or fewer stages per frame |
 
 ---
-
-## Archived
-
-Moved to `archives/`, kept for reference:
-
-- Pi + MCU architecture, UART packet schema and the Pico variant
-- TensorFlow Lite and external inference fallbacks
-- Homography calibration (replaced by pixel-based lane offset)
-- The 480×360 IMX219 timing tables

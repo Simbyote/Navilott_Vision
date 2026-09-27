@@ -14,7 +14,7 @@ Tests outside the selected mode are deselected, not skipped, so the output lists
   - camera not in use by `phase2_linker`, `live_view` or `rpicam-hello`
   - `sudo pigpiod` running (display and start-button tests)
   - I2C enabled (IMU test)
-- `matplotlib` is optional. Without it, histogram images are skipped and the CSVs carry the same data.
+- `matplotlib` is optional. Without it, histogram and timing images are skipped and the CSVs carry the same data.
 
 ## 1. Setup
 
@@ -74,6 +74,7 @@ Give options that take a value with `=`, as in `--frames=300`. With a space, pyt
 | `--replay=src/tests/data/frames` | Feed recorded frames instead of the camera |
 | `--record` | The capture test also saves its frames as the dataset software tests replay |
 | `--artifact-dir=DIR` | Write results somewhere other than `./artifacts` |
+| `--soak-minutes=15` | Run `test_soak` for this long; without it the soak test is skipped |
 | `--software --hardware` | Both modes in one run |
 
 Record a dataset first, on the course with the robot where it will drive:
@@ -103,6 +104,9 @@ pytest --hardware src/tests/test_imu.py
 | `test_debug_lane` | Camera or `--replay` | Every image each stage produces for 3 sample frames, plus `lane_annotated.avi`. Start here when tuning a detector by eye |
 | `test_debug_stop`, `test_debug_traffic` | Camera or `--replay` | That view as video + CSV, 3 rendered stills, summary |
 | `test_live_view` | Camera or `--replay` | A full bench run: one video and CSV per view, `stages.csv`, `summary.txt` |
+| `test_soak` | Camera or `--replay`; `--soak-minutes=N` | `soak_frames.csv`, `system.csv` (temperature, clock, throttle flags, memory each second), `summary.json`, `soak.png` |
+| `test_system_monitor` | A Pi | Checks one real sample reads temperature, clock and memory |
+| `test_stage_timing` | Camera or `--replay` | `stage_timing.csv` (every stage plus capture wait and loop time), `summary.json`, `timing_budget.png`, `timing_per_frame.png` |
 | `test_calibration` | `camera_calib.json`; checkerboard in view | Raw vs undistorted images, straightness per region. Use frames the solver never saw |
 | `test_imu` | MPU-6050; **robot still** | Samples per window, stationary yaw noise |
 | `test_system` | `pigpiod`; **watch the display** | Shows `rdy`, counts down, ticks the clock; checks the button reads low at rest |
@@ -121,6 +125,8 @@ artifacts/<YYYYMMDD_HHMMSS>/
 
 Hardware tests assert only contracts (stamps carried, shapes, counts that add up) and a few hard lines, such as "undistortion must not make a board less straight". Everything else is data to review, not a gate. A low frame rate, for example, prints a warning rather than failing.
 
+To turn a run's CSVs into figures and verdicts (timing, jitter, stability, offset accuracy, gate rejections, state timelines, run comparisons), see `analysis.md`.
+
 To share a run:
 
 ```
@@ -137,6 +143,7 @@ Send the archive along with the terminal output.
 | `camera unavailable` skips | Stop other camera processes; `rpicam-hello --list-cameras` must list imx290 |
 | `IMU unavailable` skip | Enable I2C; check wiring and address 0x68 |
 | `system peripherals unavailable` skip | `sudo pigpiod` |
+| `soak runs only with --soak-minutes=N` skip | Expected in a normal hardware run; add `--soak-minutes=15` to run it |
 | `unrecognized arguments: --hardware ...` | An option was given its value with a space (`--frames 300`, `--replay DIR`); use `--frames=300`, `--replay=DIR` |
 | Hardware tests `deselected` | Add `--hardware`; software is the default |
 | A software test fails after a code change | Run that file alone with `-x -vv`; the test name says which rule broke |

@@ -111,6 +111,16 @@ def _best_candidate(
         return None
     return max(valid, key=lambda c: c.confidence)
 
+def _pick_best(
+        candidates: list,
+    ):
+    """Production twin of _best_candidate(): highest-confidence valid candidate (ties keep the first), or None, without the discard log."""
+    valid = [cand for cand in candidates if _valid_confidence(cand.confidence)]
+
+    if not valid:
+        return None
+    return max(valid, key=lambda c: c.confidence)
+
 def _rects(
         roi: ROICropResult
     ) -> dict[str, tuple[int, int, int, int]]:
@@ -246,6 +256,55 @@ def fuse_detections(
         timestamp_ms = timestamp_ms,
     ), debug_summary
 
+
+def fuse(
+        geometry: GeometryBranchResult,
+        traffic_candidates: list,
+        roi: ROICropResult,
+    ) -> FusionResult:
+    """
+    Production twin of fuse_detections(): same selection and ordering, no
+    discard/suppression log or debug summary.
+
+    Outputs:
+        FusionResult.
+
+    Raises:
+        ValueError: If either input is None, or their frame stamps disagree.
+    """
+    check_same_frame(geometry, roi, "fuse")
+
+    detections = []
+
+    frame_id = roi.frame_id
+    timestamp_ms = roi.timestamp_ms
+    rects = _rects(roi)
+
+    best_tl = _pick_best(traffic_candidates)
+    if best_tl is not None:
+        detections.append(
+            _detection(TRAFFIC_LIGHT, best_tl, rects, frame_id, timestamp_ms)
+        )
+
+    valid_lanes = [c for c in geometry.lane_candidates if _valid_confidence(c.confidence)]
+
+    # LB-2: descending confidence. sorted() is stable, so ties keep input order.
+    for c in sorted(valid_lanes, key=lambda x: x.confidence, reverse=True):
+        detections.append(
+            _detection(LANE_BOUNDARY, c, rects, frame_id, timestamp_ms)
+        )
+
+    best_sign = _pick_best(geometry.sign_candidates)
+    if best_sign is not None:
+        detections.append(
+            _detection(STOP_SIGN, best_sign, rects, frame_id, timestamp_ms)
+        )
+
+    return FusionResult(
+        detections = detections,
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+    )
 
 _TYPE_COLORS = {
     TRAFFIC_LIGHT: (255,  0,  0),   # blue

@@ -299,6 +299,52 @@ def _blobs_to_candidates(
 
     return candidates
 
+def _filter_blobs(
+    mask: np.ndarray,
+    label: str,
+    blob_filter: BlobFilter,
+    frame_id: int,
+    timestamp_ms: int,
+) -> list[TrafficLightCandidate]:
+    """
+    Production twin of _blobs_to_candidates(): same gates in the same order,
+    without reject counting or tracing.
+
+    Outputs:
+        Accepted candidates.
+    """
+    candidates = []
+
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < blob_filter.min_area or area > blob_filter.max_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+
+        if h == 0:      # guard the w / h below
+            continue
+        aspect = w / h
+        if aspect < blob_filter.min_aspect or aspect > blob_filter.max_aspect:
+            continue
+
+        confidence = round(clamp(
+            (area - blob_filter.min_area) / max(blob_filter.ref_area - blob_filter.min_area, 1.0),
+            0.0, 1.0
+        ), 4)
+
+        candidates.append(TrafficLightCandidate(
+            label = label,
+            bbox = (x, y, w, h),
+            confidence = confidence,
+            frame_id = frame_id,
+            timestamp_ms = timestamp_ms,
+        ))
+
+    return candidates
+
 
 def extract_traffic_light_candidates(
     roi: np.ndarray,
@@ -376,6 +422,50 @@ def extract_traffic_light_candidates(
     return candidates, debug
 
 
+def find_traffic_light_candidates(
+    roi: np.ndarray,
+    hsv_ranges: HSVRanges,
+    blob_filter: BlobFilter,
+    frame_id: int = 0,
+    timestamp_ms: int = 0,
+) -> list[TrafficLightCandidate]:
+    """
+    Production twin of extract_traffic_light_candidates(): no debug dict
+    (masks, pixel counts, reject counts) and no trace.
+
+    Outputs:
+        Candidates, red then yellow then green.
+
+    Raises:
+        ValueError / TypeError: If roi is None, not uint8 or not (h, w, 3),
+            or hsv_ranges is None.
+    """
+    if roi is None:
+        raise ValueError("find_traffic_light_candidates: received None")
+    if roi.dtype != np.uint8:
+        raise TypeError(f"find_traffic_light_candidates: expected uint8, got {roi.dtype}")
+    if roi.ndim != 3 or roi.shape[2] != 3:
+        raise ValueError(f"find_traffic_light_candidates: expected (H,W,3) BGR, got {roi.shape}")
+    if hsv_ranges is None:
+        raise ValueError(
+            "find_traffic_light_candidates: hsv_ranges is required. "
+            "Load from calibration/hsv_ranges.json via load_hsv_ranges()."
+        )
+
+    hsv = _to_hsv(roi)
+
+    masks = {
+        RED: _threshold_red(hsv, hsv_ranges),
+        YELLOW: _threshold_single(hsv, hsv_ranges.yellow),
+        GREEN: _threshold_single(hsv, hsv_ranges.green),
+    }
+
+    candidates = []
+    for label, mask in masks.items():
+        candidates += _filter_blobs(mask, label, blob_filter, frame_id, timestamp_ms)
+
+    return candidates
+
 def run_color_stage(
         roi: ROICropResult,
         config: ColorConfig = ColorConfig(),
@@ -408,6 +498,27 @@ def run_color_stage(
     debug["enabled"] = True
     return candidates, debug
 
+
+def detect_color(
+        roi: ROICropResult,
+        config: ColorConfig = ColorConfig(),
+    ) -> list[TrafficLightCandidate]:
+    """
+    Production twin of run_color_stage(): same stage, candidates only.
+
+    Outputs:
+        Candidates, or [] while the branch is off (hsv_ranges None).
+    """
+    if config.hsv_ranges is None:
+        return []
+
+    return find_traffic_light_candidates(
+        roi.traffic_roi,
+        config.hsv_ranges,
+        config.blob,
+        roi.frame_id,
+        roi.timestamp_ms,
+    )
 
 _LABEL_COLORS = {   # BGR
     RED: (0, 0, 255),

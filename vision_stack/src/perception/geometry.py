@@ -416,6 +416,81 @@ def _extract_lane_candidates(
 
     return candidates
 
+def _filter_lane_contours(
+    contours: Sequence[np.ndarray],
+    lane_filter: LaneContourFilter,
+    frame_id: int,
+    timestamp_ms: int,
+    roi_shape: tuple[int, int],
+    gray: np.ndarray,
+) -> list[LaneCandidate]:
+    """
+    Production twin of _extract_lane_candidates(): same gates in the same
+    order, without reject counting.
+
+    Outputs:
+        Accepted candidates, not yet merged.
+    """
+    candidates = []
+    roi_h, roi_w = roi_shape
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < lane_filter.min_area or area > lane_filter.max_area:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+        if h == 0 or w == 0:
+            continue
+        if len(contour) < 5:
+            continue
+
+        _, (rect_w, rect_h), _ = cv2.minAreaRect(contour)
+        long_side = max(rect_w, rect_h)
+        raw_short = min(rect_w, rect_h)
+        short_side = max(raw_short, 1.0)
+        elongation = long_side / short_side
+        if elongation < lane_filter.min_aspect or elongation > lane_filter.max_aspect:
+            continue
+
+        horizontal = w >= h
+        if horizontal and (w / roi_w) > lane_filter.max_roi_span:
+            continue
+        if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
+            continue
+
+        mean_intensity = _mean_contour_intensity(gray, contour)
+        if mean_intensity < lane_filter.min_intensity:
+            continue
+
+        confidence = _lane_confidence(
+            long = long_side,
+            short = raw_short,
+            horizontal = horizontal,
+            mean_intensity = mean_intensity,
+            roi_h = roi_h,
+            roi_w = roi_w,
+            f = lane_filter
+        )
+
+        proximity = clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
+
+        candidates.append(LaneCandidate(
+            label = LANE_BOUNDARY,
+            bbox = (x, y, w, h),
+            contour = contour,
+            confidence = round(confidence, 4),
+            length_px = round(long_side, 2),
+            width_px = round(raw_short, 2),
+            frame_id = frame_id,
+            timestamp_ms = timestamp_ms,
+            proximity = round(proximity, 4),
+            mean_intensity = mean_intensity,
+            foot_x = contour_foot_x(contour),
+        ))
+
+    return candidates
+
 def extract_lane_candidates(
     lane_roi: np.ndarray,
     canny_params: CannyParams,
@@ -503,6 +578,32 @@ def extract_lane_candidates(
 
     return candidates, debug_images
 
+
+def find_lane_candidates(
+    lane_roi: np.ndarray,
+    canny_params: CannyParams,
+    lane_filter: LaneContourFilter,
+    frame_id: int,
+    timestamp_ms: int,
+) -> list[LaneCandidate]:
+    """
+    Production twin of extract_lane_candidates(): no debug dict, no overlays.
+
+    Outputs:
+        Merged, ROI-relative candidates.
+    """
+    edges = _close_edges(_canny(lane_roi, canny_params), canny_params.close_kernel)
+
+    candidates = _filter_lane_contours(
+        _contours(edges),
+        lane_filter,
+        frame_id,
+        timestamp_ms,
+        lane_roi.shape[:2],
+        lane_roi,
+    )
+
+    return _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])
 
 def _sign_confidence(
         area: float,
@@ -638,6 +739,58 @@ def _extract_sign_candidates(
 
     return candidates
 
+def _filter_sign_contours(
+    contours: Sequence[np.ndarray],
+    sign_filter: SignContourFilter,
+    frame_id: int,
+    timestamp_ms: int,
+) -> list[SignCandidate]:
+    """
+    Production twin of _extract_sign_candidates(): same gates in the same
+    order, without reject counting or tracing.
+
+    Outputs:
+        Accepted candidates, each holding its approxPolyDP polygon.
+    """
+    candidates = []
+
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        if area < sign_filter.min_area or area > sign_filter.max_area:
+            continue
+
+        arc_len = cv2.arcLength(contour, closed=True)
+        epsilon = sign_filter.epsilon_factor * arc_len
+        approx = cv2.approxPolyDP(contour, epsilon, closed=True)
+        n_verts = len(approx)
+        if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
+            continue
+
+        # Reject non-convex / fragmented shapes
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        if hull_area <= 0:
+            continue
+        solidity = area / hull_area
+        if solidity < sign_filter.min_solidity:
+            continue
+
+        x, y, w, h = cv2.boundingRect(contour)
+
+        candidates.append(SignCandidate(
+            label = STOP_SIGN,
+            bbox = (x, y, w, h),
+            contour = approx,
+            vertex_count = n_verts,
+            confidence = _sign_confidence(area, n_verts, sign_filter),
+            frame_id = frame_id,
+            timestamp_ms = timestamp_ms,
+            area = area,
+            solidity = round(solidity, 4),
+        ))
+
+    return candidates
+
 def extract_sign_candidates(
     sign_roi: np.ndarray,
     canny_params: CannyParams,
@@ -707,6 +860,28 @@ def extract_sign_candidates(
 
     return candidates, debug_images
 
+
+def find_sign_candidates(
+    sign_roi: np.ndarray,
+    canny_params: CannyParams,
+    sign_filter: SignContourFilter,
+    frame_id: int,
+    timestamp_ms: int,
+) -> list[SignCandidate]:
+    """
+    Production twin of extract_sign_candidates(): no debug dict, overlays or trace.
+
+    Outputs:
+        ROI-relative candidates.
+    """
+    edges = _canny(sign_roi, canny_params)
+
+    return _filter_sign_contours(
+        _contours(edges),
+        sign_filter,
+        frame_id,
+        timestamp_ms,
+    )
 
 def run_geometry_branch(
     lane_roi: np.ndarray,
@@ -816,4 +991,57 @@ def run_geometry_stage(
         timestamp_ms = roi.timestamp_ms,
         draw_overlays = draw_overlays,
         trace = trace,
+    )
+
+
+def detect_geometry(
+        roi: ROICropResult,
+        config: GeometryConfig = GeometryConfig(),
+    ) -> GeometryBranchResult:
+    """
+    Production twin of run_geometry_stage(): same stage, result only.
+
+    Outputs:
+        GeometryBranchResult, with frame_id and timestamp_ms carried from roi.
+
+    Raises:
+        ValueError / TypeError: If either ROI is None, not uint8, or not 2-D.
+            The message names the offending ROI.
+    """
+    for name, r in [("lane_roi", roi.lane_roi), ("sign_roi", roi.sign_roi)]:
+        if r is None:
+            raise ValueError(
+                f"detect_geometry: {name} is None"
+            )
+        if r.dtype != np.uint8:
+            raise TypeError(
+                f"detect_geometry: {name} expected uint8, got {r.dtype}"
+            )
+        if r.ndim != 2:
+            raise ValueError(
+                f"detect_geometry: {name} expected single-channel grayscale "
+                f"(H,W), got {r.shape}. Color conversion belongs to preprocess."
+            )
+
+    lane_candidates = find_lane_candidates(
+        roi.lane_roi,
+        config.canny,
+        config.lane,
+        roi.frame_id,
+        roi.timestamp_ms,
+    )
+
+    sign_candidates = find_sign_candidates(
+        roi.sign_roi,
+        config.canny,
+        config.sign,
+        roi.frame_id,
+        roi.timestamp_ms,
+    )
+
+    return GeometryBranchResult(
+        lane_candidates,
+        sign_candidates,
+        roi.frame_id,
+        roi.timestamp_ms
     )
