@@ -43,6 +43,7 @@ Common variations:
 python3 -m src.phase2_linker --camera --no-display --limit 600     # 30 s headless on the robot
 python3 -m src.phase2_linker --camera --views stop,traffic         # add the stop and traffic views
 python3 -m src.phase2_linker --camera --views stopline --stopline-threshold 0.4   # stop-line detection
+python3 -m src.phase2_linker --camera --views lanegeo   # why a lane line was lost
 python3 -m src.phase2_linker --frames src/tests/data/frames --scale 2
 ```
 
@@ -52,7 +53,7 @@ python3 -m src.phase2_linker --frames src/tests/data/frames --scale 2
 | `--limit N` | Stop after N frames |
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
-| `--views stop,traffic,stopline` | Extra views beside the lane view, which is always on |
+| `--views stop,traffic,stopline,lanegeo` | Extra views beside the lane view, which is always on |
 | `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--stop-threshold C`, `--traffic-threshold C`, `--stopline-threshold C` | Confidence the next stage needs; candidates below it show amber in that view. For stop lines that is `stop_line.min_confidence` (0.4) |
 | `--stride N` | Record every Nth frame. Every frame is still processed and counted |
@@ -88,6 +89,7 @@ runs/<YYYYMMDD_HHMMSS>/
     run_stop.avi, .csv          one pair per extra view
     run_traffic.avi, .csv
     run_stopline.avi, .csv
+    run_lanegeo.avi, .csv
     stages.csv                  per-frame stage timings, lane mode and offset
     summary.txt                 the run's report
     still_<view>_NNN.png        stills saved with s
@@ -100,14 +102,17 @@ runs/<YYYYMMDD_HHMMSS>/
 | Counts | `frames processed`, `dropped reads` (should be near 0), fused detections per frame |
 | Lane | Mode histogram (how often `two_boundary` vs one-sided vs `none`), availability, and the longest blind runs |
 | Stop / traffic | Per-gate rejection totals, and how many frames passed the threshold |
+| Lane geometry | Mode histogram, frames where the horizontal-line filter removed edges, contours refused by geometry and candidates refused by lane offset, per gate |
 | Stop line | Frames with a line through the gates and with a measured line, the distance range, lane candidates skipped as part of a stop line, top edges rejected per gate |
 | `[TIMING]` | Median and p95 per stage, and the total as FPS. The total must stay under 50 ms for 20 FPS |
 
 In the lane view: green candidates are usable, red ones carry the name of the gate that rejected them ("on stop line" when lane offset skipped them as part of a detected stop line). Cyan and magenta mark the chosen left and right boundaries, gray the robot at ROI center, and yellow the implied lane center (red when the offset is pinned at ±1).
 
-## 5. Recording footage for replay
+In the lane-geometry view (`--views lanegeo`): the top panel is the lane ROI with every contour the lane detector traced, colored by the stage that decided it. Red contours were refused by geometry's own gates, labeled with the gate and what it measured (`area 1203`, `aspect 1.1`, `span 0.9`, `int 95`, `pts 4`); the lane view never shows these. Amber ones passed geometry and were refused by lane offset, labeled with its gate (`conf`, `prox`, `len`, `wid`, `int`, `on stop line`). Green ones are usable, labeled with confidence and width. Cyan and magenta ticks mark the chosen left and right boundaries at their foot, yellow the lane center, gray the robot; detected stop lines are boxed gray. The bottom panel is the edge map the contours came from: Canny edges in gray, those the horizontal-line filter removed (a stop line across the lane) in red, the ones kept in white, and what the closing step filled in between in blue. A missing lane line with no contour at all was lost in the edges (look for red where the tape should be); a red contour was refused by geometry, an amber one by lane offset. The header shows the lane result and how many edge pixels the filter removed; the footer, this frame's geometry gate counts. `run_lanegeo.csv` has the per-frame counts, gates and result.
 
 In the stop-line view: the top panel is the lane ROI. Accepted stop lines are outlined as the band between their paired edges (green, or amber below `--stopline-threshold`) with confidence and thickness; rejected top edges are red lines labeled with their gate (`short` with the length, `tilt`, `unpaired`, `dim`); the measured line has a white outline and an arrow to the ROI bottom with its distance, in px and, with a ground homography (`calibrate_ground.md`), in cm (`ON LINE` when the robot is on it); lane candidates lane offset skipped are boxed amber. The bottom panel is the gradient split: every Canny edge in gray, the kept top edges (dark to bright going down) in cyan, bottom edges in magenta, with the fitted lines drawn over them. A missed stop line with no cyan and magenta in the bottom panel was lost before the gates (Canny or the tilt split); one with a red label was refused by that gate. `run_stopline.csv` has the per-frame counts, gates and measurement.
+
+## 5. Recording footage for replay
 
 `run.avi` has the overlay drawn on it, so it can't be fed back into the pipeline. To record clean frames for replay, use pytest:
 
@@ -138,7 +143,7 @@ Send the archive with the terminal output and a note on where on the course it w
 | Help text instead of a run | No source given; add `--camera`, `--video` or `--frames` |
 | `source error: ...` | Camera busy or missing, or the file or folder doesn't exist. `rpicam-hello --list-cameras` must list imx290 |
 | `no display server ...; continuing headless` | Normal over ssh; everything is still recorded |
-| `unknown view ...` | Only `stop`, `traffic` and `stopline` are valid for `--views` |
+| `unknown view ...` | Only `stop`, `traffic`, `stopline` and `lanegeo` are valid for `--views` |
 | Traffic view is empty | Check `calibration/hsv_ranges.json` against course lighting; `--hsv` tries other ranges |
 | `capture failed: ... consecutive failed reads` | The camera stopped delivering frames; stop other camera processes and rerun |
 | Timing well over 50 ms | Check `[TIMING]` for the stage responsible; `--stride` and `--no-display` reduce recording and display cost |

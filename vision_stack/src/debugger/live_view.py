@@ -35,6 +35,7 @@ from src.capture.camera import CameraSource, CaptureError
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 import src.debugger.debug_video as dv
 import src.debugger.debug_lane as debug_lane
+import src.debugger.debug_lanegeo as debug_lanegeo
 import src.debugger.debug_stop as debug_stop
 import src.debugger.debug_stopline as debug_stopline
 import src.debugger.debug_traffic as debug_traffic
@@ -44,7 +45,7 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 # Extra views selectable with --views. Each is built with conf_threshold=. The
 # lane view isn't here: it always runs, and needs the lane config.
 VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView,
-         "stopline": debug_stopline.StopLineView}
+         "stopline": debug_stopline.StopLineView, "lanegeo": debug_lanegeo.LaneGeometryView}
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -66,6 +67,11 @@ Output (--out DIR, default <root>/runs/<timestamp>):
 Views (--views a,b):
     lane                always on (debug_lane)
     stop                stop-sign detector on the sign ROI (debug_stop)
+    lanegeo             lane detector on the lane ROI (debug_lanegeo): every
+                        contour it traced, red if geometry refused it, amber if
+                        lane_offset did, green if usable, with the reason; the
+                        chosen anchors; and the edges, with what the
+                        horizontal-line filter removed
     stopline            stop-line detector on the lane ROI (debug_stopline):
                         accepted lines, rejected edges with their gate, the
                         measured distance, lane candidates skipped as part of
@@ -378,7 +384,8 @@ def run(source: FrameSource, process: Callable, lane_config, out_dir: str,
             processed and observed, so the statistics cover the whole run.
         limit: Stop after this many processed frames; None runs to the end.
         fps: Recorded video rate; None uses source.fps.
-        views: Extra views beside the lane view (see VIEWS).
+        views: Extra views beside the lane view (see VIEWS). A view with a
+            lane_config attribute left at None gets this run's lane_config.
 
     Outputs:
         RunStats, with each view's report in sections.
@@ -391,6 +398,9 @@ def run(source: FrameSource, process: Callable, lane_config, out_dir: str,
     os.makedirs(out_dir, exist_ok=True)
     stats = RunStats()
     views = [debug_lane.LaneView(lane_config), *views]
+    for v in views:                     # views that classify lane candidates use the run's config
+        if getattr(v, "lane_config", False) is None:
+            v.lane_config = lane_config
     stage_log = StageLog(os.path.join(out_dir, "stages.csv"))
     writers = [
         dv.ViewWriter(os.path.join(out_dir, _video_name(v)), v.CSV_FIELDS,

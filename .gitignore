@@ -84,3 +84,6 @@ video/
 *.png
 *.txt
 *.zip
+# Editor swap files (vim)
+*.swp
+*.swo
