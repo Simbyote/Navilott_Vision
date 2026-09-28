@@ -404,7 +404,8 @@ def _extract_lane_candidates(
     timestamp_ms: int,
     roi_shape: tuple[int, int],
     gray: np.ndarray,
-    reject_counts: dict | None = None
+    reject_counts: dict | None = None,
+    trace: list | None = None,
 ) -> list[LaneCandidate]:
     """
     Run contours through the lane gates and build a candidate for each survivor.
@@ -414,6 +415,9 @@ def _extract_lane_candidates(
         gray: The lane ROI, sampled by the intensity gate.
         reject_counts: Filled with one count per gate. Every contour lands in
             exactly one bucket, so the buckets sum to "seen".
+        trace: If given, one entry per contour is appended: {"contour",
+            "bbox", "gate" (None when accepted), "value" (what the gate
+            measured, or None)}, for the lane-geometry view.
 
     Outputs:
         Accepted candidates, not yet merged.
@@ -430,20 +434,26 @@ def _extract_lane_candidates(
                 "aspect", "w_span", "h_span", "intensity", "accepted"):
         rc.setdefault(_k, 0)
 
+    def reject(gate, contour, value=None):
+        rc[gate] += 1
+        if trace is not None:
+            trace.append({"contour": contour, "bbox": cv2.boundingRect(contour),
+                          "gate": gate, "value": value})
+
     for contour in contours:
         rc["seen"] += 1
 
         area = cv2.contourArea(contour)
         if area < lane_filter.min_area or area > lane_filter.max_area:
-            rc["area"] += 1
+            reject("area", contour, round(area, 1))
             continue
 
         x, y, w, h = cv2.boundingRect(contour)
         if h == 0 or w == 0:
-            rc["degenerate"] += 1
+            reject("degenerate", contour)
             continue
         if len(contour) < 5:
-            rc["too_few_pts"] += 1
+            reject("too_few_pts", contour, len(contour))
             continue
 
         _, (rect_w, rect_h), _ = cv2.minAreaRect(contour)
@@ -452,20 +462,20 @@ def _extract_lane_candidates(
         short_side = max(raw_short, 1.0)
         elongation = long_side / short_side
         if elongation < lane_filter.min_aspect or elongation > lane_filter.max_aspect:
-            rc["aspect"] += 1
+            reject("aspect", contour, round(elongation, 1))
             continue
 
         horizontal = w >= h
         if horizontal and (w / roi_w) > lane_filter.max_roi_span:
-            rc["w_span"] += 1
+            reject("w_span", contour, round(w / roi_w, 2))
             continue
         if not horizontal and (h / roi_h) > lane_filter.max_roi_span:
-            rc["h_span"] += 1
+            reject("h_span", contour, round(h / roi_h, 2))
             continue
 
         mean_intensity = _mean_contour_intensity(gray, contour)
         if mean_intensity < lane_filter.min_intensity:
-            rc["intensity"] += 1
+            reject("intensity", contour, round(mean_intensity, 1))
             continue
 
         confidence = _lane_confidence(
@@ -481,6 +491,8 @@ def _extract_lane_candidates(
         proximity = clamp((y + h) / max(roi_h, 1), 0.0, 1.0)
 
         rc["accepted"] += 1
+        if trace is not None:
+            trace.append({"contour": contour, "bbox": (x, y, w, h), "gate": None, "value": None})
         candidates.append(LaneCandidate(
             label = LANE_BOUNDARY,
             bbox = (x, y, w, h),
@@ -581,6 +593,7 @@ def extract_lane_candidates(
     draw_overlays: bool = True,
     edges_raw: np.ndarray | None = None,
     horizontal_split: tuple[np.ndarray, np.ndarray] | None = None,
+    trace: bool = False,
 ) -> tuple[list[LaneCandidate], dict]:
     """
     Find lane-boundary candidates in the lane ROI.
@@ -594,6 +607,8 @@ def extract_lane_candidates(
         horizontal_split: _horizontal_edges(lane_roi, edges_raw,
             lane_filter.horizontal_edge_deg), when the caller has it at that
             angle. None computes it here if the filter is on.
+        trace: Record every contour with the gate that decided it in
+            debug["trace"] (see _extract_lane_candidates), before merging.
 
     Outputs:
         (candidates, debug). Candidates are merged and ROI-relative. debug
@@ -607,6 +622,7 @@ def extract_lane_candidates(
     edges = _close_edges(edges_lane, canny_params.close_kernel)
     contours = _contours(edges)
     reject_counts = {}
+    lane_trace = [] if trace else None
 
     candidates = _extract_lane_candidates(
         contours,
@@ -615,7 +631,8 @@ def extract_lane_candidates(
         timestamp_ms,
         lane_roi.shape[:2],
         lane_roi,
-        reject_counts
+        reject_counts,
+        lane_trace,
     )
 
     candidates = _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])
@@ -629,6 +646,8 @@ def extract_lane_candidates(
         "edges_lane": edges_lane,
         "reject_counts": reject_counts,
     }
+    if trace:
+        debug_images["trace"] = lane_trace
     if draw_overlays:
         # 3-channel so the BGR annotations render (see extract_sign_candidates)
         contour_overlay = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR)
@@ -1371,7 +1390,8 @@ def run_geometry_branch(
         lane_roi, sign_roi: (h, w) uint8 gray, e.g. from ROICropResult.
         draw_overlays: Build the debug overlays in both branches. False skips
             four full-ROI allocations and two contour rasterizations per frame.
-        trace: Record the per-contour sign trace (see extract_sign_candidates).
+        trace: Record the per-contour sign trace (see extract_sign_candidates)
+            and the lane contour trace (see extract_lane_candidates).
         stop_filter: Stop-line gates. Stop lines read the lane ROI's Canny
             edges and never change the lane or sign results.
 
@@ -1410,6 +1430,7 @@ def run_geometry_branch(
         draw_overlays,
         edges_raw = lane_edges,
         horizontal_split = lane_split,
+        trace = trace,
     )
 
     stop_line_candidates, lane_debug["stop_line"] = extract_stop_line_candidates(
