@@ -36,6 +36,7 @@ PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 CALIBRATION_DIR = PIPELINE_ROOT / "calibration"     # camera, HSV and IMU calibrations
 CAMERA_CALIB_PATH = CALIBRATION_DIR / "camera_calibration.json"
 HSV_RANGES_PATH = CALIBRATION_DIR / "hsv_ranges.json"
+GROUND_HOMOGRAPHY_PATH = CALIBRATION_DIR / "ground_homography.json"   # frame px -> floor cm; scripts/calibrate_ground.py
 RUNS_DIR = PIPELINE_ROOT / "runs"                   # live_view output, one timestamped folder per run
 
 # --- GPIO (BCM numbers; Product Spec GPIO Table 7) ---

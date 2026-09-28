@@ -32,7 +32,8 @@ from src.phase2_linker import run_chain
 from src.phase3_linker import run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
-    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, differs, drive_sequence, same, sweep_frame,
+    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, differs, drive_sequence, scene,
+    same, sweep_frame,
 )
 
 # MEASURED undistorts; synthetic frames come out warped, but both paths warp
@@ -44,7 +45,7 @@ CONFIGS = {
     "alt": ALT_CONFIG,
     "measured": MEASURED,
 }
-GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line")
+GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line", "ground")
 
 
 def _stamp(i: int) -> tuple[int, int]:
@@ -114,6 +115,18 @@ def test_each_alt_group_changes_the_phase2_output(group):
     frames = list(SCENES.values()) + [sweep_frame(*p) for p in SWEEP]
     assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
                for f in frames), f"ALT_CONFIG.{group} changes nothing on any scene"
+
+
+@pytest.mark.software
+def test_alt_lane_horizontal_filter_alone_changes_the_phase2_output():
+    """Like the stop-line filter: the geometry group guard can pass on its Canny change alone."""
+    lane = SCENE_CONFIG.geometry.lane
+    alt = ALT_CONFIG.geometry.lane
+    swapped = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry, lane=replace(
+        lane, horizontal_edge_deg=alt.horizontal_edge_deg, horizontal_min_run_px=alt.horizontal_min_run_px,
+        horizontal_band_px=alt.horizontal_band_px)))
+    assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
+               for f in SCENES.values())
 
 
 @pytest.mark.software
@@ -209,6 +222,7 @@ PACKET_CASES = {
     "measured": (SCENE_CONFIG, MEASURED_ESTIMATION),
     "cm_scale": (SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=0.05)),
     "alt": (ALT_CONFIG, ALT_ESTIMATION),
+    "ground": (replace(SCENE_CONFIG, ground=SYNTHETIC_GROUND), MEASURED_ESTIMATION),
 }
 DRIVE = drive_sequence()
 
@@ -286,6 +300,14 @@ def test_drive_sequence_moves_every_phase3_output():
     assert any(c is not None for c in cm) and any(c is None for c in cm)
 
 
+@pytest.mark.software
+def test_the_drive_reports_cm_only_with_a_ground_plane():
+    scene_cm = [p.stop_line_distance_cm for p, _ in _packets(Pipeline(*PACKET_CASES["measured"]))]
+    ground_cm = [p.stop_line_distance_cm for p, _ in _packets(Pipeline(*PACKET_CASES["ground"]))]
+    assert all(cm is None for cm in scene_cm)
+    assert 0.0 in ground_cm and len({cm for cm in ground_cm if cm}) >= 3
+
+
 ALT_FIELDS = [f.name for f in fields(ALT_ESTIMATION)
               if getattr(ALT_ESTIMATION, f.name) != getattr(MEASURED_ESTIMATION, f.name)]
 
@@ -359,16 +381,42 @@ def test_a_stop_line_clear_of_the_lane_lines_leaves_the_lane_offset_alone(scene)
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("scene", ["stop_line_touching", "stop_line_between_marks", "stop_line_thick_marks"])
-def test_a_stop_line_touching_both_lane_lines_blinds_the_lane_but_is_measured(scene):
-    """
-    Accepted behavior: lane detection is left as it is, and a stop line that
-    closes into one contour with both lane lines fails the lane area gate.
-    The frame reports no lane (Phase 3 holds) rather than a wrong one.
-    """
+@pytest.mark.parametrize("scene", ["stop_line_touching", "stop_line_between_marks", "stop_line_touching_left",
+                                   "stop_line_far", "stop_line_clipped", "stop_line_tilted", "two_stop_lines"])
+def test_a_stop_line_touching_the_lane_lines_keeps_the_lane_and_is_measured(scene):
+    """The lane detector's edges lose the stop line, so it no longer joins the lane lines into one contour."""
     p2 = Pipeline(SCENE_CONFIG).perceive(SCENES[scene], 1, 50)
-    assert p2.lane_offset_results[0].mode == "none"
+    lane = p2.lane_offset_results[0]
+    assert lane.mode == "two_boundary"
+    assert abs(lane.left_x - 149.5) <= 1.0 and abs(lane.right_x - 289.5) <= 1.0
     assert p2.stop_line_results[0].detected
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("tape", [6, 20, 30])
+def test_the_lane_stays_all_the_way_up_to_a_stop_line_that_touches_it(tape):
+    """
+    The approach, frame by frame, down to the robot on the line, with real
+    tape widths. Wide tape still shifts the anchors (up to half a tape) while
+    the line is in view: the piece below it has no top edge, so its sides
+    trace apart. Pinned so the shift can't grow unnoticed.
+    """
+    pipeline = Pipeline(SCENE_CONFIG)
+    for y in (5, 20, 35, 50, 65, 76):
+        frame = scene(marks=(150, 290), mark_width=tape, stop_line=(150 - tape // 2 - 10, 290 + tape // 2 + 10, y),
+                      stop_line_thickness=10)
+        lane = pipeline.perceive(frame, 1, 50).lane_offset_results[0]
+        assert lane.mode == "two_boundary", f"stop line at y={y}"
+        assert abs(lane.left_x - 150) <= tape / 2 + 1 and abs(lane.right_x - 290) <= tape / 2 + 1, f"y={y}"
+
+
+@pytest.mark.software
+def test_the_lane_filter_off_brings_back_the_blind_lane():
+    """The filter is what keeps the lane: without it the touching stop line blinds it again."""
+    off = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry,
+                                                 lane=replace(SCENE_CONFIG.geometry.lane, horizontal_edge_deg=None)))
+    p2 = Pipeline(off).perceive(SCENES["stop_line_touching"], 1, 50)
+    assert p2.lane_offset_results[0].mode == "none" and p2.stop_line_results[0].detected
 
 
 @pytest.mark.software

@@ -52,7 +52,7 @@ class StopLineView(dv.CandidateView):
     CSV_FIELDS = ("frame_id", "timestamp_ms", "top_edges", "bottom_edges", "seen",
                   "passed", "low", "rej_short", "rej_tilt", "rej_unpaired", "rej_intensity",
                   "best_conf", "measured", "distance_px", "y_near_px", "tilt_deg",
-                  "thickness_px", "clipped", "lane_skipped")
+                  "thickness_px", "clipped", "lane_skipped", "distance_cm", "proximity")
 
     def __init__(self, conf_threshold=None, zoom=2):
         super().__init__(conf_threshold, zoom)
@@ -60,6 +60,7 @@ class StopLineView(dv.CandidateView):
         self._with_candidate = 0
         self._measured = 0
         self._distances = []
+        self._distances_cm = []
         self._skipped = 0
         self._best_conf = []
         self._counts = {}
@@ -126,6 +127,8 @@ class StopLineView(dv.CandidateView):
         if m is not None:
             self._measured += 1
             self._distances.append(m.distance_px)
+            if m.distance_cm is not None:
+                self._distances_cm.append(m.distance_cm)
         self._skipped += len(data["lane_skipped"])
         for gate, n in data["counts"].items():
             self._counts[gate] = self._counts.get(gate, 0) + n
@@ -143,6 +146,7 @@ class StopLineView(dv.CandidateView):
             int(m is not None), opt(m and m.distance_px), opt(m and m.y_near_px),
             opt(m and m.tilt_deg), opt(cand and cand.thickness_px),
             "" if m is None else int(m.clipped), len(data["lane_skipped"]),
+            opt(m and m.distance_cm), opt(m and m.proximity),
         ]
 
     def report(self):
@@ -155,6 +159,10 @@ class StopLineView(dv.CandidateView):
         if self._distances:
             d = sorted(self._distances)
             out.append(f" distance to the ROI bottom, px: min {d[0]:.1f}  "
+                       f"med {d[len(d) // 2]:.1f}  max {d[-1]:.1f}")
+        if self._distances_cm:
+            d = sorted(self._distances_cm)
+            out.append(f" distance ahead on the floor, cm: min {d[0]:.1f}  "
                        f"med {d[len(d) // 2]:.1f}  max {d[-1]:.1f}")
         out.append(f" lane candidates skipped as part of a stop line  {self._skipped}")
         out += self._threshold_report(self._best_conf, n)
@@ -236,7 +244,10 @@ class StopLineView(dv.CandidateView):
             p0, p1 = pt(x, m.y_near_px, top_y), pt(x, H, top_y)
             if p1[1] - p0[1] > 2:
                 cv2.arrowedLine(canvas, p0, (p1[0], p1[1] - 1), dv.C_WHITE, 1, cv2.LINE_AA, tipLength=0.2)
-            dv.draw_text(canvas, "ON LINE" if m.clipped else f"{m.distance_px:.0f}px",
+            dist = "ON LINE" if m.clipped else f"{m.distance_px:.0f}px"
+            if m.distance_cm is not None and not m.clipped:
+                dist += f" {m.distance_cm:.1f}cm"
+            dv.draw_text(canvas, dist,
                          (p0[0] + 4, min(p0[1] + lh, top_y + ph - 3)), dv.C_WHITE, fs, th)
 
         # Header
@@ -246,8 +257,9 @@ class StopLineView(dv.CandidateView):
         (tw, _), _ = cv2.getTextSize(title, dv.FONT, fs * 1.15, th)
         dv.draw_text(canvas, counts, (6 + tw + 14, lh), dv.C_WHITE, fs, th)
         if m is not None:
-            info = (f"measured {'on the line' if m.clipped else f'{m.distance_px:.1f}px ahead'}"
-                    f"  tilt {m.tilt_deg:+.1f}  conf {m.confidence:.2f}")
+            cm = "" if m.distance_cm is None else f" = {m.distance_cm:.1f}cm"
+            info = (f"measured {'on the line' if m.clipped else f'{m.distance_px:.1f}px{cm} ahead'}"
+                    f"  tilt {m.tilt_deg:+.1f}  prox {m.proximity:.2f}  conf {m.confidence:.2f}")
         elif data["measured"] is not None and data["measured"].candidate_count:
             info = f"not measured: {data['measured'].candidate_count} line(s) below the confidence gate"
         else:

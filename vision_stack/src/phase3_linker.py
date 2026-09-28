@@ -153,6 +153,7 @@ def status_line(res: Phase3Result) -> str:
         f"off={pk.lane_offset:+.3f}{cm} {pk.lane_status:<6} hd={pk.heading_error:+.1f} | "
         f"{pk.drive_state} stop={'T' if pk.stop_sign_detected else 'F'} "
         f"line={_fmt(pk.stop_line_distance_px, '.0f')}"
+        + (f"/{pk.stop_line_distance_cm:.1f}cm" if pk.stop_line_distance_cm is not None else "")
     )
 
 
@@ -202,6 +203,8 @@ CSV_COLUMNS = (
     "drive_state", "stop_sign_detected", "stop_line_detected", "stop_line_distance_px",
     "yaw_rate", "lateral_accel",
     "wheel_speed", "p3_log",
+    # Appended, so no earlier column moves
+    "p2_stop_line_cm", "stop_line_distance_cm",
 )
 
 class CsvLog:
@@ -229,6 +232,7 @@ class CsvLog:
             int(pk.stop_line_detected), pk.stop_line_distance_px,
             pk.yaw_rate, pk.lateral_accel, pk.wheel_speed,
             " | ".join(res.p3_debug.get("log", [])),
+            res.chain.stop_line.distance_cm, pk.stop_line_distance_cm,     # blank without a ground homography
         ))
 
     def close(self) -> None:

@@ -277,45 +277,56 @@ def test_red_light_sequence_stops_then_releases():
 # Stop lines
 # =============================================================================
 
-def seen(distance, frame_id=FID, ts=TS):
-    """This frame's stop-line result: a line at distance px, or none when distance is None."""
+def seen(distance, frame_id=FID, ts=TS, cm="half"):
+    """
+    This frame's stop-line result: a line at distance px, or none when distance is None.
+    cm defaults to half the px value, so px and cm can be told apart; None means no ground plane.
+    """
     if distance is None:
         return [StopLineResult(False, None, None, None, None, None, False, 0.0, 0, frame_id, ts)]
+    cm = distance / 2.0 if cm == "half" else cm
     return [StopLineResult(True, distance, 81.0 - distance, 100.0, 300.0, 0.0, distance == 0.0,
-                           0.8, 1, frame_id, ts)]
+                           0.8, 1, frame_id, ts, distance_cm=cm, proximity=(81.0 - distance) / 81.0)]
 
 
 @pytest.mark.software
 def test_stop_line_needs_a_majority_of_the_window():
     out = feed(StopLineClassifier(Phase3Config(vote_window=3)), [seen(40.0), seen(30.0), seen(20.0)])
-    assert out == [(False, None), (True, 30.0), (True, 20.0)]
+    assert out == [(False, None, None), (True, 30.0, 15.0), (True, 20.0, 10.0)]
 
 
 @pytest.mark.software
-def test_stop_line_holds_the_last_distance_through_a_missed_frame():
+def test_stop_line_holds_both_distances_from_one_frame_through_a_missed_frame():
     stage, log = StopLineClassifier(Phase3Config(vote_window=3)), []
     for d in (40.0, 30.0):
         stage.update(seen(d), log)
-    assert stage.update(seen(None), log) == (True, 30.0)
+    assert stage.update(seen(None), log) == (True, 30.0, 15.0)
     assert any("holding 30.0px" in e for e in log)
 
 
 @pytest.mark.software
-def test_stop_line_distance_is_none_once_the_vote_drops():
+def test_stop_line_distances_are_none_once_the_vote_drops():
     out = feed(StopLineClassifier(Phase3Config(vote_window=3)),
                [seen(10.0), seen(0.0), seen(None), seen(None), seen(None)])
-    assert out[1:] == [(True, 0.0), (True, 0.0), (False, None), (False, None)]
+    assert out[1:] == [(True, 0.0, 0.0), (True, 0.0, 0.0), (False, None, None), (False, None, None)]
 
 
 @pytest.mark.software
 def test_stop_line_empty_results_count_as_no_line():
-    assert feed(StopLineClassifier(Phase3Config(vote_window=1)), [[], seen(5.0)]) == [(False, None), (True, 5.0)]
+    assert feed(StopLineClassifier(Phase3Config(vote_window=1)), [[], seen(5.0)]) == \
+        [(False, None, None), (True, 5.0, 2.5)]
 
 
 @pytest.mark.software
-def test_packet_carries_the_stop_line_vote_and_distance():
+def test_stop_line_without_a_ground_plane_reports_px_and_no_cm():
+    out = feed(StopLineClassifier(Phase3Config(vote_window=1)), [seen(20.0, cm=None)])
+    assert out == [(True, 20.0, None)]
+
+
+@pytest.mark.software
+def test_packet_carries_the_stop_line_vote_and_distances():
     proc = Phase3Processor(Phase3Config(vote_window=3))
     packets = [proc.process(Phase2Output([], [lane()], FID, TS, stop_line_results=seen(d)))[0]
                for d in (50.0, 45.0, None)]
-    assert [(p.stop_line_detected, p.stop_line_distance_px) for p in packets] == \
-        [(False, None), (True, 45.0), (True, 45.0)]
+    assert [(p.stop_line_detected, p.stop_line_distance_px, p.stop_line_distance_cm) for p in packets] == \
+        [(False, None, None), (True, 45.0, 22.5), (True, 45.0, 22.5)]

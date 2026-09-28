@@ -28,10 +28,10 @@ On P2: the pipeline stamps a frame when it reaches the application, after exposu
 | D1 | Detect the lane boundaries of the robot's own lane | Course recording through `phase3_linker`: share of frames in `vision` status, and longest `hold` / `stale` runs. Target **TBD** | Runs; not tuned on the IMX290 |
 | D2 | Detect a stop sign at the expected range | Recordings approaching each sign: first frame with the stop-sign flag set, and no flag on stretches with no sign. Range **TBD** | Code runs; not tuned on course frames |
 | D3 | Classify a traffic light as red, yellow or green | Recordings at each light state: voted state matches the light. Range **TBD** | Code runs; off until HSV ranges are calibrated |
-| D4 | Detect the stop line at an intersection | **TBD** | Not implemented |
+| D4 | Detect the stop line at an intersection, and how far ahead it is | Proposed: with `calibration/ground_homography.json` fitted (`guides/calibrate_ground.md`), park square to a stop line at tape-measured distances from the reference point (the floor at the bottom of the camera's view) to the line's near edge: 0 (on it), 5, 10, 15, 20 cm and the far edge of the lane ROI. 100 frames each through `phase3_linker`. Pass: at every distance the stop line is detected in ≥ 95% of frames and the median `p2_stop_line_cm` is within ±1.0 cm of the tape (±0.5 cm at 0–10 cm), with a frame-to-frame standard deviation under 0.5 cm; repeat at ±10° to the line; and no stop line on 300 frames of plain lane with dashed center line. Tolerances **TBD** with navigation's stopping needs | Implemented (geometry detection, `stop_line_distance`, Phase 3 vote, cm through the ground homography); not verified on the course |
 | D5 | Detect intersections | **TBD** | Not implemented; planned as the scene state machine |
 
-D4 and D5 were in earlier plans but have no code yet. Either schedule them or mark them out of scope for this semester in the PSR.
+D5 was in earlier plans but has no code yet. Either schedule it or mark it out of scope for this semester in the PSR. D4's stop line is detected and measured; intersections as a scene state (D5) are not.
 
 ---
 
@@ -65,5 +65,5 @@ Record the results, with the date and commit, in the status column above.
 | | Verified | Not yet | Not implemented |
 | --- | --- | --- | --- |
 | Performance | P4 | P1, P2, P3 | |
-| Detection | | D1, D2, D3 | D4, D5 |
+| Detection | | D1, D2, D3, D4 | D5 |
 | Robustness | R1, R2, R3 | R4 | R5 |

@@ -123,6 +123,9 @@ class EstimationPacket:
     # Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it);
     # None unless stop_line_detected. Held from the last frame that saw it
     stop_line_distance_px: float | None
+    # Floor cm forward to where the line crosses the robot's centerline, held
+    # like the px value; None also when there is no ground homography
+    stop_line_distance_cm: float | None
     yaw_rate: float                 # pass-through, deg/s; 0.0 if unavailable
     lateral_accel: float            # pass-through, m/s^2; 0.0 if unavailable
     wheel_speed: float              # pass-through, m/s; 0.0 if unavailable
@@ -335,32 +338,33 @@ class StopSignClassifier:
 
 class StopLineClassifier:
     """
-    Stop-line results -> voted bool and the distance to report.
+    Stop-line results -> voted bool and the distances to report.
 
     The confidence gate is Phase 2's (StopLineDistanceConfig), since the
     measurement already refuses weak candidates. While the vote says a line
-    is there, a frame that misses it repeats the last measured distance; the
-    distance is None whenever the vote says there isn't one.
+    is there, a frame that misses it repeats the last measured distances (px
+    and cm together, from the same frame); both are None whenever the vote
+    says there isn't one.
     """
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, False)
-        self._last_distance: float | None = None
+        self._last: tuple[float | None, float | None] = (None, None)
 
     def update(
             self,
             results: list[StopLineResult],
             log: list[str],
-        ) -> tuple[bool, float | None]:
-        """(voted flag, distance_px) after this frame. Logs a held distance."""
+        ) -> tuple[bool, float | None, float | None]:
+        """(voted flag, distance_px, distance_cm) after this frame. Logs a held distance."""
         seen = next((r for r in results if r.detected), None)
         if seen is not None:
-            self._last_distance = seen.distance_px
+            self._last = (seen.distance_px, seen.distance_cm)
         if not self._vote.update(seen is not None):
-            return False, None
+            return False, None, None
         if seen is None:
-            log.append(f"[STOPLINE] missed this frame; holding {self._last_distance:.1f}px")
-        return True, self._last_distance
+            log.append(f"[STOPLINE] missed this frame; holding {self._last[0]:.1f}px")
+        return True, *self._last
 
 
 class Phase3Processor:
@@ -416,7 +420,7 @@ class Phase3Processor:
         heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
-        stop_line, stop_line_px = self.stop_line.update(phase2.stop_line_results, log)
+        stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -427,6 +431,7 @@ class Phase3Processor:
             stop_sign_detected = stop_sign,
             stop_line_detected = stop_line,
             stop_line_distance_px = stop_line_px,
+            stop_line_distance_cm = stop_line_cm,
             yaw_rate = sensors.yaw_rate_dps or 0.0,
             lateral_accel = sensors.lateral_accel_mps2 or 0.0,
             wheel_speed = sensors.wheel_speed_mps or 0.0,

@@ -22,11 +22,15 @@ Main package:
     SWEEP, sweep_frame(): mark brightness x width x noise across the lane gates.
     drive_sequence(): a stamped frame-and-sensor sequence long enough to move
         every Phase 3 vote, hold and integrator, for packet parity.
-    SCENE_CONFIG: MEASURED with undistortion off.
+    SCENE_CONFIG: MEASURED with undistortion off and no ground plane.
+    SYNTHETIC_GROUND: a known ground homography for 480x270 frames: floor
+        cm from the bottom-center of the frame, 30 cm ahead at the lane ROI top.
     ALT_CONFIG: SCENE_CONFIG with every stage's tuning changed, so a stage
         that ignores its config can't pass a parity test.
     ALT_ESTIMATION: MEASURED_ESTIMATION with every Phase 3 field changed, for
         the same reason.
+    floor_board(), lens_distort(): a checkerboard lying on a known floor, and
+        the raw frame our lens would capture of it, for the ground calibration.
     same(): field-by-field equality across dataclasses, containers and arrays.
 """
 from dataclasses import dataclass, fields, is_dataclass, replace
@@ -39,6 +43,7 @@ from src.estimation import SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
+from src.perception.ground import GroundHomography
 from src.perception.roi_crop import LANE, ROIBounds, resolve
 from src.perception.stop_line_distance import StopLineDistanceConfig
 
@@ -47,9 +52,22 @@ from src.perception.stop_line_distance import StopLineDistanceConfig
 # Configs
 # =============================================================================
 
+# A plausible floor plane for synthetic frames: the frame's bottom corners are
+# 15 cm either side of the robot reference (bottom-center of the view), and
+# 90 rows up, 30 cm ahead, the view is as wide as at the bottom minus the
+# perspective squeeze. Only its being known matters to the tests.
+SYNTHETIC_GROUND = GroundHomography.from_matrix(
+    cv2.getPerspectiveTransform(
+        np.float32([[0, FRAME_H], [FRAME_W, FRAME_H], [90, FRAME_H - 90], [FRAME_W - 90, FRAME_H - 90]]),
+        np.float32([[-15, 0], [15, 0], [-15, 30], [15, 30]])),
+    image_size=(FRAME_W, FRAME_H), undistort_alpha=0.0, lens_sha256=None)
+
+# Synthetic frames are drawn already undistorted, and a ground plane fit on
+# real undistorted frames doesn't describe them, so both are off here
 SCENE_CONFIG = replace(
     MEASURED,
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
+    ground = None,
 )
 
 # Every stage's tuning moved off SCENE_CONFIG's. The values matter only in
@@ -67,7 +85,8 @@ ALT_CONFIG = replace(
     geometry = replace(
         SCENE_CONFIG.geometry,
         canny = CannyParams(threshold1 = 60.0, threshold2 = 180.0, close_kernel = (7, 3)),
-        lane = LaneContourFilter(max_area = 1200.0, min_intensity = 100.0),
+        lane = LaneContourFilter(max_area = 1200.0, min_intensity = 100.0, horizontal_edge_deg = 6.0,
+                                 horizontal_min_run_px = 60.0, horizontal_band_px = 2.0),
         sign = SignContourFilter(min_solidity = 0.75, epsilon_factor = 0.025),
         stop_line = StopLineFilter(max_tilt_deg = 6.0, min_length_px = 80.0, min_thickness_px = 2.0,
                                    max_thickness_px = 30.0, min_intensity = 150.0,
@@ -81,6 +100,7 @@ ALT_CONFIG = replace(
         stop_line_overlap = 0.7,
     ),
     stop_line = StopLineDistanceConfig(min_confidence = 0.7),
+    ground = SYNTHETIC_GROUND,
 )
 
 # Every Phase 3 field moved off MEASURED_ESTIMATION's, chosen so that each one
@@ -367,6 +387,49 @@ def sweep_frame(level: int, width: int, noise: int | None) -> np.ndarray:
         rng = np.random.default_rng(noise)
         frame = cv2.add(frame, rng.integers(0, 12, frame.shape, dtype=np.uint8))
     return frame
+
+
+# =============================================================================
+# Ground plane
+# =============================================================================
+
+def floor_board(ground, origin_x_cm, origin_y_cm, square_cm, pattern=(9, 6)) -> np.ndarray:
+    """
+    An undistorted BGR frame of a checkerboard lying flat on the floor ground describes.
+
+    Corner 0 (the far-left inner corner) is at (origin_x_cm, origin_y_cm) on the
+    floor, squares run +X across and toward the robot down the image, with a
+    white margin around them like a printed page. Each pixel is colored by
+    where its center lands on the floor.
+    """
+    cols, rows = pattern
+    ys, xs = np.mgrid[0:FRAME_H, 0:FRAME_W]
+    floor = ground.to_floor(np.stack([xs.ravel() + 0.5, ys.ravel() + 0.5], 1)).reshape(FRAME_H, FRAME_W, 2)
+    u = (floor[..., 0] - origin_x_cm) / square_cm + 1          # square column
+    v = (origin_y_cm - floor[..., 1]) / square_cm + 1          # square row, toward the robot
+    img = np.full((FRAME_H, FRAME_W), 90, np.uint8)
+    img[(u >= -0.6) & (u < cols + 1.6) & (v >= -0.6) & (v < rows + 1.6)] = 255
+    squares = (u >= 0) & (u < cols + 1) & (v >= 0) & (v < rows + 1)
+    img[squares & ((np.floor(u) + np.floor(v)) % 2 == 1)] = 20
+    return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+def lens_distort(undistorted: np.ndarray, calibration_path: str, alpha: float = 0.0) -> np.ndarray:
+    """
+    The raw frame our lens would capture, given the undistorted view preprocess produces from it.
+
+    The inverse of preprocess's undistortion: every raw pixel is sampled from
+    where undistortion would send it. Resampling twice softens edges slightly.
+    """
+    import json
+    calib = json.loads(open(calibration_path).read())
+    K, dist = np.array(calib["camera_matrix"]), np.array(calib["dist_coeffs"])
+    h, w = undistorted.shape[:2]
+    new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), alpha, (w, h))
+    ys, xs = np.mgrid[0:h, 0:w].astype(np.float32)
+    und = cv2.undistortPoints(np.stack([xs.ravel(), ys.ravel()], 1).reshape(-1, 1, 2),
+                              K, dist, P=new_K).reshape(h, w, 2)
+    return cv2.remap(undistorted, und[..., 0], und[..., 1], cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REPLICATE)
 
 
 # =============================================================================

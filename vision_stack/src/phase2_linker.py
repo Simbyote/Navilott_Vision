@@ -113,7 +113,7 @@ def run_chain(
     offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
     lap("lane_offset")
 
-    stop_line, stop_line_debug = compute_stop_line_distance(geo, roi, config.stop_line)
+    stop_line, stop_line_debug = compute_stop_line_distance(geo, roi, config.stop_line, config.ground)
     lap("stop_line")
 
     fusion, fusion_debug = fuse_detections(geo, traffic, roi)

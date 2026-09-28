@@ -35,9 +35,13 @@ from src.tests.artifacts import summarize
 
 # Explicit rather than the shipped defaults, so retuning never breaks detection tests
 TEST_CANNY = CannyParams(threshold1=80.0, threshold2=200.0, aperture_size=3, close_kernel=(9, 3))
+# The horizontal-line filter is off here so the contour gates are tested alone;
+# it has its own tests below, with TEST_LANE_FILTERED
 TEST_LANE = LaneContourFilter(min_area=1, max_area=1e6, min_aspect=0.0, max_aspect=1000.0,
                               max_roi_span=1.0, min_intensity=120.0, ref_length=0.25,
-                              ref_width=30.0)
+                              ref_width=30.0, horizontal_edge_deg=None)
+TEST_LANE_FILTERED = replace(TEST_LANE, horizontal_edge_deg=20.0, horizontal_min_run_px=46.0,
+                             horizontal_band_px=3.0)
 TEST_SIGN = SignContourFilter(min_area=200.0, max_area=30000.0, min_vertices=8, max_vertices=10,
                               min_solidity=0.80, epsilon_factor=0.03, ref_area=5000.0)
 TEST_STOP = StopLineFilter(max_tilt_deg=20.0, min_length_px=60.0, min_thickness_px=3.0,
@@ -465,6 +469,16 @@ def test_raw_edges_are_a_subset_of_the_closed_edges():
     _, dbg = extract_lane_candidates(noisy_scene(1, LANE_SHAPE), TEST_CANNY, TEST_LANE, 1, 2, False)
     assert_edge_map(dbg["edges"], dbg["lane_roi"]); assert_edge_map(dbg["edges_raw"], dbg["lane_roi"])
     assert np.all(dbg["edges"][dbg["edges_raw"] > 0] == 255)
+    assert dbg["edges_lane"] is dbg["edges_raw"]                    # filter off: the same map
+
+
+@pytest.mark.software
+def test_filtered_lane_edges_are_a_subset_of_the_raw_edges_and_feed_the_closing():
+    lane = stop_bar(100, 340, 40, 8, marks=(150, 290))
+    _, dbg = extract_lane_candidates(lane, TEST_CANNY, TEST_LANE_FILTERED, 1, 2, False)
+    assert np.all(dbg["edges_raw"][dbg["edges_lane"] > 0] == 255)
+    assert (dbg["edges_lane"] > 0).sum() < (dbg["edges_raw"] > 0).sum()
+    assert np.all(dbg["edges"][dbg["edges_lane"] > 0] == 255)
 
 
 @pytest.mark.software
@@ -914,6 +928,88 @@ def test_stop_line_config_reaches_the_detector_through_the_stage():
     refused, _, _ = run_geometry_stage(roi, replace(TEST_CFG, stop_line=replace(TEST_STOP, min_length_px=500.0)))
     assert len(found.stop_line_candidates) == 1 and refused.stop_line_candidates == []
     assert geo.detect_geometry(roi, TEST_CFG).stop_line_candidates[0].bbox == found.stop_line_candidates[0].bbox
+
+
+# =============================================================================
+# Lines across the lane, out of the lane detector's edges
+# =============================================================================
+
+def lanes_found(lane, flt=TEST_LANE_FILTERED):
+    return extract_lane_candidates(lane, TEST_CANNY, flt, 1, 2, False)
+
+
+# Unblurred drawn ROIs, so thin marks: wide tape needs preprocess's blur to
+# trace as a shape, and is covered through the pipeline in test_pipeline
+@pytest.mark.software
+def test_a_stop_line_touching_the_lane_lines_no_longer_joins_them():
+    lane = stop_bar(140, 300, 40, 10, marks=(150, 290), mark_width=6)
+    joined, _ = lanes_found(lane, TEST_LANE)
+    assert len(joined) == 1 and joined[0].bbox[2] > 150                # one H-shaped contour
+    apart, _ = lanes_found(lane)
+    assert apart and all(c.bbox[2] < 45 for c in apart)                 # the lane lines, apart
+    assert any(c.bbox[0] <= 150 <= c.bbox[0] + c.bbox[2] for c in apart)
+    assert any(c.bbox[0] <= 290 <= c.bbox[0] + c.bbox[2] for c in apart)
+
+
+@pytest.mark.software
+def test_the_stubs_of_a_stop_line_running_past_the_tape_go_too():
+    """Shorter than a tape end on their own; removed because they lie on the long run's line."""
+    lane = stop_bar(40, 400, 40, 10, marks=(150, 290), mark_width=6)
+    cands, _ = lanes_found(lane)
+    assert cands and all(c.bbox[2] < 45 for c in cands)
+
+
+@pytest.mark.software
+def test_the_ends_of_a_piece_of_tape_stay_so_it_traces_as_one():
+    dash = blank(LANE_SHAPE)
+    cv2.rectangle(dash, (140, 20), (160, 60), FG, -1)                   # 20 px wide, 40 px long
+    plain, _ = lanes_found(dash, TEST_LANE)
+    filtered, dbg = lanes_found(dash)
+    assert dbg["edges_lane"] is dbg["edges_raw"]                        # no run long enough to remove
+    assert [(c.bbox, c.confidence) for c in filtered] == [(c.bbox, c.confidence) for c in plain]
+
+
+@pytest.mark.software
+def test_a_tilted_stop_line_within_the_angle_goes_and_a_steeper_line_stays():
+    # Blurred as preprocess does: a drawn tilted edge is a pixel staircase whose
+    # steps read steeper than the angle and break the run into short pieces
+    tilted_bar = cv2.GaussianBlur(stop_bar(100, 340, 45, 10, tilt_deg=12.0, marks=(150, 290)), (9, 3), 0)
+    tilted, _ = lanes_found(tilted_bar)
+    assert tilted and all(c.bbox[2] < 60 for c in tilted)
+    _, dbg = lanes_found(line_tape((120, 100), (300, 10), thickness=8))   # ~27 deg: a line the lane keeps
+    assert dbg["edges_lane"] is dbg["edges_raw"]
+
+
+@pytest.mark.software
+def test_lane_lines_alone_are_untouched_by_the_filter():
+    _, dbg = lanes_found(stop_bar(0, 1, 0, 1, value=BG, marks=(150, 290), mark_width=20))
+    assert dbg["edges_lane"] is dbg["edges_raw"]
+
+
+@pytest.mark.software
+def test_the_stop_line_detector_reads_the_full_edges_whatever_the_lane_filter():
+    from src.tests.scenes import SCENE_CONFIG, SCENES
+    roi = crop_rois(preprocess_frame(FrameData(SCENES["stop_line_touching"], 1, 50), SCENE_CONFIG.preprocess),
+                    SCENE_CONFIG.roi)
+    on = run_geometry_stage(roi, SCENE_CONFIG.geometry)[0]
+    off = run_geometry_stage(roi, replace(SCENE_CONFIG.geometry,
+                                          lane=replace(SCENE_CONFIG.geometry.lane, horizontal_edge_deg=None)))[0]
+    assert [c.bbox for c in on.stop_line_candidates] == [c.bbox for c in off.stop_line_candidates]
+    assert len(on.stop_line_candidates) == 1
+    narrow = lambda cands: [c for c in cands if c.bbox[2] < 45]
+    assert narrow(off.lane_candidates) == [] and len(narrow(on.lane_candidates)) >= 2   # joined vs apart
+
+
+@pytest.mark.software
+def test_the_lane_filter_is_the_same_whether_it_shares_the_stop_line_split_or_not():
+    """At the same angle the stop-line detector's split is reused; at another the lane computes its own."""
+    lane = stop_bar(100, 340, 40, 10, marks=(150, 290), mark_width=20)
+    edges = geo._canny(lane, TEST_CANNY)
+    shared = geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED, geo._horizontal_edges(lane, edges, 20.0))
+    own = geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED)
+    assert np.array_equal(shared, own)
+    split = geo._splits(lane, edges, TEST_LANE_FILTERED, replace(TEST_STOP, max_tilt_deg=15.0))
+    assert split[1] is None
 
 
 def _jsonable_trace(trace):
