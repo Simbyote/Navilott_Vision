@@ -196,6 +196,7 @@ class StopLineCandidate:
     confidence: float                   # [0, 1]
     frame_id: int
     timestamp_ms: int
+    proximity: float = 0.0              # [0, 1] y_near_px / ROI height, as LaneCandidate's; 1.0 = at the ROI bottom
 
 @dataclass
 class GeometryBranchResult:
@@ -1178,6 +1179,7 @@ def _stop_line_from(
         confidence = _stop_line_confidence(length_px, tilt, mean_intensity, f),
         frame_id = frame_id,
         timestamp_ms = timestamp_ms,
+        proximity = round(clamp(min(y_near, float(roi_h)) / max(roi_h, 1), 0.0, 1.0), 4),
     ), "accepted"
 
 def extract_stop_line_candidates(

@@ -108,7 +108,7 @@ runs/p3_<YYYYMMDD_HHMMSS>/
 | Lane offset while on vision | Mean, standard deviation, min and max |
 | Transitions | How many times each packet field changed |
 
-In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. The status line ends with `line=<px>`. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
+In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. `p2_stop_line_cm` and `stop_line_distance_cm`, the last two columns, are the same in floor cm, blank without a ground homography (`calibrate_ground.md`). The status line ends with `line=<px>`, or `line=<px>/<cm>cm` with one. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
 
 ## 5. Bench checks
 

@@ -13,7 +13,8 @@ Purpose:
 
 Main package:
     PipelineConfig: preprocess, ROI, geometry, color, lane-offset and
-        stop-line distance tuning.
+        stop-line distance tuning, and the ground homography (frame px ->
+        floor cm) the cm outputs project through.
         Its defaults are each stage's own defaults: no undistortion, color
         branch off.
     MEASURED: the robot's Phase 2 tuning. Undistorts with the lens
@@ -26,15 +27,19 @@ Main package:
 Flow:
     Import-time only. MEASURED reads calibration/hsv_ranges.json once, when
     this module is first imported, and fails then if the file is missing or
-    malformed rather than on the first frame. The lens calibration is stored
+    malformed rather than on the first frame. It also loads
+    calibration/ground_homography.json once, checked against MEASURED's own
+    preprocess settings; missing or mismatched, it warns and leaves ground
+    None, which only turns the cm outputs off. The lens calibration is stored
     as a path and read by preprocess on first use.
 """
 from dataclasses import dataclass, field
 
 from src.estimation import Phase3Config
-from src.params import CAMERA_CALIB_PATH, HSV_RANGES_PATH
+from src.params import CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH
 from src.perception.color_branch import ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig
+from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
 from src.perception.preprocess import PreprocessParams
 from src.perception.roi_crop import ROIConfig
@@ -54,6 +59,7 @@ class PipelineConfig:
     color: ColorConfig = field(default_factory=ColorConfig)                 # off until HSV ranges are given
     lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
     stop_line: StopLineDistanceConfig = field(default_factory=StopLineDistanceConfig)
+    ground: GroundHomography | None = None      # frame px -> floor cm; None turns the cm outputs off
 
 
 # =============================================================================
@@ -73,9 +79,14 @@ class PipelineConfig:
 #
 # Synthetic frames are drawn already undistorted, so tests that feed them use
 # src/tests/scenes.SCENE_CONFIG: this, with undistortion off.
+#
+# The ground homography was fit on frames from exactly this preprocess, so it
+# is loaded against it; any other lens calibration, alpha or size refuses it.
+_MEASURED_PREPROCESS = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH))
 MEASURED = PipelineConfig(
-    preprocess = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH)),
+    preprocess = _MEASURED_PREPROCESS,
     color = load_color_config(str(HSV_RANGES_PATH)),
+    ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,

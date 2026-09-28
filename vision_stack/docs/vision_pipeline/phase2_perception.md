@@ -289,9 +289,21 @@ Turns stop-line candidates into one measurement per frame: how far ahead the nea
 candidates → confidence gate (≥ 0.4) → nearest (largest y_near_px) → distance_px = lane ROI height − y_near_px
 ```
 
-The reference row is the bottom of the lane ROI, the nearest ground the camera sees, so the distance falls to 0 as the robot reaches the line (a clipped line is at 0). It is in lane-ROI px. Converting to cm needs a ground homography: `cm_per_px` holds only at the bottom row, and perspective compresses the rows above it.
+The reference is the bottom of the lane ROI, which is the bottom of the frame: the nearest floor the camera sees, about 3 cm ahead of the robot. Both distances fall to 0 as the robot reaches the line (a clipped line is at 0).
 
-`StopLineResult` has `detected`, `distance_px`, `y_near_px`, the line's ends and tilt, `clipped`, the confidence and how many candidates geometry found. With nothing confident, `detected` is False and the numbers are None. Phase 3 votes on it and holds the distance (see `phase3_estimation.md`).
+- **`distance_px`** is in lane-ROI rows and needs no calibration.
+- **`distance_cm`** is the floor distance forward from the reference point to where the line's near edge crosses the robot's centerline (X = 0), through `PipelineConfig.ground` (`perception/ground.py`). The near edge's two ends go from lane-ROI to frame coordinates (adding the ROI origin), onto the floor, and the crossing is taken there; a straight line stays straight through a homography, so this is exact even for a line seen at an angle or off to one side. `None` when there is no ground homography or the frame isn't the size it was fit at. `cm_per_px` isn't used: it only holds at the bottom row.
+- **`proximity`** is `y_near_px / ROI height` in [0, 1], the same closeness measure lane candidates carry (1 = at the ROI bottom).
+
+`StopLineResult` also has `y_near_px`, the line's ends and tilt, `clipped`, the confidence and how many candidates geometry found. With nothing confident, `detected` is False and the numbers are None. Phase 3 votes on it and holds the distances (see `phase3_estimation.md`).
+
+### Ground homography
+
+**File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`guides/calibrate_ground.md`)
+
+One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+, origin at the reference point). It is fit on frames from `preprocess_frame` with `MEASURED`'s settings and records the lens calibration (a SHA-256 of its `image_size`, `camera_matrix` and `dist_coeffs`), `undistort_alpha` and image size it was fit under. `config.py` loads it once into `MEASURED.ground`; if it's missing, or any of those three differ from what preprocess uses, or undistortion is off, it warns and leaves `ground` None, which only turns the cm outputs off. `SCENE_CONFIG` has none, since synthetic frames aren't undistorted. Nothing reads it per frame.
+
+**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the hand-set `expected_half_lane_px` (228) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
 ---
 

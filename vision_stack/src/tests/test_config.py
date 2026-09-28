@@ -148,3 +148,24 @@ def test_phase3_linker_reports_the_color_branch_from_the_config(tmp_path, capsys
     cv2.imwrite(str(frames / "000000.png"), synthetic_frame([150, 290]))
     assert p3.cli(["--frames", str(frames), "--out", str(tmp_path / "out")]) == 0
     assert "color branch on" in capsys.readouterr().out
+
+
+@pytest.mark.software
+def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_path):
+    """A matching ground file at GROUND_HOMOGRAPHY_PATH ends up in MEASURED.ground; SCENE_CONFIG never has one."""
+    import json
+    from src.perception.ground import lens_id
+    from src.tests.scenes import SYNTHETIC_GROUND
+    ground = tmp_path / "ground_homography.json"
+    ground.write_text(json.dumps({
+        "H": [list(r) for r in SYNTHETIC_GROUND.H], "image_size": [FRAME_W, FRAME_H],
+        "undistort_alpha": MEASURED.preprocess.undistort_alpha,
+        "lens_calibration": {"sha256": lens_id(MEASURED.preprocess.calibration_path)}}))
+    probe = ("import src.params as p, pathlib; "
+             f"p.GROUND_HOMOGRAPHY_PATH = pathlib.Path({str(ground)!r}); "
+             "import src.config as c, src.tests.scenes as s; "
+             "print(c.MEASURED.ground is not None, c.MEASURED.ground.H == s.SYNTHETIC_GROUND.H, "
+             "s.SCENE_CONFIG.ground is None)")
+    out = subprocess.run([sys.executable, "-W", "ignore", "-c", probe], cwd=PIPELINE_ROOT,
+                         capture_output=True, text=True, check=True).stdout.split()
+    assert out == ["True", "True", "True"]

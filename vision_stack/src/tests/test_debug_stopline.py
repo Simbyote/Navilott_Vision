@@ -10,6 +10,7 @@ labelling of candidates lane_offset skipped as part of a stop line.
             line with --views stopline, and debug_lane's "stop_line" gate. No camera.
 """
 import re
+from dataclasses import replace
 
 import cv2
 import pytest
@@ -18,7 +19,7 @@ import src.debugger.live_view as lv
 from src.debugger.debug_lane import candidate_gates
 from src.debugger.debug_stopline import StopLineView
 from src.phase2_linker import run_chain, run_live_view
-from src.tests.scenes import SCENE_CONFIG, SCENES
+from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND
 
 
 def chain(scene, trace=True):
@@ -121,8 +122,15 @@ def test_row_matches_the_header_and_carries_the_measurement():
     assert len(row) == len(StopLineView.CSV_FIELDS)
     assert (row["measured"], row["distance_px"], row["clipped"], row["lane_skipped"]) == (1, 26.0, 0, 1)
     assert row["thickness_px"] == pytest.approx(5.4, abs=0.5)
+    assert (row["distance_cm"], row["proximity"]) == ("", pytest.approx(55.0 / 81.0, abs=1e-3))
     empty = dict(zip(StopLineView.CSV_FIELDS, view.row(data("two_boundary", view))))
     assert (empty["measured"], empty["distance_px"]) == (0, "")
+    # With a ground plane the row carries the floor distance, and the header shows it
+    grounded = replace(SCENE_CONFIG, ground=SYNTHETIC_GROUND)
+    d = view.extract(run_chain(SCENES["stop_line_wide"], 7, 350, grounded, trace=True))
+    row = dict(zip(StopLineView.CSV_FIELDS, view.row(d)))
+    assert row["distance_cm"] == d["measured"].distance_cm and row["distance_cm"] > 0
+    assert view.render(d).shape[2] == 3
 
 
 @pytest.mark.software

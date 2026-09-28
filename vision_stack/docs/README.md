@@ -18,6 +18,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Watch what the pipeline detects | `guides/phase2_linker.md` |
 | Check what estimation decides | `guides/phase3_linker.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
+| Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
 | Check an existing calibration | `guides/test_calibration.md` |
 
 ---
@@ -32,6 +33,7 @@ docs/
         phase3_estimation.md    detections + IMU → navigation packet
     guides/
         calibrate_camera.md     lens calibration
+        calibrate_ground.md     ground-plane homography: floor distances in cm
         phase2_linker.md        watching the pipeline, with video
         phase3_linker.md        checking estimation, headless
         pytest.md               running the test suite

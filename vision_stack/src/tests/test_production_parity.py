@@ -39,7 +39,7 @@ from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
 from src.config import MEASURED, PipelineConfig
-from src.tests.scenes import ALT_CONFIG, SCENE_CONFIG, SCENES, SWEEP, same as _same, sweep_frame
+from src.tests.scenes import ALT_CONFIG, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, same as _same, sweep_frame
 
 
 # ALT_CONFIG moves every stage's tuning, so a twin that ignores part of its
@@ -55,7 +55,7 @@ def _run_debug(roi, config, color):
     g, _, _ = geo.run_geometry_stage(roi, config.geometry)
     traffic, _ = cb.run_color_stage(roi, color)
     offset, _ = lo.compute_lane_offset(g, roi, config.lane_offset)
-    stop_line, _ = sld.compute_stop_line_distance(g, roi, config.stop_line)
+    stop_line, _ = sld.compute_stop_line_distance(g, roi, config.stop_line, config.ground)
     fusion, _ = ff.fuse_detections(g, traffic, roi)
     return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
 
@@ -64,7 +64,7 @@ def _run_production(roi, config, color):
     g = geo.detect_geometry(roi, config.geometry)
     traffic = cb.detect_color(roi, color)
     offset = lo.estimate_lane_offset(g, roi, config.lane_offset)
-    stop_line = sld.estimate_stop_line_distance(g, roi, config.stop_line)
+    stop_line = sld.estimate_stop_line_distance(g, roi, config.stop_line, config.ground)
     fusion = ff.fuse(g, traffic, roi)
     return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
 
@@ -283,14 +283,17 @@ def test_stop_line_distance_twins_fuzz():
     from src.perception.geometry import StopLineCandidate
     rng = np.random.default_rng(11)
     roi = _roi(SCENES["two_boundary"], SCENE_CONFIG)
-    for _ in range(300):
+    for i in range(300):
         cands = []
         for _ in range(int(rng.integers(0, 5))):
             y = float(rng.choice([20.0, 40.0, 40.0, 81.0]))
             cands.append(StopLineCandidate(
-                "stop_line", (0, 0, 1, 1), float(rng.integers(0, 200)), 300.0, y - 6, y, y, 0.0,
-                100.0, 6.0, 200.0, y == 81.0, float(rng.choice([0.39, 0.4, 0.41, 0.9])),
-                roi.frame_id, roi.timestamp_ms))
+                "stop_line", (0, 0, 1, 1), float(rng.integers(0, 200)), 300.0, y - 6, y, y,
+                float(rng.uniform(-15, 15)), 100.0, 6.0, 200.0, y == 81.0,
+                float(rng.choice([0.39, 0.4, 0.41, 0.9])), roi.frame_id, roi.timestamp_ms,
+                proximity=round(y / 81.0, 4)))
         g = geo.GeometryBranchResult([], [], roi.frame_id, roi.timestamp_ms, cands)
         cfg = sld.StopLineDistanceConfig(min_confidence=0.4)
-        _same(sld.compute_stop_line_distance(g, roi, cfg)[0], sld.estimate_stop_line_distance(g, roi, cfg))
+        ground = SYNTHETIC_GROUND if i % 2 else None
+        _same(sld.compute_stop_line_distance(g, roi, cfg, ground)[0],
+              sld.estimate_stop_line_distance(g, roi, cfg, ground))

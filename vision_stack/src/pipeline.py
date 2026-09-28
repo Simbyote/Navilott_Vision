@@ -172,7 +172,7 @@ class Pipeline:
         if laps:
             laps.lap("lane_offset")
 
-        stop_line = estimate_stop_line_distance(geo, roi, cfg.stop_line)
+        stop_line = estimate_stop_line_distance(geo, roi, cfg.stop_line, cfg.ground)
         if laps:
             laps.lap("stop_line")
 

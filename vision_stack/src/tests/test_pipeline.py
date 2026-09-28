@@ -32,7 +32,8 @@ from src.phase2_linker import run_chain
 from src.phase3_linker import run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
-    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, differs, drive_sequence, same, sweep_frame,
+    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, differs, drive_sequence,
+    same, sweep_frame,
 )
 
 # MEASURED undistorts; synthetic frames come out warped, but both paths warp
@@ -44,7 +45,7 @@ CONFIGS = {
     "alt": ALT_CONFIG,
     "measured": MEASURED,
 }
-GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line")
+GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line", "ground")
 
 
 def _stamp(i: int) -> tuple[int, int]:
@@ -209,6 +210,7 @@ PACKET_CASES = {
     "measured": (SCENE_CONFIG, MEASURED_ESTIMATION),
     "cm_scale": (SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=0.05)),
     "alt": (ALT_CONFIG, ALT_ESTIMATION),
+    "ground": (replace(SCENE_CONFIG, ground=SYNTHETIC_GROUND), MEASURED_ESTIMATION),
 }
 DRIVE = drive_sequence()
 
@@ -284,6 +286,14 @@ def test_drive_sequence_moves_every_phase3_output():
     assert 0.0 in line_px and len({d for d in line_px if d is not None}) >= 3
     assert max(abs(h) for h in headings) > 10.0
     assert any(c is not None for c in cm) and any(c is None for c in cm)
+
+
+@pytest.mark.software
+def test_the_drive_reports_cm_only_with_a_ground_plane():
+    scene_cm = [p.stop_line_distance_cm for p, _ in _packets(Pipeline(*PACKET_CASES["measured"]))]
+    ground_cm = [p.stop_line_distance_cm for p, _ in _packets(Pipeline(*PACKET_CASES["ground"]))]
+    assert all(cm is None for cm in scene_cm)
+    assert 0.0 in ground_cm and len({cm for cm in ground_cm if cm}) >= 3
 
 
 ALT_FIELDS = [f.name for f in fields(ALT_ESTIMATION)

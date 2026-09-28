@@ -109,8 +109,8 @@ The traffic light path runs with `calibration/hsv_ranges.json`, loaded whether o
 | Voted | This frame saw a line | `stop_line_distance_px` |
 | --- | --- | --- |
 | yes | yes | this frame's distance |
-| yes | no | the last measured distance, held (logged as `[STOPLINE]`) |
-| no | either | `None` |
+| yes | no | the last measured distances (px and cm, from one frame), held (logged as `[STOPLINE]`) |
+| no | either | `None` (px and cm) |
 
 The hold lasts only as long as the vote: with a window of 3, one missed frame keeps the line and its last distance; two in a row drop it. The distance is in lane-ROI px from the bottom of the lane ROI (0 = on the line).
 
@@ -146,7 +146,8 @@ If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is a
 | `drive_state` | `str` | `go` / `caution` / `stop`, voted |
 | `stop_sign_detected` | `bool` | Voted |
 | `stop_line_detected` | `bool` | Voted |
-| `stop_line_distance_px` | `float \| None` | Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it), held through a missed frame; `None` unless `stop_line_detected`. Not cm: that needs a ground homography |
+| `stop_line_distance_px` | `float \| None` | Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it), held through a missed frame; `None` unless `stop_line_detected` |
+| `stop_line_distance_cm` | `float \| None` | Floor cm forward of the reference point (the bottom of the camera's view) to where the line crosses the robot's centerline, held with the px value from the same frame; also `None` without a ground homography |
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `wheel_speed` | `float` | Pass-through, m/s; 0.0 until encoders are wired in |

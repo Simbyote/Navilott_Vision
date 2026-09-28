@@ -22,10 +22,10 @@ from src.perception.stop_line_distance import (
     StopLineDistanceConfig, StopLineResult, compute_stop_line_distance, estimate_stop_line_distance,
 )
 from src.phase2_linker import run_chain
-from src.tests.scenes import SCENE_CONFIG, SCENES, same
+from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND, same
 
 ROI_H = 81
-ROI = SimpleNamespace(lane_rect=(24, 189, 432, ROI_H), frame_id=7, timestamp_ms=350)
+ROI = SimpleNamespace(lane_rect=(24, 189, 432, ROI_H), frame_id=7, timestamp_ms=350, source_shape=(270, 480))
 
 
 def line(y_near, confidence=0.8, clipped=False, x=(100.0, 300.0), tilt=0.0):
@@ -34,15 +34,16 @@ def line(y_near, confidence=0.8, clipped=False, x=(100.0, 300.0), tilt=0.0):
         label=STOP_LINE, bbox=(int(x[0]), int(y_near) - 8, int(x[1] - x[0]), 8),
         x_left=x[0], x_right=x[1], y_top_px=y_near - 8, y_bottom_px=y_near, y_near_px=y_near,
         tilt_deg=tilt, length_px=x[1] - x[0], thickness_px=8.0, mean_intensity=220.0,
-        clipped=clipped, confidence=confidence, frame_id=7, timestamp_ms=350)
+        clipped=clipped, confidence=confidence, frame_id=7, timestamp_ms=350,
+        proximity=round(y_near / ROI_H, 4))
 
 def geometry(*lines, frame_id=7, ts=350):
     return GeometryBranchResult([], [], frame_id, ts, list(lines))
 
-def both(geo, cfg=StopLineDistanceConfig()):
+def both(geo, cfg=StopLineDistanceConfig(), ground=None, roi=ROI):
     """The debug and production results, checked equal."""
-    debug, summary = compute_stop_line_distance(geo, ROI, cfg)
-    same(debug, estimate_stop_line_distance(geo, ROI, cfg))
+    debug, summary = compute_stop_line_distance(geo, roi, cfg, ground)
+    same(debug, estimate_stop_line_distance(geo, roi, cfg, ground))
     return debug, summary
 
 
@@ -82,7 +83,8 @@ def test_the_confidence_gate_is_inclusive_and_configurable():
 @pytest.mark.parametrize("lines", [(), (line(30.0, confidence=0.1),)], ids=["none", "all_weak"])
 def test_nothing_measured_reports_not_detected_with_no_numbers(lines):
     r, _ = both(geometry(*lines))
-    assert r == StopLineResult(False, None, None, None, None, None, False, 0.0, len(lines), 7, 350)
+    assert r == StopLineResult(False, None, None, None, None, None, False, 0.0, len(lines), 7, 350,
+                               distance_cm=None, proximity=0.0)
 
 
 @pytest.mark.software
@@ -125,9 +127,71 @@ def test_phase3_linker_logs_the_stop_line_columns(tmp_path):
     cols = header.split(",")
     for name in ("p2_stop_line_px", "stop_line_detected", "stop_line_distance_px"):
         assert name in cols
+    # cm columns are appended, so nothing before them moved; blank without a ground homography
+    assert cols[-2:] == ["p2_stop_line_cm", "stop_line_distance_cm"]
     # The CLI runs MEASURED, which undistorts the synthetic frame, so only
     # consistency is checked: once voted, the packet reports what Phase 2 measured
     last = dict(zip(cols, rows[-1].split(",")))
     assert float(last["p2_stop_line_px"]) > 0
     assert last["stop_line_detected"] == "1"
     assert float(last["stop_line_distance_px"]) == float(last["p2_stop_line_px"])
+
+
+# =============================================================================
+# Floor distance through the ground homography
+# =============================================================================
+
+def floor_y(frame_row):
+    """What SYNTHETIC_GROUND says is Y at the robot's centerline for a frame row (its rows are level)."""
+    return float(SYNTHETIC_GROUND.to_floor([[240.0, frame_row]])[0][1])
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("y_near", [10.0, 40.0, 72.5])
+def test_distance_cm_is_the_floor_distance_to_the_near_edge_at_the_centerline(y_near):
+    r, _ = both(geometry(line(y_near)), ground=SYNTHETIC_GROUND)
+    assert r.distance_cm == pytest.approx(floor_y(189 + y_near), abs=0.01)     # lane ROI origin added
+    assert r.distance_px == ROI_H - y_near and r.proximity == pytest.approx(y_near / ROI_H, abs=1e-4)
+
+
+@pytest.mark.software
+def test_a_tilted_line_is_measured_where_it_crosses_the_robots_centerline():
+    """Not at its nearest pixel: the right end is nearer, the centerline crossing further."""
+    c = line(50.0, x=(150.0, 350.0), tilt=6.0)
+    r, _ = both(geometry(c), ground=SYNTHETIC_GROUND)
+    slope = np.tan(np.radians(6.0))
+    mid = 250.0
+    ends = [(24 + x, 189 + 50.0 + (x - mid) * slope) for x in (150.0, 350.0)]
+    assert r.distance_cm == pytest.approx(SYNTHETIC_GROUND.forward_at_centerline(*ends), abs=0.01)
+    assert r.distance_cm > floor_y(189 + 50.0 + 100 * slope) + 0.2           # further than the near end
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("tilt", [0.0, 8.0, -8.0])
+def test_a_line_the_robot_is_on_is_at_zero_cm_however_it_is_tilted(tilt):
+    """Its near edge is below the frame; the ROI bottom stands in for it, not the tilted edge extended."""
+    r, _ = both(geometry(line(float(ROI_H), clipped=True, tilt=tilt)), ground=SYNTHETIC_GROUND)
+    assert r.distance_cm == 0.0 and r.distance_px == 0.0 and r.proximity == 1.0
+
+
+@pytest.mark.software
+def test_without_a_ground_plane_or_at_another_frame_size_there_is_no_cm():
+    assert both(geometry(line(40.0)))[0].distance_cm is None
+    other_size = SimpleNamespace(**{**vars(ROI), "source_shape": (360, 640)})
+    r, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND, roi=other_size)
+    assert r.detected and r.distance_px == 41.0 and r.distance_cm is None
+
+
+@pytest.mark.software
+def test_the_lane_roi_origin_is_added_before_projecting():
+    """The same lane-ROI row sits lower in the frame when the ROI starts lower, so it is nearer."""
+    higher = SimpleNamespace(**{**vars(ROI), "lane_rect": (24, 150, 432, ROI_H)})
+    a, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND)
+    b, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND, roi=higher)
+    assert b.distance_cm == pytest.approx(floor_y(150 + 40.0), abs=0.01) and b.distance_cm > a.distance_cm
+
+
+@pytest.mark.software
+def test_the_log_reports_cm_when_there_is_a_ground_plane():
+    _, s = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND)
+    assert any("cm ahead" in e for e in s["log"])
