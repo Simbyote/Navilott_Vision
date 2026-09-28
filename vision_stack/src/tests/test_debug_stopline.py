@@ -22,11 +22,17 @@ from src.phase2_linker import run_chain, run_live_view
 from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND
 
 
-def chain(scene, trace=True):
-    return run_chain(SCENES[scene], 7, 350, SCENE_CONFIG, trace=trace)
+# The lane detector's horizontal-line filter keeps stop lines out of the lane
+# candidates, so lane_offset's stop-line check is a backstop. These tests of
+# the "lane skip" marks turn the filter off to reach it
+NO_LANE_FILTER = replace(SCENE_CONFIG, geometry=replace(
+    SCENE_CONFIG.geometry, lane=replace(SCENE_CONFIG.geometry.lane, horizontal_edge_deg=None)))
 
-def data(scene, view=None):
-    return (view or StopLineView()).extract(chain(scene))
+def chain(scene, trace=True, config=NO_LANE_FILTER):
+    return run_chain(SCENES[scene], 7, 350, config, trace=trace)
+
+def data(scene, view=None, config=NO_LANE_FILTER):
+    return (view or StopLineView()).extract(chain(scene, config=config))
 
 
 # =============================================================================

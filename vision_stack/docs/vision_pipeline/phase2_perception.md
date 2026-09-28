@@ -131,10 +131,14 @@ Finds lane boundaries, stop lines and stop-sign shapes from intensity edges. Can
 ### Lane boundaries
 
 ```
-lane ROI → Canny (80, 200) → close (9×3) → contours → gates → confidence → merge fragments
+lane ROI → Canny (80, 200) → take lines across the lane out → close (9×3) → contours → gates → confidence → merge fragments
 ```
 
 White tape on a dark mat gives strong edges. The morphological close bridges gaps along a line so a fragmented line traces as one contour.
+
+**Lines across the lane come out first.** A stop line touching the lane lines would otherwise close into one H-shaped contour with them, too wide for any lane gate, and the lane would be lost for as long as the line is in view. So the lane detector's own copy of the edges loses every horizontal edge run at least `horizontal_min_run_px` (46 px) long within `horizontal_edge_deg` (20°) of horizontal, plus any horizontal edge within `horizontal_band_px` (3 px) of such a run's line (the stubs of a stop line running past the tape). The runs are longer than any tape is wide, so the ends of a piece of tape stay and it still traces as one shape. These are `LaneContourFilter` settings, the lane's own; the stop-line detector reads the full edge map with its own `StopLineFilter`. When the two angles match, the gradient split is computed once for both. The course has no curves the camera steers through, so no lane line lies that flat. `horizontal_edge_deg = None` turns it off.
+
+Checked against the previous version on every test scene and gate-sweep frame under three configs (840 pairs): lane results changed only on frames with a stop line, from `none` or one-sided to `two_boundary`, plus one short line bent by undistortion that the stop-line detector misses. **Known limit:** on wide tape (20–30 px), while a stop line is in view, the anchors can land on the tape's edge instead of its middle, up to half a tape width: the piece of tape below the line has no top edge (tape meets tape there), so its two sides trace apart.
 
 Gates, applied in order. Each rejection goes to its own counter:
 
@@ -225,7 +229,7 @@ Turns lane candidates into one steering error.
 
 Geometry's lane detector doesn't know about stop lines, so a stop line short enough to pass the lane gates arrives as a lane candidate, and without a check lane offset would steer by its middle (on the test scenes, the right boundary moved from 289.5 to ~225 px). Lane offset first skips any candidate that belongs to a detected stop line: it lies across the ROI (wider than tall), at least `stop_line_overlap` (0.5) of its width is within the stop line's span, and it is no further above or below it than the line is thick. That also covers the dark pocket a stop line and two lane lines enclose. A lane line crossing the stop line runs along the ROI, so it is kept. Each skip is logged.
 
-A stop line that **touches** a lane line closes into one contour with it in the lane detector, and that contour fails the lane area gate. Those frames lose the lane (mode `none`, or one side), by design: lane detection is left as it is, and Phase 3 holds the last offset. A horizontal blob shorter than any stop line (under 60 px) is not skipped and still moves the offset.
+This check is now a backstop: the lane detector takes lines across the lane out of its edges first (see Stage 3A), so a stop line rarely arrives as a lane candidate. It still catches one when that filter is off or tuned narrower. A horizontal blob too short for either (under 46 px) is not skipped and still moves the offset.
 
 ### A second, stricter gate
 

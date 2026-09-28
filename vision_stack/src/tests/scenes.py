@@ -85,7 +85,8 @@ ALT_CONFIG = replace(
     geometry = replace(
         SCENE_CONFIG.geometry,
         canny = CannyParams(threshold1 = 60.0, threshold2 = 180.0, close_kernel = (7, 3)),
-        lane = LaneContourFilter(max_area = 1200.0, min_intensity = 100.0),
+        lane = LaneContourFilter(max_area = 1200.0, min_intensity = 100.0, horizontal_edge_deg = 6.0,
+                                 horizontal_min_run_px = 60.0, horizontal_band_px = 2.0),
         sign = SignContourFilter(min_solidity = 0.75, epsilon_factor = 0.025),
         stop_line = StopLineFilter(max_tilt_deg = 6.0, min_length_px = 80.0, min_thickness_px = 2.0,
                                    max_thickness_px = 30.0, min_intensity = 150.0,
