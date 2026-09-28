@@ -34,6 +34,7 @@ from src.perception import color_branch as cb
 from src.perception import feature_fusion as ff
 from src.perception import geometry as geo
 from src.perception import lane_offset as lo
+from src.perception import stop_line_distance as sld
 from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
@@ -54,16 +55,20 @@ def _run_debug(roi, config, color):
     g, _, _ = geo.run_geometry_stage(roi, config.geometry)
     traffic, _ = cb.run_color_stage(roi, color)
     offset, _ = lo.compute_lane_offset(g, roi, config.lane_offset)
+    stop_line, _ = sld.compute_stop_line_distance(g, roi, config.stop_line)
     fusion, _ = ff.fuse_detections(g, traffic, roi)
-    return g, traffic, offset, fusion, package_phase2(fusion, offset)
+    return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
 
 def _run_production(roi, config, color):
     """The same chain through the production twins."""
     g = geo.detect_geometry(roi, config.geometry)
     traffic = cb.detect_color(roi, color)
     offset = lo.estimate_lane_offset(g, roi, config.lane_offset)
+    stop_line = sld.estimate_stop_line_distance(g, roi, config.stop_line)
     fusion = ff.fuse(g, traffic, roi)
-    return g, traffic, offset, fusion, package_phase2(fusion, offset)
+    return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
+
+STAGES = ("geometry", "traffic", "offset", "stop_line", "fusion", "phase2")
 
 
 @pytest.mark.software
@@ -76,7 +81,7 @@ def test_chain_parity(scene, color_on, config_name):
     color = cb.ColorConfig(cb.load_hsv_ranges(str(HSV_RANGES_PATH))) if color_on else cb.ColorConfig()
     roi = _roi(SCENES[scene], config)
 
-    for name, a, b in zip(("geometry", "traffic", "offset", "fusion", "phase2"),
+    for name, a, b in zip(STAGES,
                           _run_debug(roi, config, color),
                           _run_production(roi, config, color)):
         _same(a, b, name)
@@ -89,7 +94,7 @@ def test_scenes_exercise_every_output():
     types, modes = set(), set()
     for frame in SCENES.values():
         for config in CONFIGS.values():
-            _, _, offset, fusion, _ = _run_debug(_roi(frame, config), config, color)
+            _, _, offset, _, fusion, _ = _run_debug(_roi(frame, config), config, color)
             types |= {d.type for d in fusion.detections}
             modes.add(offset.mode)
     assert {"lane_boundary", "stop_sign", "traffic_light"} <= types
@@ -104,7 +109,7 @@ def test_threshold_sweep_parity(config_name):
     color = cb.ColorConfig()
     for level, width, noise in SWEEP:
         roi = _roi(sweep_frame(level, width, noise), config)
-        for name, a, b in zip(("geometry", "traffic", "offset", "fusion", "phase2"),
+        for name, a, b in zip(STAGES,
                               _run_debug(roi, config, color),
                               _run_production(roi, config, color)):
             _same(a, b, f"level={level} width={width} noise={noise} {name}")
@@ -271,3 +276,21 @@ def test_best_candidate_twins_fuzz():
         a = ff._best_candidate(cands, [], "x")
         b = ff._pick_best(cands)
         assert a is b, f"case {i}"
+
+@pytest.mark.software
+def test_stop_line_distance_twins_fuzz():
+    """Random candidate sets, confidences straddling the gate and tied rows: both versions pick the same line."""
+    from src.perception.geometry import StopLineCandidate
+    rng = np.random.default_rng(11)
+    roi = _roi(SCENES["two_boundary"], SCENE_CONFIG)
+    for _ in range(300):
+        cands = []
+        for _ in range(int(rng.integers(0, 5))):
+            y = float(rng.choice([20.0, 40.0, 40.0, 81.0]))
+            cands.append(StopLineCandidate(
+                "stop_line", (0, 0, 1, 1), float(rng.integers(0, 200)), 300.0, y - 6, y, y, 0.0,
+                100.0, 6.0, 200.0, y == 81.0, float(rng.choice([0.39, 0.4, 0.41, 0.9])),
+                roi.frame_id, roi.timestamp_ms))
+        g = geo.GeometryBranchResult([], [], roi.frame_id, roi.timestamp_ms, cands)
+        cfg = sld.StopLineDistanceConfig(min_confidence=0.4)
+        _same(sld.compute_stop_line_distance(g, roi, cfg)[0], sld.estimate_stop_line_distance(g, roi, cfg))

@@ -55,6 +55,7 @@ ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"
 LANE_BOUNDARY = "lane_boundary"
 TRAFFIC_LIGHT = "traffic_light"
 STOP_SIGN = "stop_sign"
+STOP_LINE = "stop_line"          # StopLineCandidate.label; not a DetectionObject type
 
 # --- Traffic light colors (TrafficLightCandidate.label, DetectionObject.label_detail) ---
 RED, YELLOW, GREEN = "red", "yellow", "green"

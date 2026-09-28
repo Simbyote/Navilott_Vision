@@ -12,7 +12,8 @@ Purpose:
     reads it; PipelineConfig only bundles them.
 
 Main package:
-    PipelineConfig: preprocess, ROI, geometry, color and lane-offset tuning.
+    PipelineConfig: preprocess, ROI, geometry, color, lane-offset and
+        stop-line distance tuning.
         Its defaults are each stage's own defaults: no undistortion, color
         branch off.
     MEASURED: the robot's Phase 2 tuning. Undistorts with the lens
@@ -37,6 +38,7 @@ from src.perception.geometry import GeometryConfig
 from src.perception.lane_offset import LaneOffsetConfig
 from src.perception.preprocess import PreprocessParams
 from src.perception.roi_crop import ROIConfig
+from src.perception.stop_line_distance import StopLineDistanceConfig
 
 
 # =============================================================================
@@ -51,6 +53,7 @@ class PipelineConfig:
     geometry: GeometryConfig = field(default_factory=GeometryConfig)
     color: ColorConfig = field(default_factory=ColorConfig)                 # off until HSV ranges are given
     lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
+    stop_line: StopLineDistanceConfig = field(default_factory=StopLineDistanceConfig)
 
 
 # =============================================================================

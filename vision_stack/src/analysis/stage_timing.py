@@ -45,7 +45,7 @@ from src.params import FPS
 # Pipeline order for the stages run_chain times, then anything timed around
 # it. Unknown *_ms columns are appended after these in file order
 STAGE_ORDER = ("capture", "preprocess", "roi", "geometry", "color",
-               "lane_offset", "fusion", "package", "phase2", "phase3", "hud", "record")
+               "lane_offset", "stop_line", "fusion", "package", "phase2", "phase3", "hud", "record")
 
 # Timed outside run_chain, so not part of total_ms
 EXTERNAL_STAGES = frozenset({"capture", "hud", "record"})

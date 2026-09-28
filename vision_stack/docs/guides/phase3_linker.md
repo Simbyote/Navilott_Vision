@@ -83,7 +83,7 @@ f0412 t=20.61s P1=6.1 P2=31.8 P3=0.9ms | two_boundary L=150 R=290 n=2 c=.82 raw=
 | `hd` | Degrees turned since the last `vision` frame (IMU only) |
 | `go`, `stop=` | Voted traffic state and stop-sign flag |
 
-An event line appears whenever `lane_status`, `drive_state` or `stop_sign_detected` changes. A lane change also shows the Phase 2 mode that caused it:
+An event line appears whenever `lane_status`, `drive_state`, `stop_sign_detected` or `stop_line_detected` changes. A lane change also shows the Phase 2 mode that caused it:
 
 ```
 >>> f0413 lane: vision -> hold (p2 mode=none)
@@ -93,7 +93,7 @@ An event line appears whenever `lane_status`, `drive_state` or `stop_sign_detect
 
 ```
 runs/p3_<YYYYMMDD_HHMMSS>/
-    p3.csv          every frame: timings, the Phase 2 lane input, the packet, Phase 3's log
+    p3.csv          every frame: timings, the Phase 2 lane and stop-line input, the packet, Phase 3's log
     summary.txt     the run's report, also printed at the end
 ```
 
@@ -108,7 +108,7 @@ runs/p3_<YYYYMMDD_HHMMSS>/
 | Lane offset while on vision | Mean, standard deviation, min and max |
 | Transitions | How many times each packet field changed |
 
-In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
+In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. The status line ends with `line=<px>`. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
 
 ## 5. Bench checks
 

@@ -2,34 +2,36 @@
 
 Purpose:
     The last Phase 2 stage and the contract boundary with Phase 3. It does no
-    computation, filtering or decision logic: it collects fusion's detections
-    and the lane offset, checks that they belong to the same frame, and
+    computation, filtering or decision logic: it collects fusion's detections,
+    the lane offset and the stop-line distance, checks that they belong to the same frame, and
     packages them into one predictable object. Frame identity lives on the
     container, so a frame with no detections is still identifiable.
 
 Main package:
     Phase2Output: the frame's detections exactly as fusion ordered them, its
-    lane offset result, the frame identity and a detection count. Phase 3
+    lane offset and stop-line results, the frame identity and a detection count. Phase 3
     should steer lane-keeping from lane_offset_results, not from lane_boundary
     positions: those are bbox centroids, and for an angled marking that isn't
     where the marking meets the robot.
 
 Flow:
     1. Take the detections and frame stamp from the FusionResult.
-    2. Wrap the lane offset result in a list (empty if there is none).
+    2. Wrap the lane offset and stop-line results in lists (empty if there is none).
     3. Check list types, required fields, per-item stamps and detection_count.
 """
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.perception.feature_fusion import DetectionObject, FusionResult
 from src.perception.lane_offset import LaneOffsetResult
+from src.perception.stop_line_distance import StopLineResult
 
 # The Phase 2 schema plus what Phase 3 needs to interpret a detection: which
 # frame it is from and which ROI its position is local to
 DETECTION_FIELDS = ("type", "position", "confidence", "timestamp", "frame_id",
                     "source_roi", "source_rect")
 LANE_OFFSET_FIELDS = ("offset", "mode", "frame_id", "timestamp_ms")
+STOP_LINE_FIELDS = ("detected", "distance_px", "frame_id", "timestamp_ms")
 
 
 @dataclass(frozen=True)
@@ -38,17 +40,17 @@ class Phase2Output:
     Phase 2 -> Phase 3 handoff for one frame.
 
     Packaging rules:
-        PR-1  detections and lane_offset_results are taken as-is: no
-              re-ordering, no filtering.
+        PR-1  detections, lane_offset_results and stop_line_results are
+              taken as-is: no re-ordering, no filtering.
         PR-2  detection_count is always len(detections).
         PR-3  frame_id and timestamp_ms come from the caller, never from a
               candidate or a clock.
-        PR-4  Every detection and lane offset result carries the container's
-              (frame_id, timestamp_ms).
+        PR-4  Every detection, lane offset result and stop-line result
+              carries the container's (frame_id, timestamp_ms).
 
     Failure cases, raised on construction:
-        F1  detections or lane_offset_results is not a list (None included):
-            TypeError. Pass [] for "nothing detected".
+        F1  detections, lane_offset_results or stop_line_results is not a
+            list (None included): TypeError. Pass [] for "nothing detected".
         F2  An item is missing a required field: AttributeError naming it.
             Only presence is checked; upstream stages own completeness.
         F3  detection_count is passed and isn't len(detections): ValueError.
@@ -64,9 +66,13 @@ class Phase2Output:
     frame_id: int
     timestamp_ms: int
     detection_count: int | None = None              # None computes len(detections); a mismatch is rejected (F3)
+    # One per frame from the chain (detected False when none); [] if none supplied.
+    # Distance to the nearest stop line: a measurement, like the lane offset,
+    # so it travels beside detections rather than as one
+    stop_line_results: list[StopLineResult] = field(default_factory=list)
 
     def __post_init__(self):
-        for name in ("detections", "lane_offset_results"):
+        for name in ("detections", "lane_offset_results", "stop_line_results"):
             value = getattr(self, name)
             if not isinstance(value, list):
                 raise TypeError(
@@ -79,6 +85,9 @@ class Phase2Output:
                      stamp, lambda d: (d.frame_id, d.timestamp))
         _check_items("lane offset result", self.lane_offset_results,
                      LANE_OFFSET_FIELDS, stamp,
+                     lambda r: (r.frame_id, r.timestamp_ms))
+        _check_items("stop line result", self.stop_line_results,
+                     STOP_LINE_FIELDS, stamp,
                      lambda r: (r.frame_id, r.timestamp_ms))
 
         n = len(self.detections)
@@ -116,25 +125,29 @@ def _check_items(
 def package_phase2(
         fusion: FusionResult,
         lane_offset: LaneOffsetResult | None,
+        stop_line: StopLineResult | None = None,
     ) -> Phase2Output:
     """
-    Stage entry point: package one frame's fusion and lane offset results.
+    Stage entry point: package one frame's fusion, lane offset and stop-line results.
 
     Inputs:
         fusion: From fuse_detections(). An empty detections list is a valid frame.
         lane_offset: From compute_lane_offset(), or None if there is none for
             this frame.
+        stop_line: From compute_stop_line_distance(), or None if there is
+            none for this frame.
 
     Outputs:
         Phase2Output stamped with fusion's frame_id and timestamp_ms, which
         fusion carried from the ROI crop.
 
     Raises:
-        ValueError: If the lane offset result is from a different frame (F5).
+        ValueError: If the lane offset or stop-line result is from a different frame (F5).
     """
     return Phase2Output(
         detections = fusion.detections,
         lane_offset_results = [] if lane_offset is None else [lane_offset],
+        stop_line_results = [] if stop_line is None else [stop_line],
         frame_id = fusion.frame_id,
         timestamp_ms = fusion.timestamp_ms,
     )

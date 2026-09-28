@@ -40,20 +40,21 @@ crop_rois()               lane + sign ROIs (gray), traffic ROI (BGR), their rect
    ├────────────────────────────┐
    ▼                            ▼
 run_geometry_stage()        run_color_stage()
-lane + sign candidates      traffic light candidates
+lane + stop-line +          traffic light candidates
+sign candidates                 │
    │                            │
-   ├──────────────────┐         │
-   ▼                  ▼         ▼
-compute_lane_offset() fuse_detections()      (both also read the ROI crop)
-   │                  │
-   └────────┬─────────┘
-            ▼
-     package_phase2()  →  Phase2Output  →  Phase 3
+   ├──────────────────┬──────────────────────────┐   │
+   ▼                  ▼                          ▼   ▼
+compute_lane_offset() compute_stop_line_distance() fuse_detections()   (all read the ROI crop)
+   │                  │                          │
+   └──────────────────┴────────────┬─────────────┘
+                                   ▼
+                     package_phase2()  →  Phase2Output  →  Phase 3
 ```
 
-Lane offset and fusion are siblings. Lane offset reads the geometry candidates directly, not fusion's output, because fusion keeps only a centroid and a confidence, and the offset needs each contour's foot position, width, length and brightness.
+Lane offset, stop-line distance and fusion are siblings. Lane offset reads the geometry candidates directly, not fusion's output, because fusion keeps only a centroid and a confidence, and the offset needs each contour's foot position, width, length and brightness. Stop-line distance reads geometry's stop-line candidates the same way. Geometry only detects; the two measurement stages turn detections into numbers.
 
-`run_chain()` runs them in this order: preprocess, roi, geometry, color, lane_offset, fusion, package. Each one's wall time goes in `ChainResult.timings_ms` under those names.
+`run_chain()` runs them in this order: preprocess, roi, geometry, color, lane_offset, stop_line, fusion, package. Each one's wall time goes in `ChainResult.timings_ms` under those names. The main pipeline (`src/pipeline.py`) runs the same order through the production versions.
 
 ---
 
@@ -123,9 +124,9 @@ Traffic and sign overlap in x 240–360, y 0–135.
 
 ## Stage 3A: Geometry branch
 
-**File:** `geometry.py` · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`) · **Output:** `GeometryBranchResult`
+**File:** `geometry.py` · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
 
-Finds lane boundaries and stop-sign shapes from intensity edges. Both use Canny and external contours, on separate ROIs.
+Finds lane boundaries, stop lines and stop-sign shapes from intensity edges. Canny runs once on the lane ROI; the lane and stop-line detectors both read that edge map. The sign detector runs its own Canny on the sign ROI.
 
 ### Lane boundaries
 
@@ -150,6 +151,32 @@ Confidence, in [0, 1]: 50% length (against a quarter of the ROI extent), 30% bri
 Horizontal fragments of the same line, with endpoints within 40 px, are merged into one candidate. Without that, lane offset could pick two pieces of one line as opposite boundaries.
 
 Each candidate records `foot_x`: the mean x of the contour's lowest 6 rows (`FOOT_BAND_PX`). That's where the marking is closest to the robot, which is what steering should use. For an angled line, the bbox center sits halfway up the ROI instead.
+
+### Stop lines
+
+```
+lane ROI Canny (shared) → gradient split → top / bottom edge maps → close (15×1) → fitted segments
+                        → join pieces broken by lane tape → pair top with bottom → gates → confidence
+```
+
+A stop line's edges run across the ROI, so their gradient points up or down; a lane line's sides point left or right. Sobel at each Canny edge pixel keeps only edges of lines within `max_tilt_deg` (20°) of horizontal. That separates a stop line from lane lines it touches before any contour joins them. The course has no curves the camera steers through, so nothing lying across the ROI is a lane line.
+
+The kept edges split by polarity: a **top** edge (brightness rising going down, the upper edge of bright tape) and a **bottom** edge. Each is fitted as a line. Where lane tape crosses the stop line, the edge breaks for the tape's width; pieces at the same height with a gap up to `max_thickness_px` are refit as one. Each top edge is then paired with the nearest bottom edge below it that overlaps it.
+
+| Gate | Default | Rejects |
+| --- | --- | --- |
+| `short` | length ≥ 60 px | Anything as short as a lane-tape width (up to ~41 px), such as the end of a dash |
+| `tilt` | ≤ 20° | Edges fitted steeper than the split allowed |
+| `unpaired` | a bottom edge 3–40 px below, overlapping half the shorter edge | Single edges, and bars thicker than tape |
+| `intensity` | mean between the edges ≥ 130 | Shadow edges and dim patches |
+
+A top edge within `max_thickness_px` of the ROI bottom with no bottom edge is kept as **clipped**: the robot is on the line, its bottom edge below the ROI.
+
+Each `StopLineCandidate` records its ends, the top and bottom rows at its middle, `y_near_px` (the lowest point of the bottom edge, the part the robot reaches first), signed tilt (+ = right end nearer), length, thickness and brightness. Confidence: 50% length (against 200 px, about a lane), 30% brightness above `min_intensity`, 20% squareness. Candidates come out nearest first.
+
+**Stop lines never change the lane or sign results.** They only read the shared Canny map and have their own config. `test_geometry` checks lanes and signs are identical under any `StopLineFilter`, and the change was checked against a snapshot of every scene and gate-sweep frame under four configs taken before it (1096 of 1096 identical).
+
+Cost on a laptop: about 0.5 ms per frame, most of it the Sobel pass and contour fitting. It classifies only edge pixels (a few hundred of the ROI's ~35 000).
 
 ### Stop sign
 
@@ -193,6 +220,12 @@ The HSV ranges have to be tuned under course lighting. Ranges from a lab or offi
 **File:** `lane_offset.py` · **Config:** `LaneOffsetConfig` · **Output:** `LaneOffsetResult`
 
 Turns lane candidates into one steering error.
+
+### Stop lines are not boundaries
+
+Geometry's lane detector doesn't know about stop lines, so a stop line short enough to pass the lane gates arrives as a lane candidate, and without a check lane offset would steer by its middle (on the test scenes, the right boundary moved from 289.5 to ~225 px). Lane offset first skips any candidate that belongs to a detected stop line: it lies across the ROI (wider than tall), at least `stop_line_overlap` (0.5) of its width is within the stop line's span, and it is no further above or below it than the line is thick. That also covers the dark pocket a stop line and two lane lines enclose. A lane line crossing the stop line runs along the ROI, so it is kept. Each skip is logged.
+
+A stop line that **touches** a lane line closes into one contour with it in the lane detector, and that contour fails the lane area gate. Those frames lose the lane (mode `none`, or one side), by design: lane detection is left as it is, and Phase 3 holds the last offset. A horizontal blob shorter than any stop line (under 60 px) is not skipped and still moves the offset.
 
 ### A second, stricter gate
 
@@ -246,6 +279,22 @@ Single-boundary mode projects the lane center `expected_half_lane_px` from the v
 
 ---
 
+## Stage 4B: Stop-line distance
+
+**File:** `stop_line_distance.py` · **Config:** `StopLineDistanceConfig` · **Output:** `StopLineResult`
+
+Turns stop-line candidates into one measurement per frame: how far ahead the nearest stop line is.
+
+```
+candidates → confidence gate (≥ 0.4) → nearest (largest y_near_px) → distance_px = lane ROI height − y_near_px
+```
+
+The reference row is the bottom of the lane ROI, the nearest ground the camera sees, so the distance falls to 0 as the robot reaches the line (a clipped line is at 0). It is in lane-ROI px. Converting to cm needs a ground homography: `cm_per_px` holds only at the bottom row, and perspective compresses the rows above it.
+
+`StopLineResult` has `detected`, `distance_px`, `y_near_px`, the line's ends and tilt, `clipped`, the confidence and how many candidates geometry found. With nothing confident, `detected` is False and the numbers are None. Phase 3 votes on it and holds the distance (see `phase3_estimation.md`).
+
+---
+
 ## Stage 5: Feature fusion
 
 **File:** `feature_fusion.py` · **Output:** `FusionResult` of `DetectionObject`
@@ -282,7 +331,7 @@ Fusion doesn't import the color branch, so lane and sign fusion work with the co
 
 **File:** `phase2_out.py` · **Output:** `Phase2Output`
 
-No computation. Collects the detections and lane offset, checks that they belong to one frame, and packages them as the Phase 3 contract.
+No computation. Collects the detections, lane offset and stop-line distance, checks that they belong to one frame, and packages them as the Phase 3 contract.
 
 ```
 Phase2Output
@@ -291,11 +340,14 @@ Phase2Output
     frame_id             int
     timestamp_ms         int
     detection_count      int                     always len(detections)
+    stop_line_results    list[StopLineResult]    one per frame (detected False when none); [] if none
 ```
+
+Stop lines travel beside the detections, like the lane offset, because they are a measurement rather than a detection to fuse. The same packaging rules apply to them.
 
 Checked on construction, so a malformed handoff fails loudly instead of reaching navigation:
 
-- Both lists must be lists; pass `[]` for none
+- All three lists must be lists; pass `[]` for none
 - Every item has its required fields
 - Every item's stamp matches the container's
 - `frame_id` and `timestamp_ms` have no default, since a silent 0 would make every frame look like the same instant
@@ -341,5 +393,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 - **HSV calibration** under course lighting, then switch the color branch on.
 - **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
 - **`expected_half_lane_px`** from calibration instead of the hand-set 228 px.
-- **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. Record those spots and check the lane pair choice and modes there.
+- **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
+- **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
+- **`distance_px` to cm:** needs a ground homography, not `cm_per_px`.
 - **Offset sign on hardware:** confirm + = robot right of center on the propped-up chassis before tuning anything downstream.

@@ -87,9 +87,10 @@ def test_every_stage_run_chain_times_is_known_and_counted_inside_total():
 @pytest.mark.software
 def test_live_view_stages_csv_header_is_readable(tmp_path):
     header = list(StageLog.FIELDS)
-    row = [1, 50, 3.0, 0.2, 5.0, 0.1, 0.1, 9.0, 0, 0, "none", 0.0, 0, 0.02]
+    row = [1, 50, 3.0, 0.2, 5.0, 0.1, 0.1, 9.0, 0, 0, "none", 0.0, 0, 0.02, 0.4]
     cols = st.read_timing_csv(write_csv(tmp_path / "stages.csv", header, [row] * 3), skip=0)
-    assert set(st.stage_names(cols)) == {"preprocess", "roi", "geometry", "color", "lane_offset", "fusion"}
+    assert set(st.stage_names(cols)) == {"preprocess", "roi", "geometry", "color", "lane_offset",
+                                         "stop_line", "fusion"}
     assert "mode_ms" not in cols and "mode" not in cols
 
 

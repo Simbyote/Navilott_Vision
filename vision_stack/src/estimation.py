@@ -11,15 +11,18 @@ Purpose:
 
 Main package:
     EstimationPacket: smoothed lane offset and its status, heading change
-    since vision was lost, the voted drive state and stop-sign flag, sensor
-    pass-throughs, and the frame identity carried from Phase2Output.
+    since vision was lost, the voted drive state, stop-sign flag and
+    stop-line flag with its distance, sensor pass-throughs, and the frame
+    identity carried from Phase2Output.
 
 Flow (Phase3Processor.process() is the only place the order is written):
     1. LaneFilter: EMA, per-frame jump gate and dropout hold on the lane offset.
     2. HeadingTracker: integrate IMU yaw while vision is lost; zero on vision.
     3. TrafficClassifier: confidence gate and majority vote -> go / caution / stop.
     4. StopSignClassifier: confidence gate and majority vote -> bool.
-    5. Assemble the EstimationPacket.
+    5. StopLineClassifier: majority vote -> bool, with the distance held
+       through frames that miss the line while the vote stands.
+    6. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
 from dataclasses import dataclass
@@ -32,6 +35,7 @@ from src.utils import clamp
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
 from src.perception.phase2_out import Phase2Output
+from src.perception.stop_line_distance import StopLineResult
 
 # LaneOffsetResult modes that carry a measurement. "none" and
 # "single_uncalibrated" report offset 0.0 with no information behind it
@@ -115,6 +119,10 @@ class EstimationPacket:
     heading_error: float            # deg turned since the last frame on vision, from the IMU; 0.0 on vision; + = turned right
     drive_state: str                # "go" | "caution" | "stop", from the traffic light vote
     stop_sign_detected: bool        # from the stop sign vote
+    stop_line_detected: bool        # from the stop line vote
+    # Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it);
+    # None unless stop_line_detected. Held from the last frame that saw it
+    stop_line_distance_px: float | None
     yaw_rate: float                 # pass-through, deg/s; 0.0 if unavailable
     lateral_accel: float            # pass-through, m/s^2; 0.0 if unavailable
     wheel_speed: float              # pass-through, m/s; 0.0 if unavailable
@@ -325,6 +333,36 @@ class StopSignClassifier:
         return self._vote.update(raw)
 
 
+class StopLineClassifier:
+    """
+    Stop-line results -> voted bool and the distance to report.
+
+    The confidence gate is Phase 2's (StopLineDistanceConfig), since the
+    measurement already refuses weak candidates. While the vote says a line
+    is there, a frame that misses it repeats the last measured distance; the
+    distance is None whenever the vote says there isn't one.
+    """
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._vote = _Vote(cfg.vote_window, False)
+        self._last_distance: float | None = None
+
+    def update(
+            self,
+            results: list[StopLineResult],
+            log: list[str],
+        ) -> tuple[bool, float | None]:
+        """(voted flag, distance_px) after this frame. Logs a held distance."""
+        seen = next((r for r in results if r.detected), None)
+        if seen is not None:
+            self._last_distance = seen.distance_px
+        if not self._vote.update(seen is not None):
+            return False, None
+        if seen is None:
+            log.append(f"[STOPLINE] missed this frame; holding {self._last_distance:.1f}px")
+        return True, self._last_distance
+
+
 class Phase3Processor:
     """
     Runs every Phase 3 stage for one frame. Create once; call process() on
@@ -336,6 +374,7 @@ class Phase3Processor:
         self.heading = HeadingTracker(self._cfg)
         self.traffic = TrafficClassifier(self._cfg)
         self.stop_sign = StopSignClassifier(self._cfg)
+        self.stop_line = StopLineClassifier(self._cfg)
         self._last_ts: int | None = None
 
     def _dt(self, timestamp_ms: int, log: list[str]) -> float:
@@ -377,6 +416,7 @@ class Phase3Processor:
         heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
+        stop_line, stop_line_px = self.stop_line.update(phase2.stop_line_results, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -385,6 +425,8 @@ class Phase3Processor:
             heading_error = heading,
             drive_state = drive_state,
             stop_sign_detected = stop_sign,
+            stop_line_detected = stop_line,
+            stop_line_distance_px = stop_line_px,
             yaw_rate = sensors.yaw_rate_dps or 0.0,
             lateral_accel = sensors.lateral_accel_mps2 or 0.0,
             wheel_speed = sensors.wheel_speed_mps or 0.0,

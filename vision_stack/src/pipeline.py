@@ -2,7 +2,8 @@
 
 Purpose:
     What the robot runs. It declares its own flow through the production
-    twins (detect_geometry, detect_color, estimate_lane_offset, fuse), so no
+    twins (detect_geometry, detect_color, estimate_lane_offset,
+    estimate_stop_line_distance, fuse), so no
     frame pays for the overlays, traces and debug dicts the linkers build.
     phase2_linker and phase3_linker stay as the instrumented debuggers of the
     same flow; test_pipeline holds the two to identical results, so neither
@@ -17,7 +18,8 @@ Main package:
 
 Flow:
     FrameData -> preprocess_frame -> crop_rois -> detect_geometry
-              -> detect_color -> estimate_lane_offset -> fuse
+              -> detect_color -> estimate_lane_offset
+              -> estimate_stop_line_distance -> fuse
               -> package_phase2 -> Phase2Output
               -> Phase3Processor.process -> EstimationPacket
     Phase 3 runs as one stage: its internal order belongs to estimation.py.
@@ -41,6 +43,7 @@ from src.perception.lane_offset import estimate_lane_offset
 from src.perception.phase2_out import Phase2Output, package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois, resolve
+from src.perception.stop_line_distance import estimate_stop_line_distance
 
 
 # =============================================================================
@@ -93,7 +96,7 @@ class Pipeline:
         last_estimation_debug: Phase 3's debug summary for the latest
             estimate() (frame_id, timestamp_ms, dt, log); None before the first.
         last_timings_ms: With timing on, the latest frame's stage times
-            (preprocess, roi, geometry, color, lane_offset, fusion, package,
+            (preprocess, roi, geometry, color, lane_offset, stop_line, fusion, package,
             then phase3 once estimated); {} with timing off. A fresh dict
             per frame, so a caller may keep it.
     """
@@ -169,11 +172,15 @@ class Pipeline:
         if laps:
             laps.lap("lane_offset")
 
+        stop_line = estimate_stop_line_distance(geo, roi, cfg.stop_line)
+        if laps:
+            laps.lap("stop_line")
+
         fusion = fuse(geo, traffic, roi)
         if laps:
             laps.lap("fusion")
 
-        phase2 = package_phase2(fusion, offset)
+        phase2 = package_phase2(fusion, offset, stop_line)
         if laps:
             laps.lap("package")
             self.last_timings_ms = laps.times

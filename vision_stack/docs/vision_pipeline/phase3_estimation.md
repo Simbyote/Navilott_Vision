@@ -41,6 +41,9 @@ TrafficClassifier   confidence gate → 3-frame vote        → drive_state
 StopSignClassifier  confidence gate → 3-frame vote        → stop_sign_detected
    │
    ▼
+StopLineClassifier  3-frame vote → hold distance          → stop_line_detected, stop_line_distance_px
+   │
+   ▼
 EstimationPacket    → Navigation
 ```
 
@@ -97,7 +100,19 @@ Both use the same pattern: a confidence gate per frame, then a majority vote.
 
 Fusion already keeps at most one light and one sign per frame, so there's no candidate selection here.
 
-The traffic light path is effectively off: the color branch produces nothing until HSV ranges are calibrated, so `drive_state` stays `go`. The stop sign path is live, gated at 0.45 on geometry that hasn't been tuned on course frames yet.
+The traffic light path runs with `calibration/hsv_ranges.json`, loaded whether or not it has been tuned under course lighting. The stop sign path is live, gated at 0.45 on geometry that hasn't been tuned on course frames yet. On synthetic frames every detected sign scores at least 0.53, so the gate is never reached from below there.
+
+## Stop line
+
+`StopLineClassifier` votes on Phase 2's `stop_line_results` with the same `vote_window`. There is no confidence gate here: `stop_line_distance` already refuses candidates under its own `min_confidence`.
+
+| Voted | This frame saw a line | `stop_line_distance_px` |
+| --- | --- | --- |
+| yes | yes | this frame's distance |
+| yes | no | the last measured distance, held (logged as `[STOPLINE]`) |
+| no | either | `None` |
+
+The hold lasts only as long as the vote: with a window of 3, one missed frame keeps the line and its last distance; two in a row drop it. The distance is in lane-ROI px from the bottom of the lane ROI (0 = on the line).
 
 ---
 
@@ -130,6 +145,8 @@ If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is a
 | `heading_error` | `float` | Degrees turned since the last `vision` frame; 0.0 on vision |
 | `drive_state` | `str` | `go` / `caution` / `stop`, voted |
 | `stop_sign_detected` | `bool` | Voted |
+| `stop_line_detected` | `bool` | Voted |
+| `stop_line_distance_px` | `float \| None` | Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it), held through a missed frame; `None` unless `stop_line_detected`. Not cm: that needs a ground homography |
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `wheel_speed` | `float` | Pass-through, m/s; 0.0 until encoders are wired in |
@@ -168,8 +185,8 @@ python3 -m src.phase3_linker --camera --limit 200 --print-every 1
 
 | Output (`runs/p3_<timestamp>/`) | Contents |
 | --- | --- |
-| Console | A status line once a second, plus an event line whenever `lane_status`, `drive_state` or `stop_sign_detected` changes |
-| `p3.csv` | Every frame: timings, the Phase 2 lane input, the packet, and Phase 3's log |
+| Console | A status line once a second, plus an event line whenever `lane_status`, `drive_state`, `stop_sign_detected` or `stop_line_detected` changes |
+| `p3.csv` | Every frame: timings, the Phase 2 lane input and stop-line distance (`p2_stop_line_px`), the packet (`stop_line_detected`, `stop_line_distance_px` included), and Phase 3's log |
 | `summary.txt` | Timing percentiles, frames over budget, lane status and mode histograms, longest hold and stale runs, offset statistics while on vision |
 
 Replays are deterministic, so Phase 3 config changes can be compared on the same footage. With the robot parked centered, the offset standard deviation in `summary.txt` is the measurement noise floor.
@@ -179,7 +196,7 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 ## Not in Phase 3 (yet)
 
 - **Dead reckoning during a hold.** The hold repeats the last offset. Once wheel encoders are wired in, odometry plus heading could propagate it instead (the `@TODO` in `LaneFilter.update()`).
-- **Scene awareness.** Intersections, turns and orientation are not modeled; there's only lane offset. The planned scene state machine goes here, as a separate entry point so the current path keeps working.
+- **Scene awareness.** Stop lines are voted and measured, but intersections, turns and orientation are not modeled as states. Where the scene state machine lives (estimation or navigation) is still open.
 - **Out-of-bounds recovery** (stop, localize, correct). Deferred until basic lane keeping works.
 - **Control.** Phase 3 ends at the packet. Steering and speed are navigation's.
 

@@ -233,7 +233,8 @@ class StageLog:
     """
     FIELDS = ("frame_id", "timestamp_ms", "preprocess_ms", "roi_ms",
               "geometry_ms", "fusion_ms", "lane_offset_ms", "total_ms",
-              "accepted", "usable", "mode", "offset", "detections", "color_ms")
+              "accepted", "usable", "mode", "offset", "detections", "color_ms",
+              "stop_line_ms")
 
     def __init__(self, path: str) -> None:
         self._f = open(path, "w", newline="")
@@ -251,7 +252,7 @@ class StageLog:
             dbg.get("raw_count", 0), result.boundary_count,
             result.mode, result.offset,
             "" if n_detections is None else n_detections,
-            ms("color"),
+            ms("color"), ms("stop_line"),
         ])
 
     def close(self) -> None:

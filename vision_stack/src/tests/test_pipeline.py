@@ -44,7 +44,7 @@ CONFIGS = {
     "alt": ALT_CONFIG,
     "measured": MEASURED,
 }
-GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset")
+GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line")
 
 
 def _stamp(i: int) -> tuple[int, int]:
@@ -89,6 +89,7 @@ def test_scenes_reach_every_output_through_the_pipeline():
             modes |= {r.mode for r in p2.lane_offset_results}
     assert {LANE_BOUNDARY, STOP_SIGN, TRAFFIC_LIGHT} <= types
     assert {"two_boundary", "none"} <= modes and len(modes) >= 3
+    assert any(Pipeline(SCENE_CONFIG).perceive(f, 1, 50).stop_line_results[0].detected for f in SCENES.values())
 
 
 # =============================================================================
@@ -113,6 +114,16 @@ def test_each_alt_group_changes_the_phase2_output(group):
     frames = list(SCENES.values()) + [sweep_frame(*p) for p in SWEEP]
     assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
                for f in frames), f"ALT_CONFIG.{group} changes nothing on any scene"
+
+
+@pytest.mark.software
+def test_alt_stop_line_filter_alone_changes_the_phase2_output():
+    """The geometry group guard can pass on its Canny change alone; the stop-line detector needs its own."""
+    swapped = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry,
+                                                     stop_line=ALT_CONFIG.geometry.stop_line))
+    assert ALT_CONFIG.geometry.stop_line != SCENE_CONFIG.geometry.stop_line
+    assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
+               for f in SCENES.values())
 
 
 # =============================================================================
@@ -252,13 +263,15 @@ def test_step_is_perceive_then_estimate(case):
 @pytest.mark.software
 def test_drive_sequence_moves_every_phase3_output():
     """Guards the packet parity test: the drive must change every vote, status and integrator."""
-    seen = {k: set() for k in ("drive", "stop", "lane", "log")}
-    headings, cm = [], []
+    seen = {k: set() for k in ("drive", "stop", "lane", "log", "line")}
+    headings, cm, line_px = [], [], []
     for case in PACKET_CASES.values():
         for (packet, debug), sf in zip(_packets(Pipeline(*case)), DRIVE):
             assert (packet.frame_id, packet.timestamp_ms) == (sf.frame_id, sf.timestamp_ms)
             seen["drive"].add(packet.drive_state)
             seen["stop"].add(packet.stop_sign_detected)
+            seen["line"].add(packet.stop_line_detected)
+            line_px.append(packet.stop_line_distance_px)
             seen["lane"].add(packet.lane_status)
             seen["log"] |= {entry.split("]")[0] + "]" for entry in debug["log"]}
             headings.append(packet.heading_error)
@@ -266,7 +279,9 @@ def test_drive_sequence_moves_every_phase3_output():
     assert seen["drive"] == {"go", "caution", "stop"}
     assert seen["stop"] == {True, False}
     assert seen["lane"] == {LANE_VISION, LANE_HOLD, LANE_STALE}
-    assert {"[TRAFFIC]", "[SIGN]", "[LANE]", "[DT]", "[HEADING]"} <= seen["log"]
+    assert {"[TRAFFIC]", "[SIGN]", "[LANE]", "[DT]", "[HEADING]", "[STOPLINE]"} <= seen["log"]
+    assert seen["line"] == {True, False}
+    assert 0.0 in line_px and len({d for d in line_px if d is not None}) >= 3
     assert max(abs(h) for h in headings) > 10.0
     assert any(c is not None for c in cm) and any(c is None for c in cm)
 
@@ -328,15 +343,41 @@ def test_step_timing_adds_phase3_only_when_on():
 
 
 # =============================================================================
-# Known defect: stop lines reach the lane offset (Section 6)
+# Stop lines and the lane offset
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.xfail(strict=True, reason="horizontal lines pass the lane gates until Section 6 "
-                                       "separates them; remove this marker when it lands")
-@pytest.mark.parametrize("scene", ["stop_line_short", "stop_line_wide", "stop_line_between_marks"])
-def test_a_stop_line_leaves_the_lane_offset_alone(scene):
+@pytest.mark.parametrize("scene", ["stop_line_short", "stop_line_wide", "intersection"])
+def test_a_stop_line_clear_of_the_lane_lines_leaves_the_lane_offset_alone(scene):
+    """The stop line passes the lane gates as a lane candidate; lane_offset must skip it."""
     pipeline = Pipeline(SCENE_CONFIG)
     clear = pipeline.perceive(SCENES["two_boundary"], 1, 50).lane_offset_results[0]
-    crossed = pipeline.perceive(SCENES[scene], 1, 50).lane_offset_results[0]
+    p2 = pipeline.perceive(SCENES[scene], 1, 50)
+    crossed = p2.lane_offset_results[0]
     assert (crossed.mode, crossed.left_x, crossed.right_x) == (clear.mode, clear.left_x, clear.right_x)
+    assert p2.stop_line_results[0].detected
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("scene", ["stop_line_touching", "stop_line_between_marks", "stop_line_thick_marks"])
+def test_a_stop_line_touching_both_lane_lines_blinds_the_lane_but_is_measured(scene):
+    """
+    Accepted behavior: lane detection is left as it is, and a stop line that
+    closes into one contour with both lane lines fails the lane area gate.
+    The frame reports no lane (Phase 3 holds) rather than a wrong one.
+    """
+    p2 = Pipeline(SCENE_CONFIG).perceive(SCENES[scene], 1, 50)
+    assert p2.lane_offset_results[0].mode == "none"
+    assert p2.stop_line_results[0].detected
+
+
+@pytest.mark.software
+def test_a_horizontal_blob_too_short_for_a_stop_line_still_moves_the_offset():
+    """
+    Known limit, pinned so a change to it is deliberate: shorter than any
+    stop line, so no stop line is found for lane_offset to skip it by, yet
+    it passes the lane gates.
+    """
+    p2 = Pipeline(SCENE_CONFIG).perceive(SCENES["horizontal_blob"], 1, 50)
+    assert not p2.stop_line_results[0].detected
+    assert p2.lane_offset_results[0].right_x != 289.5

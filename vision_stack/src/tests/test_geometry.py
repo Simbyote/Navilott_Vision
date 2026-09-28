@@ -13,6 +13,7 @@ from crop_rois()'s rects, so they hold for any ROI bounds.
             counts per gate, and writes edge maps / overlays / sign trace.
 """
 import time
+from types import SimpleNamespace
 from dataclasses import asdict, replace
 
 import cv2
@@ -23,13 +24,13 @@ from src.capture.camera import FrameData
 from src.perception import geometry as geo
 from src.perception.geometry import (
     CannyParams, GeometryBranchResult, GeometryConfig, LaneCandidate,
-    LaneContourFilter, SignContourFilter,
+    LaneContourFilter, SignContourFilter, StopLineFilter,
     contour_foot_x, extract_lane_candidates, extract_sign_candidates,
-    run_geometry_branch, run_geometry_stage,
+    extract_stop_line_candidates, find_lane_candidates, run_geometry_branch, run_geometry_stage,
 )
 from src.perception.preprocess import PreprocessResult, preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
-from src.params import FRAME_H, FRAME_W
+from src.params import FRAME_H, FRAME_W, STOP_LINE
 from src.tests.artifacts import summarize
 
 # Explicit rather than the shipped defaults, so retuning never breaks detection tests
@@ -39,7 +40,10 @@ TEST_LANE = LaneContourFilter(min_area=1, max_area=1e6, min_aspect=0.0, max_aspe
                               ref_width=30.0)
 TEST_SIGN = SignContourFilter(min_area=200.0, max_area=30000.0, min_vertices=8, max_vertices=10,
                               min_solidity=0.80, epsilon_factor=0.03, ref_area=5000.0)
-TEST_CFG = GeometryConfig(canny=TEST_CANNY, lane=TEST_LANE, sign=TEST_SIGN)
+TEST_STOP = StopLineFilter(max_tilt_deg=20.0, min_length_px=60.0, min_thickness_px=3.0,
+                           max_thickness_px=40.0, min_intensity=130.0, min_edge_overlap=0.5,
+                           close_kernel=(15, 1), ref_length_px=200.0)
+TEST_CFG = GeometryConfig(canny=TEST_CANNY, lane=TEST_LANE, sign=TEST_SIGN, stop_line=TEST_STOP)
 
 LANE_SHAPE = (108, 432)       # synthetic lane ROI, sized so the drawn scenes fit; any size works
 SIGN_SHAPE = (198, 240)       # synthetic sign ROI, same
@@ -47,6 +51,7 @@ BG, FG = 30, 230              # dark mat, white tape
 
 LANE_BUCKETS = ("area", "degenerate", "too_few_pts", "aspect", "w_span", "h_span", "intensity", "accepted")
 SIGN_BUCKETS = ("area", "vertices", "hull", "solidity", "accepted")
+STOP_BUCKETS = ("short", "tilt", "unpaired", "intensity", "accepted")
 TRACE_KEYS = {"bbox", "gate", "area", "vertices", "solidity", "confidence", "poly"}
 
 
@@ -175,6 +180,28 @@ def assert_sign_counts(rc, n_final):
     assert rc["accepted"] == n_final
 
 
+def assert_stop_line_candidates_ok(cands, shape, frame_id, ts, flt=TEST_STOP):
+    """Invariants of every stop-line candidate: label, stamp, box inside the ROI, gates honored, nearest first."""
+    h, w = shape
+    for c in cands:
+        assert c.label == STOP_LINE and (c.frame_id, c.timestamp_ms) == (frame_id, ts)
+        x, y, bw, bh = c.bbox
+        assert 0 <= x and 0 <= y and x + bw <= w + 1 and y + bh <= h and bw > 0 and bh > 0
+        assert 0.0 <= c.confidence <= 1.0
+        assert c.length_px >= flt.min_length_px and abs(c.tilt_deg) <= flt.max_tilt_deg
+        assert flt.min_thickness_px <= c.thickness_px <= flt.max_thickness_px
+        assert c.mean_intensity >= flt.min_intensity
+        assert c.y_top_px <= c.y_bottom_px and c.y_near_px <= h
+        assert c.clipped == (c.y_bottom_px == h)
+    assert [c.y_near_px for c in cands] == sorted((c.y_near_px for c in cands), reverse=True)
+
+
+def assert_stop_counts(rc, n_final):
+    assert set(rc) == {"seen", *STOP_BUCKETS}
+    assert rc["seen"] == sum(rc[b] for b in STOP_BUCKETS)
+    assert rc["accepted"] == n_final
+
+
 def assert_edge_map(edges, roi):
     """Edge map is a binary 0/255 image the size of its ROI."""
     assert edges.shape == roi.shape[:2] and edges.dtype == np.uint8
@@ -187,8 +214,10 @@ def assert_geometry_contract(res, roi, lane_dbg, sign_dbg):
     assert (res.frame_id, res.timestamp_ms) == (roi.frame_id, roi.timestamp_ms)
     assert_lane_candidates_ok(res.lane_candidates, roi.lane_roi.shape, res.frame_id, res.timestamp_ms)
     assert_sign_candidates_ok(res.sign_candidates, roi.sign_roi.shape, res.frame_id, res.timestamp_ms)
+    assert_stop_line_candidates_ok(res.stop_line_candidates, roi.lane_roi.shape, res.frame_id, res.timestamp_ms)
     assert_lane_counts(lane_dbg["reject_counts"], len(res.lane_candidates))
     assert_sign_counts(sign_dbg["reject_counts"], len(res.sign_candidates))
+    assert_stop_counts(lane_dbg["stop_line"]["reject_counts"], len(res.stop_line_candidates))
     assert_edge_map(lane_dbg["edges"], roi.lane_roi)
     assert_edge_map(sign_dbg["edges"], roi.sign_roi)
 
@@ -714,6 +743,163 @@ def test_every_recorded_frame_meets_the_geometry_contract(dataset_frames):
             assert_geometry_contract(*(lambda r: (r[0], roi, r[1], r[2]))(run_geometry_stage(roi)))
         except AssertionError as e:
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
+
+
+# =============================================================================
+# Stop lines
+# =============================================================================
+
+def stop_bar(x0=100, x1=300, y=40, thickness=8, tilt_deg=0.0, value=FG, marks=(), mark_width=8,
+             shape=LANE_SHAPE):
+    """A bar across a lane ROI, optionally over vertical lane marks; tilt rotates it about its center (+ = right end lower)."""
+    img = blank(shape)
+    for mx in marks:
+        cv2.rectangle(img, (mx - mark_width // 2, 0), (mx + mark_width // 2, shape[0] - 1), FG, -1)
+    if tilt_deg == 0.0:
+        cv2.rectangle(img, (x0, y), (x1, y + thickness - 1), value, -1)
+    else:
+        box = cv2.boxPoints((((x0 + x1) / 2.0, y + thickness / 2.0), (x1 - x0, thickness), tilt_deg))
+        cv2.fillPoly(img, [np.round(box).astype(np.int32)], value)
+    return img
+
+
+def stop_lines(lane, flt=TEST_STOP, frame_id=4, ts=200):
+    """The stop-line detector on a lane ROI, reading the Canny map the lane detector would."""
+    return extract_stop_line_candidates(lane, geo._canny(lane, TEST_CANNY), flt, frame_id, ts)
+
+
+@pytest.mark.software
+def test_a_stop_line_is_found_where_it_was_drawn():
+    cands, dbg = stop_lines(stop_bar(100, 300, 40, 8))
+    assert len(cands) == 1
+    c = cands[0]
+    assert abs(c.x_left - 100) <= 3 and abs(c.x_right - 300) <= 3
+    assert abs(c.y_top_px - 40) <= 1.5 and abs(c.y_bottom_px - 48) <= 1.5
+    assert abs(c.thickness_px - 8) <= 1.5 and abs(c.tilt_deg) < 0.5
+    assert c.y_near_px == pytest.approx(c.y_bottom_px, abs=0.5) and not c.clipped
+    assert (c.frame_id, c.timestamp_ms) == (4, 200)
+    assert_stop_line_candidates_ok(cands, LANE_SHAPE, 4, 200)
+    assert_stop_counts(dbg["reject_counts"], 1)
+
+
+@pytest.mark.software
+def test_a_stop_line_touching_lane_lines_is_found_as_one_line_across_them():
+    """The gradient split keeps the lane lines' sides out, so the bar comes out alone."""
+    cands, _ = stop_lines(stop_bar(100, 340, 40, 8, marks=(150, 290)))
+    assert len(cands) == 1
+    assert abs(cands[0].x_left - 100) <= 3 and abs(cands[0].x_right - 340) <= 3
+
+
+@pytest.mark.software
+def test_a_stop_line_broken_by_wide_lane_tape_is_joined_into_one():
+    """30 px tape breaks the bar's edges wider than the closing bridges; the pieces are refit as one."""
+    cands, _ = stop_lines(stop_bar(80, 380, 40, 10, marks=(150, 300), mark_width=30))
+    assert len(cands) == 1
+    assert cands[0].x_left < 120 and cands[0].x_right > 340
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("tilt", [8.0, -8.0])
+def test_tilt_is_measured_with_its_sign_and_the_nearer_end_sets_y_near(tilt):
+    c, = stop_lines(stop_bar(120, 320, 45, 8, tilt_deg=tilt))[0]
+    assert c.tilt_deg == pytest.approx(tilt, abs=1.5)
+    assert c.y_near_px > c.y_bottom_px + 5          # the lower end is well below the midpoint
+
+
+@pytest.mark.software
+def test_a_line_steeper_than_max_tilt_never_reaches_the_detector():
+    cands, dbg = stop_lines(stop_bar(120, 320, 45, 8, tilt_deg=35.0))
+    assert cands == [] and dbg["reject_counts"]["seen"] == 0
+
+
+@pytest.mark.software
+def test_a_line_running_off_the_roi_bottom_is_clipped_at_the_bottom_row():
+    h = LANE_SHAPE[0]
+    c, = stop_lines(stop_bar(100, 300, h - 10, 20))[0]
+    assert c.clipped and c.y_near_px == h and c.y_bottom_px == h
+    assert c.thickness_px == pytest.approx(10, abs=1.5)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("scene, gate", [
+    (dict(x0=200, x1=240), "short"),                          # 40 px: a lane-tape width, not a stop line
+    (dict(value=110), "intensity"),                           # edges found, but too dim for tape
+    (dict(y=10, thickness=60), "unpaired"),                   # edges 60 px apart: thicker than any stop line
+], ids=["short", "intensity", "unpaired"])
+def test_each_stop_line_gate_rejects_and_is_counted_under_its_own_name(scene, gate):
+    cands, dbg = stop_lines(stop_bar(**scene))
+    assert cands == []
+    assert dbg["reject_counts"][gate] >= 1
+    assert_stop_counts(dbg["reject_counts"], 0)
+
+
+@pytest.mark.software
+def test_the_tilt_gate_rejects_an_edge_fitted_steeper_than_max_tilt():
+    """The gradient split already drops most steep edges; the fitted line is gated again."""
+    x = np.arange(0, 200, dtype=np.float32)
+    steep = geo._fit_segment(np.stack([x, 20 + x * np.tan(np.radians(25))], axis=1))
+    assert geo._stop_line_from(steep, [], blank(LANE_SHAPE), TEST_STOP, 0, 0) == (None, "tilt")
+
+
+@pytest.mark.software
+def test_stop_lines_come_out_nearest_the_robot_first():
+    lane = stop_bar(100, 300, 15, 8)
+    cv2.rectangle(lane, (100, 70), (300, 77), FG, -1)
+    cands, _ = stop_lines(lane)
+    assert len(cands) == 2 and cands[0].y_near_px > cands[1].y_near_px
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("seed", range(6))
+def test_lane_marks_dashes_and_clutter_give_no_stop_line(seed):
+    """Vertical tape, dash ends and noise: nothing lying across the ROI long enough to be a stop line."""
+    lane = stop_bar(0, 1, 0, 1, value=BG, marks=(150, 290))
+    cv2.rectangle(lane, (60, 10), (80, 40), FG, -1)                            # a dash: 20 px ends
+    rng = np.random.default_rng(seed)
+    lane = cv2.add(lane, rng.integers(0, 40, lane.shape, dtype=np.uint8))
+    assert stop_lines(lane)[0] == []
+
+
+@pytest.mark.software
+def test_lane_and_sign_results_do_not_depend_on_the_stop_line_filter():
+    """Stop lines only read the shared Canny map: any StopLineFilter leaves lanes and signs as they are."""
+    from src.tests.scenes import SCENE_CONFIG, SCENES
+    permissive = StopLineFilter(max_tilt_deg=45.0, min_length_px=5.0, min_thickness_px=0.5,
+                                max_thickness_px=200.0, min_intensity=0.0, close_kernel=(31, 3))
+    closed = StopLineFilter(min_length_px=1e6)
+    for name, frame in SCENES.items():
+        roi = crop_rois(preprocess_frame(FrameData(frame, 1, 50), SCENE_CONFIG.preprocess), SCENE_CONFIG.roi)
+        runs = [run_geometry_stage(roi, replace(SCENE_CONFIG.geometry, stop_line=f)) for f in (permissive, closed)]
+        (a, a_lane, a_sign), (b, b_lane, b_sign) = runs
+        assert len(b.stop_line_candidates) == 0, name
+        for x, y in ((a.lane_candidates, b.lane_candidates), (a.sign_candidates, b.sign_candidates)):
+            assert len(x) == len(y), name
+            for cx, cy in zip(x, y):
+                assert cx.bbox == cy.bbox and cx.confidence == cy.confidence, name
+        assert a_lane["reject_counts"] == b_lane["reject_counts"], name
+        assert a_sign["reject_counts"] == b_sign["reject_counts"], name
+
+
+@pytest.mark.software
+def test_shared_canny_edges_give_the_lane_detector_what_it_computes_itself():
+    lane = stop_bar(100, 340, 40, 8, marks=(150, 290))
+    edges = geo._canny(lane, TEST_CANNY)
+    own, own_dbg = extract_lane_candidates(lane, TEST_CANNY, TEST_LANE, 1, 2, False)
+    shared, shared_dbg = extract_lane_candidates(lane, TEST_CANNY, TEST_LANE, 1, 2, False, edges_raw=edges)
+    assert [(c.bbox, c.confidence) for c in own] == [(c.bbox, c.confidence) for c in shared]
+    assert own_dbg["reject_counts"] == shared_dbg["reject_counts"]
+    assert [c.bbox for c in find_lane_candidates(lane, TEST_CANNY, TEST_LANE, 1, 2, edges_raw=edges)] \
+        == [c.bbox for c in own]
+
+
+@pytest.mark.software
+def test_stop_line_config_reaches_the_detector_through_the_stage():
+    lane = stop_bar(100, 300, 40, 8)
+    roi = SimpleNamespace(lane_roi=lane, sign_roi=blank(SIGN_SHAPE), frame_id=3, timestamp_ms=30)
+    found, _, _ = run_geometry_stage(roi, TEST_CFG)
+    refused, _, _ = run_geometry_stage(roi, replace(TEST_CFG, stop_line=replace(TEST_STOP, min_length_px=500.0)))
+    assert len(found.stop_line_candidates) == 1 and refused.stop_line_candidates == []
+    assert geo.detect_geometry(roi, TEST_CFG).stop_line_candidates[0].bbox == found.stop_line_candidates[0].bbox
 
 
 def _jsonable_trace(trace):

@@ -63,9 +63,10 @@ Sensors:
 
 Output (--out DIR, default <root>/runs/p3_<timestamp>):
     console      one status line every --print-every frames, plus an event
-                 line on every lane_status, drive_state or stop_sign change
-    p3.csv       every frame: timings, the Phase 2 lane input, the packet,
-                 and Phase 3's debug log
+                 line on every lane_status, drive_state, stop_sign or
+                 stop_line change
+    p3.csv       every frame: timings, the Phase 2 lane and stop-line input,
+                 the packet, and Phase 3's debug log
     summary.txt  timing percentiles, lane status and mode histograms, longest
                  hold and stale runs, and offset statistics while on vision
 
@@ -150,14 +151,16 @@ def status_line(res: Phase3Result) -> str:
         f"{off.mode:<19} L={_fmt(off.left_x, '3.0f')} R={_fmt(off.right_x, '3.0f')} "
         f"n={off.boundary_count} c={off.confidence:.2f} raw={off.offset:+.3f} | "
         f"off={pk.lane_offset:+.3f}{cm} {pk.lane_status:<6} hd={pk.heading_error:+.1f} | "
-        f"{pk.drive_state} stop={'T' if pk.stop_sign_detected else 'F'}"
+        f"{pk.drive_state} stop={'T' if pk.stop_sign_detected else 'F'} "
+        f"line={_fmt(pk.stop_line_distance_px, '.0f')}"
     )
 
 
 class EventTracker:
     """
     Reports changes in the packet fields Navigation acts on: lane_status,
-    drive_state and stop_sign_detected. counts holds transitions per field.
+    drive_state, stop_sign_detected and stop_line_detected. counts holds
+    transitions per field.
     """
     def __init__(self) -> None:
         self._prev = None
@@ -175,6 +178,7 @@ class EventTracker:
             "lane": pk.lane_status,
             "drive": pk.drive_state,
             "stop_sign": "T" if pk.stop_sign_detected else "F",
+            "stop_line": "T" if pk.stop_line_detected else "F",
         }
         lines = []
         if self._prev is not None:
@@ -193,8 +197,10 @@ CSV_COLUMNS = (
     "capture_ms", "phase2_ms", "phase3_ms", "total_ms",
     "p2_mode", "p2_offset", "p2_left_x", "p2_right_x", "p2_lane_width_px",
     "p2_conf", "p2_boundary_count", "p2_detections", "p2_traffic", "p2_stop",
+    "p2_stop_line_px",
     "lane_offset", "lane_offset_cm", "lane_status", "heading_error",
-    "drive_state", "stop_sign_detected", "yaw_rate", "lateral_accel",
+    "drive_state", "stop_sign_detected", "stop_line_detected", "stop_line_distance_px",
+    "yaw_rate", "lateral_accel",
     "wheel_speed", "p3_log",
 )
 
@@ -217,8 +223,10 @@ class CsvLog:
             len(dets),
             sum(d.type == TRAFFIC_LIGHT for d in dets),
             sum(d.type == STOP_SIGN for d in dets),
+            res.chain.stop_line.distance_px,        # blank when Phase 2 saw no line
             pk.lane_offset, pk.lane_offset_cm, pk.lane_status,
             pk.heading_error, pk.drive_state, int(pk.stop_sign_detected),
+            int(pk.stop_line_detected), pk.stop_line_distance_px,
             pk.yaw_rate, pk.lateral_accel, pk.wheel_speed,
             " | ".join(res.p3_debug.get("log", [])),
         ))
@@ -417,7 +425,8 @@ def run(
     summary = stats.report()
     summary += ["", f"transitions      lane {events.counts['lane']}  "
                     f"drive {events.counts['drive']}  "
-                    f"stop_sign {events.counts['stop_sign']}"]
+                    f"stop_sign {events.counts['stop_sign']}  "
+                    f"stop_line {events.counts['stop_line']}"]
     with open(os.path.join(out_dir, "summary.txt"), "w") as f:
         f.write(f"source {source.label}\n\n" + "\n".join(summary) + "\n")
     print("\n" + "\n".join(summary))

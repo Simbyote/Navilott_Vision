@@ -28,7 +28,7 @@ from src.perception import lane_offset as lo
 from src.perception.geometry import GeometryBranchResult, GeometryConfig, LaneCandidate, run_geometry_stage
 from src.perception.lane_offset import (
     BoundaryAnchor, LaneOffsetConfig, LaneOffsetResult,
-    compute_lane_offset, foot_x,
+    compute_lane_offset, estimate_lane_offset, foot_x,
 )
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
@@ -471,6 +471,69 @@ def draw_anchor_overlay(lane_roi, dbg, result):
     label = f"{result.mode} off={result.offset:+.3f} conf={result.confidence:.2f}"
     cv2.putText(vis, label, (4, h - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     return vis
+
+
+
+# =============================================================================
+# Stop lines: lane candidates that belong to one are skipped
+# =============================================================================
+
+def stop_line(bbox=(100, 30, 200, 8), thickness=8.0, frame_id=1, ts=2):
+    """Hand-built StopLineCandidate; only bbox and thickness_px matter to lane_offset."""
+    from src.perception.geometry import StopLineCandidate
+    x, y, w, h = bbox
+    return StopLineCandidate(
+        label="stop_line", bbox=bbox, x_left=float(x), x_right=float(x + w), y_top_px=float(y),
+        y_bottom_px=float(y + h), y_near_px=float(y + h), tilt_deg=0.0, length_px=float(w),
+        thickness_px=thickness, mean_intensity=220.0, clipped=False, confidence=0.9,
+        frame_id=frame_id, timestamp_ms=ts)
+
+def with_stop(cands, stops, cfg=TEST_CFG):
+    """Both lane_offset versions on candidates plus stop lines; checked equal."""
+    g = GeometryBranchResult(list(cands), [], 1, 2, list(stops))
+    debug, dbg = compute_lane_offset(g, make_roi(), cfg)
+    assert debug == estimate_lane_offset(g, make_roi(), cfg)
+    return debug, dbg
+
+def lying(bbox, fx):
+    """A lane candidate lying across the ROI at bbox."""
+    return replace(cand(fx), bbox=bbox)
+
+LANES = (cand(80.0), cand(220.0))
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("bbox", [(110, 30, 180, 8),     # the stop line itself passing the lane gates
+                                  (130, 42, 140, 20),    # the dark pocket 4 px below it
+                                  (130, 6, 140, 20)],    # the pocket 4 px above it
+                         ids=["on", "below", "above"])
+def test_a_candidate_lying_on_or_against_a_stop_line_is_skipped_and_logged(bbox):
+    r, dbg = with_stop(LANES + (lying(bbox, 160.0),), [stop_line()])
+    assert (r.mode, r.left_x, r.right_x, dbg["usable_count"]) == ("two_boundary", 80.0, 220.0, 2)
+    assert any("stop line" in e for e in dbg["log"])
+
+
+@pytest.mark.software
+def test_a_lane_line_crossing_a_stop_line_is_kept():
+    crossing = replace(cand(150.0), bbox=(146, 0, 8, 50))        # runs along the ROI, through the line
+    _, dbg = with_stop([crossing], [stop_line()])
+    assert dbg["usable_count"] == 1
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("bbox", [(130, 60, 140, 8),       # further from the line than it is thick
+                                  (20, 30, 150, 8)],       # most of its width outside the line's span
+                         ids=["far", "outside_span"])
+def test_a_candidate_lying_across_the_roi_away_from_the_stop_line_is_kept(bbox):
+    _, dbg = with_stop([lying(bbox, 100.0)], [stop_line()])
+    assert dbg["usable_count"] == 1
+
+
+@pytest.mark.software
+def test_without_stop_lines_or_with_the_check_off_nothing_is_skipped():
+    on = lying((110, 30, 180, 8), 160.0)
+    assert with_stop([on], [])[1]["usable_count"] == 1
+    assert with_stop([on], [stop_line()], replace(TEST_CFG, stop_line_overlap=None))[1]["usable_count"] == 1
 
 
 @pytest.mark.hardware

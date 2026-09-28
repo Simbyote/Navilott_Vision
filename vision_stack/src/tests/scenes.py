@@ -38,8 +38,9 @@ from src.config import MEASURED, MEASURED_ESTIMATION
 from src.estimation import SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
-from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter
+from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
 from src.perception.roi_crop import LANE, ROIBounds, resolve
+from src.perception.stop_line_distance import StopLineDistanceConfig
 
 
 # =============================================================================
@@ -68,13 +69,18 @@ ALT_CONFIG = replace(
         canny = CannyParams(threshold1 = 60.0, threshold2 = 180.0, close_kernel = (7, 3)),
         lane = LaneContourFilter(max_area = 1200.0, min_intensity = 100.0),
         sign = SignContourFilter(min_solidity = 0.75, epsilon_factor = 0.025),
+        stop_line = StopLineFilter(max_tilt_deg = 6.0, min_length_px = 80.0, min_thickness_px = 2.0,
+                                   max_thickness_px = 30.0, min_intensity = 150.0,
+                                   close_kernel = (11, 1), ref_length_px = 150.0),
     ),
     color = replace(SCENE_CONFIG.color, blob = BlobFilter(min_area = 80.0, ref_area = 400.0)),
     lane_offset = replace(
         SCENE_CONFIG.lane_offset,
         conf_threshold = 0.30, min_length_px = 20.0, max_width_px = 40.0,
         min_intensity = 140.0,          # the only one of these the scenes and sweep react to
+        stop_line_overlap = 0.7,
     ),
+    stop_line = StopLineDistanceConfig(min_confidence = 0.7),
 )
 
 # Every Phase 3 field moved off MEASURED_ESTIMATION's, chosen so that each one
@@ -162,14 +168,21 @@ def scene(
         noise_seed: int | None = None,
         lamp_radius: int = 11,
         sign_radius: int = 28,
+        mark_width: int = 6,
+        stop_line_thickness: int = 6,
+        stop_line_tilt_deg: float = 0.0,
     ) -> np.ndarray:
     """
     A synthetic frame with any of the things the robot has to see.
 
     Inputs:
         marks: Lane marks, as synthetic_frame() takes them.
-        stop_line: (x_left, x_right, y_top) in lane-ROI px: a 6 px white bar
+        stop_line: (x_left, x_right, y_top) in lane-ROI px: a white bar
             across the lane, as at an intersection.
+        stop_line_thickness, stop_line_tilt_deg: The bar's height in px and
+            its rotation about its center (+ = clockwise on screen, so the
+            right end sits lower, nearer the robot).
+        mark_width: Lane mark width in px; real tape is 20-40 px in the ROI.
         sign: A red octagon in the sign ROI (upper right).
         lights: BGR lamp colors, stacked downward in the traffic ROI (top center).
         noise_seed: Adds uniform noise in [0, 60) from this seed.
@@ -179,12 +192,17 @@ def scene(
     Outputs:
         (FRAME_H, FRAME_W, 3) uint8 BGR.
     """
-    frame = synthetic_frame(marks)
+    frame = synthetic_frame(marks, mark_width=mark_width)
     if stop_line is not None:
         x_left, x_right, y_top = stop_line
         x0, y0 = LANE_RECT[0], LANE_RECT[1]
-        cv2.rectangle(frame, (x0 + x_left, y0 + y_top), (x0 + x_right, y0 + y_top + 5),
-                      (240, 240, 240), -1)
+        if stop_line_tilt_deg == 0.0:
+            cv2.rectangle(frame, (x0 + x_left, y0 + y_top),
+                          (x0 + x_right, y0 + y_top + stop_line_thickness - 1), (240, 240, 240), -1)
+        else:
+            center = (x0 + (x_left + x_right) / 2.0, y0 + y_top + stop_line_thickness / 2.0)
+            box = cv2.boxPoints((center, (x_right - x_left, stop_line_thickness), stop_line_tilt_deg))
+            cv2.fillPoly(frame, [np.round(box).astype(np.int32)], (240, 240, 240))
     if sign:
         cx, cy, r = int(FRAME_W * 0.78), int(FRAME_H * 0.25), sign_radius
         pts = np.array([(cx + r * np.cos(np.pi / 8 + k * np.pi / 4),
@@ -200,6 +218,29 @@ def scene(
 
 RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (0, 200, 0)
 
+def _paint(frame, x_left, x_right, y_top, height, value):
+    """A gray rectangle in lane-ROI coordinates, on a copy of frame."""
+    out = frame.copy()
+    x0, y0 = LANE_RECT[0], LANE_RECT[1]
+    cv2.rectangle(out, (x0 + x_left, y0 + y_top), (x0 + x_right, y0 + y_top + height - 1), (value,) * 3, -1)
+    return out
+
+def _faint_stop_line():
+    """
+    A 165-gray line on a lighter patch of road (110): an edge weak enough
+    that the Canny thresholds decide it. ALT_CONFIG finds it only with its
+    own Canny settings, so a detector handed the wrong edges fails parity.
+    """
+    return _paint(_paint(scene(), 100, 340, 25, 41, 110), 120, 320, 40, 8, 165)
+
+def _two_stop_lines():
+    """
+    The near stop line and the far side's line across the intersection.
+    The far one starts further left, so detection order (by x) differs from
+    nearest-first and a detector that doesn't sort fails parity.
+    """
+    return _paint(scene(stop_line=(170, 270, 60)), 110, 330, 6, 6, 240)
+
 SCENES = {
     "two_boundary": scene(),
     "one_boundary": scene(marks=(150,)),
@@ -211,15 +252,28 @@ SCENES = {
     "sign_and_lights": scene(sign=True, lights=(RED_LAMP, YELLOW_LAMP, GREEN_LAMP)),
     "noise_a": scene(sign=True, lights=(RED_LAMP,), noise_seed=1),
     "noise_b": scene(marks=(100, 180, 300), noise_seed=7),
-    # Intersections. Today a stop line passes the lane gates: the short one
-    # becomes a lane candidate, the wide one merges with the left mark and
-    # fails the area gate (see Section 6)
-    "stop_line_short": scene(stop_line=(200, 240, 50)),
+    # Stop lines. Geometry finds them from the lane ROI's edges without
+    # changing the lane candidates. Short and wide stay apart from the lane
+    # marks, pass the lane gates too, and lane_offset has to skip them. The
+    # ones that touch a lane mark close into one contour with it, which
+    # fails the lane area gate: those frames lose the lane (Phase 3 holds)
+    "stop_line_short": scene(stop_line=(185, 255, 50)),
     "stop_line_wide": scene(stop_line=(170, 270, 50)),
     "stop_line_between_marks": scene(stop_line=(160, 280, 60)),
     "stop_line_far": scene(stop_line=(160, 280, 8)),
     "stop_line_no_marks": scene(marks=(), stop_line=(100, 330, 40)),
+    "stop_line_touching": scene(stop_line=(120, 320, 40)),
+    "stop_line_touching_left": scene(stop_line=(140, 260, 40)),
+    "stop_line_thick_marks": scene(marks=(150, 330), mark_width=30, stop_line=(100, 380, 40),
+                                   stop_line_thickness=12),
+    "stop_line_clipped": scene(stop_line=(120, 320, 76)),
+    "stop_line_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=8.0),
+    "stop_line_faint": _faint_stop_line(),
+    "two_stop_lines": _two_stop_lines(),
     "intersection": scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,)),
+    # Not a stop line: shorter than any stop line, so no stop-line gate
+    # accepts it, yet it passes the lane gates and still moves the offset
+    "horizontal_blob": scene(stop_line=(200, 240, 50)),
 }
 
 
@@ -243,7 +297,8 @@ def drive_sequence() -> list[SequenceFrame]:
     A drive that moves every Phase 3 stage: votes change both ways, a light
     and a sign below their gates, a lane dropout through hold into stale
     with the gyro turning, a frame gap inside the dropout, an offset jump,
-    a stop line, noise, and frames with no sensors or no yaw.
+    an approach to a stop line with one missed frame, noise, and frames with
+    no sensors or no yaw.
 
     Outputs:
         SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart
@@ -271,7 +326,14 @@ def drive_sequence() -> list[SequenceFrame]:
         ("dropout_late", scene(marks=()), 6, turning),
         ("recover", scene(), 4, steady),
         ("jump", scene(marks=(64, 204)), 3, steady),
-        ("stop_line", scene(stop_line=(170, 270, 50)), 3, steady),
+        # Driving up to a stop line: nearer each frame, one frame that misses
+        # it (glare), then on it, then past it
+        ("stop_line_far", scene(stop_line=(170, 270, 12)), 2, steady),
+        ("stop_line_nearer", scene(stop_line=(170, 270, 30)), 2, steady),
+        ("stop_line_missed", scene(), 1, steady),
+        ("stop_line_near", scene(stop_line=(170, 270, 50)), 2, steady),
+        ("stop_line_on", scene(stop_line=(120, 320, 76)), 3, steady),
+        ("stop_line_past", scene(), 4, steady),
         ("intersection", scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,), **strong), 6, steady),
         ("noise", scene(sign=True, lights=(GREEN_LAMP,), noise_seed=3, **strong), 4, steady),
     ]

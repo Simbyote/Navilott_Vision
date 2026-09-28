@@ -16,6 +16,9 @@ Main package:
     Usable directly as the Phase 3 steering error.
 
 Flow:
+    0. Skip lane candidates that lie on a detected stop line: geometry's
+       lane detector doesn't know about stop lines, so a stop line short
+       enough to pass the lane gates arrives here as a lane candidate.
     1. Gate each lane candidate: is it trustworthy enough to steer by?
     2. Reduce survivors to anchors: foot x and a proximity-scaled weight.
     3. Pick the nearest boundary on each side of ROI center.
@@ -30,7 +33,7 @@ from src.params import (
     MODE_SINGLE_UNCALIBRATED, MODE_TWO_BOUNDARY,
 )
 from src.utils import check_same_frame, clamp
-from src.perception.geometry import GeometryBranchResult, LaneCandidate
+from src.perception.geometry import GeometryBranchResult, LaneCandidate, StopLineCandidate
 from src.perception.roi_crop import ROICropResult
 
 
@@ -57,6 +60,13 @@ class LaneOffsetConfig:
     # "single_uncalibrated" with zero confidence, not a steering error of unknown scale.
     expected_half_lane_px: float | None = 228        # Half of 95% of a single lane frame
     foot_band_px: int = FOOT_BAND_PX    # band height for foot_x; only used when geometry didn't store one
+    # A lane candidate lying across the ROI, with this fraction of its width
+    # within a detected stop line's span and no further from it than the line
+    # is thick, is the stop line or the pocket it encloses: skipped. A lane
+    # line crossing a stop line runs along the ROI, so it stays. The course
+    # has no curves the camera steers through, so nothing lying across the
+    # ROI is a lane boundary. None disables
+    stop_line_overlap: float | None = 0.5
 
 
 @dataclass(frozen=True)
@@ -329,6 +339,34 @@ def _project_single(
     )
 
 
+def _on_stop_line(
+        candidate: LaneCandidate,
+        stop_lines: list[StopLineCandidate],
+        min_overlap: float | None,
+    ) -> StopLineCandidate | None:
+    """
+    The stop line this lane candidate belongs to, or None.
+
+    A candidate belongs to a stop line when it lies across the ROI (wider
+    than tall), at least min_overlap of its width is within the stop line's
+    span, and it is no further above or below the stop line than the line
+    is thick. That covers the stop line itself passing the lane gates, and
+    the dark pocket that the stop line and two lane lines enclose. A lane
+    line crossing the stop line runs along the ROI, so it is kept.
+    """
+    if min_overlap is None or not stop_lines:
+        return None
+    x, y, w, h = candidate.bbox
+    if w < h:
+        return None
+    for s in stop_lines:
+        sx, sy, sw, sh = s.bbox
+        x_overlap = min(x + w, sx + sw) - max(x, sx)
+        rows_apart = max(sy - (y + h), y - (sy + sh))       # <= 0 when the boxes share rows
+        if x_overlap >= min_overlap * w and rows_apart <= s.thickness_px:
+            return s
+    return None
+
 def compute_lane_offset(
         geometry: GeometryBranchResult,
         roi: ROICropResult,
@@ -361,7 +399,14 @@ def compute_lane_offset(
     center_x = roi_width / 2.0
 
     raw = list(geometry.lane_candidates)
-    usable = [c for c in raw if _usable(c, config, log)]
+    usable = []
+    for c in raw:
+        on = _on_stop_line(c, geometry.stop_line_candidates, config.stop_line_overlap)
+        if on is not None:
+            log.append(f"[REJECT] candidate at x={c.bbox[0]} y={c.bbox[1]} lies on the "
+                       f"stop line at y={on.y_near_px:.1f}")
+        elif _usable(c, config, log):
+            usable.append(c)
     anchors = [_anchor(c, config) for c in usable]
     boundary_count = len(anchors)
 
@@ -461,7 +506,9 @@ def estimate_lane_offset(
     roi_width = roi.lane_rect[2]
     center_x = roi_width / 2.0
 
-    usable = [c for c in geometry.lane_candidates if _is_usable(c, config)]
+    usable = [c for c in geometry.lane_candidates
+              if _on_stop_line(c, geometry.stop_line_candidates, config.stop_line_overlap) is None
+              and _is_usable(c, config)]
     anchors = [_anchor(c, config) for c in usable]
     boundary_count = len(anchors)
 

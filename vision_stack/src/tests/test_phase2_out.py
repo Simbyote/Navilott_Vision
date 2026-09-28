@@ -27,7 +27,10 @@ from src.perception.color_branch import BlobFilter, ColorConfig, HSVRanges, run_
 from src.perception.feature_fusion import DetectionObject, FusionResult, fuse_detections
 from src.perception.geometry import GeometryConfig, run_geometry_stage
 from src.perception.lane_offset import LaneOffsetConfig, LaneOffsetResult, compute_lane_offset
-from src.perception.phase2_out import DETECTION_FIELDS, LANE_OFFSET_FIELDS, Phase2Output, package_phase2
+from src.perception.phase2_out import (
+    DETECTION_FIELDS, LANE_OFFSET_FIELDS, STOP_LINE_FIELDS, Phase2Output, package_phase2,
+)
+from src.perception.stop_line_distance import StopLineResult
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
 from src.params import FRAME_H, FRAME_W
@@ -327,6 +330,54 @@ def _jsonable(out: Phase2Output) -> dict:
         "lane_offset_results": [{"mode": r.mode, "offset": r.offset, "confidence": r.confidence}
                                 for r in out.lane_offset_results],
     }
+
+
+
+# =============================================================================
+# Stop-line results: the same rules as lane offset results
+# =============================================================================
+
+def stop_result(frame_id=1, ts=2, detected=True, distance=30.0):
+    return StopLineResult(detected, distance if detected else None, 50.0 if detected else None,
+                          100.0, 300.0, 0.0, False, 0.8 if detected else 0.0, 1, frame_id, ts)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("bad", [None, (), "x"])
+def test_f1_non_list_stop_line_results_raises_typeerror_naming_the_field(bad):
+    with pytest.raises(TypeError, match="stop_line_results"):
+        Phase2Output([], [], 1, 2, stop_line_results=bad)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("missing", STOP_LINE_FIELDS)
+def test_f2_a_missing_stop_line_field_raises_attributeerror_naming_it(missing):
+    item = SimpleNamespace(**{k: getattr(stop_result(), k) for k in STOP_LINE_FIELDS if k != missing})
+    with pytest.raises(AttributeError, match=missing):
+        Phase2Output([], [], 1, 2, stop_line_results=[item])
+
+
+@pytest.mark.software
+def test_f5_a_stop_line_result_from_a_different_frame_is_rejected():
+    with pytest.raises(ValueError, match="stop line result"):
+        Phase2Output([], [], 1, 2, stop_line_results=[stop_result(frame_id=9)])
+
+
+@pytest.mark.software
+def test_stop_line_results_default_to_empty_and_are_kept_as_is():
+    assert Phase2Output([], [], 1, 2).stop_line_results == []
+    items = [stop_result(), stop_result(detected=False)]
+    assert Phase2Output([], [], 1, 2, stop_line_results=items).stop_line_results == items
+
+
+@pytest.mark.software
+def test_package_wraps_the_stop_line_result_and_accepts_none():
+    fusion = FusionResult(detections=[], frame_id=1, timestamp_ms=2)
+    r = stop_result()
+    assert package_phase2(fusion, offset_result(), r).stop_line_results == [r]
+    assert package_phase2(fusion, offset_result()).stop_line_results == []
+    with pytest.raises(ValueError):
+        package_phase2(fusion, offset_result(), stop_result(ts=3))
 
 
 @pytest.mark.hardware

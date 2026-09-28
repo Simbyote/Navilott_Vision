@@ -1,30 +1,44 @@
-"""Geometry branch: lane boundaries and stop-sign shapes from gray ROIs.
+"""Geometry branch: lane boundaries, stop lines and stop-sign shapes from gray ROIs.
 
 Purpose:
-    Answers two structural questions per frame. Lane boundaries: white tape
+    Answers three structural questions per frame. Lane boundaries: white tape
     on a dark mat gives intensity edges that Canny finds, and contours are
     kept when their area, elongation, span and brightness match tape. Stop
-    sign: polygon approximation reduces a contour to its dominant vertices,
-    an octagon gives about 8, and area and solidity reject noise. Both share
-    the Canny-contour structure but run on separate ROIs.
+    lines: the same lane-ROI Canny edges, split by gradient direction so only
+    edges of near-horizontal lines remain, then the tape's top and bottom
+    edges paired into one line with its own gates. Stop sign: polygon
+    approximation reduces a contour to its dominant vertices, an octagon
+    gives about 8, and area and solidity reject noise.
+
+    Stop lines only share the Canny result. They have their own config
+    (StopLineFilter) and never change what the lane and sign detectors see,
+    so lane and sign results are identical with or without them. Geometry
+    only detects; the distance to a stop line is stop_line_distance's job.
 
 Main package:
-    GeometryBranchResult: one frame's accepted LaneCandidates and
-    SignCandidates, all coordinates ROI-relative, with the frame identity
-    carried from ROICropResult. Consumed by feature fusion.
+    GeometryBranchResult: one frame's accepted LaneCandidates,
+    SignCandidates and StopLineCandidates, all coordinates ROI-relative, with
+    the frame identity carried from ROICropResult. Consumed by feature
+    fusion, lane_offset and stop_line_distance.
 
 Flow:
     1. Validate that both ROIs are single-channel uint8.
-    2. Lane: Canny, close along-line gaps, filter contours, merge fragments.
-    3. Sign: Canny, filter contours by area, vertex count and solidity.
-    4. Package both candidate lists with the frame identity.
+    2. Canny on the lane ROI, once; lanes and stop lines both read it.
+    3. Lane: close along-line gaps, filter contours, merge fragments.
+    4. Stop line: keep near-horizontal edges, split them into top (dark to
+       bright going down) and bottom edges, fit each, pair top with bottom,
+       gate by length, tilt, thickness and brightness.
+    5. Sign: Canny on the sign ROI, filter contours by area, vertex count and solidity.
+    6. Package the three candidate lists with the frame identity.
 """
+import math
+
 import cv2
 import numpy as np
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 
-from src.params import FOOT_BAND_PX, LANE_BOUNDARY, STOP_SIGN
+from src.params import FOOT_BAND_PX, LANE_BOUNDARY, STOP_LINE, STOP_SIGN
 from src.utils import clamp
 from src.perception.roi_crop import ROICropResult
 
@@ -67,6 +81,31 @@ class SignContourFilter:
     ref_area: float = 5000.0        # px^2 that scores full area confidence
 
 @dataclass(frozen=True)
+class StopLineFilter:
+    """
+    Stop-line detection tuning, separate from the lane gates.
+
+    Lengths and thicknesses are lane-ROI px, measured along the fitted line
+    and perpendicular to it.
+    """
+    # Largest angle from horizontal. Also the gradient split: edges of steeper
+    # lines never reach the stop-line detector. Covers the robot approaching
+    # the line off-square; the course has no curves the camera steers through
+    max_tilt_deg: float = 20.0
+    # Longer than any lane-tape width (sweep max ~41 px), so the top or bottom
+    # edge of a lane-line dash can't pass for a stop line
+    min_length_px: float = 60.0
+    min_thickness_px: float = 3.0
+    max_thickness_px: float = 40.0
+    min_intensity: float = 130.0        # 0-255 mean between the paired edges; tape, not a shadow edge
+    # Paired edges must overlap by this fraction of the shorter one
+    min_edge_overlap: float = 0.5
+    # (width, height) px closing rectangle on each edge map; bridges gaps
+    # along the line, e.g. where a lane line crosses it
+    close_kernel: tuple[int, int] = (15, 1)
+    ref_length_px: float = 200.0        # length that scores full length confidence, about one lane
+
+@dataclass(frozen=True)
 class GeometryConfig:
     """
     Geometry tuning as one unit, so the stage takes a single config like every
@@ -75,6 +114,7 @@ class GeometryConfig:
     canny: CannyParams = field(default_factory=CannyParams)     # shared by both branches
     lane: LaneContourFilter = field(default_factory=LaneContourFilter)
     sign: SignContourFilter = field(default_factory=SignContourFilter)
+    stop_line: StopLineFilter = field(default_factory=StopLineFilter)   # reads the lane ROI's Canny edges
 
 def contour_foot_x(
         contour: np.ndarray,
@@ -134,12 +174,37 @@ class SignCandidate:
     solidity: float = 0.0               # area / convex hull area; 0.0 = not computed
 
 @dataclass
+class StopLineCandidate:
+    """
+    Stop-line candidate, lane-ROI-relative. frame_id and timestamp_ms are carried from capture.
+
+    Rows grow downward, toward the robot. y_near_px is the lowest point of the
+    bottom edge: the part of the line the robot reaches first.
+    """
+    label: str                          # always "stop_line"
+    bbox: tuple[int, int, int, int]     # (x, y, w, h) around the paired edges
+    x_left: float                       # ends of the overlap of the paired edges, px
+    x_right: float
+    y_top_px: float                     # top edge's row at the midpoint of the overlap
+    y_bottom_px: float                  # bottom edge's row at the midpoint; the ROI height when clipped
+    y_near_px: float                    # lowest bottom-edge row across the overlap
+    tilt_deg: float                     # signed angle from horizontal; + = right end nearer the robot
+    length_px: float                    # along the line
+    thickness_px: float                 # perpendicular to the line
+    mean_intensity: float               # 0-255 between the edges
+    clipped: bool                       # the bottom edge is below the ROI: the robot is on the line
+    confidence: float                   # [0, 1]
+    frame_id: int
+    timestamp_ms: int
+
+@dataclass
 class GeometryBranchResult:
     """One frame's geometry detections, ROI-relative. Identity copied from ROICropResult."""
     lane_candidates: list[LaneCandidate]
     sign_candidates: list[SignCandidate]
     frame_id: int
     timestamp_ms: int
+    stop_line_candidates: list[StopLineCandidate] = field(default_factory=list)   # lane-ROI-relative, nearest first
 
 
 def _close_edges(
@@ -497,7 +562,8 @@ def extract_lane_candidates(
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
-    draw_overlays: bool = True
+    draw_overlays: bool = True,
+    edges_raw: np.ndarray | None = None,
 ) -> tuple[list[LaneCandidate], dict]:
     """
     Find lane-boundary candidates in the lane ROI.
@@ -506,13 +572,16 @@ def extract_lane_candidates(
         lane_roi: (h, w) uint8 gray.
         draw_overlays: Also build contour_overlay and accepted_overlay. False
             skips two full-ROI allocations and a contour rasterization per frame.
+        edges_raw: Canny of lane_roi with canny_params, when the caller has
+            already run it (the stop-line detector shares it). None runs it here.
 
     Outputs:
         (candidates, debug). Candidates are merged and ROI-relative. debug
         always holds lane_roi, edges, edges_raw and reject_counts (including
         merged_into, the post-merge count).
     """
-    edges_raw = _canny(lane_roi, canny_params)
+    if edges_raw is None:
+        edges_raw = _canny(lane_roi, canny_params)
     edges = _close_edges(edges_raw, canny_params.close_kernel)
     contours = _contours(edges)
     reject_counts = {}
@@ -585,14 +654,20 @@ def find_lane_candidates(
     lane_filter: LaneContourFilter,
     frame_id: int,
     timestamp_ms: int,
+    edges_raw: np.ndarray | None = None,
 ) -> list[LaneCandidate]:
     """
     Production twin of extract_lane_candidates(): no debug dict, no overlays.
 
+    Inputs:
+        edges_raw: As for extract_lane_candidates().
+
     Outputs:
         Merged, ROI-relative candidates.
     """
-    edges = _close_edges(_canny(lane_roi, canny_params), canny_params.close_kernel)
+    if edges_raw is None:
+        edges_raw = _canny(lane_roi, canny_params)
+    edges = _close_edges(edges_raw, canny_params.close_kernel)
 
     candidates = _filter_lane_contours(
         _contours(edges),
@@ -883,6 +958,295 @@ def find_sign_candidates(
         timestamp_ms,
     )
 
+# =============================================================================
+# Stop lines
+# =============================================================================
+
+@dataclass
+class _EdgeSegment:
+    """One near-horizontal edge, as the line fitted through its points."""
+    points: np.ndarray      # (N, 2) float32
+    x0: float               # leftmost and rightmost x
+    x1: float
+    cx: float               # a point on the fitted line
+    cy: float
+    slope: float            # dy/dx of the fitted line
+
+    def y_at(self, x: float) -> float:
+        return self.cy + (x - self.cx) * self.slope
+
+    @property
+    def tilt_deg(self) -> float:
+        """Signed angle from horizontal; + = the right end is lower (nearer the robot)."""
+        return math.degrees(math.atan(self.slope))
+
+    @property
+    def length_px(self) -> float:
+        return (self.x1 - self.x0) / math.cos(math.atan(self.slope))
+
+def _fit_segment(
+        points: np.ndarray,
+    ) -> _EdgeSegment | None:
+    """Fit a line through edge points; None if they span under 2 px in x (not a horizontal edge)."""
+    x0, x1 = float(points[:, 0].min()), float(points[:, 0].max())
+    if x1 - x0 < 2.0:
+        return None
+    vx, vy, cx, cy = cv2.fitLine(points, cv2.DIST_L2, 0, 0.01, 0.01).ravel()
+    if abs(vx) < 1e-6:
+        return None
+    return _EdgeSegment(points, x0, x1, float(cx), float(cy), float(vy / vx))
+
+def _horizontal_edges(
+        lane_roi: np.ndarray,
+        edges_raw: np.ndarray,
+        max_tilt_deg: float,
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Split the lane ROI's Canny edges by gradient direction.
+
+    Purpose:
+        A stop line's top and bottom edges have a gradient pointing up or
+        down; a lane line's sides have one pointing left or right. Keeping
+        only edge pixels whose line runs within max_tilt_deg of horizontal
+        separates a stop line from lane lines it touches, before any contour
+        joins them.
+
+    Outputs:
+        (top, bottom): 0/255 uint8 maps. top holds edges where brightness
+        rises going down (the upper edge of bright tape), bottom where it falls.
+    """
+    gx = cv2.Sobel(lane_roi, cv2.CV_16S, 1, 0, ksize=3)
+    gy = cv2.Sobel(lane_roi, cv2.CV_16S, 0, 1, ksize=3)
+    # Only edge pixels are classified: a few hundred of the ROI's ~35k, so
+    # whole-array arithmetic would cost ten times the work it needs
+    ys, xs = np.nonzero(edges_raw)
+    ex = np.abs(gx[ys, xs].astype(np.int32))
+    ey = gy[ys, xs].astype(np.int32)
+    # |gx| <= |gy| tan(tilt), in integers: the edge's line is within tilt of horizontal
+    scale = 1024
+    horizontal = ex * scale <= np.abs(ey) * int(round(math.tan(math.radians(max_tilt_deg)) * scale))
+    top = np.zeros_like(edges_raw)
+    bottom = np.zeros_like(edges_raw)
+    rising = horizontal & (ey > 0)
+    falling = horizontal & (ey < 0)
+    top[ys[rising], xs[rising]] = 255
+    bottom[ys[falling], xs[falling]] = 255
+    return top, bottom
+
+def _edge_segments(
+        mask: np.ndarray,
+        f: StopLineFilter,
+    ) -> list[_EdgeSegment]:
+    """
+    Near-horizontal edges of one polarity as fitted segments, with pieces of one edge joined.
+
+    Purpose:
+        A lane line crossing a stop line breaks the stop line's edge for the
+        width of the lane tape. Pieces whose facing ends are within
+        max_thickness_px in x and whose fitted lines agree within 3 px there
+        are refit as one edge.
+
+    Outputs:
+        Segments sorted by x0.
+    """
+    kw, kh = f.close_kernel
+    if kw >= 2 or kh >= 2:
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(kw, 1), max(kh, 1)))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+    segments = []
+    for contour in _contours(mask):
+        seg = _fit_segment(contour.reshape(-1, 2).astype(np.float32))
+        if seg is not None:
+            segments.append(seg)
+    segments.sort(key=lambda sg: sg.x0)
+
+    joined = []
+    for seg in segments:
+        prev = joined[-1] if joined else None
+        if (prev is not None
+                and 0.0 <= seg.x0 - prev.x1 <= f.max_thickness_px
+                and abs(prev.y_at(prev.x1) - seg.y_at(seg.x0)) <= 3.0):
+            refit = _fit_segment(np.vstack([prev.points, seg.points]))
+            if refit is not None:
+                joined[-1] = refit
+                continue
+        joined.append(seg)
+    return joined
+
+def _stop_line_confidence(
+        length_px: float,
+        tilt_deg: float,
+        mean_intensity: float,
+        f: StopLineFilter,
+    ) -> float:
+    """[0, 1], rounded to 4 places: 50% length, 30% intensity margin above min_intensity, 20% squareness."""
+    length_score = clamp(length_px / max(f.ref_length_px, 1.0), 0.0, 1.0)
+    intensity_score = clamp((mean_intensity - f.min_intensity) / max(255.0 - f.min_intensity, 1.0), 0.0, 1.0)
+    square_score = clamp(1.0 - abs(tilt_deg) / max(f.max_tilt_deg, 1e-6), 0.0, 1.0)
+    return round(clamp(0.5 * length_score + 0.3 * intensity_score + 0.2 * square_score, 0.0, 1.0), 4)
+
+def _stop_line_from(
+        top: _EdgeSegment,
+        bottoms: list[_EdgeSegment],
+        lane_roi: np.ndarray,
+        f: StopLineFilter,
+        frame_id: int,
+        timestamp_ms: int,
+    ) -> tuple[StopLineCandidate | None, str]:
+    """
+    Gate one top edge and pair it with the bottom edge of the same tape.
+
+    Purpose:
+        Shared by the debug and production detectors, so their gates can't
+        drift; the debug one counts the returned reason, the production one
+        ignores it.
+
+    Inputs:
+        top: A top edge (brightness rising going down).
+        bottoms: Every bottom edge in the ROI.
+
+    Outputs:
+        (candidate, "accepted"), or (None, reason) with reason one of
+        "short", "tilt", "unpaired", "intensity". Unpaired means no bottom
+        edge overlaps it at a plausible thickness, and it isn't close enough
+        to the ROI bottom to be a line the robot is already on.
+    """
+    roi_h = lane_roi.shape[0]
+    if top.length_px < f.min_length_px:
+        return None, "short"
+    if abs(top.tilt_deg) > f.max_tilt_deg:
+        return None, "tilt"
+
+    best = None
+    for b in bottoms:
+        if b.length_px < f.min_length_px or abs(b.tilt_deg) > f.max_tilt_deg:
+            continue
+        x_left, x_right = max(top.x0, b.x0), min(top.x1, b.x1)
+        if x_right - x_left < f.min_edge_overlap * min(top.x1 - top.x0, b.x1 - b.x0):
+            continue
+        mid = (x_left + x_right) / 2.0
+        tilt = (top.tilt_deg + b.tilt_deg) / 2.0
+        thickness = (b.y_at(mid) - top.y_at(mid)) * math.cos(math.radians(tilt))
+        if f.min_thickness_px <= thickness <= f.max_thickness_px \
+                and (best is None or thickness < best[1]):
+            best = (b, thickness, x_left, x_right, tilt)
+
+    if best is not None:
+        b, thickness, x_left, x_right, tilt = best
+        y_bottom_at = b.y_at
+        clipped = False
+    else:
+        # The robot may already be on the line: its bottom edge is below the ROI
+        x_left, x_right, tilt = top.x0, top.x1, top.tilt_deg
+        mid = (x_left + x_right) / 2.0
+        visible = (roi_h - top.y_at(mid)) * math.cos(math.radians(tilt))
+        if not (f.min_thickness_px <= visible <= f.max_thickness_px):
+            return None, "unpaired"
+        thickness = visible
+        y_bottom_at = lambda x: float(roi_h)
+        clipped = True
+
+    mid = (x_left + x_right) / 2.0
+    band = np.array([[x_left, top.y_at(x_left)], [x_right, top.y_at(x_right)],
+                     [x_right, y_bottom_at(x_right)], [x_left, y_bottom_at(x_left)]])
+    polygon = np.round(band).astype(np.int32).reshape(-1, 1, 2)
+    mean_intensity = _mean_contour_intensity(lane_roi, polygon)
+    if mean_intensity < f.min_intensity:
+        return None, "intensity"
+
+    length_px = (x_right - x_left) / math.cos(math.radians(tilt))
+    y_top = min(top.y_at(x_left), top.y_at(x_right))
+    y_near = max(y_bottom_at(x_left), y_bottom_at(x_right))
+    x, y = int(math.floor(x_left)), int(math.floor(max(y_top, 0.0)))
+    w = int(math.ceil(x_right)) - x + 1
+    h = int(math.ceil(min(y_near, roi_h))) - y
+
+    return StopLineCandidate(
+        label = STOP_LINE,
+        bbox = (x, y, w, max(h, 1)),
+        x_left = round(x_left, 2),
+        x_right = round(x_right, 2),
+        y_top_px = round(top.y_at(mid), 2),
+        y_bottom_px = round(y_bottom_at(mid), 2),
+        y_near_px = round(min(y_near, float(roi_h)), 2),
+        tilt_deg = round(tilt, 2),
+        length_px = round(length_px, 2),
+        thickness_px = round(thickness, 2),
+        mean_intensity = round(mean_intensity, 2),
+        clipped = clipped,
+        confidence = _stop_line_confidence(length_px, tilt, mean_intensity, f),
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+    ), "accepted"
+
+def extract_stop_line_candidates(
+        lane_roi: np.ndarray,
+        edges_raw: np.ndarray,
+        stop_filter: StopLineFilter,
+        frame_id: int,
+        timestamp_ms: int,
+    ) -> tuple[list[StopLineCandidate], dict]:
+    """
+    Find stop lines in the lane ROI from its Canny edges.
+
+    Inputs:
+        lane_roi: (h, w) uint8 gray.
+        edges_raw: Canny of lane_roi, the same map the lane detector reads.
+
+    Outputs:
+        (candidates, debug). Candidates are lane-ROI-relative, nearest the
+        robot first. debug holds edges_top and edges_bottom (the gradient
+        split), top_count, bottom_count and reject_counts per gate.
+    """
+    edges_top, edges_bottom = _horizontal_edges(lane_roi, edges_raw, stop_filter.max_tilt_deg)
+    tops = _edge_segments(edges_top, stop_filter)
+    bottoms = _edge_segments(edges_bottom, stop_filter)
+
+    reject_counts = {"seen": len(tops), "short": 0, "tilt": 0, "unpaired": 0,
+                     "intensity": 0, "accepted": 0}
+    candidates = []
+    for top in tops:
+        candidate, reason = _stop_line_from(top, bottoms, lane_roi, stop_filter,
+                                            frame_id, timestamp_ms)
+        reject_counts[reason] += 1
+        if candidate is not None:
+            candidates.append(candidate)
+    candidates.sort(key=lambda c: -c.y_near_px)
+
+    return candidates, {
+        "edges_top": edges_top,
+        "edges_bottom": edges_bottom,
+        "top_count": len(tops),
+        "bottom_count": len(bottoms),
+        "reject_counts": reject_counts,
+    }
+
+def find_stop_line_candidates(
+        lane_roi: np.ndarray,
+        edges_raw: np.ndarray,
+        stop_filter: StopLineFilter,
+        frame_id: int,
+        timestamp_ms: int,
+    ) -> list[StopLineCandidate]:
+    """
+    Production twin of extract_stop_line_candidates(): no debug dict or reject counts.
+
+    Outputs:
+        Lane-ROI-relative candidates, nearest the robot first.
+    """
+    edges_top, edges_bottom = _horizontal_edges(lane_roi, edges_raw, stop_filter.max_tilt_deg)
+    bottoms = _edge_segments(edges_bottom, stop_filter)
+    candidates = []
+    for top in _edge_segments(edges_top, stop_filter):
+        candidate, _ = _stop_line_from(top, bottoms, lane_roi, stop_filter,
+                                       frame_id, timestamp_ms)
+        if candidate is not None:
+            candidates.append(candidate)
+    candidates.sort(key=lambda c: -c.y_near_px)
+    return candidates
+
+
 def run_geometry_branch(
     lane_roi: np.ndarray,
     sign_roi: np.ndarray,
@@ -893,9 +1257,10 @@ def run_geometry_branch(
     timestamp_ms: int = 0,
     draw_overlays: bool = True,
     trace: bool = False,
+    stop_filter: StopLineFilter = StopLineFilter(),
 ) -> tuple[GeometryBranchResult, dict, dict]:
     """
-    Run lane and sign detection on loose ROI arrays.
+    Run lane, stop-line and sign detection on loose ROI arrays.
 
     Purpose:
         The entry point for tuning work. The pipeline calls run_geometry_stage().
@@ -905,9 +1270,12 @@ def run_geometry_branch(
         draw_overlays: Build the debug overlays in both branches. False skips
             four full-ROI allocations and two contour rasterizations per frame.
         trace: Record the per-contour sign trace (see extract_sign_candidates).
+        stop_filter: Stop-line gates. Stop lines read the lane ROI's Canny
+            edges and never change the lane or sign results.
 
     Outputs:
-        (result, lane_debug, sign_debug).
+        (result, lane_debug, sign_debug). lane_debug["stop_line"] holds the
+        stop-line detector's debug (see extract_stop_line_candidates).
 
     Raises:
         ValueError / TypeError: If either ROI is None, not uint8, or not 2-D.
@@ -928,13 +1296,24 @@ def run_geometry_branch(
                 f"(H,W), got {roi.shape}. Color conversion belongs to preprocess."
             )
 
+    lane_edges = _canny(lane_roi, canny_params)     # shared by lanes and stop lines
+
     lane_candidates, lane_debug = extract_lane_candidates(
         lane_roi,
         canny_params,
         lane_filter,
         frame_id,
         timestamp_ms,
-        draw_overlays
+        draw_overlays,
+        edges_raw = lane_edges,
+    )
+
+    stop_line_candidates, lane_debug["stop_line"] = extract_stop_line_candidates(
+        lane_roi,
+        lane_edges,
+        stop_filter,
+        frame_id,
+        timestamp_ms,
     )
 
     sign_candidates, sign_debug = extract_sign_candidates(
@@ -951,7 +1330,8 @@ def run_geometry_branch(
         lane_candidates,
         sign_candidates,
         frame_id,
-        timestamp_ms
+        timestamp_ms,
+        stop_line_candidates,
     )
 
     return result, lane_debug, sign_debug
@@ -991,6 +1371,7 @@ def run_geometry_stage(
         timestamp_ms = roi.timestamp_ms,
         draw_overlays = draw_overlays,
         trace = trace,
+        stop_filter = config.stop_line,
     )
 
 
@@ -1023,10 +1404,21 @@ def detect_geometry(
                 f"(H,W), got {r.shape}. Color conversion belongs to preprocess."
             )
 
+    lane_edges = _canny(roi.lane_roi, config.canny)     # shared by lanes and stop lines
+
     lane_candidates = find_lane_candidates(
         roi.lane_roi,
         config.canny,
         config.lane,
+        roi.frame_id,
+        roi.timestamp_ms,
+        edges_raw = lane_edges,
+    )
+
+    stop_line_candidates = find_stop_line_candidates(
+        roi.lane_roi,
+        lane_edges,
+        config.stop_line,
         roi.frame_id,
         roi.timestamp_ms,
     )
@@ -1043,5 +1435,6 @@ def detect_geometry(
         lane_candidates,
         sign_candidates,
         roi.frame_id,
-        roi.timestamp_ms
+        roi.timestamp_ms,
+        stop_line_candidates,
     )
