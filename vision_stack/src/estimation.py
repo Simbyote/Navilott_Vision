@@ -162,6 +162,15 @@ class _Vote:
         self._buf: deque = deque(maxlen=self._window)
         self.state = initial
 
+    @property
+    def buffer(self) -> tuple:
+        """The samples in the window, oldest first. Read-only; for the debug twin."""
+        return tuple(self._buf)
+
+    @property
+    def window(self) -> int:
+        return self._window
+
     def update(self, sample):
         self._buf.append(sample)
         value, count = Counter(self._buf).most_common(1)[0]

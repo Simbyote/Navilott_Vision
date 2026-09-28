@@ -1,23 +1,28 @@
-"""Phase 1-3 linker: capture, perception and estimation in one headless process, reported as text.
+"""Phase 1-3 linker: the debug pipeline for capture, perception and estimation, reported as text and video.
 
 Purpose:
     The estimation test harness. Phase 3's lane filter, dropout hold, heading
     tracker and votes only mean something across frames, so this runs the
     whole chain and shows each packet next to the Phase 2 input it came from;
-    a bad packet can then be traced to bad input or bad filtering. Phases 1-2
-    come from phase2_linker.run_chain(), the only place that order is
-    written, so the two linkers can't drift. It runs the chain itself, live or
-    from a replay, rather than reading phase2_linker's recordings, and it
-    doesn't draw or record video; live_view is the visual debugger.
+    a bad packet can then be traced to bad input or bad filtering. It is the
+    instrumented twin of pipeline.Pipeline: Phases 1-2 come from
+    phase2_linker.run_chain() and Phase 3 from
+    estimation_debug.TracedPhase3Processor, which record every decision and
+    time every stage, and the tests hold both to Pipeline's packets. It runs
+    the chain itself, live or from a replay, rather than reading
+    phase2_linker's recordings. The Phase 3 video (debug_phase3) is recorded
+    and shown the way phase2_linker's views are.
 
 Main package:
     Phase3Result: one frame's ChainResult, the EstimationPacket handed to
-    Navigation, Phase 3's debug summary, and per-phase timings.
+    Navigation, Phase 3's debug (the per-stage records and timings), and
+    per-phase timings.
 
 Flow:
-    FrameSource -> run_chain() -> Phase3Processor.process() -> EstimationPacket
+    FrameSource -> run_chain() -> TracedPhase3Processor.process() -> EstimationPacket
                    (Phases 1-2)   (Phase 3)
-    Each result goes to p3.csv, the event tracker and the run statistics;
+    Each result goes to p3.csv, the event tracker, the run statistics and,
+    unless turned off, Phase3View (p3_debug.avi / .csv and the window);
     summary.txt is written when the source ends or the run is interrupted.
 """
 import argparse
@@ -35,18 +40,21 @@ from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.phase2_linker import ChainResult, run_chain
+import src.debugger.debug_video as dv
+from src.debugger.debug_phase3 import Phase3View
 from src.debugger.live_view import (
-    CameraFrameSource, VideoFrameSource, DirectoryFrameSource,
+    CameraFrameSource, VideoFrameSource, DirectoryFrameSource, Display, stage_timing_report,
 )
 from src.estimation import (
     LANE_VISION, LANE_HOLD, LANE_STALE,
     EstimationPacket, Phase3Config, Phase3Processor, SensorSample,
 )
+from src.estimation_debug import TracedPhase3Processor
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
-Run capture -> perception -> estimation headless and report what estimation
-decided, frame by frame, next to the Phase 2 input it came from.
+Run capture -> perception -> estimation and report what estimation decided,
+frame by frame, next to the Phase 2 input it came from, as text and as video.
 
 Sources:
     --camera        live capture through capture.CameraSource
@@ -67,13 +75,29 @@ Output (--out DIR, default <root>/runs/p3_<timestamp>):
                  stop_line change
     p3.csv       every frame: timings, the Phase 2 lane and stop-line input,
                  the packet, and Phase 3's debug log
+    p3_debug.avi the Phase 3 video, every frame (--no-video turns it off):
+                 the Phase 2 lane overlay with traffic lights and stop signs
+                 green if they passed Phase 3's gate, amber if not; the lane
+                 filter's raw vs filtered offset, status, hold counter and
+                 rejection reason; the three vote buffers; and a 5 s timeline
+    p3_debug.csv every frame's Phase 3 decisions: lane reason, EMA before and
+                 after, vote buffers, stop line seen or held
     summary.txt  timing percentiles, lane status and mode histograms, longest
-                 hold and stale runs, and offset statistics while on vision
+                 hold and stale runs, offset statistics while on vision, the
+                 [PHASE 3] decision counts, and [TIMING] per stage (Phase 2
+                 stages, Phase 3 stages, render; render is not in the total
+                 or the P2+P3 budget)
+
+Display:
+    On by default, as in phase2_linker; falls back to headless if the window
+    can't open. q quits, space pauses, s saves a still. --no-display forces
+    headless.
 
 Examples (from the repo root):
     python3 -m src.phase3_linker --video run.avi
     python3 -m src.phase3_linker --camera --imu --fps 20
     python3 -m src.phase3_linker --camera --limit 200 --print-every 1
+    python3 -m src.phase3_linker --camera --no-display --no-video   # text and timing only
 
 Sign convention:
     lane_offset    + = robot RIGHT of lane center, so steer left
@@ -87,8 +111,8 @@ class Phase3Result:
     """One frame through all three phases."""
     chain: ChainResult              # every Phase 1-2 stage output
     packet: EstimationPacket        # handed to Navigation
-    p3_debug: dict                  # Phase3Processor's debug summary: dt, log, ...
-    timings_ms: dict = field(default_factory=dict)      # capture, phase2, phase3, total
+    p3_debug: dict                  # the processor's debug; TracedPhase3Processor adds per-stage records and timings_ms
+    timings_ms: dict = field(default_factory=dict)      # capture, phase2, phase3, total; render added by run() when it draws
 
 def run_phase3_chain(
         frame_bgr: np.ndarray,
@@ -104,8 +128,9 @@ def run_phase3_chain(
 
     Inputs:
         frame_bgr, frame_id, timestamp_ms: As the frame source delivered them.
-        processor: This run's Phase3Processor. Stateful: pass the same one
-            every frame, in order.
+        processor: This run's Phase3Processor, normally a
+            TracedPhase3Processor (run() builds one). Stateful: pass the
+            same one every frame, in order.
         sensors: Readings for this frame window; None runs without sensors.
         config: Phase 2 tuning.
         capture_ms: Time spent in source.read(). Phase 1 happens there,
@@ -253,6 +278,7 @@ class Phase3Stats:
         self.budget_ms = budget_ms
         self.frames = 0
         self.timings = {k: [] for k in ("capture", "phase2", "phase3", "total")}
+        self.stage_ms = {}                  # stage -> per-frame ms: Phase 2 stages, Phase 3 stages, render
         self.status = Counter()
         self.modes = Counter()
         self.vision_offsets = []
@@ -265,7 +291,12 @@ class Phase3Stats:
         """Fold one frame into the counts, timings and run lengths."""
         self.frames += 1
         for k, v in res.timings_ms.items():
-            self.timings[k].append(v)
+            self.timings.setdefault(k, []).append(v)
+        stages = {**res.chain.timings_ms, **res.p3_debug.get("timings_ms", {})}
+        if "render" in res.timings_ms:
+            stages["render"] = res.timings_ms["render"]
+        for k, v in stages.items():
+            self.stage_ms.setdefault(k, []).append(v)
         # Capture time on a live camera includes waiting for the next frame,
         # so the processing budget is judged on Phases 2 and 3 only
         if res.timings_ms["phase2"] + res.timings_ms["phase3"] > self.budget_ms:
@@ -318,6 +349,9 @@ class Phase3Stats:
                          f"min {a.min():+.4f}  max {a.max():+.4f}")
         else:
             lines.append("  no frames on vision")
+
+        if self.stage_ms:
+            lines += [""] + stage_timing_report(self.stage_ms, exclude=("render",))
         return lines
 
 
@@ -358,6 +392,9 @@ def run(
         print_every: int = 20,
         verbose: bool = False,
         limit: int | None = None,
+        video: bool = True,
+        display: bool = False,
+        scale: int = 1,
     ) -> Phase3Stats:
     """
     Run every frame from source through all three phases.
@@ -372,14 +409,19 @@ def run(
         print_every: Status line every N frames; 0 prints events only.
         verbose: Also print Phase 3's per-frame debug log.
         limit: Stop after this many frames; None runs until the source ends.
+        video: Record p3_debug.avi and p3_debug.csv, every frame.
+        display: Show the same picture in a window (q quits, space pauses,
+            s saves a still); falls back to headless without a display.
+        scale: Magnification of the video and window.
 
     Outputs:
         Phase3Stats.
 
     Side effects:
-        Writes p3.csv and summary.txt into out_dir (created if missing),
-        prints to the console, and closes the source. Ctrl-C ends the run
-        early; the CSV and summary are still written.
+        Writes p3.csv and summary.txt into out_dir (created if missing), and
+        the video when on; may open a window; prints to the console, and
+        closes the source. Ctrl-C ends the run early; the CSV, a playable
+        video and the summary are still written.
     """
     os.makedirs(out_dir, exist_ok=True)
     stats = Phase3Stats(budget_ms=1000.0 / max(source.fps, 1))
@@ -387,6 +429,10 @@ def run(
     log = CsvLog(os.path.join(out_dir, "p3.csv"))
     sensors = _ImuSensors() if use_imu else _NoSensors()
     processor = None
+    view = Phase3View(config.lane_offset, source.fps) if (video or display) else None
+    writer = (dv.ViewWriter(os.path.join(out_dir, "p3_debug.avi"), Phase3View.CSV_FIELDS,
+                            fps=source.fps) if video else None)
+    window = Display(display, out_dir, [Phase3View.name])
 
     try:
         while limit is None or stats.frames < limit:
@@ -405,9 +451,19 @@ def run(
                 if p3_config.cm_per_px is not None and p3_config.lane_roi_width_px is None:
                     lane_w = run_chain(frame, fid, ts, config).roi.lane_rect[2]
                     p3_config = replace(p3_config, lane_roi_width_px=int(lane_w))
-                processor = Phase3Processor(p3_config)
+                processor = TracedPhase3Processor(p3_config)
 
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
+            quit_ = False
+            if view is not None:
+                data = view.extract(res, frame)
+                view.observe(data)
+                t0 = time.perf_counter()
+                img = view.render(data)
+                if writer is not None:
+                    writer.push(img, view.row(data))
+                res.timings_ms["render"] = view.last_render_ms = (time.perf_counter() - t0) * 1000.0
+                quit_ = not window.show({view.name: img})
             stats.update(res)
             log.write(res)
 
@@ -418,15 +474,22 @@ def run(
             if verbose:
                 for entry in res.p3_debug.get("log", []):
                     print(f"    {entry}")
+            if quit_:
+                break
 
     except KeyboardInterrupt:
         print("\ninterrupted")
     finally:
         log.close()
+        if writer is not None:
+            writer.close()              # released here so Ctrl-C still leaves a playable file
+        window.close()
         sensors.stop()
         source.close()
 
     summary = stats.report()
+    if view is not None:
+        summary += [""] + view.report()
     summary += ["", f"transitions      lane {events.counts['lane']}  "
                     f"drive {events.counts['drive']}  "
                     f"stop_sign {events.counts['stop_sign']}  "
@@ -472,6 +535,10 @@ def cli(argv: list[str] | None = None) -> int:
                          "0 prints events only")
     ap.add_argument("--verbose", action="store_true",
                     help="print Phase 3's per-frame debug log")
+    ap.add_argument("--no-video", action="store_true",
+                    help="don't record p3_debug.avi / .csv")
+    ap.add_argument("--no-display", action="store_true", help="force headless")
+    ap.add_argument("--scale", type=int, default=1, help="magnify the video and window")
     ap.add_argument("--out", default=None, metavar="DIR")
 
     argv = sys.argv[1:] if argv is None else argv
@@ -508,7 +575,8 @@ def cli(argv: list[str] | None = None) -> int:
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}\n")
 
     run(source, config, p3_config, args.imu, out_dir, print_every,
-        args.verbose, args.limit)
+        args.verbose, args.limit, video=not args.no_video,
+        display=not args.no_display, scale=args.scale)
     return 0
 
 if __name__ == "__main__":

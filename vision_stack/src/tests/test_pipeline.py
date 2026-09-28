@@ -29,6 +29,7 @@ from src.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, Phase3Processor
 from src.params import LANE_BOUNDARY, PIPELINE_ROOT, STOP_SIGN, TRAFFIC_LIGHT
 from src.perception.color_branch import ColorConfig
 from src.phase2_linker import run_chain
+from src.estimation_debug import TracedPhase3Processor
 from src.phase3_linker import run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
@@ -209,7 +210,7 @@ def test_pipeline_imports_no_linker_or_debugger():
     out = subprocess.run([sys.executable, "-c", probe], cwd=PIPELINE_ROOT,
                          capture_output=True, text=True, check=True).stdout
     assert not [m for m in eval(out) if m.startswith(("src.debugger", "src.phase2_linker",
-                                                       "src.phase3_linker"))]
+                                                       "src.phase3_linker", "src.estimation_debug"))]
 
 
 # =============================================================================
@@ -228,11 +229,11 @@ DRIVE = drive_sequence()
 
 
 def _linker_processor(config, estimation, first_frame):
-    """The Phase3Processor phase3_linker.run() builds: the lane ROI width from the first frame when cm_per_px is set."""
+    """The processor phase3_linker.run() builds: traced, with the lane ROI width from the first frame when cm_per_px is set."""
     if estimation.cm_per_px is not None and estimation.lane_roi_width_px is None:
         lane_w = run_chain(first_frame, 0, 0, config).roi.lane_rect[2]
         estimation = replace(estimation, lane_roi_width_px=int(lane_w))
-    return Phase3Processor(estimation)
+    return TracedPhase3Processor(estimation)
 
 def _packets(pipeline, sequence=DRIVE):
     """step() over a sequence: every packet with Phase 3's debug beside it."""
@@ -259,7 +260,9 @@ def test_packets_match_phase3_linker_over_a_drive(case):
         p2 = pipeline.perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
         same(p2, res.chain.phase2, f"{where} phase2")
         same(pipeline.estimate(p2, sf.sensors), res.packet, f"{where} packet")
-        same(pipeline.last_estimation_debug, res.p3_debug, f"{where} p3_debug")
+        # The traced debug is a superset: production's fields must match it exactly
+        same(pipeline.last_estimation_debug,
+             {k: res.p3_debug[k] for k in pipeline.last_estimation_debug}, f"{where} p3_debug")
 
 
 @pytest.mark.software

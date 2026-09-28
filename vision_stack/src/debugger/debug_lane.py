@@ -33,7 +33,6 @@ from src.params import (
     FRAME_H, FRAME_W, MODE_LEFT_ONLY, MODE_NONE, MODE_RIGHT_ONLY,
     MODE_SINGLE_UNCALIBRATED, MODE_TWO_BOUNDARY,
 )
-from src.utils import clamp
 
 FRAME_SIZE = (FRAME_W, FRAME_H)      # (w, h) the lane_rect coordinates assume
 
@@ -54,6 +53,7 @@ TAG_COLORS = {"BLIND": (60, 60, 255), "MERGE": (60, 60, 255),
 GATE_SHORT = {"confidence": "conf", "proximity": "prox", "length_px": "len",
               "width_px": "wid", "mean_intensity": "int", "stop_line": "on stop line"}
 
+HEADER_H = 52                                 # px at scale 1; annotate() draws its header over the frame's top rows
 C_LEFT   = (255, 255, 0)                      # cyan
 C_RIGHT  = (255, 0, 255)                      # magenta
 C_LANE   = (0, 255, 255)                      # yellow
@@ -225,7 +225,7 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
         _text(img, f"{tag}{val:.0f}", (xp + 3 * s, top + 12 * s), color, fs, th)
 
     W = img.shape[1]
-    hh = 52 * s
+    hh = HEADER_H * s
     cv2.rectangle(img, (0, 0), (W - 1, hh), (0, 0, 0), -1)
     lh = 16 * s
 
@@ -239,13 +239,9 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
 
     # offset gauge, right side, -1 .. +1
     gx0, gx1, gy = W - 130 * s, W - 8 * s, 2 * lh - 6 * s
-    cv2.line(img, (gx0, gy), (gx1, gy), C_GRAY, 1)
-    for v in (-1.0, 0.0, 1.0):
-        tx = int(gx0 + (v + 1) / 2 * (gx1 - gx0))
-        cv2.line(img, (tx, gy - 4 * s), (tx, gy + 4 * s), C_GRAY, 1)
+    dv.draw_offset_axis(img, gx0, gx1, gy, 4 * s)
     if result.mode in STEERING_MODES:
-        v = clamp(result.offset, -1.0, 1.0)
-        mx = int(gx0 + (v + 1) / 2 * (gx1 - gx0))
+        mx = dv.offset_x(result.offset, gx0, gx1)
         cv2.circle(img, (mx, gy), 4 * s,
                    C_RED if abs(result.offset) >= 1.0 else C_LANE, -1)
 
