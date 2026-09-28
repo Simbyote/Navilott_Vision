@@ -28,8 +28,8 @@ from src.params import GREEN, HSV_RANGES_PATH, RED, TRAFFIC_LIGHT, YELLOW
 from src.perception.color_branch import BlobFilter, ColorConfig, ColorRange, HSVRanges, load_color_config
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
-from src.phase2_linker import run_chain, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 TEST_HSV = HSVRanges(
     red_low=ColorRange((0, 120, 120), (10, 255, 255)),

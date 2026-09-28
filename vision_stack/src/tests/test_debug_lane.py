@@ -33,8 +33,8 @@ from src.perception.color_branch import BlobFilter, ColorConfig, HSVRanges, load
 from src.perception.geometry import GeometryBranchResult, LaneCandidate
 from src.perception.lane_offset import LaneOffsetConfig, LaneOffsetResult
 from src.perception.roi_crop import draw_roi_overlay
-from src.phase2_linker import run_chain, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 LANE_RECT = (24, 189, 432, 81)          # default LANE bounds at 480x270
 SIZE = (FRAME_W, FRAME_H)

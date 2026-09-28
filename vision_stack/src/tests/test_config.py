@@ -27,8 +27,8 @@ from src.params import CAMERA_CALIB_PATH, FRAME_H, FRAME_W, HSV_RANGES_PATH, PIP
 from src.perception.color_branch import load_hsv_ranges, run_color_stage
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
-from src.phase2_linker import run_chain, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 
 # =============================================================================

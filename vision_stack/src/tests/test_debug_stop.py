@@ -27,8 +27,8 @@ from src.perception.geometry import SignCandidate
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
 from src.config import MEASURED
-from src.phase2_linker import run_chain, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 ROI_SHAPE = (80, 120)                    # (h, w) of the hand-built sign ROI
 

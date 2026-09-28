@@ -33,7 +33,8 @@ In the order a frame passes through them.
 | `test_feature_fusion` | `perception/feature_fusion.py` | Ordering, conflict resolution, ROI-local coordinates | Fusion time, per-class counts, overlays |
 | `test_lane_offset` | `perception/lane_offset.py` | Gates, boundary pairing and single-sided rules on hand-built candidates; the sign convention | Offset, mode and confidence per frame; debug log; anchor overlay |
 | `test_phase2_out` | `perception/phase2_out.py`, the output packet | Every packaging rule (PR-1 to PR-4) and failure case (F1–F5) in the Phase 2 contract | Packaging time, one JSON snapshot of the packet per sample frame |
-| `test_production_parity` | Debug-free twins in `geometry`, `color_branch`, `lane_offset`, `feature_fusion` | The fast production functions return the same results as their debug-instrumented versions, field by field | — |
+| `test_production_parity` | Debug-free twins in `geometry`, `color_branch`, `lane_offset`, `feature_fusion` | The fast production functions return the same results as their debug-instrumented versions, field by field, on the shared scenes (stop lines included) and the gate sweep, under the bare defaults, `SCENE_CONFIG`, `ALT_CONFIG` and `MEASURED` | — |
+| `test_pipeline` | `pipeline.py`, the robot's flow | `Pipeline.perceive()` gives the same `Phase2Output` as `run_chain()`, field by field, on every shared scene and the gate sweep under five configs; each `ALT_CONFIG` group changes the output, so a stage ignoring its config fails; no debug function runs; stage timing is off unless asked for; the stamp is carried and the frame untouched. Stop lines moving the lane offset is recorded as a strict `xfail` until Section 6 | — |
 | `test_estimation` | `estimation.py`, Phase 3 | Each estimation stage alone, then `Phase3Processor` for ordering, stamps and pass-through | — |
 
 ## 2. Peripherals
@@ -89,6 +90,7 @@ The software halves of `test_stage_timing` and `test_soak` (group 4) belong here
 | `test_utils.py` | Known answers for the shared helpers in `src/utils.py` |
 | `conftest.py` | Not tests: the `--hardware`, `--replay`, `--frames`, `--soak-minutes` options, the frame source, and the artifact folders |
 | `artifacts.py` | Not tests: how hardware tests write CSVs, JSON, images and videos |
+| `scenes.py` | Not tests: the one source of synthetic frames (`synthetic_frame`, `scene`, `SCENES` with stop lines, the gate `SWEEP`), `SCENE_CONFIG` (`MEASURED` without undistortion), `ALT_CONFIG` (every stage's tuning moved), and `same()`, the field-by-field comparison |
 
 ## Which test for which question
 

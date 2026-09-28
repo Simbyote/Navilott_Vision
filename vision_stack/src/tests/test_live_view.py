@@ -25,8 +25,8 @@ from src.capture.camera import CaptureError, FrameData
 from src.debugger.debug_stop import StopView
 from src.debugger.debug_traffic import TrafficView
 from src.params import FRAME_H, FRAME_W, HSV_RANGES_PATH
-from src.phase2_linker import run_chain, run_live_view, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain, run_live_view
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 
 def write_frames(directory, n=4, names=None):

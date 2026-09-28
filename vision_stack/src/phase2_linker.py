@@ -24,13 +24,11 @@ Command line (options from live_view.cli):
 import time
 
 import numpy as np
-import cv2
 from dataclasses import dataclass, field, replace
 
 from src.capture.camera import FrameData
-from src.params import FRAME_H, FRAME_W
 from src.perception.preprocess import preprocess_frame, PreprocessResult
-from src.perception.roi_crop import crop_rois, ROICropResult, LANE, resolve
+from src.perception.roi_crop import crop_rois, ROICropResult
 from src.perception.geometry import run_geometry_stage, GeometryBranchResult
 from src.perception.color_branch import ColorConfig, run_color_stage, load_hsv_ranges
 from src.perception.lane_offset import compute_lane_offset, LaneOffsetResult
@@ -161,63 +159,6 @@ def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
 
     return live_view.run(source, process, config.lane_offset, **options)
 
-
-# @TODO move synthetic_frame() and expected_offset() into test/; nothing in this module uses them
-LANE_RECT = resolve(LANE, (FRAME_H, FRAME_W))   # what crop_rois will cut at this size
-ROI_W, ROI_H = LANE_RECT[2], LANE_RECT[3]
-ROI_CENTER = ROI_W / 2.0                 # where the robot sits in the lane ROI
-
-def synthetic_frame(
-        marks,
-        mark_width: int = 6,
-        road: int = 60,
-        surround: int = 30,
-        marking: int = 240,
-    ) -> np.ndarray:
-    """
-    BGR frame whose lane ROI holds markings at known ROI-local x, so the correct offset is known exactly.
-
-    Purpose:
-        Synthetic ground truth proves the arithmetic recovers what was drawn.
-        It says nothing about whether the camera sees the world the way these
-        frames assume, so it can't test accuracy in cm against the +/-2 cm
-        requirement; that needs captures at measured lateral offsets on a real
-        course.
-
-    Inputs:
-        marks: ROI-local x positions, or (x, y_top, y_bottom) tuples to
-            control vertical extent for dash and partial-visibility cases.
-        mark_width: Marking width in px.
-        road, surround, marking: Intensities for the road surface inside the
-            lane ROI, everything outside it, and the markings.
-
-    Outputs:
-        (FRAME_H, FRAME_W, 3) uint8 BGR. A marking drawn at ROI x is recovered
-        within half a pixel: marks at 150 and 290 come back as 149.5 and 289.5
-        at 480x270 with MEASURED.
-    """
-    x0, y0, w, h = LANE_RECT
-    frame = np.full((FRAME_H, FRAME_W, 3), surround, np.uint8)
-    frame[y0:y0 + h, x0:x0 + w] = road
-
-    for mark in marks:
-        if isinstance(mark, (int, float)):
-            x, top, bottom = mark, 0, h
-        else:
-            x, top, bottom = mark
-        fx = x0 + int(x)
-        cv2.rectangle(
-            frame,
-            (fx - mark_width // 2, y0 + int(top)),
-            (fx + mark_width // 2, y0 + int(bottom) - 1),
-            (marking,) * 3, -1,
-        )
-    return frame
-
-def expected_offset(left_x: float, right_x: float) -> float:
-    """The offset the chain must recover for markings at these ROI x."""
-    lane_center = (left_x + right_x) / 2.0
-    return (ROI_CENTER - lane_center) / ROI_CENTER
 
 if __name__ == "__main__":
     import sys

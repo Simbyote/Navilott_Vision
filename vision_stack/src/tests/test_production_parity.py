@@ -23,14 +23,13 @@ with the debug path. Every test here pins that agreement.
 
 --software  Both chains on synthetic scenes, compared field by field. No camera.
 """
-from dataclasses import fields, is_dataclass
 
 import cv2
 import numpy as np
 import pytest
 
 from src.capture.camera import FrameData
-from src.params import FRAME_H, FRAME_W, HSV_RANGES_PATH
+from src.params import HSV_RANGES_PATH
 from src.perception import color_branch as cb
 from src.perception import feature_fusion as ff
 from src.perception import geometry as geo
@@ -38,63 +37,13 @@ from src.perception import lane_offset as lo
 from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
-from src.config import PipelineConfig
-from src.phase2_linker import synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.config import MEASURED, PipelineConfig
+from src.tests.scenes import ALT_CONFIG, SCENE_CONFIG, SCENES, SWEEP, same as _same, sweep_frame
 
 
-def _same(a, b, path="root"):
-    """Structural equality across dataclasses, containers and numpy arrays; asserts with the path that differs."""
-    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
-        assert np.array_equal(np.asarray(a), np.asarray(b)), f"{path}: arrays differ"
-    elif is_dataclass(a) and is_dataclass(b):
-        assert type(a) is type(b), f"{path}: {type(a).__name__} != {type(b).__name__}"
-        for f in fields(a):
-            _same(getattr(a, f.name), getattr(b, f.name), f"{path}.{f.name}")
-    elif isinstance(a, dict):
-        assert a.keys() == b.keys(), f"{path}: keys differ"
-        for k in a:
-            _same(a[k], b[k], f"{path}[{k!r}]")
-    elif isinstance(a, (list, tuple)):
-        assert len(a) == len(b), f"{path}: length {len(a)} != {len(b)}"
-        for i, (x, y) in enumerate(zip(a, b)):
-            _same(x, y, f"{path}[{i}]")
-    else:
-        assert a == b, f"{path}: {a!r} != {b!r}"
-
-
-def _scene(marks=(150, 290), sign=False, lights=(), noise_seed=None):
-    """BGR frame: lane marks from synthetic_frame, plus an optional octagon, colored lamps and noise."""
-    frame = synthetic_frame(marks)
-    if sign:
-        # Filled octagon in the sign ROI (upper right)
-        cx, cy, r = int(FRAME_W * 0.78), int(FRAME_H * 0.25), 28
-        pts = np.array([(cx + r * np.cos(np.pi / 8 + k * np.pi / 4),
-                         cy + r * np.sin(np.pi / 8 + k * np.pi / 4)) for k in range(8)], np.int32)
-        cv2.fillPoly(frame, [pts], (40, 40, 255))   # red, bright enough in gray for Canny
-    for i, bgr in enumerate(lights):
-        # Lamps stacked in the traffic ROI (top center)
-        cv2.circle(frame, (FRAME_W // 2, 25 + i * 30), 11, bgr, -1)
-    if noise_seed is not None:
-        rng = np.random.default_rng(noise_seed)
-        frame = cv2.add(frame, rng.integers(0, 60, frame.shape, dtype=np.uint8))
-    return frame
-
-
-SCENES = {
-    "two_boundary": _scene(),
-    "one_boundary": _scene(marks=(150,)),
-    "merge_close": _scene(marks=(200, 230)),
-    "span_wide": _scene(marks=(5, 425)),
-    "three_marks": _scene(marks=(60, 200, 340)),
-    "dashed": _scene(marks=((150, 0, 30), (150, 50, 81), 290)),
-    "blind": _scene(marks=()),
-    "sign_and_lights": _scene(sign=True, lights=((0, 0, 255), (0, 220, 255), (0, 200, 0))),
-    "noise_a": _scene(sign=True, lights=((0, 0, 255),), noise_seed=1),
-    "noise_b": _scene(marks=(100, 180, 300), noise_seed=7),
-}
-
-CONFIGS = {"default": PipelineConfig(), "scene": SCENE_CONFIG}
+# ALT_CONFIG moves every stage's tuning, so a twin that ignores part of its
+# config fails here; MEASURED covers the undistortion path
+CONFIGS = {"default": PipelineConfig(), "scene": SCENE_CONFIG, "alt": ALT_CONFIG, "measured": MEASURED}
 
 
 def _roi(frame_bgr, config, frame_id=7):
@@ -147,22 +96,6 @@ def test_scenes_exercise_every_output():
     assert {"two_boundary", "none"} <= modes and len(modes) >= 3
 
 
-# Marking brightness and width walked across the intensity, width and span
-# gates in both geometry and lane offset, so a twin whose gate is off by one
-# flips a decision somewhere in the sweep. The fixed scenes above sit far from
-# every threshold and would not notice.
-SWEEP = [(level, width, noise)
-         for level in range(96, 160, 2)
-         for width in (2, 6, 24, 44)
-         for noise in (None, 3)]
-
-def _sweep_frame(level, width, noise):
-    frame = synthetic_frame((150, 290), mark_width=width, marking=level)
-    if noise is not None:
-        rng = np.random.default_rng(noise)
-        frame = cv2.add(frame, rng.integers(0, 12, frame.shape, dtype=np.uint8))
-    return frame
-
 @pytest.mark.software
 @pytest.mark.parametrize("config_name", CONFIGS)
 def test_threshold_sweep_parity(config_name):
@@ -170,7 +103,7 @@ def test_threshold_sweep_parity(config_name):
     config = CONFIGS[config_name]
     color = cb.ColorConfig()
     for level, width, noise in SWEEP:
-        roi = _roi(_sweep_frame(level, width, noise), config)
+        roi = _roi(sweep_frame(level, width, noise), config)
         for name, a, b in zip(("geometry", "traffic", "offset", "fusion", "phase2"),
                               _run_debug(roi, config, color),
                               _run_production(roi, config, color)):

@@ -28,8 +28,8 @@ import src.analysis.stage_timing as st
 from src.debugger.live_view import StageLog
 from src.params import FPS
 from src.config import MEASURED
-from src.phase2_linker import run_chain, synthetic_frame
-from src.tests.scenes import SCENE_CONFIG
+from src.phase2_linker import run_chain
+from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 BUDGET = 1000.0 / FPS
 
