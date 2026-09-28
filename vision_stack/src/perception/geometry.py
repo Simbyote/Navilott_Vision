@@ -70,10 +70,10 @@ class LaneContourFilter:
 @dataclass
 class SignContourFilter:
     """Acceptance gates and confidence references for sign-shape contours."""
-    min_area: float = 200.0         # px^2
+    min_area: float = 100.0         # px^2
     max_area: float = 30000.0       # px^2
     min_vertices: int = 8           # approxPolyDP vertex count
-    max_vertices: int = 10
+    max_vertices: int = 9
     min_solidity: float = 0.80      # contour area / convex hull area
     # approxPolyDP epsilon as a fraction of arc length. Smaller keeps more
     # vertices; larger collapses the outline toward fewer.

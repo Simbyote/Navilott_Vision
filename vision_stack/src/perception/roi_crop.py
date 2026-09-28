@@ -54,9 +54,9 @@ class ROIBounds:
 # Bottom strip of the frame: the near-field road surface
 LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
 # Top-center: where a light sits when the robot is square to an intersection
-TRAFFIC = ROIBounds(x0=0.25, y0=0.00, x1=0.75, y1=0.50)
+TRAFFIC = ROIBounds(x0=0.25, y0=0.00, x1=0.65, y1=0.40)
 # Upper-right: signs are posted right of the lane
-SIGN = ROIBounds(x0=0.50, y0=0.00, x1=1.00, y1=0.55)
+SIGN = ROIBounds(x0=0.55, y0=0.20, x1=1.00, y1=0.75)
 
 
 @dataclass(frozen=True)
