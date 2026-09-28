@@ -1,6 +1,6 @@
 # Running the Tests (pytest)
 
-Every module in `src/` has a matching `src/tests/test_<module>.py`. Each test runs in one of two modes:
+Most modules in `src/` have a matching `src/tests/test_<module>.py`; a few tests cover the whole system (`test_stage_timing`, `test_soak`) or check functions across several modules (`test_production_parity`). What each test covers and proves is in `tests.md`. Each test runs in one of two modes:
 
 - **software**: contract and known-answer tests on synthetic or recorded input. No camera or robot needed; pass/fail. This is the default.
 - **hardware**: characterization on the Pi against the real camera, IMU or display. Writes CSVs, images, videos and summaries to `artifacts/` for review.
@@ -40,12 +40,13 @@ timedatectl                                   # confirm
 pytest
 ```
 
-Expect a summary like `605 passed, 10 skipped`. Skips are normal until their input exists, and `pytest.ini` prints the reason for each:
+Expect every test to pass. Skips are normal until their input exists, and `pytest.ini` prints the reason for each:
 
 | Skip reason | Goes away when |
 | --- | --- |
 | `no recorded dataset in tests/data/frames` | A dataset is recorded (step 3) |
 | `no camera_calib.json yet` | The camera is calibrated (`calibrate_camera.md`) |
+| `calib_frames ... no longer holds the frames this calibration used` | The frames the calibration was solved from are back in `calib_frames/`; a fresh clone does not have them (`test_calibration.md`) |
 
 Narrower runs:
 
@@ -56,7 +57,7 @@ pytest --lf                              # only what failed last time
 pytest -x                                # stop at the first failure
 ```
 
-Run this after every code change. The full suite takes about 15 s on a laptop, most of it in `test_calibration.py`.
+Run this after every code change. The full suite takes about 30 s on a laptop, over half of it in `test_calibration.py`.
 
 ## 3. Hardware tests (on the Pi)
 

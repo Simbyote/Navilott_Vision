@@ -1,0 +1,103 @@
+# What the Tests Cover
+
+A catalog of `src/tests/`: what each test file targets, what its software tests check, and what its hardware test records. How to run them is in `pytest.md`; how to interpret recorded runs is in `analysis.md`.
+
+## How the suite is organized
+
+Every test file answers one of three questions:
+
+1. **Does each piece work correctly?** Groups 1–3: pipeline stages, peripherals, debug views.
+2. **How does the whole system perform on real hardware?** Group 4: system runs.
+3. **Do the analysis tools compute correctly?** Group 5: interpreter tests.
+
+Most files hold both kinds of test:
+
+- **Software** tests run anywhere, on synthetic or recorded input with known answers. They pass or fail, and they prove behavior: shapes, stamps, gate logic, math. They say nothing about how well the robot performs on the course.
+- **Hardware** tests run on the Pi against the camera or a `--replay` dataset. They record measurements to `artifacts/` and fail only on broken contracts; performance problems are warnings. They measure; they don't judge.
+
+A dash (—) means the file has no test of that kind.
+
+## 1. Pipeline stages
+
+In the order a frame passes through them.
+
+| Test | Covers | Software checks | Hardware records |
+| --- | --- | --- | --- |
+| `test_capture` | `capture/camera.py`, frame delivery | Frame source contract against a scripted fake camera | Per-frame timing, effective FPS, dropped reads, sample frames; with `--record`, the replay dataset every other test can use |
+| `test_calibration` | `scripts/calibrate_camera.py`, `preprocess.undistort` | Solver recovers a known synthetic lens; error paths; undistortion matches a reference; the team's `camera_calib.json` is valid and was solved from frames covering the whole image | Undistortion time per frame; straightness raw vs corrected on boards the solver never saw. Details: `test_calibration.md` |
+| `test_preprocess` | `perception/preprocess.py` | Grayscale and blur on synthetic frames with known answers, and on every recorded frame if a dataset exists | Stage time per frame, sample images, latency histogram |
+| `test_roi_crop` | `perception/roi_crop.py` | Lane, sign and traffic crops obey their bounds for any valid bounds and frame size | Crop time, the rects actually used, the crops, the debug overlay |
+| `test_geometry` | `perception/geometry.py`, lane and sign shapes | Tape and octagons drawn at known positions are found; each gate rejects what it should; reject counts add up | Stage time, reject counts per gate, edge maps, overlays, sign trace |
+| `test_color_branch` | `perception/color_branch.py`, traffic lights | Colored blobs at known positions are found; gate wiring; HSV file loading | Stage time, mask areas, reject counts per color, overlays; uses `calibration/hsv_ranges.json` when present |
+| `test_feature_fusion` | `perception/feature_fusion.py` | Ordering, conflict resolution, ROI-local coordinates | Fusion time, per-class counts, overlays |
+| `test_lane_offset` | `perception/lane_offset.py` | Gates, boundary pairing and single-sided rules on hand-built candidates; the sign convention | Offset, mode and confidence per frame; debug log; anchor overlay |
+| `test_phase2_out` | `perception/phase2_out.py`, the output packet | Every packaging rule (PR-1 to PR-4) and failure case (F1–F5) in the Phase 2 contract | Packaging time, one JSON snapshot of the packet per sample frame |
+| `test_production_parity` | Debug-free twins in `geometry`, `color_branch`, `lane_offset`, `feature_fusion` | The fast production functions return the same results as their debug-instrumented versions, field by field | — |
+| `test_estimation` | `estimation.py`, Phase 3 | Each estimation stage alone, then `Phase3Processor` for ordering, stamps and pass-through | — |
+
+## 2. Peripherals
+
+| Test | Covers | Software checks | Hardware records |
+| --- | --- | --- | --- |
+| `test_imu` | `peripherals/imu.py`, MPU-6050 | Accumulator, calibration and worker thread against a scripted fake sensor | Samples per window and stationary yaw noise. **Robot still** |
+| `test_system` | `peripherals/system.py`, button and display | Debounce, countdown, MM:SS formatting and cleanup against fake `pigpio` and `tm1637` | Drives the real display (`rdy`, countdown, clock) and reads the button at rest. **Watch the display** |
+| `test_system_monitor` | `debugger/system_monitor.py`, Pi health | Temperature, clock, throttle-flag and memory parsing against fake `/sys` and `/proc` files; the sampling thread | One real sample: temperature, clock and memory must read |
+
+## 3. Debug views
+
+The views watched while tuning. These tests make sure what they show is true.
+
+| Test | Covers | Software checks | Hardware records |
+| --- | --- | --- | --- |
+| `test_debug_lane` | `debugger/debug_lane.py` | Overlays land at known pixels; gate labels match every real `lane_offset` gate | Every debug image each stage produces for 3 sample frames, plus a video of the run. Start here when tuning by eye |
+| `test_debug_stop` | `debugger/debug_stop.py` | Contour grading into pass / low / reject, labels, CSV row, summary | The stop view as video + CSV, 3 rendered stills |
+| `test_debug_traffic` | `debugger/debug_traffic.py` | Blob grading, per-color totals, mask panel, labels | The traffic view as video + CSV, 3 rendered stills |
+| `test_debug_video` | `debugger/debug_video.py` | Recording, stride, sidecar CSV, codec failure, the shared grading | — |
+| `test_live_view` | `debugger/live_view.py`, the bench runner | Frame sources and stamps, `stages.csv`, headless display, early exits, command line | A full bench run: every view's video and CSV, `stages.csv`, `summary.txt` |
+
+## 4. System runs
+
+Not tied to one module: these run the whole chain.
+
+| Test | Covers | Software checks | Hardware records |
+| --- | --- | --- | --- |
+| `test_stage_timing` | Phases 1–2 against the frame budget; `analysis/stage_timing.py` | The timing breakdown math on tables with known answers; that it knows every stage `run_chain` times | Every stage's time, the capture wait and the loop time per frame; `timing_budget.png`, `timing_per_frame.png` |
+| `test_soak` | Phases 2–3 over a long run; `analysis/soak.py` | Heat, throttling, memory growth and slowdown found in synthetic logs where they were planted | Temperature, CPU clock, throttle flags and memory each second beside every frame's timing. Runs only with `--soak-minutes=N` |
+
+## 5. Interpreter tests
+
+These test the tools in `src/analysis/`, not the robot. The tools are run on recorded data (`analysis.md`); these tests only check that their math is right on data with known answers. All software.
+
+| Test | Checks the tool that... |
+| --- | --- |
+| `test_jitter` | finds frame-interval tails, over-budget streaks and periodic spikes |
+| `test_stability` | measures offset noise and lane-mode flicker on a still scene |
+| `test_offset_accuracy` | judges measured offsets against true positions and the ±2 cm spec |
+| `test_detection_range` | finds how far away stop signs and traffic lights are reliably detected |
+| `test_gate_rejections` | ranks which detector gate discards the most candidates |
+| `test_state_timeline` | measures how long Phase 3 states last and what they change into |
+| `test_compare_runs` | lists every value that changed between two runs |
+| `test_common` | covers the shared CSV reading, run finding and statistics helpers |
+
+The software halves of `test_stage_timing` and `test_soak` (group 4) belong here too.
+
+## Supporting files
+
+| File | Role |
+| --- | --- |
+| `test_utils.py` | Known answers for the shared helpers in `src/utils.py` |
+| `conftest.py` | Not tests: the `--hardware`, `--replay`, `--frames`, `--soak-minutes` options, the frame source, and the artifact folders |
+| `artifacts.py` | Not tests: how hardware tests write CSVs, JSON, images and videos |
+
+## Which test for which question
+
+| Question | Evidence |
+| --- | --- |
+| Does the robot keep up with 20 FPS? | `test_stage_timing` (hardware), then `analysis/stage_timing`, `analysis/jitter` |
+| Does it stay fast when hot? | `test_soak` (hardware), then `analysis/soak` |
+| Is the lane offset within ±2 cm? | Recorded runs at measured positions, then `analysis/offset_accuracy` |
+| How much warning before a stop sign? | Recorded runs at measured distances, then `analysis/detection_range` |
+| Is the lens correction right? | `test_calibration` (hardware, held-out boards) |
+| Why does a detector miss things? | `test_debug_lane` or `test_debug_stop` / `test_debug_traffic`, then `analysis/gate_rejections` |
+| Is a stage's logic right? | That stage's software tests (group 1) |
+| Did a change make things worse? | Two hardware runs, then `analysis/compare_runs` |
