@@ -45,7 +45,7 @@ class PreprocessParams:
     # it, so fragments bridge without the line thinning out.
     gray_kernel: tuple[int, int] = (9, 3)
     gray_sigma: float = 0.0             # 0.0 derives sigma from the kernel size
-    color_kernel: tuple[int, int] = (5, 5)
+    color_kernel: tuple[int, int] = (3, 3)
     color_sigma: float = 0.0            # 0.0 derives sigma from the kernel size
     # Off: it lifted sensor noise enough to cost more in false contours than
     # it bought in contrast. Kept so the report comparison can be regenerated.
