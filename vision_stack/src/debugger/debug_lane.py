@@ -52,7 +52,7 @@ TAG_COLORS = {"BLIND": (60, 60, 255), "MERGE": (60, 60, 255),
               "SPAN": (60, 60, 255)}          # everything else amber
 # lane_offset gate names, shortened for labels
 GATE_SHORT = {"confidence": "conf", "proximity": "prox", "length_px": "len",
-              "width_px": "wid", "mean_intensity": "int"}
+              "width_px": "wid", "mean_intensity": "int", "stop_line": "on stop line"}
 
 C_LEFT   = (255, 255, 0)                      # cyan
 C_RIGHT  = (255, 0, 255)                      # magenta
@@ -138,15 +138,21 @@ def candidate_gates(geometry, config) -> list[tuple[tuple[int, int, int, int], s
             reports different gates than the chain applied.
 
     Outputs:
-        [(bbox, gate)], gate None when the candidate passed.
+        [(bbox, gate)], gate None when the candidate passed. A candidate
+        lane_offset skipped because it belongs to a stop line gets gate
+        "stop_line", checked first, in the order lane_offset applies them.
     """
-    # _usable is private to lane_offset and imported at the first call, so
-    # nothing else here depends on lane_offset. A public classify function
-    # there would remove the need.
-    from src.perception.lane_offset import _usable
+    # _usable and _on_stop_line are private to lane_offset and imported at
+    # the first call, so nothing else here depends on lane_offset. A public
+    # classify function there would remove the need.
+    from src.perception.lane_offset import _on_stop_line, _usable
 
     pairs = []
+    stop_lines = getattr(geometry, "stop_line_candidates", [])
     for cand in geometry.lane_candidates:
+        if _on_stop_line(cand, stop_lines, config.stop_line_overlap) is not None:
+            pairs.append((cand.bbox, "stop_line"))
+            continue
         scratch = []
         ok = _usable(cand, config, scratch)
         gate = None

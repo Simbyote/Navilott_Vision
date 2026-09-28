@@ -842,6 +842,20 @@ def test_the_tilt_gate_rejects_an_edge_fitted_steeper_than_max_tilt():
 
 
 @pytest.mark.software
+def test_the_stop_line_trace_has_one_entry_per_top_edge_agreeing_with_the_counts():
+    lane = stop_bar(100, 300, 50, 8)
+    cv2.rectangle(lane, (200, 10), (240, 17), FG, -1)                     # 40 px: short
+    cands, dbg = stop_lines(lane)
+    trace, rc = dbg["trace"], dbg["reject_counts"]
+    assert len(trace) == rc["seen"] == 2
+    for gate in STOP_BUCKETS[:-1]:
+        assert sum(e["gate"] == gate for e in trace) == rc[gate]
+    accepted = [e["candidate"] for e in trace if e["gate"] is None]
+    assert accepted == cands and all(e["candidate"] is None for e in trace if e["gate"])
+    assert len(dbg["bottoms"]) == dbg["bottom_count"]
+
+
+@pytest.mark.software
 def test_stop_lines_come_out_nearest_the_robot_first():
     lane = stop_bar(100, 300, 15, 8)
     cv2.rectangle(lane, (100, 70), (300, 77), FG, -1)

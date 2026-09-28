@@ -36,13 +36,15 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 import src.debugger.debug_video as dv
 import src.debugger.debug_lane as debug_lane
 import src.debugger.debug_stop as debug_stop
+import src.debugger.debug_stopline as debug_stopline
 import src.debugger.debug_traffic as debug_traffic
 
 IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 
 # Extra views selectable with --views. Each is built with conf_threshold=. The
 # lane view isn't here: it always runs, and needs the lane config.
-VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView}
+VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView,
+         "stopline": debug_stopline.StopLineView}
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -64,6 +66,10 @@ Output (--out DIR, default <root>/runs/<timestamp>):
 Views (--views a,b):
     lane                always on (debug_lane)
     stop                stop-sign detector on the sign ROI (debug_stop)
+    stopline            stop-line detector on the lane ROI (debug_stopline):
+                        accepted lines, rejected edges with their gate, the
+                        measured distance, lane candidates skipped as part of
+                        a line, and the gradient split that feeds it
     traffic             color branch on the traffic ROI: the three HSV masks
                         and every blob (debug_traffic). The color branch runs
                         with calibration/hsv_ranges.json (MEASURED); --hsv
@@ -489,6 +495,9 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
     ap.add_argument("--traffic-threshold", type=float, default=None, metavar="C",
                     help="traffic-light confidence needed downstream; blobs "
                          "below it show amber in the traffic view")
+    ap.add_argument("--stopline-threshold", type=float, default=None, metavar="C",
+                    help="stop-line confidence needed downstream (stop_line.min_confidence); "
+                         "lines below it show amber in the stopline view")
     ap.add_argument("--hsv", default=None, metavar="PATH",
                     help="HSV ranges JSON to use instead of the config's "
                          "(MEASURED loads calibration/hsv_ranges.json)")
@@ -507,7 +516,8 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
         print(f"unknown view {', '.join(unknown)}; choose from "
               f"{', '.join(sorted(VIEWS))}")
         return 2
-    thresholds = {"stop": args.stop_threshold, "traffic": args.traffic_threshold}
+    thresholds = {"stop": args.stop_threshold, "traffic": args.traffic_threshold,
+                  "stopline": args.stopline_threshold}
     views = [VIEWS[n](conf_threshold=thresholds.get(n)) for n in names]
 
     try:

@@ -1197,7 +1197,11 @@ def extract_stop_line_candidates(
     Outputs:
         (candidates, debug). Candidates are lane-ROI-relative, nearest the
         robot first. debug holds edges_top and edges_bottom (the gradient
-        split), top_count, bottom_count and reject_counts per gate.
+        split), top_count, bottom_count, reject_counts per gate, and for the
+        stop-line view: trace, one entry per top edge ({"ends": ((x0, y0),
+        (x1, y1)) of its fitted line, "gate": None or the rejecting gate,
+        "length", "tilt", "candidate": the StopLineCandidate or None}), and
+        bottoms, the fitted ends of every bottom edge.
     """
     edges_top, edges_bottom = _horizontal_edges(lane_roi, edges_raw, stop_filter.max_tilt_deg)
     tops = _edge_segments(edges_top, stop_filter)
@@ -1205,11 +1209,15 @@ def extract_stop_line_candidates(
 
     reject_counts = {"seen": len(tops), "short": 0, "tilt": 0, "unpaired": 0,
                      "intensity": 0, "accepted": 0}
-    candidates = []
+    candidates, trace = [], []
+    ends = lambda sg: ((sg.x0, sg.y_at(sg.x0)), (sg.x1, sg.y_at(sg.x1)))
     for top in tops:
         candidate, reason = _stop_line_from(top, bottoms, lane_roi, stop_filter,
                                             frame_id, timestamp_ms)
         reject_counts[reason] += 1
+        trace.append({"ends": ends(top), "gate": None if candidate else reason,
+                      "length": round(top.length_px, 1), "tilt": round(top.tilt_deg, 1),
+                      "candidate": candidate})
         if candidate is not None:
             candidates.append(candidate)
     candidates.sort(key=lambda c: -c.y_near_px)
@@ -1220,6 +1228,8 @@ def extract_stop_line_candidates(
         "top_count": len(tops),
         "bottom_count": len(bottoms),
         "reject_counts": reject_counts,
+        "trace": trace,
+        "bottoms": [ends(b) for b in bottoms],
     }
 
 def find_stop_line_candidates(

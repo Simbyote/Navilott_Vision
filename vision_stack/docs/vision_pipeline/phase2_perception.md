@@ -371,7 +371,7 @@ Each stage's test writes a timing CSV and histogram. The old tables (24–48 ms 
 ## Seeing inside it
 
 ```
-python3 -m src.phase2_linker --camera --views stop,traffic
+python3 -m src.phase2_linker --camera --views stop,traffic,stopline
 python3 -m src.phase2_linker --video run.avi --no-display
 ```
 
@@ -382,6 +382,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 | lane (always on, `debug_lane`) | Every raw candidate (green usable, red with the gate that rejected it), each anchor's foot, the chosen left and right boundaries, robot and lane center, mode and offset gauge |
 | `stop` (`debug_stop`) | Sign contours colored by the gate that decided them, with vertex count and confidence |
 | `traffic` (`debug_traffic`) | HSV masks and blobs against the bands |
+| `stopline` (`debug_stopline`) | On the lane ROI: accepted stop lines as bands, rejected top edges with their gate, the measured distance, lane candidates skipped as part of a stop line; below it, the gradient split (all edges, kept top and bottom edges, fitted lines) |
 
 `pytest --hardware -k debug_lane` saves every stage's images for 3 sample frames plus an annotated video, which is the place to start when tuning a detector by eye.
 
