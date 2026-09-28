@@ -75,7 +75,7 @@ MPU-6050 IMU ──►  Phase 3: estimation   smoothed offset, hold/stale status
 | Time | Monotonic milliseconds, meaningful only as differences within one run |
 | Lane offset | [−1, +1] of half the lane ROI width. **+ = robot right of lane center, so steer left** |
 | Lane status | Steer only on `vision` or `hold`; `stale` means don't trust the offset |
-| Constants | Shared values live in `src/params.py`; each stage's tuning lives in its config, bundled in `PipelineConfig` |
+| Constants | Shared values live in `src/params.py`; each stage's tuning lives in its config, bundled in `PipelineConfig`; `PipelineConfig` and the robot's tuning `MEASURED` live in `src/config.py` |
 | Commands | Repo commands run from `~/Navilott_Vision`; pytest runs from `~/Navilott_Vision/vision_stack` |
 
 ---

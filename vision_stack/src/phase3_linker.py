@@ -33,7 +33,8 @@ import numpy as np
 from src.capture.camera import CaptureError
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
-from src.phase2_linker import MEASURED, ChainResult, PipelineConfig, run_chain
+from src.config import MEASURED, PipelineConfig
+from src.phase2_linker import ChainResult, run_chain
 from src.debugger.live_view import (
     CameraFrameSource, VideoFrameSource, DirectoryFrameSource,
 )
@@ -446,7 +447,8 @@ def cli(argv: list[str] | None = None) -> int:
                     help="capture/replay rate (video files default to their own)")
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
     ap.add_argument("--hsv", default=None, metavar="PATH",
-                    help="calibrated HSV ranges JSON; switches the color branch on")
+                    help="HSV ranges JSON to use instead of MEASURED's "
+                         "(calibration/hsv_ranges.json)")
     ap.add_argument("--imu", action="store_true", help="feed the MPU-6050 to Phase 3")
     ap.add_argument("--gyro-bias", type=float, default=0.0, metavar="DPS",
                     help="gyro Z reading at standstill, subtracted before integrating")
@@ -489,7 +491,7 @@ def cli(argv: list[str] | None = None) -> int:
     print(f"source   {source.label} @ {source.fps:.0f} FPS")
     print(f"output   {out_dir}")
     print(f"sensors  {'IMU' if args.imu else 'none'}   "
-          f"color branch {'on' if args.hsv else 'off'}   "
+          f"color branch {'off' if config.color.hsv_ranges is None else 'on'}   "
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}\n")
 
     run(source, config, p3_config, args.imu, out_dir, print_every,

@@ -28,7 +28,7 @@ from src.analysis import soak
 from src.analysis.common import Table
 from src.debugger.system_monitor import FIELDS, SystemMonitor
 from src.estimation import Phase3Processor
-from src.phase2_linker import MEASURED
+from src.config import MEASURED
 from src.phase3_linker import run_phase3_chain
 
 FRAME_FIELDS = ("n", "frame_id", "timestamp_ms", "elapsed_s", "capture_ms", "phase2_ms",

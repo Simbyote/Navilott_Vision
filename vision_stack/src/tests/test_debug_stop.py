@@ -26,7 +26,9 @@ from src.params import STOP_SIGN
 from src.perception.geometry import SignCandidate
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
-from src.phase2_linker import MEASURED, run_chain, synthetic_frame
+from src.config import MEASURED
+from src.phase2_linker import run_chain, synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 ROI_SHAPE = (80, 120)                    # (h, w) of the hand-built sign ROI
 
@@ -62,7 +64,7 @@ def sign_scene(frame_id=11, ts=222, sign=True):
         pts = np.array([(ox + r * np.cos(np.pi / 8 + 2 * np.pi * k / 8),
                          oy + r * np.sin(np.pi / 8 + 2 * np.pi * k / 8)) for k in range(8)], np.int32)
         cv2.fillPoly(frame, [pts], (230, 230, 230))
-    return run_chain(frame, frame_id, ts, MEASURED, trace=True), frame
+    return run_chain(frame, frame_id, ts, SCENE_CONFIG, trace=True), frame
 
 
 @pytest.mark.software

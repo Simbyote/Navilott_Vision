@@ -18,7 +18,7 @@ Phase 2 takes one `FrameData` and answers, for that frame alone: where are the l
 
 **Frame identity travels with the data.** Every result carries the `frame_id` and `timestamp_ms` capture assigned. Stages that combine inputs check the stamps match and raise if they don't.
 
-**Tuning lives in config, not code.** Each stage has a config dataclass, and `PipelineConfig` bundles them. Re-tuning after a camera change is a config swap and a re-run. `MEASURED` is the tuning currently used on the robot.
+**Tuning lives in config, not code.** Each stage has a config dataclass, and `PipelineConfig` bundles them. Re-tuning after a camera change is a config swap and a re-run. `PipelineConfig` and `MEASURED`, the tuning used on the robot, live in `src/config.py`; the pipeline, both linkers and the tests import them from there. `MEASURED` undistorts with `calibration/camera_calibration.json` and runs the color branch with `calibration/hsv_ranges.json`. Tests that feed synthetic frames use `SCENE_CONFIG` (`src/tests/scenes.py`): `MEASURED` with undistortion off, since synthetic frames are drawn already undistorted.
 
 **Results and debug are separate.** Each stage returns its result and a debug dict. The result is the contract; the debug dict (edge maps, reject counts, logs, traces) is for inspection and nothing downstream reads it. Overlay drawing and per-contour traces are off in the live loop and switched on by the debug tools.
 
@@ -178,7 +178,7 @@ With `trace=True`, every contour that reached a gate is recorded with the gate t
 traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area + aspect gates → confidence
 ```
 
-- **It's off until calibrated.** With `ColorConfig.hsv_ranges = None` (the default), the stage returns no candidates and never reads the ROI. Pass calibrated ranges from `calibration/hsv_ranges.json` with `--hsv` or `load_color_config()` to switch it on.
+- **It's off without ranges.** With `ColorConfig.hsv_ranges = None` (the `PipelineConfig` default), the stage returns no candidates and never reads the ROI. `MEASURED` loads `calibration/hsv_ranges.json` at import, tuned or not, so the robot and both linkers run with the branch on; `--hsv` swaps in other ranges.
 - **Red uses two bands** because hue wraps around: 0–10 and 170–180 in OpenCV units (degrees / 2), combined with OR.
 - **The built-in ranges are a scaffold,** not a calibration. `HSVRanges.is_calibrated` is only true for ranges loaded from JSON, and the debug dict reports it.
 - **Blob gates** (area 50–5000 px², w/h aspect 0.3–3.0) are placeholders, not tuned.
@@ -206,7 +206,7 @@ Geometry decides "is this a lane marking". Lane offset decides "is it trustworth
 | `width_px` range | 1–25 | 1–45 | Noise below; blobs, glare and merged pairs above |
 | `min_intensity` | 90 | 130 | Shadow edges and seams |
 
-`MEASURED` comes from a sweep of 4,827 recorded candidates rather than from course dimensions. The default `min_proximity` sat above the observed median of 0.17 and threw out 1,752 candidates geometry had already scored at 0.30 or higher. The default width cap clipped detections whose 90th percentile was 27 px.
+`MEASURED` comes from a sweep of 4,827 recorded candidates rather than from course dimensions. The sweep ran on distorted frames; `MEASURED` now undistorts, which moves marks near the ROI edges by up to ~20 px, so the px gates need a re-sweep on undistorted captures. The default `min_proximity` sat above the observed median of 0.17 and threw out 1,752 candidates geometry had already scored at 0.30 or higher. The default width cap clipped detections whose 90th percentile was 27 px.
 
 ### Picking the lane
 

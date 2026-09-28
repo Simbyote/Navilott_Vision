@@ -33,7 +33,8 @@ from src.perception.color_branch import BlobFilter, ColorConfig, HSVRanges, load
 from src.perception.geometry import GeometryBranchResult, LaneCandidate
 from src.perception.lane_offset import LaneOffsetConfig, LaneOffsetResult
 from src.perception.roi_crop import draw_roi_overlay
-from src.phase2_linker import MEASURED, run_chain, synthetic_frame
+from src.phase2_linker import run_chain, synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 LANE_RECT = (24, 189, 432, 81)          # default LANE bounds at 480x270
 SIZE = (FRAME_W, FRAME_H)
@@ -235,18 +236,18 @@ def test_candidate_gates_recovers_every_lane_offset_gate_name(override, gate):
 def chain_on_synthetic(marks=(150, 290)):
     """Real run_chain() output for a synthetic frame with lane marks at these ROI x."""
     frame = synthetic_frame(list(marks))
-    return run_chain(frame, 5, 250, MEASURED), frame
+    return run_chain(frame, 5, 250, SCENE_CONFIG), frame
 
 
 @pytest.mark.software
 def test_lane_view_extracts_renders_and_logs_a_real_chain_result():
     chain, frame = chain_on_synthetic()
-    v = dl.LaneView(MEASURED.lane_offset)
+    v = dl.LaneView(SCENE_CONFIG.lane_offset)
     data = v.extract(chain, frame)
     v.observe(data)
     assert v.render(data).shape == frame.shape
     assert len(v.row(data)) == len(v.CSV_FIELDS)
-    assert all(g is None for _, g in data["gates"])              # both marks pass MEASURED
+    assert all(g is None for _, g in data["gates"])              # both marks pass SCENE_CONFIG
     report = "\n".join(v.report())
     assert "[MODES]" in report and "two_boundary" in report and "[AVAILABILITY] 1/1" in report
 
@@ -259,7 +260,7 @@ def test_lane_view_without_a_config_draws_no_candidate_boxes():
 
 @pytest.mark.software
 def test_lane_view_tracks_the_longest_blind_run():
-    v = dl.LaneView(MEASURED.lane_offset)
+    v = dl.LaneView(SCENE_CONFIG.lane_offset)
     seen, blind = chain_on_synthetic(), chain_on_synthetic(marks=())
     for chain, frame in (seen, blind, blind, seen, blind):
         v.observe(v.extract(chain, frame))
@@ -277,7 +278,7 @@ def _color_config():
 def test_debug_images_characterization(request, frames, artifacts):
     n = request.config.getoption("--frames")
     color, color_source = _color_config()
-    cfg = replace(MEASURED, color=color)
+    cfg = replace(SCENE_CONFIG, color=color)
     views = {"stop": StopView(), "traffic": TrafficView()}
     lane_view = dl.LaneView(cfg.lane_offset)
 

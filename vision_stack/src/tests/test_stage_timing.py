@@ -27,7 +27,9 @@ import pytest
 import src.analysis.stage_timing as st
 from src.debugger.live_view import StageLog
 from src.params import FPS
-from src.phase2_linker import MEASURED, run_chain, synthetic_frame
+from src.config import MEASURED
+from src.phase2_linker import run_chain, synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 BUDGET = 1000.0 / FPS
 
@@ -74,7 +76,7 @@ def test_every_stage_run_chain_times_is_known_and_counted_inside_total():
     # A stage run_chain adds must be placed in STAGE_ORDER, or the bar
     # would draw it out of order; it must not be marked external, or
     # the unaccounted and outside arithmetic would count it twice
-    chain = run_chain(synthetic_frame([150, 290]), 1, 50, MEASURED)
+    chain = run_chain(synthetic_frame([150, 290]), 1, 50, SCENE_CONFIG)
     assert chain.timings_ms, "run_chain reported no timings"
     for name, ms in chain.timings_ms.items():
         assert name in st.STAGE_ORDER, f"{name} missing from STAGE_ORDER"

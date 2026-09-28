@@ -25,7 +25,8 @@ from src.capture.camera import CaptureError, FrameData
 from src.debugger.debug_stop import StopView
 from src.debugger.debug_traffic import TrafficView
 from src.params import FRAME_H, FRAME_W, HSV_RANGES_PATH
-from src.phase2_linker import MEASURED, run_chain, run_live_view, synthetic_frame
+from src.phase2_linker import run_chain, run_live_view, synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 
 def write_frames(directory, n=4, names=None):
@@ -38,7 +39,7 @@ def write_frames(directory, n=4, names=None):
 
 def process(frame, frame_id, timestamp_ms):
     """The chain live_view runs in production."""
-    return run_chain(frame, frame_id, timestamp_ms, MEASURED)
+    return run_chain(frame, frame_id, timestamp_ms, SCENE_CONFIG)
 
 
 def drain(source):
@@ -198,7 +199,7 @@ def test_disabled_display_never_opens_a_window(tmp_path):
 @pytest.mark.software
 def test_run_writes_a_video_and_csv_per_view_plus_stages_csv(tmp_path):
     src = lv.DirectoryFrameSource(str(write_frames(tmp_path / "f", n=4)))
-    stats = lv.run(src, process, MEASURED.lane_offset, str(tmp_path / "out"),
+    stats = lv.run(src, process, SCENE_CONFIG.lane_offset, str(tmp_path / "out"),
                    display=False, views=[StopView(), TrafficView()])
     out = tmp_path / "out"
     names = {p.name for p in out.iterdir()}
@@ -213,7 +214,7 @@ def test_run_writes_a_video_and_csv_per_view_plus_stages_csv(tmp_path):
 @pytest.mark.software
 def test_stride_thins_the_recordings_but_every_frame_is_still_counted(tmp_path):
     src = lv.DirectoryFrameSource(str(write_frames(tmp_path / "f", n=5)))
-    stats = lv.run(src, process, MEASURED.lane_offset, str(tmp_path / "out"), display=False, stride=2)
+    stats = lv.run(src, process, SCENE_CONFIG.lane_offset, str(tmp_path / "out"), display=False, stride=2)
     with open(tmp_path / "out" / "run.csv", newline="") as f:
         assert len(list(csv.reader(f))) == 1 + 3                 # frames 0, 2, 4
     with open(tmp_path / "out" / "stages.csv", newline="") as f:
@@ -224,21 +225,21 @@ def test_stride_thins_the_recordings_but_every_frame_is_still_counted(tmp_path):
 @pytest.mark.software
 def test_limit_stops_the_run_and_the_source_is_closed(tmp_path):
     src = ListSource([frame_item(i) for i in range(5)])
-    stats = lv.run(src, process, MEASURED.lane_offset, str(tmp_path), display=False, limit=2)
+    stats = lv.run(src, process, SCENE_CONFIG.lane_offset, str(tmp_path), display=False, limit=2)
     assert stats.frames == 2 and src.closed
 
 
 @pytest.mark.software
 def test_dropped_reads_are_counted_and_skipped(tmp_path):
     src = ListSource([frame_item(0), (None, None, None), frame_item(1)])
-    stats = lv.run(src, process, MEASURED.lane_offset, str(tmp_path), display=False)
+    stats = lv.run(src, process, SCENE_CONFIG.lane_offset, str(tmp_path), display=False)
     assert (stats.frames, stats.drops) == (2, 1)
 
 
 @pytest.mark.software
 def test_a_dead_camera_ends_the_run_but_outputs_are_still_closed(tmp_path):
     src = ListSource([frame_item(0), CaptureError("pipeline dead"), frame_item(1)])
-    stats = lv.run(src, process, MEASURED.lane_offset, str(tmp_path), display=False)
+    stats = lv.run(src, process, SCENE_CONFIG.lane_offset, str(tmp_path), display=False)
     assert stats.frames == 1 and src.closed
     with open(tmp_path / "stages.csv", newline="") as f:
         assert len(list(csv.reader(f))) == 2                    # flushed on close
@@ -249,7 +250,7 @@ def test_a_process_without_fusion_or_timings_is_timed_as_one_unit(tmp_path):
     def bare(frame, fid, ts):
         c = process(frame, fid, ts)
         return SimpleNamespace(geometry=c.geometry, roi=c.roi, offset=c.offset, offset_debug=c.offset_debug)
-    stats = lv.run(ListSource([frame_item(0)]), bare, MEASURED.lane_offset, str(tmp_path), display=False)
+    stats = lv.run(ListSource([frame_item(0)]), bare, SCENE_CONFIG.lane_offset, str(tmp_path), display=False)
     assert list(stats.stage_ms) == ["chain"] and not stats.fusion_seen
 
 
@@ -281,11 +282,11 @@ def test_cli_runs_every_view_and_writes_the_summary(tmp_path, capsys):
                                   "--stop-threshold", "0.5", "--out", str(out)])
     assert code == 0
     printed = capsys.readouterr().out
-    assert "traffic view needs --hsv" in printed               # the branch is off without ranges
+    assert "--hsv" not in printed                               # MEASURED loads the HSV ranges itself
     summary = (out / "summary.txt").read_text()
     assert summary.startswith("source: f\nfusion: on")
     assert "[LANE] 3 frames" in summary and "[STOP SIGN] 3 frames" in summary
-    assert "color branch OFF" in summary
+    assert "color branch OFF" not in summary
 
 
 @pytest.mark.hardware

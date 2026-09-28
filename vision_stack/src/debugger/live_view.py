@@ -65,8 +65,9 @@ Views (--views a,b):
     lane                always on (debug_lane)
     stop                stop-sign detector on the sign ROI (debug_stop)
     traffic             color branch on the traffic ROI: the three HSV masks
-                        and every blob (debug_traffic). Needs --hsv PATH; the
-                        color branch is off without calibrated ranges
+                        and every blob (debug_traffic). The color branch runs
+                        with calibration/hsv_ranges.json (MEASURED); --hsv
+                        swaps in other ranges
 
 Display:
     On by default; falls back to headless if the window can't open, so the
@@ -488,8 +489,8 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
                     help="traffic-light confidence needed downstream; blobs "
                          "below it show amber in the traffic view")
     ap.add_argument("--hsv", default=None, metavar="PATH",
-                    help="calibrated HSV ranges JSON; switches the color "
-                         "branch on (off without it)")
+                    help="HSV ranges JSON to use instead of the config's "
+                         "(MEASURED loads calibration/hsv_ranges.json)")
     ap.add_argument("--no-display", action="store_true", help="force headless")
     ap.add_argument("--out", default=None, metavar="DIR")
 
@@ -507,9 +508,6 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
         return 2
     thresholds = {"stop": args.stop_threshold, "traffic": args.traffic_threshold}
     views = [VIEWS[n](conf_threshold=thresholds.get(n)) for n in names]
-    if "traffic" in names and not args.hsv:
-        print("note: the traffic view needs --hsv PATH; without calibrated "
-              "ranges the color branch is off and the view stays empty")
 
     try:
         if args.camera:

@@ -1,6 +1,6 @@
 # Camera Calibration (IMX290)
 
-Measures lens distortion and writes `calibration/camera_calib.json`. Preprocessing can undistort every frame with it, but only when `PreprocessParams.calibration_path` is set; `MEASURED` and both linkers leave it unset, so the pipeline currently runs without undistortion. To check a calibration that's already been made, without redoing it, use `test_calibration.md`.
+Measures lens distortion and writes `calibration/camera_calibration.json`. Preprocessing undistorts every frame with it when `PreprocessParams.calibration_path` is set; `MEASURED` (`src/config.py`) sets it, so the robot and both linkers run undistorted. Synthetic-frame tests use `SCENE_CONFIG`, which leaves it unset. To check a calibration that's already been made, without redoing it, use `test_calibration.md`.
 
 ## Requirements
 

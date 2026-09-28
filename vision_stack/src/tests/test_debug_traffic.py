@@ -28,14 +28,15 @@ from src.params import GREEN, HSV_RANGES_PATH, RED, TRAFFIC_LIGHT, YELLOW
 from src.perception.color_branch import BlobFilter, ColorConfig, ColorRange, HSVRanges, load_color_config
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
-from src.phase2_linker import MEASURED, run_chain, synthetic_frame
+from src.phase2_linker import run_chain, synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 TEST_HSV = HSVRanges(
     red_low=ColorRange((0, 120, 120), (10, 255, 255)),
     red_high=ColorRange((170, 120, 120), (180, 255, 255)),
     yellow=ColorRange((20, 120, 120), (35, 255, 255)),
     green=ColorRange((40, 120, 120), (80, 255, 255)))
-TEST_CFG = replace(MEASURED, color=ColorConfig(TEST_HSV, BlobFilter(min_area=50.0, max_area=5000.0,
+TEST_CFG = replace(SCENE_CONFIG, color=ColorConfig(TEST_HSV, BlobFilter(min_area=50.0, max_area=5000.0,
                                                                    min_aspect=0.3, max_aspect=3.0,
                                                                    ref_area=800.0)))
 ROI_SHAPE = (60, 90)                     # (h, w) of the hand-built traffic ROI
@@ -80,7 +81,7 @@ def test_extract_reads_the_color_branch_and_fusion_from_a_real_chain():
 
 @pytest.mark.software
 def test_with_the_color_branch_off_the_view_reports_off_and_draws_a_notice():
-    chain, frame = light_scene(cfg=MEASURED)                   # MEASURED leaves the branch off
+    chain, frame = light_scene(cfg=replace(SCENE_CONFIG, color=ColorConfig()))    # no HSV ranges: branch off
     v = TrafficView()
     data = v.extract(chain, frame)
     assert not data["enabled"]
@@ -231,7 +232,7 @@ def _color_config():
 @pytest.mark.hardware
 def test_traffic_view_characterization(request, frames, artifacts):
     n = request.config.getoption("--frames")
-    cfg = replace(MEASURED, color=_color_config())
+    cfg = replace(SCENE_CONFIG, color=_color_config())
     view = TrafficView()
     writer = dv.ViewWriter(str(artifacts.path / "traffic_view.avi"), TrafficView.CSV_FIELDS)
     try:
