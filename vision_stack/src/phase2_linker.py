@@ -4,9 +4,9 @@ Purpose:
     Runs a frame through every Phase 1-2 stage in order, so the live view and
     the tests all go through one chain and can't drift from it. The color
     branch stays off until calibrated HSV ranges are supplied; lane
-    boundaries and stop signs flow either way. Every stage's tuning lives in
-    PipelineConfig, so re-tuning after a camera change is a config swap and a
-    re-run, not a code edit.
+    boundaries and stop signs flow either way. Every stage's tuning comes in
+    as one PipelineConfig from src/config.py, so re-tuning after a camera
+    change is a config swap and a re-run, not a code edit.
 
 Main package:
     ChainResult: every stage's output and debug data for one frame, ending in
@@ -29,37 +29,15 @@ from dataclasses import dataclass, field, replace
 
 from src.capture.camera import FrameData
 from src.params import FRAME_H, FRAME_W
-from src.perception.preprocess import preprocess_frame, PreprocessParams, PreprocessResult
-from src.perception.roi_crop import crop_rois, ROIConfig, ROICropResult, LANE, resolve
-from src.perception.geometry import run_geometry_stage, GeometryConfig, GeometryBranchResult
+from src.perception.preprocess import preprocess_frame, PreprocessResult
+from src.perception.roi_crop import crop_rois, ROICropResult, LANE, resolve
+from src.perception.geometry import run_geometry_stage, GeometryBranchResult
 from src.perception.color_branch import ColorConfig, run_color_stage, load_hsv_ranges
-from src.perception.lane_offset import compute_lane_offset, LaneOffsetConfig, LaneOffsetResult
+from src.perception.lane_offset import compute_lane_offset, LaneOffsetResult
 from src.perception.feature_fusion import fuse_detections, FusionResult
 from src.perception.phase2_out import package_phase2, Phase2Output
 import src.debugger.live_view as live_view
-
-
-@dataclass(frozen=True)
-class PipelineConfig:
-    """Every stage's tuning as one unit."""
-    preprocess: PreprocessParams = field(default_factory=PreprocessParams)
-    roi: ROIConfig = field(default_factory=ROIConfig)
-    geometry: GeometryConfig = field(default_factory=GeometryConfig)
-    color: ColorConfig = field(default_factory=ColorConfig)                 # off until HSV ranges are given
-    lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
-
-# Gates revised from the 4827-candidate CSV sweep rather than from course
-# dimensions. min_proximity sat above the observed median of 0.17 and killed
-# 1752 candidates the geometry branch had already scored at or above 0.30;
-# max_width_px at 25 clipped detections whose p90 is 27 and max is 41.7.
-MEASURED = PipelineConfig(
-    lane_offset = LaneOffsetConfig(
-        conf_threshold = 0.25,
-        min_proximity = 0.05,
-        max_width_px = 45.0,
-        min_intensity = 130.0,
-    )
-)
+from src.config import MEASURED, PipelineConfig      # re-exported: older imports read them from here
 
 
 @dataclass(frozen=True)
@@ -161,8 +139,9 @@ def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
         config: Drives both the chain and the overlay gating. Defaults to MEASURED.
         trace: On by default, since this is the debug entry point; run_chain()
             leaves it off.
-        hsv_path: Calibrated HSV ranges JSON. Switches the color branch on for
-            this run; None keeps whatever config.color says.
+        hsv_path: HSV ranges JSON that replaces config.color's ranges for
+            this run; None keeps whatever config.color says (MEASURED
+            already loads calibration/hsv_ranges.json).
         options: out_dir, display, scale, stride, limit, fps, views; passed
             to live_view.run().
 

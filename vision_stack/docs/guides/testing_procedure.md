@@ -91,7 +91,7 @@ python3 -m src.analysis.offset_accuracy positions.csv
 
 ```
 
-python3 -m src.phase3_linker --camera --limit=200 --hsv=calibration/hsv_ranges.json --out=runs/dist_40
+python3 -m src.phase3_linker --camera --limit=200 --out=runs/dist_40
 ...
 python3 -m src.analysis.detection_range distances.csv
 

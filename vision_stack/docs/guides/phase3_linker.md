@@ -55,7 +55,7 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--imu` | Start the MPU-6050 and feed it to Phase 3 |
 | `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating. `--imu` doesn't calibrate, so pass it here |
 | `--cm-per-px S` | Hand-measured ground scale; fills `lane_offset_cm` |
-| `--hsv PATH` | Calibrated HSV ranges; switches the color branch on |
+| `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--print-every N` | Status line every N frames (default once a second); 0 prints only events |
 | `--verbose` | Also print Phase 3's per-frame log |
 | `--out DIR` | Output folder instead of `runs/p3_<timestamp>` |
@@ -140,7 +140,7 @@ Send the archive with the terminal output and which source it ran on.
 | IMU error at startup with `--imu` | Enable I²C; check wiring and address 0x68 (`i2cdetect -y 1`) |
 | `hd` always 0.0 | Normal while on `vision`; without `--imu` it never moves |
 | `lane_offset_cm` empty | Set `--cm-per-px` |
-| `drive_state` always `go` | Expected: the color branch is off without `--hsv` |
+| `drive_state` always `go` | No light passed the HSV ranges or Phase 3's confidence gate; check `p2_traffic` in `p3.csv`, then the ranges |
 | Mostly `stale` from the start | Phase 2 isn't finding usable boundaries; watch the same stretch with `phase2_linker` |
 | `No module named src` or `cv2` | Not in `vision_stack/`, or environment not active |
 

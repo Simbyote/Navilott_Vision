@@ -38,7 +38,9 @@ from src.perception import lane_offset as lo
 from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
-from src.phase2_linker import MEASURED, PipelineConfig, synthetic_frame
+from src.config import PipelineConfig
+from src.phase2_linker import synthetic_frame
+from src.tests.scenes import SCENE_CONFIG
 
 
 def _same(a, b, path="root"):
@@ -92,7 +94,7 @@ SCENES = {
     "noise_b": _scene(marks=(100, 180, 300), noise_seed=7),
 }
 
-CONFIGS = {"default": PipelineConfig(), "measured": MEASURED}
+CONFIGS = {"default": PipelineConfig(), "scene": SCENE_CONFIG}
 
 
 def _roi(frame_bgr, config, frame_id=7):

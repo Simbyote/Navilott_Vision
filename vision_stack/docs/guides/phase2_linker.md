@@ -52,7 +52,7 @@ python3 -m src.phase2_linker --frames src/tests/data/frames --scale 2
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
 | `--views stop,traffic` | Extra views beside the lane view, which is always on |
-| `--hsv PATH` | Calibrated HSV ranges; switches the color branch on. The traffic view is empty without it |
+| `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--stop-threshold C`, `--traffic-threshold C` | Confidence the next stage needs; candidates below it show amber in that view |
 | `--stride N` | Record every Nth frame. Every frame is still processed and counted |
 | `--scale N` | Magnify the overlay |
@@ -72,9 +72,9 @@ With no arguments it prints the full help.
 
 ## 3. What runs
 
-- Tuning is `MEASURED` from `phase2_linker.py`, the same the robot uses
-- The color branch is off unless `--hsv` is given
-- Undistortion is off; there's no option to turn it on from here yet
+- Tuning is `MEASURED` from `src/config.py`, the same the robot uses
+- The color branch is on with `calibration/hsv_ranges.json`; `--hsv` swaps in other ranges
+- Undistortion is on with `calibration/camera_calibration.json`
 - The per-contour sign and traffic traces are on, since this is the debug entry point
 
 ## 4. Reading the results
@@ -134,7 +134,7 @@ Send the archive with the terminal output and a note on where on the course it w
 | `source error: ...` | Camera busy or missing, or the file or folder doesn't exist. `rpicam-hello --list-cameras` must list imx290 |
 | `no display server ...; continuing headless` | Normal over ssh; everything is still recorded |
 | `unknown view ...` | Only `stop` and `traffic` are valid for `--views` |
-| Traffic view is empty | Add `--hsv calibration/hsv_ranges.json` |
+| Traffic view is empty | Check `calibration/hsv_ranges.json` against course lighting; `--hsv` tries other ranges |
 | `capture failed: ... consecutive failed reads` | The camera stopped delivering frames; stop other camera processes and rerun |
 | Timing well over 50 ms | Check `[TIMING]` for the stage responsible; `--stride` and `--no-display` reduce recording and display cost |
 | `No module named src` or `cv2` | Not in `vision_stack/`, or environment not active |
