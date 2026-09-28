@@ -15,9 +15,12 @@ Main package:
     PipelineConfig: preprocess, ROI, geometry, color and lane-offset tuning.
         Its defaults are each stage's own defaults: no undistortion, color
         branch off.
-    MEASURED: the robot's tuning. Undistorts with the lens calibration, runs
-        the color branch with the calibrated HSV ranges, and uses the lane
-        gates from the candidate sweep.
+    MEASURED: the robot's Phase 2 tuning. Undistorts with the lens
+        calibration, runs the color branch with the calibrated HSV ranges,
+        and uses the lane gates from the candidate sweep.
+    MEASURED_ESTIMATION: the robot's Phase 3 tuning (Phase3Config), kept
+        apart from PipelineConfig because run_chain and the Phase 2 parity
+        tests take Phase 2 tuning only.
 
 Flow:
     Import-time only. MEASURED reads calibration/hsv_ranges.json once, when
@@ -27,6 +30,7 @@ Flow:
 """
 from dataclasses import dataclass, field
 
+from src.estimation import Phase3Config
 from src.params import CAMERA_CALIB_PATH, HSV_RANGES_PATH
 from src.perception.color_branch import ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig
@@ -76,3 +80,9 @@ MEASURED = PipelineConfig(
         min_intensity = 130.0,
     ),
 )
+
+# Phase 3: estimation.Phase3Config's defaults until course runs tune them.
+# lane_roi_width_px stays None: Pipeline derives it from MEASURED's lane ROI
+# when cm_per_px is set. gyro_bias_dps stays 0 until a bench measurement
+# (or phase3_linker's --gyro-bias) sets it.
+MEASURED_ESTIMATION = Phase3Config()

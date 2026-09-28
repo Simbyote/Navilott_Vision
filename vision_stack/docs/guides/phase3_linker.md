@@ -53,7 +53,7 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
 | `--imu` | Start the MPU-6050 and feed it to Phase 3 |
-| `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating. `--imu` doesn't calibrate, so pass it here |
+| `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating. `--imu` doesn't calibrate, so pass it here. Applied on top of `MEASURED_ESTIMATION` (`src/config.py`), like `--cm-per-px` |
 | `--cm-per-px S` | Hand-measured ground scale; fills `lane_offset_cm` |
 | `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--print-every N` | Status line every N frames (default once a second); 0 prints only events |

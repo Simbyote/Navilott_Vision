@@ -20,17 +20,22 @@ Main package:
     scene(): synthetic_frame plus a stop line, a stop sign, lamps and noise.
     SCENES: named scenes covering every detection type and lane mode.
     SWEEP, sweep_frame(): mark brightness x width x noise across the lane gates.
+    drive_sequence(): a stamped frame-and-sensor sequence long enough to move
+        every Phase 3 vote, hold and integrator, for packet parity.
     SCENE_CONFIG: MEASURED with undistortion off.
     ALT_CONFIG: SCENE_CONFIG with every stage's tuning changed, so a stage
         that ignores its config can't pass a parity test.
+    ALT_ESTIMATION: MEASURED_ESTIMATION with every Phase 3 field changed, for
+        the same reason.
     same(): field-by-field equality across dataclasses, containers and arrays.
 """
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 
 import cv2
 import numpy as np
 
-from src.config import MEASURED
+from src.config import MEASURED, MEASURED_ESTIMATION
+from src.estimation import SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter
@@ -70,6 +75,24 @@ ALT_CONFIG = replace(
         conf_threshold = 0.30, min_length_px = 20.0, max_width_px = 40.0,
         min_intensity = 140.0,          # the only one of these the scenes and sweep react to
     ),
+)
+
+# Every Phase 3 field moved off MEASURED_ESTIMATION's, chosen so that each one
+# alone changes the packets drive_sequence() produces (test_pipeline guards
+# that). The sign gate sits above a small sign's 0.56, so the gated-sign path
+# is reached; lane_roi_width_px is left for Pipeline to derive.
+ALT_ESTIMATION = replace(
+    MEASURED_ESTIMATION,
+    ema_alpha = 0.6,
+    max_offset_jump = 0.3,
+    hold_max_frames = 4,
+    cm_per_px = 0.05,
+    vote_window = 5,
+    min_confidence_traffic = 0.5,
+    min_confidence_sign = 0.6,
+    gyro_bias_dps = 1.5,
+    heading_limit_deg = 20.0,
+    max_dt_s = 0.3,
 )
 
 
@@ -137,6 +160,8 @@ def scene(
         sign: bool = False,
         lights=(),
         noise_seed: int | None = None,
+        lamp_radius: int = 11,
+        sign_radius: int = 28,
     ) -> np.ndarray:
     """
     A synthetic frame with any of the things the robot has to see.
@@ -148,6 +173,8 @@ def scene(
         sign: A red octagon in the sign ROI (upper right).
         lights: BGR lamp colors, stacked downward in the traffic ROI (top center).
         noise_seed: Adds uniform noise in [0, 60) from this seed.
+        lamp_radius, sign_radius: Size in px. Lamps score about 0.42 at 11,
+            0.97 at 16 and 0.19 at 8; signs 0.71 at 28 and 0.56 at 16.
 
     Outputs:
         (FRAME_H, FRAME_W, 3) uint8 BGR.
@@ -159,12 +186,12 @@ def scene(
         cv2.rectangle(frame, (x0 + x_left, y0 + y_top), (x0 + x_right, y0 + y_top + 5),
                       (240, 240, 240), -1)
     if sign:
-        cx, cy, r = int(FRAME_W * 0.78), int(FRAME_H * 0.25), 28
+        cx, cy, r = int(FRAME_W * 0.78), int(FRAME_H * 0.25), sign_radius
         pts = np.array([(cx + r * np.cos(np.pi / 8 + k * np.pi / 4),
                          cy + r * np.sin(np.pi / 8 + k * np.pi / 4)) for k in range(8)], np.int32)
         cv2.fillPoly(frame, [pts], (40, 40, 255))   # red, bright enough in gray for Canny
     for i, bgr in enumerate(lights):
-        cv2.circle(frame, (FRAME_W // 2, 25 + i * 30), 11, bgr, -1)
+        cv2.circle(frame, (FRAME_W // 2, 25 + i * 30), lamp_radius, bgr, -1)
     if noise_seed is not None:
         rng = np.random.default_rng(noise_seed)
         frame = cv2.add(frame, rng.integers(0, 60, frame.shape, dtype=np.uint8))
@@ -194,6 +221,68 @@ SCENES = {
     "stop_line_no_marks": scene(marks=(), stop_line=(100, 330, 40)),
     "intersection": scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,)),
 }
+
+
+# =============================================================================
+# Frame sequences (Phase 3 works across frames)
+# =============================================================================
+
+@dataclass(frozen=True)
+class SequenceFrame:
+    """One stamped frame of a sequence, with the sensor readings for its window."""
+    frame: np.ndarray
+    frame_id: int
+    timestamp_ms: int
+    sensors: SensorSample | None
+    segment: str                    # which part of the drive this frame belongs to
+
+FRAME_MS = 50                       # 20 FPS
+
+def drive_sequence() -> list[SequenceFrame]:
+    """
+    A drive that moves every Phase 3 stage: votes change both ways, a light
+    and a sign below their gates, a lane dropout through hold into stale
+    with the gyro turning, a frame gap inside the dropout, an offset jump,
+    a stop line, noise, and frames with no sensors or no yaw.
+
+    Outputs:
+        SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart
+        (plus one 900 ms gap). Same content on every call.
+    """
+    steady = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, wheel_speed_mps=0.3)
+    turning = SensorSample(yaw_rate_dps=60.0, lateral_accel_mps2=-0.8, wheel_speed_mps=0.25)
+    no_yaw = SensorSample(yaw_rate_dps=None, lateral_accel_mps2=0.2, wheel_speed_mps=0.3)
+    strong, dim = dict(lamp_radius=16), dict(lamp_radius=8)
+    segments = [
+        # (segment, frame, count, sensors)
+        ("cruise", scene(), 4, steady),
+        ("red", scene(lights=(RED_LAMP,), **strong), 6, steady),
+        ("yellow", scene(lights=(YELLOW_LAMP,), **strong), 6, steady),
+        ("green", scene(lights=(GREEN_LAMP,), **strong), 6, None),
+        ("red_flicker", scene(lights=(RED_LAMP,), **strong), 1, steady),
+        ("green_after_flicker", scene(lights=(GREEN_LAMP,), **strong), 2, steady),
+        ("dim_red", scene(lights=(RED_LAMP,), **dim), 4, steady),
+        ("stop_sign", scene(sign=True), 6, steady),
+        ("clear", scene(), 6, steady),
+        ("small_sign", scene(sign=True, sign_radius=16), 6, steady),
+        ("dropout", scene(marks=()), 5, turning),
+        ("gap", scene(marks=()), 1, turning),              # arrives 900 ms late
+        ("dropout_no_yaw", scene(marks=()), 2, no_yaw),
+        ("dropout_late", scene(marks=()), 6, turning),
+        ("recover", scene(), 4, steady),
+        ("jump", scene(marks=(64, 204)), 3, steady),
+        ("stop_line", scene(stop_line=(170, 270, 50)), 3, steady),
+        ("intersection", scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,), **strong), 6, steady),
+        ("noise", scene(sign=True, lights=(GREEN_LAMP,), noise_seed=3, **strong), 4, steady),
+    ]
+    out, fid, ts = [], 100, 10_000
+    for segment, frame, count, sensors in segments:
+        for _ in range(count):
+            if segment == "gap":
+                ts += 900 - FRAME_MS
+            out.append(SequenceFrame(frame, fid, ts, sensors, segment))
+            fid, ts = fid + 1, ts + FRAME_MS
+    return out
 
 
 # =============================================================================

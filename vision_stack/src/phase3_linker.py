@@ -33,7 +33,7 @@ import numpy as np
 from src.capture.camera import CaptureError
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
-from src.config import MEASURED, PipelineConfig
+from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.phase2_linker import ChainResult, run_chain
 from src.debugger.live_view import (
     CameraFrameSource, VideoFrameSource, DirectoryFrameSource,
@@ -340,7 +340,7 @@ class _ImuSensors:
 def run(
         source,
         config: PipelineConfig = MEASURED,
-        p3_config: Phase3Config = Phase3Config(),
+        p3_config: Phase3Config = MEASURED_ESTIMATION,
         use_imu: bool = False,
         out_dir: str = str(RUNS_DIR / "p3"),
         print_every: int = 20,
@@ -353,9 +353,9 @@ def run(
     Inputs:
         source: A live_view FrameSource: camera, video file or image directory.
         config: Phase 2 tuning.
-        p3_config: Phase 3 tuning. When cm_per_px is set and
-            lane_roi_width_px isn't, the width is taken from the first
-            frame's lane ROI.
+        p3_config: Phase 3 tuning; defaults to MEASURED_ESTIMATION. When
+            cm_per_px is set and lane_roi_width_px isn't, the width is taken
+            from the first frame's lane ROI.
         use_imu: Start the IMU and feed it to Phase 3.
         print_every: Status line every N frames; 0 prints events only.
         verbose: Also print Phase 3's per-frame debug log.
@@ -482,7 +482,7 @@ def cli(argv: list[str] | None = None) -> int:
     if args.hsv:
         config = replace(config, color=ColorConfig(load_hsv_ranges(args.hsv),
                                                    config.color.blob))
-    p3_config = Phase3Config(gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
+    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
 
     out_dir = args.out or str(RUNS_DIR / ("p3_" + time.strftime("%Y%m%d_%H%M%S")))
     print_every = args.print_every if args.print_every is not None \

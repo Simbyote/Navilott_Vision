@@ -156,6 +156,8 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 
 ## Running it
 
+The robot's Phase 3 tuning is `MEASURED_ESTIMATION` in `src/config.py`, beside the Phase 2 `MEASURED`; it holds `Phase3Config`'s defaults until course runs tune it. The main pipeline (`src/pipeline.py`) runs Phase 3 as one stage, `Pipeline.estimate()`, with one `Phase3Processor` built when the `Pipeline` is created. When `cm_per_px` is set, the pipeline takes the lane ROI width from the config's lane ROI at 480×270 and refuses frames of another size. `test_pipeline` holds its packets to `phase3_linker`'s over a drive sequence, frame by frame.
+
 `phase3_linker` runs capture, Phase 2 and Phase 3 headless and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering.
 
 ```

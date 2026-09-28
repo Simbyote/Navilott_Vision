@@ -10,13 +10,17 @@ Purpose:
     once, as a PipelineConfig from src/config.py.
 
 Main package:
-    Pipeline: one run's config and stage flow.
-        perceive(frame, frame_id, timestamp_ms) -> Phase2Output   (Phases 1-2)
+    Pipeline: one run's config, Phase 3 state and stage flow.
+        perceive(frame, frame_id, timestamp_ms) -> Phase2Output      (Phases 1-2)
+        estimate(phase2, sensors)               -> EstimationPacket  (Phase 3)
+        step(frame, frame_id, timestamp_ms, sensors) -> EstimationPacket  (both)
 
 Flow:
     FrameData -> preprocess_frame -> crop_rois -> detect_geometry
               -> detect_color -> estimate_lane_offset -> fuse
               -> package_phase2 -> Phase2Output
+              -> Phase3Processor.process -> EstimationPacket
+    Phase 3 runs as one stage: its internal order belongs to estimation.py.
     Stage timing is opt-in (Pipeline(timing=True)); off, the flow pays one
     branch per stage and last_timings_ms stays empty.
 """
@@ -24,15 +28,19 @@ import time
 
 import numpy as np
 
+from dataclasses import replace
+
 from src.capture.camera import FrameData
-from src.config import MEASURED, PipelineConfig
+from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
+from src.estimation import EstimationPacket, Phase3Config, Phase3Processor, SensorSample
+from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import detect_color
 from src.perception.feature_fusion import fuse
 from src.perception.geometry import detect_geometry
 from src.perception.lane_offset import estimate_lane_offset
 from src.perception.phase2_out import Phase2Output, package_phase2
 from src.perception.preprocess import preprocess_frame
-from src.perception.roi_crop import crop_rois
+from src.perception.roi_crop import crop_rois, resolve
 
 
 # =============================================================================
@@ -63,22 +71,49 @@ class _Laps:
 
 class Pipeline:
     """
-    The robot's per-frame flow. Create once per run; call perceive() on every frame.
+    The robot's per-frame flow. Create once per run; call step() (or
+    perceive() then estimate()) on every frame, in order.
 
     Inputs:
-        config: Every stage's tuning. Defaults to MEASURED, the robot's.
+        config: Phase 2 tuning. Defaults to MEASURED, the robot's.
+        estimation: Phase 3 tuning. Defaults to MEASURED_ESTIMATION. When it
+            sets cm_per_px but not lane_roi_width_px, the width is taken
+            from config's lane ROI at frame_size, and perceive() then
+            refuses frames of any other size, since the cm scale would be
+            wrong for them.
         timing: Record each stage's wall time into last_timings_ms. Off by
             default: the loop shouldn't pay for timers it doesn't read.
+        frame_size: (height, width) the camera delivers. Only used to derive
+            the lane ROI width.
 
     Attributes:
         config: As given; read on every frame.
-        last_timings_ms: The latest frame's stage times with timing on
-            (preprocess, roi, geometry, color, lane_offset, fusion, package);
-            {} with timing off. A fresh dict per frame, so a caller may keep it.
+        estimation: As given, with lane_roi_width_px filled in if derived.
+        processor: This run's Phase3Processor. Stateful across frames.
+        last_estimation_debug: Phase 3's debug summary for the latest
+            estimate() (frame_id, timestamp_ms, dt, log); None before the first.
+        last_timings_ms: With timing on, the latest frame's stage times
+            (preprocess, roi, geometry, color, lane_offset, fusion, package,
+            then phase3 once estimated); {} with timing off. A fresh dict
+            per frame, so a caller may keep it.
     """
 
-    def __init__(self, config: PipelineConfig = MEASURED, timing: bool = False) -> None:
+    def __init__(
+            self,
+            config: PipelineConfig = MEASURED,
+            estimation: Phase3Config = MEASURED_ESTIMATION,
+            timing: bool = False,
+            frame_size: tuple[int, int] = (FRAME_H, FRAME_W),
+        ) -> None:
         self.config = config
+        self._frame_size = None
+        if estimation.cm_per_px is not None and estimation.lane_roi_width_px is None:
+            lane_w = resolve(config.roi.lane, frame_size)[2]
+            estimation = replace(estimation, lane_roi_width_px=int(lane_w))
+            self._frame_size = tuple(frame_size)
+        self.estimation = estimation
+        self.processor = Phase3Processor(estimation)
+        self.last_estimation_debug: dict | None = None
         self.last_timings_ms: dict = {}
         self._laps = _Laps() if timing else None
 
@@ -102,10 +137,15 @@ class Pipeline:
             under the same config.
 
         Raises:
+            ValueError: If the lane ROI width was derived for the cm scale
+                and this frame is another size.
             Whatever the stages raise on malformed input (wrong shape or
             dtype); see preprocess_frame and detect_geometry.
         """
         cfg, laps = self.config, self._laps
+        if self._frame_size is not None and frame_bgr.shape[:2] != self._frame_size:
+            raise ValueError(f"Pipeline: frame is {frame_bgr.shape[:2]}, but the cm scale "
+                             f"was set up for {self._frame_size}")
         if laps:
             laps.start()
 
@@ -138,3 +178,49 @@ class Pipeline:
             laps.lap("package")
             self.last_timings_ms = laps.times
         return phase2
+
+    def estimate(
+            self,
+            phase2: Phase2Output,
+            sensors: SensorSample | None = None,
+        ) -> EstimationPacket:
+        """
+        Run one frame's Phase 2 output through Phase 3.
+
+        Inputs:
+            phase2: This frame's Phase2Output, in frame order: Phase 3
+                smooths, holds and votes across calls.
+            sensors: Readings for this frame window; None runs without sensors.
+
+        Outputs:
+            EstimationPacket for Navigation. Phase 3's debug summary is kept
+            on last_estimation_debug; with timing on, its time is added to
+            last_timings_ms as "phase3".
+        """
+        laps = self._laps
+        if laps:
+            t0 = time.perf_counter()
+        packet, self.last_estimation_debug = self.processor.process(phase2, sensors)
+        if laps:
+            self.last_timings_ms["phase3"] = (time.perf_counter() - t0) * 1000.0
+        return packet
+
+    def step(
+            self,
+            frame_bgr: np.ndarray,
+            frame_id: int,
+            timestamp_ms: int,
+            sensors: SensorSample | None = None,
+        ) -> EstimationPacket:
+        """
+        One frame through Phases 1-3: perceive() then estimate().
+
+        Inputs:
+            frame_bgr, frame_id, timestamp_ms: As for perceive().
+            sensors: As for estimate().
+
+        Outputs:
+            EstimationPacket. Per-stage times, with timing on, are on
+            last_timings_ms; Phase 3's debug on last_estimation_debug.
+        """
+        return self.estimate(self.perceive(frame_bgr, frame_id, timestamp_ms), sensors)

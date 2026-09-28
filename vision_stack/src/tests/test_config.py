@@ -110,6 +110,23 @@ def test_linkers_run_the_config_module_objects():
     assert _default(p2.run_live_view, "config") is config.MEASURED
     assert _default(p3.run_phase3_chain, "config") is config.MEASURED
     assert _default(p3.run, "config") is config.MEASURED
+    assert _default(p3.run, "p3_config") is config.MEASURED_ESTIMATION
+
+
+@pytest.mark.software
+def test_phase3_linker_flags_apply_on_top_of_measured_estimation(tmp_path, monkeypatch):
+    frames = tmp_path / "f"
+    frames.mkdir()
+    cv2.imwrite(str(frames / "000000.png"), synthetic_frame([150, 290]))
+    # MEASURED_ESTIMATION still equals Phase3Config()'s defaults, so a CLI that
+    # built a bare Phase3Config would pass unnoticed; swap in one that differs
+    tuned = replace(config.MEASURED_ESTIMATION, ema_alpha=0.6, vote_window=5)
+    monkeypatch.setattr(p3, "MEASURED_ESTIMATION", tuned)
+    got = {}
+    monkeypatch.setattr(p3, "run", lambda source, cfg, p3_config, *a, **k: got.update(p3=p3_config))
+    p3.cli(["--frames", str(frames), "--gyro-bias", "1.25", "--cm-per-px", "0.07",
+            "--out", str(tmp_path / "out")])
+    assert got["p3"] == replace(tuned, gyro_bias_dps=1.25, cm_per_px=0.07)
 
 
 @pytest.mark.software
