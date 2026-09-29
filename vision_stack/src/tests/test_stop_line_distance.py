@@ -127,8 +127,9 @@ def test_phase3_linker_logs_the_stop_line_columns(tmp_path):
     cols = header.split(",")
     for name in ("p2_stop_line_px", "stop_line_detected", "stop_line_distance_px"):
         assert name in cols
-    # cm columns are appended, so nothing before them moved; blank without a ground homography
-    assert cols[-2:] == ["p2_stop_line_cm", "stop_line_distance_cm"]
+    # cm columns were appended after every earlier column (the wheel columns came
+    # later still), so nothing before them moved; blank without a ground homography
+    assert cols[cols.index("p3_log") + 1:cols.index("p3_log") + 3] == ["p2_stop_line_cm", "stop_line_distance_cm"]
     # The CLI runs MEASURED, which undistorts the synthetic frame, so only
     # consistency is checked: once voted, the packet reports what Phase 2 measured
     last = dict(zip(cols, rows[-1].split(",")))

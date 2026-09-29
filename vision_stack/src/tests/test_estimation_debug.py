@@ -79,7 +79,9 @@ def test_packets_and_log_match_the_production_processor(seed, cfg):
     prod, traced = Phase3Processor(cfg), TracedPhase3Processor(cfg)
     rng = random.Random(seed)
     for o in _random_stream(300, seed):
-        sensors = SensorSample(yaw_rate_dps=rng.choice([None, rng.uniform(-30, 30)]))
+        sensors = SensorSample(yaw_rate_dps=rng.choice([None, rng.uniform(-30, 30)]),
+                               left_wheel_cps=rng.choice([None, 0.0, rng.uniform(-400, 400)]),
+                               right_wheel_cps=rng.choice([None, 0.0, rng.uniform(-400, 400)]))
         p_pkt, p_dbg = prod.process(o, sensors)
         t_pkt, t_dbg = traced.process(o, sensors)
         same(p_pkt, t_pkt, f"f{o.frame_id} packet")

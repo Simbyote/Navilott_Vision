@@ -216,7 +216,8 @@ class Phase3View:
         render = "--" if self.last_render_ms is None else f"{self.last_render_ms:.1f}"
         # The header's third line, right side: annotate's tags fill it from the left
         text = (f"t={pk.timestamp_ms / 1000.0:.2f}s  P1 {ms('capture')}  P2 {ms('phase2')}  "
-                f"P3 {ms('phase3')}  render(prev) {render} ms")
+                f"P3 {ms('phase3')}  render(prev) {render} ms   "
+                f"wheels {pk.left_wheel_cps:.0f}/{pk.right_wheel_cps:.0f} cps")
         (tw, _), _ = cv2.getTextSize(text, dv.FONT, fs, th)
         dv.draw_text(img, text, (img.shape[1] - tw - 6 * s, 3 * lh - 3 * s), dv.C_GRAY, fs, th)
         return img
