@@ -13,7 +13,7 @@ Main package:
     EncoderFrame: one frame window's cumulative encoder counts and calculated 
         instantaneous wheel speeds (counts per second).
     EncoderReader: non-blocking quadrature decoder registering state transitions 
-        on left (GPIO 16/19) and right (GPIO 21/20) channel interrupts via pigpio.
+        on left (GPIO 21/20) and right (GPIO 16/19) channel interrupts via pigpio.
     MotorController: abstraction layer translating normalized speed vectors (-1.0 
         to 1.0) into TB6612 direction control pins and hardware PWM duty cycles, 
         and encapsulating closed-loop execution routines.
@@ -60,12 +60,14 @@ class EncoderFrame:
 # =============================================================================
 class EncoderReader:
     """
-    Reads quadrature encoders on Left (GPIO 16/19) and Right (GPIO 21/20) motors.
+    Reads quadrature encoders on Left (GPIO 21/20) and Right (GPIO 16/19) motors.
     """
-    LEFT_C1  = 16
-    LEFT_C2  = 19
-    RIGHT_C1 = 21
-    RIGHT_C2 = 20
+    # Measured 2026-09-29: the encoder on 21/20 turns with motor A (left).
+    # Each side's decode direction moved with its pins.
+    LEFT_C1  = 21
+    LEFT_C2  = 20
+    RIGHT_C1 = 16
+    RIGHT_C2 = 19
 
     def __init__(self, pi: pigpio.pi) -> None:
         self._pi = pi
@@ -100,9 +102,9 @@ class EncoderReader:
 
         if gpio == self.LEFT_C1 and level == 1:
             if self._left_c2_state == 0:
-                self._left_pos += 1
-            else:
                 self._left_pos -= 1
+            else:
+                self._left_pos += 1
 
     def _right_cb(self, gpio: int, level: int, tick: int) -> None:
         if gpio == self.RIGHT_C1:
@@ -112,9 +114,9 @@ class EncoderReader:
 
         if gpio == self.RIGHT_C1 and level == 1:
             if self._right_c2_state == 0:
-                self._right_pos -= 1
-            else:
                 self._right_pos += 1
+            else:
+                self._right_pos -= 1
 
     def snapshot(self) -> EncoderFrame:
         """Atomically read current counts and compute counts per second."""
@@ -243,9 +245,9 @@ class MotorController:
                 correction = error * kp
                 correction = max(-max_corr, min(max_corr, correction))
 
-                # Adjust speeds
-                left_cmd = max(min_speed, min(1.0, base_speed + correction))
-                right_cmd = max(min_speed, min(1.0, base_speed - correction))
+                # Adjust speeds: slow the wheel that is ahead
+                left_cmd = max(min_speed, min(1.0, base_speed - correction))
+                right_cmd = max(min_speed, min(1.0, base_speed + correction))
 
                 self.drive(left_cmd, right_cmd)
 
