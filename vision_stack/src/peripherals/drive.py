@@ -208,14 +208,14 @@ class MotorController:
         # Left Motor Direction & Duty Cycle (0 to 1,000,000 for hardware_PWM)
         spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
         self._pi.hardware_PWM(self.pwma, self.pwm_freq, spd_l)
-        self._pi.write(self.ain1, 1 if left_speed > 0 else 0)
-        self._pi.write(self.ain2, 1 if left_speed < 0 else 0)
+        self._pi.write(self.ain1, 1 if left_speed < 0 else 0)
+        self._pi.write(self.ain2, 1 if left_speed > 0 else 0)
 
         # Right Motor Direction & Duty Cycle
         spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
         self._pi.hardware_PWM(self.pwmb, self.pwm_freq, spd_r)
-        self._pi.write(self.bin1, 1 if right_speed < 0 else 0)
-        self._pi.write(self.bin2, 1 if right_speed > 0 else 0)
+        self._pi.write(self.bin1, 1 if right_speed > 0 else 0)
+        self._pi.write(self.bin2, 1 if right_speed < 0 else 0)
 
     def stop(self) -> None:
         """Stop both motors immediately and set standby LOW."""
