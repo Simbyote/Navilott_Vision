@@ -142,9 +142,9 @@ def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_
     drive, pi = fake_encoders
     enc = drive.EncoderReader
     sensors = p3._Sensors(encoders=True)
-    # Forward on each side, per drive.py's decode: left C2 leads, right C1 leads
-    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=False)
-    pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 10, c1_leads=True)
+    # Forward on each side, per drive.py's decode: left C1 leads, right C2 leads
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
+    pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 10, c1_leads=False)
     moving = sensors.sample()
     assert moving.left_wheel_cps > moving.right_wheel_cps > 0.0
     stopped = sensors.sample()
@@ -166,8 +166,8 @@ def test_encoders_flag_writes_the_wheel_columns(frames, tmp_path, fake_encoders,
 
     def turning(self):
         """The left wheel turns faster than the right before every frame's reading."""
-        pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=False)
-        pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 5, c1_leads=True)
+        pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
+        pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 5, c1_leads=False)
         return real(self)
     monkeypatch.setattr(p3._Sensors, "sample", turning)
 

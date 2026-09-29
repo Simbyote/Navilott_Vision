@@ -102,11 +102,13 @@ class EncoderReader:
         elif gpio == self.LEFT_C2:
             self._left_c2_state = level
 
+        # + = forward: measured 2026-09-29 by turning each wheel forward by
+        # hand, which read negative under the previous decode
         if gpio == self.LEFT_C1 and level == 1:
             if self._left_c2_state == 0:
-                self._left_pos -= 1
-            else:
                 self._left_pos += 1
+            else:
+                self._left_pos -= 1
 
     def _right_cb(self, gpio: int, level: int, tick: int) -> None:
         if gpio == self.RIGHT_C1:
@@ -116,9 +118,9 @@ class EncoderReader:
 
         if gpio == self.RIGHT_C1 and level == 1:
             if self._right_c2_state == 0:
-                self._right_pos += 1
-            else:
                 self._right_pos -= 1
+            else:
+                self._right_pos += 1
 
     def snapshot(self) -> EncoderFrame:
         """Current counts since reset(), and counts per second over the window since the previous snapshot."""
