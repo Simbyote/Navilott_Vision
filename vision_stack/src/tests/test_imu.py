@@ -6,7 +6,8 @@ so nothing touches I2C. The accumulator is tested directly where timing would
 make a threaded test flaky; the threaded tests only check what survives jitter.
 
 --software  Accumulator, calibration, snapshot and worker contract. No sensor.
---hardware  Calibrates the real MPU-6050, samples it at the pipeline frame rate
+--hardware  Skips unless an MPU-6050 answers on I2C at 0x68 or 0x69. Then
+            calibrates it, samples it at the pipeline frame rate
             for --frames windows, and writes per-window CSV, a summary and a
             yaw-noise histogram. Keep the robot still: the numbers are the
             stationary noise floor.
@@ -21,8 +22,10 @@ import pytest
 from src.params import FPS, IMU_RATE_HZ
 from src.peripherals.imu import IMUFrame, IMUReader, _Accum
 from src.tests.artifacts import summarize
+from src.tests.presence import i2c_device_or_skip
 
 FAST_HZ = 1000.0        # keeps calibrate() and the worker quick in software tests
+MPU6050_ADDRESSES = (0x68, 0x69)    # AD0 low / high
 
 
 class FakeMPU:
@@ -171,10 +174,11 @@ def test_snapshot_is_safe_while_the_worker_runs():
 @pytest.mark.hardware
 def test_imu_characterization(request, artifacts):
     n = request.config.getoption("--frames")
+    i2c_device_or_skip("imu", MPU6050_ADDRESSES)
     try:
         r = IMUReader()
-    except Exception as e:                   # no board module, no I2C, no sensor
-        pytest.skip(f"IMU unavailable: {e}")
+    except ImportError as e:                 # the part answered, but its driver isn't installed
+        pytest.skip(f"imu unavailable: {e}")
 
     bias_dps = r.calibrate()
     period_s = 1.0 / FPS

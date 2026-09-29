@@ -7,10 +7,12 @@ instantly and the display throttle can be stepped by hand.
 
 --software  Button debounce, countdown, MM:SS formatting, throttling and
             cleanup, against fake pigpio / tm1637. No GPIO.
---hardware  Opens the real pigpio daemon and display: shows "rdy", runs the
-            countdown, ticks the clock for a few seconds, reads the button
-            once and cleans up. Watch the display; the button is not pressed
-            (wait_for_start() would block for a person).
+--hardware  Display: skips unless a TM1637 acknowledges on the display pins,
+            then shows "rdy", runs the countdown, ticks the clock for a few
+            seconds and shows the final time. Watch the display.
+            Button: reads it once at rest. It has no presence probe (see
+            the test), so it runs wherever pigpio does. The button is not
+            pressed; wait_for_start() would block for a person.
 """
 import importlib
 import sys
@@ -19,6 +21,7 @@ import types
 import pytest
 
 from src.params import GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO, GPIO_START_BUTTON
+from src.tests.presence import pigpio_or_skip, tm1637_acks
 
 SYSTEM_MODULE = "src.peripherals.system"
 
@@ -82,7 +85,8 @@ def env(monkeypatch):
     """Imports system.py against fake pigpio / tm1637 / time; returns (module, pi, clock)."""
     pi = FakePi()
     pigpio = types.ModuleType("pigpio")
-    pigpio.INPUT, pigpio.PUD_DOWN = "INPUT", "PUD_DOWN"
+    pigpio.INPUT, pigpio.OUTPUT = "INPUT", "OUTPUT"
+    pigpio.PUD_DOWN, pigpio.PUD_UP = "PUD_DOWN", "PUD_UP"
     pigpio.pi = lambda: pi
     tm1637 = types.ModuleType("tm1637")
     tm1637.TM1637 = FakeDisplay
@@ -198,14 +202,57 @@ def test_cleanup_still_releases_pigpio_if_the_display_fails(env):
     assert pi.stopped
 
 
+class BusPi:
+    """pigpio.pi stand-in for the TM1637 probe: keeps the bits clocked out before the ACK, answers the ACK read."""
+    def __init__(self, chip_fitted):
+        self.chip_fitted = chip_fitted
+        self.modes, self.levels, self.bits = {}, {}, []
+        self.dio_mode_at_read = None
+
+    def set_mode(self, pin, mode):
+        self.modes[pin] = mode
+
+    def set_pull_up_down(self, pin, pud):
+        pass
+
+    def write(self, pin, level):
+        rising = pin == GPIO_DISPLAY_CLK and level == 1 and self.levels.get(pin) == 0
+        self.levels[pin] = level
+        if rising and self.modes.get(GPIO_DISPLAY_DIO) == "OUTPUT" and self.dio_mode_at_read is None:
+            self.bits.append(self.levels[GPIO_DISPLAY_DIO])
+
+    def read(self, pin):
+        self.dio_mode_at_read = self.modes.get(pin)
+        return 0 if self.chip_fitted else 1       # a fitted chip pulls DIO low; else the pull-up wins
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("fitted", [True, False])
+def test_display_probe_reads_the_tm1637_ack(env, fitted):
+    pi = BusPi(fitted)
+    assert tm1637_acks(pi, GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO) is fitted
+    byte = sum(bit << i for i, bit in enumerate(pi.bits))
+    assert len(pi.bits) == 8 and byte == 0x40             # one data-command byte, LSB first
+    assert pi.dio_mode_at_read == "INPUT"                 # DIO released before the ACK clock
+    assert pi.levels[GPIO_DISPLAY_CLK] == 1 and pi.levels[GPIO_DISPLAY_DIO] == 1   # bus left idle
+
+
 @pytest.mark.hardware
-def test_system_characterization(artifacts):
+def test_display_characterization(artifacts):
     import time
+    pi = pigpio_or_skip("display")
+    try:
+        fitted = tm1637_acks(pi, GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO)
+    finally:
+        pi.stop()
+    if not fitted:
+        pytest.skip(f"display not found on this chassis: no TM1637 ACK on "
+                    f"CLK {GPIO_DISPLAY_CLK} / DIO {GPIO_DISPLAY_DIO}")
     try:
         mod = importlib.import_module(SYSTEM_MODULE)
         s = mod.System()
-    except Exception as e:                      # no pigpio/tm1637, or the daemon isn't running
-        pytest.skip(f"system peripherals unavailable: {e}")
+    except ImportError as e:                    # the chip answered, but tm1637 isn't installed
+        pytest.skip(f"display unavailable: {e}")
 
     try:
         s._display.show("rdy ")
@@ -216,14 +263,34 @@ def test_system_characterization(artifacts):
             s.update_display(time.perf_counter() - t0)
             time.sleep(0.05)                    # roughly frame-paced, so the throttle is exercised
         s.show_final_time(time.perf_counter() - t0)
-        button = s._pi.read(GPIO_START_BUTTON)
         time.sleep(2.0)                         # leave the final time up long enough to read
     finally:
         s.cleanup()
 
     artifacts.json("summary.json", {
-        "pins": {"display_clk": GPIO_DISPLAY_CLK, "display_dio": GPIO_DISPLAY_DIO,
-                 "start_button": GPIO_START_BUTTON},
+        "pins": {"display_clk": GPIO_DISPLAY_CLK, "display_dio": GPIO_DISPLAY_DIO},
+        "tm1637_ack": fitted,
+    })
+
+
+@pytest.mark.hardware
+def test_start_button_at_rest(artifacts):
+    # No presence probe: behind a pull-down, an unwired button reads 0 exactly
+    # like a fitted one at rest. So this runs wherever pigpio does, and the one
+    # fault it can catch, a line stuck high, is a fault on any chassis.
+    pigpio_or_skip("start button").stop()
+    try:
+        mod = importlib.import_module(SYSTEM_MODULE)
+        s = mod.System()
+    except ImportError as e:
+        pytest.skip(f"start button unavailable: {e}")
+    try:
+        button = s._pi.read(GPIO_START_BUTTON)
+    finally:
+        s.cleanup()
+
+    artifacts.json("summary.json", {
+        "pins": {"start_button": GPIO_START_BUTTON},
         "button_level_at_rest": button,         # expect 0: pull-down, not pressed
     })
     assert button == 0, "start button reads high at rest: check the pull-down and wiring"
