@@ -1,4 +1,4 @@
-"""Geometry branch: lane boundaries, stop lines and stop-sign shapes from gray ROIs.
+"""Geometry branch: lane boundaries and stop lines from the gray lane ROI, stop-sign shapes from the color sign ROI.
 
 Purpose:
     Answers three structural questions per frame. Lane boundaries: white tape
@@ -6,9 +6,11 @@ Purpose:
     kept when their area, elongation, span and brightness match tape. Stop
     lines: the same lane-ROI Canny edges, split by gradient direction so only
     edges of near-horizontal lines remain, then the tape's top and bottom
-    edges paired into one line with its own gates. Stop sign: polygon
-    approximation reduces a contour to its dominant vertices, an octagon
-    gives about 8, and area and solidity reject noise.
+    edges paired into one line with its own gates. Stop sign: a red sign on a
+    floor of similar brightness gives Canny almost no edge in gray, so the
+    sign is found by color instead: a redness mask, its largest blob, and
+    polygon approximation of that blob's hull, where an octagon gives about 8
+    vertices and area and solidity reject noise.
 
     Stop lines only share the Canny result. They have their own config
     (StopLineFilter) and never change what the lane and sign detectors see,
@@ -22,7 +24,7 @@ Main package:
     fusion, lane_offset and stop_line_distance.
 
 Flow:
-    1. Validate that both ROIs are single-channel uint8.
+    1. Validate the ROIs: the lane ROI single-channel, the sign ROI BGR, both uint8.
     2. Canny on the lane ROI, once; lanes and stop lines both read it.
     3. Lane: take lines lying across the lane out of the edges (the stop
        line, so it can't close into one contour with the lane lines), close
@@ -30,7 +32,8 @@ Flow:
     4. Stop line: keep near-horizontal edges, split them into top (dark to
        bright going down) and bottom edges, fit each, pair top with bottom,
        gate by length, tilt, thickness and brightness.
-    5. Sign: Canny on the sign ROI, filter contours by area, vertex count and solidity.
+    5. Sign: redness mask of the sign ROI (Otsu, floored), close, take the
+       largest blob, gate its hull's polygon by area, vertex count and solidity.
     6. Package the three candidate lists with the frame identity.
 """
 import math
@@ -90,10 +93,22 @@ class SignContourFilter:
     min_vertices: int = 8           # approxPolyDP vertex count
     max_vertices: int = 9
     min_solidity: float = 0.80      # contour area / convex hull area
-    # approxPolyDP epsilon as a fraction of arc length. Smaller keeps more
-    # vertices; larger collapses the outline toward fewer.
-    epsilon_factor: float = 0.03
+    # approxPolyDP epsilon as a fraction of the hull's perimeter, so it scales
+    # with sign distance. Smaller keeps more vertices; larger collapses the
+    # outline toward fewer. 0.02 per the redness design: on the hull of a
+    # filled mask it gave 8-9 vertices on every synthetic sign from radius 12 to 30 px
+    epsilon_factor: float = 0.02
     ref_area: float = 5000.0        # px^2 that scores full area confidence
+    # Redness (R - max(G, B), 0-255) never thresholded below this. Otsu always
+    # splits the image in two, so a sign-free ROI thresholds its own noise
+    # (Otsu at 1 on synthetic gray and black floors, 2026-09, with a false
+    # 8-vertex blob in 1 of 20). The dimmest synthetic sign, BGR (30, 30, 80)
+    # on near-black, had Otsu at 22. Re-check on course frames
+    min_redness: float = 20.0
+    # Side, px, of the square closing on the red mask: fills noise pinholes
+    # and the notches the white STOP letters leave at the rim. 5 per the
+    # design; larger starts merging the sign with red nearby. < 2 disables
+    close_kernel: int = 5
 
 @dataclass(frozen=True)
 class StopLineFilter:
@@ -126,7 +141,7 @@ class GeometryConfig:
     Geometry tuning as one unit, so the stage takes a single config like every
     other stage. The parts can still be passed to run_geometry_branch() directly.
     """
-    canny: CannyParams = field(default_factory=CannyParams)     # shared by both branches
+    canny: CannyParams = field(default_factory=CannyParams)     # lanes and stop lines; signs are found by color
     lane: LaneContourFilter = field(default_factory=LaneContourFilter)
     sign: SignContourFilter = field(default_factory=SignContourFilter)
     stop_line: StopLineFilter = field(default_factory=StopLineFilter)   # reads the lane ROI's Canny edges
@@ -763,6 +778,28 @@ def _trace_entry(
         "poly": poly,
     }
 
+def _redness(sign_color_roi: np.ndarray) -> np.ndarray:
+    """R - max(G, B) per pixel, 0-255: bright on red, near 0 on gray, black and white alike."""
+    b, g, r = cv2.split(sign_color_roi)
+    # cv2.subtract saturates at 0; numpy '-' on uint8 would wrap gray-green pixels to ~255
+    return cv2.subtract(r, cv2.max(g, b))
+
+def _red_mask(redness: np.ndarray, sign_filter: SignContourFilter) -> tuple[np.ndarray, float]:
+    """0/255 mask of the red pixels (Otsu, never below min_redness), closed; and the threshold used."""
+    t, mask = cv2.threshold(redness, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if t < sign_filter.min_redness:
+        t, mask = cv2.threshold(redness, sign_filter.min_redness, 255, cv2.THRESH_BINARY)
+    k = sign_filter.close_kernel
+    if k >= 2:
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    return mask, float(t)
+
+def _sign_polygon(contour: np.ndarray, sign_filter: SignContourFilter):
+    """(hull, hull area, approxPolyDP of the hull at epsilon_factor x its perimeter)."""
+    hull = cv2.convexHull(contour)
+    epsilon = sign_filter.epsilon_factor * cv2.arcLength(hull, closed=True)
+    return hull, cv2.contourArea(hull), cv2.approxPolyDP(hull, epsilon, closed=True)
+
 def _extract_sign_candidates(
     contours: Sequence[np.ndarray],
     sign_filter: SignContourFilter,
@@ -772,91 +809,97 @@ def _extract_sign_candidates(
     trace: list[dict] | None = None,
 ) -> list[SignCandidate]:
     """
-    Run contours through the sign gates: area, vertex count, convex hull, solidity.
+    Gate the red-mask contours: below min_area dropped, then only the largest
+    goes on, through max_area, hull, vertex count and solidity.
 
     Inputs:
+        contours: External contours of the red mask.
         reject_counts: Filled with one count per gate. Every contour lands in
-            exactly one bucket, so the buckets sum to "seen".
+            exactly one bucket ("not_largest" for the sized ones set aside),
+            so the buckets sum to "seen".
         trace: A list to receive one _trace_entry() per contour that reached a
             gate, accepted or not, or None to skip tracing. Area rejects are
             traced only when their bbox clears TRACE_MIN_BBOX_FRAC.
 
     Outputs:
-        Accepted candidates, each holding its approxPolyDP polygon.
+        At most one candidate, holding the hull's approxPolyDP polygon.
 
     Side effects:
         Mutates reject_counts and trace.
     """
-    candidates = []
-
     rc = reject_counts if reject_counts is not None else {}
-    for _k in ("seen", "area", "vertices", "hull", "solidity", "accepted"):
+    for _k in ("seen", "area", "not_largest", "vertices", "hull", "solidity", "accepted"):
         rc.setdefault(_k, 0)
 
+    sized = []
     for contour in contours:
         rc["seen"] += 1
         area = cv2.contourArea(contour)
-        if area < sign_filter.min_area or area > sign_filter.max_area:
+        if area < sign_filter.min_area:
             rc["area"] += 1
             if trace is not None:
                 _, _, bw, bh = cv2.boundingRect(contour)
                 if bw * bh >= sign_filter.min_area * TRACE_MIN_BBOX_FRAC:
                     trace.append(_trace_entry(contour, "area", area))
             continue
+        sized.append((area, contour))
+    if not sized:
+        return []
 
-        arc_len = cv2.arcLength(contour, closed=True)
-        epsilon = sign_filter.epsilon_factor * arc_len
-        approx = cv2.approxPolyDP(contour, epsilon, closed=True)
-        n_verts = len(approx)
-        confidence = _sign_confidence(area, n_verts, sign_filter)
-
-        if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
-            rc["vertices"] += 1
+    # max() keeps the first of equal areas, as _filter_sign_contours does
+    largest = max(range(len(sized)), key=lambda i: sized[i][0])
+    for i, (area, contour) in enumerate(sized):
+        if i != largest:
+            rc["not_largest"] += 1
             if trace is not None:
-                trace.append(_trace_entry(
-                    contour, "vertices", area, n_verts,
-                    confidence=confidence, poly=approx))
-            continue
+                trace.append(_trace_entry(contour, "not_largest", area))
+    area, contour = sized[largest]
 
-        # Reject non-convex / fragmented shapes
-        hull = cv2.convexHull(contour)
-        hull_area = cv2.contourArea(hull)
-        if hull_area <= 0:
-            rc["hull"] += 1
-            if trace is not None:
-                trace.append(_trace_entry(
-                    contour, "hull", area, n_verts,
-                    confidence=confidence, poly=approx))
-            continue
-        solidity = area / hull_area
-        if solidity < sign_filter.min_solidity:
-            rc["solidity"] += 1
-            if trace is not None:
-                trace.append(_trace_entry(
-                    contour, "solidity", area, n_verts, round(solidity, 4),
-                    confidence, approx))
-            continue
-
-        x, y, w, h = cv2.boundingRect(contour)
-        rc["accepted"] += 1
-
-        candidates.append(SignCandidate(
-            label = STOP_SIGN,
-            bbox = (x, y, w, h),
-            contour = approx,
-            vertex_count = n_verts,
-            confidence = confidence,
-            frame_id = frame_id,
-            timestamp_ms = timestamp_ms,
-            area = area,
-            solidity = round(solidity, 4),
-        ))
+    if area > sign_filter.max_area:
+        rc["area"] += 1
         if trace is not None:
-            trace.append(_trace_entry(
-                contour, None, area, n_verts, round(solidity, 4),
-                confidence, approx))
+            trace.append(_trace_entry(contour, "area", area))
+        return []
 
-    return candidates
+    hull, hull_area, approx = _sign_polygon(contour, sign_filter)
+    if hull_area <= 0:
+        rc["hull"] += 1
+        if trace is not None:
+            trace.append(_trace_entry(contour, "hull", area))
+        return []
+
+    n_verts = len(approx)
+    confidence = _sign_confidence(area, n_verts, sign_filter)
+    if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
+        rc["vertices"] += 1
+        if trace is not None:
+            trace.append(_trace_entry(contour, "vertices", area, n_verts,
+                                      confidence=confidence, poly=approx))
+        return []
+
+    # Of the raw contour against its hull; the hull alone is always 1.0
+    solidity = round(area / hull_area, 4)
+    if solidity < sign_filter.min_solidity:
+        rc["solidity"] += 1
+        if trace is not None:
+            trace.append(_trace_entry(contour, "solidity", area, n_verts, solidity,
+                                      confidence, approx))
+        return []
+
+    rc["accepted"] += 1
+    if trace is not None:
+        trace.append(_trace_entry(contour, None, area, n_verts, solidity, confidence, approx))
+    return [SignCandidate(
+        label = STOP_SIGN,
+        bbox = cv2.boundingRect(contour),
+        contour = approx,
+        vertex_count = n_verts,
+        confidence = confidence,
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+        area = area,
+        solidity = solidity,
+    )]
 
 def _filter_sign_contours(
     contours: Sequence[np.ndarray],
@@ -869,50 +912,39 @@ def _filter_sign_contours(
     order, without reject counting or tracing.
 
     Outputs:
-        Accepted candidates, each holding its approxPolyDP polygon.
+        At most one candidate, holding the hull's approxPolyDP polygon.
     """
-    candidates = []
-
+    best, best_area = None, -1.0
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area < sign_filter.min_area or area > sign_filter.max_area:
-            continue
+        if area >= sign_filter.min_area and area > best_area:
+            best, best_area = contour, area
+    if best is None or best_area > sign_filter.max_area:
+        return []
 
-        arc_len = cv2.arcLength(contour, closed=True)
-        epsilon = sign_filter.epsilon_factor * arc_len
-        approx = cv2.approxPolyDP(contour, epsilon, closed=True)
-        n_verts = len(approx)
-        if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
-            continue
+    hull, hull_area, approx = _sign_polygon(best, sign_filter)
+    n_verts = len(approx)
+    if (hull_area <= 0 or n_verts < sign_filter.min_vertices
+            or n_verts > sign_filter.max_vertices):
+        return []
+    solidity = round(best_area / hull_area, 4)
+    if solidity < sign_filter.min_solidity:
+        return []
 
-        # Reject non-convex / fragmented shapes
-        hull = cv2.convexHull(contour)
-        hull_area = cv2.contourArea(hull)
-        if hull_area <= 0:
-            continue
-        solidity = area / hull_area
-        if solidity < sign_filter.min_solidity:
-            continue
-
-        x, y, w, h = cv2.boundingRect(contour)
-
-        candidates.append(SignCandidate(
-            label = STOP_SIGN,
-            bbox = (x, y, w, h),
-            contour = approx,
-            vertex_count = n_verts,
-            confidence = _sign_confidence(area, n_verts, sign_filter),
-            frame_id = frame_id,
-            timestamp_ms = timestamp_ms,
-            area = area,
-            solidity = round(solidity, 4),
-        ))
-
-    return candidates
+    return [SignCandidate(
+        label = STOP_SIGN,
+        bbox = cv2.boundingRect(best),
+        contour = approx,
+        vertex_count = n_verts,
+        confidence = _sign_confidence(best_area, n_verts, sign_filter),
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+        area = best_area,
+        solidity = solidity,
+    )]
 
 def extract_sign_candidates(
-    sign_roi: np.ndarray,
-    canny_params: CannyParams,
+    sign_color_roi: np.ndarray,
     sign_filter: SignContourFilter,
     frame_id: int,
     timestamp_ms: int,
@@ -920,10 +952,10 @@ def extract_sign_candidates(
     trace: bool = False,
 ) -> tuple[list[SignCandidate], dict]:
     """
-    Find stop-sign-shaped candidates in the sign ROI.
+    Find the stop-sign-shaped red blob in the sign ROI.
 
     Inputs:
-        sign_roi: (h, w) uint8 gray.
+        sign_color_roi: (h, w, 3) uint8 BGR.
         draw_overlays: Also build contour_overlay and accepted_overlay. False
             skips two full-ROI allocations and a contour rasterization per frame.
         trace: Record every contour that reached a gate, and the gate that
@@ -931,13 +963,16 @@ def extract_sign_candidates(
             doesn't read it.
 
     Outputs:
-        (candidates, debug). debug always holds sign_roi, edges and
-        reject_counts. With trace, debug["trace"] is a list of dicts (bbox,
-        gate, area, vertices, solidity, confidence, poly), ROI-relative; gate
-        is None for accepted candidates.
+        (candidates, debug); at most one candidate. debug always holds
+        sign_roi (the BGR ROI), redness (0-255), mask (0/255, closed),
+        threshold (the redness threshold used) and reject_counts. With
+        trace, debug["trace"] is a list of dicts (bbox, gate, area,
+        vertices, solidity, confidence, poly), ROI-relative; gate is None
+        for the accepted candidate.
     """
-    edges = _canny(sign_roi, canny_params)
-    contours = _contours(edges)
+    redness = _redness(sign_color_roi)
+    mask, threshold = _red_mask(redness, sign_filter)
+    contours = _contours(mask)
 
     reject_counts = {}
     trace_log = [] if trace else None
@@ -952,27 +987,27 @@ def extract_sign_candidates(
     )
 
     debug_images = {
-        "sign_roi": sign_roi,
-        "edges": edges,
+        "sign_roi": sign_color_roi,
+        "redness": redness,
+        "mask": mask,
+        "threshold": threshold,
         "reject_counts": reject_counts,
     }
     if trace:
         debug_images["trace"] = trace_log
 
     if draw_overlays:
-        # Both overlays must be 3-channel: a single-channel destination keeps
-        # only the first BGR component, so every annotation would render black
-        contour_overlay = cv2.cvtColor(sign_roi, cv2.COLOR_GRAY2BGR)
-        accepted_overlay = cv2.cvtColor(sign_roi, cv2.COLOR_GRAY2BGR)
+        contour_overlay = sign_color_roi.copy()
+        accepted_overlay = sign_color_roi.copy()
 
         cv2.drawContours(contour_overlay, contours, -1, (200, 200, 200), 1)
         for c in candidates:
-            cv2.drawContours(accepted_overlay, [c.contour], -1, (0, 0, 255), 2)
+            cv2.drawContours(accepted_overlay, [c.contour], -1, (0, 255, 0), 2)
             x, y, w, h = c.bbox
-            cv2.rectangle(accepted_overlay, (x, y), (x + w - 1, y + h - 1), (0, 0, 200), 1)
+            cv2.rectangle(accepted_overlay, (x, y), (x + w - 1, y + h - 1), (0, 200, 0), 1)
             cv2.putText(accepted_overlay, f"v={c.vertex_count} {c.confidence:.2f}",
                         (x, max(y - 3, 10)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 0), 1, cv2.LINE_AA)
 
         debug_images["contour_overlay"] = contour_overlay
         debug_images["accepted_overlay"] = accepted_overlay
@@ -981,8 +1016,7 @@ def extract_sign_candidates(
 
 
 def find_sign_candidates(
-    sign_roi: np.ndarray,
-    canny_params: CannyParams,
+    sign_color_roi: np.ndarray,
     sign_filter: SignContourFilter,
     frame_id: int,
     timestamp_ms: int,
@@ -991,12 +1025,12 @@ def find_sign_candidates(
     Production twin of extract_sign_candidates(): no debug dict, overlays or trace.
 
     Outputs:
-        ROI-relative candidates.
+        ROI-relative candidates, at most one.
     """
-    edges = _canny(sign_roi, canny_params)
+    mask, _ = _red_mask(_redness(sign_color_roi), sign_filter)
 
     return _filter_sign_contours(
-        _contours(edges),
+        _contours(mask),
         sign_filter,
         frame_id,
         timestamp_ms,
@@ -1368,9 +1402,21 @@ def _splits(lane_roi, lane_edges, lane_filter: LaneContourFilter, stop_filter: S
     return stop_split, lane_split
 
 
+def _validate_rois(where: str, lane_roi: np.ndarray, sign_color_roi: np.ndarray) -> None:
+    """Raise, naming the ROI, unless lane_roi is (h, w) uint8 and sign_color_roi (h, w, 3) uint8."""
+    for name, roi, ndim in (("lane_roi", lane_roi, 2), ("sign_color_roi", sign_color_roi, 3)):
+        if roi is None:
+            raise ValueError(f"{where}: {name} is None")
+        if roi.dtype != np.uint8:
+            raise TypeError(f"{where}: {name} expected uint8, got {roi.dtype}")
+        if roi.ndim != ndim or (ndim == 3 and roi.shape[2] != 3):
+            want = "single-channel grayscale (H,W)" if ndim == 2 else "BGR (H,W,3)"
+            raise ValueError(f"{where}: {name} expected {want}, got {roi.shape}. "
+                             "Color conversion belongs to preprocess.")
+
 def run_geometry_branch(
     lane_roi: np.ndarray,
-    sign_roi: np.ndarray,
+    sign_color_roi: np.ndarray,
     canny_params: CannyParams,
     lane_filter: LaneContourFilter,
     sign_filter: SignContourFilter,
@@ -1387,7 +1433,9 @@ def run_geometry_branch(
         The entry point for tuning work. The pipeline calls run_geometry_stage().
 
     Inputs:
-        lane_roi, sign_roi: (h, w) uint8 gray, e.g. from ROICropResult.
+        lane_roi: (h, w) uint8 gray; sign_color_roi: (h, w, 3) uint8 BGR;
+            e.g. from ROICropResult.
+        canny_params: The lane ROI's Canny; the sign is found by color.
         draw_overlays: Build the debug overlays in both branches. False skips
             four full-ROI allocations and two contour rasterizations per frame.
         trace: Record the per-contour sign trace (see extract_sign_candidates)
@@ -1400,23 +1448,10 @@ def run_geometry_branch(
         stop-line detector's debug (see extract_stop_line_candidates).
 
     Raises:
-        ValueError / TypeError: If either ROI is None, not uint8, or not 2-D.
-            The message names the offending ROI.
+        ValueError / TypeError: If either ROI is None, not uint8, or the
+            wrong shape. The message names the offending ROI.
     """
-    for name, roi in [("lane_roi", lane_roi), ("sign_roi", sign_roi)]:
-        if roi is None:
-            raise ValueError(
-                f"run_geometry_branch: {name} is None"
-            )
-        if roi.dtype != np.uint8:
-            raise TypeError(
-                f"run_geometry_branch: {name} expected uint8, got {roi.dtype}"
-            )
-        if roi.ndim != 2:
-            raise ValueError(
-                f"run_geometry_branch: {name} expected single-channel grayscale "
-                f"(H,W), got {roi.shape}. Color conversion belongs to preprocess."
-            )
+    _validate_rois("run_geometry_branch", lane_roi, sign_color_roi)
 
     lane_edges = _canny(lane_roi, canny_params)     # shared by lanes and stop lines
     stop_split, lane_split = _splits(lane_roi, lane_edges, lane_filter, stop_filter)
@@ -1443,8 +1478,7 @@ def run_geometry_branch(
     )
 
     sign_candidates, sign_debug = extract_sign_candidates(
-        sign_roi,
-        canny_params,
+        sign_color_roi,
         sign_filter,
         frame_id,
         timestamp_ms,
@@ -1489,7 +1523,7 @@ def run_geometry_stage(
     """
     return run_geometry_branch(
         lane_roi = roi.lane_roi,
-        sign_roi = roi.sign_roi,
+        sign_color_roi = roi.sign_color_roi,
         canny_params = config.canny,
         lane_filter = config.lane,
         sign_filter = config.sign,
@@ -1512,23 +1546,10 @@ def detect_geometry(
         GeometryBranchResult, with frame_id and timestamp_ms carried from roi.
 
     Raises:
-        ValueError / TypeError: If either ROI is None, not uint8, or not 2-D.
-            The message names the offending ROI.
+        ValueError / TypeError: If either ROI is None, not uint8, or the
+            wrong shape. The message names the offending ROI.
     """
-    for name, r in [("lane_roi", roi.lane_roi), ("sign_roi", roi.sign_roi)]:
-        if r is None:
-            raise ValueError(
-                f"detect_geometry: {name} is None"
-            )
-        if r.dtype != np.uint8:
-            raise TypeError(
-                f"detect_geometry: {name} expected uint8, got {r.dtype}"
-            )
-        if r.ndim != 2:
-            raise ValueError(
-                f"detect_geometry: {name} expected single-channel grayscale "
-                f"(H,W), got {r.shape}. Color conversion belongs to preprocess."
-            )
+    _validate_rois("detect_geometry", roi.lane_roi, roi.sign_color_roi)
 
     lane_edges = _canny(roi.lane_roi, config.canny)     # shared by lanes and stop lines
     stop_split, lane_split = _splits(roi.lane_roi, lane_edges, config.lane, config.stop_line)
@@ -1553,8 +1574,7 @@ def detect_geometry(
     )
 
     sign_candidates = find_sign_candidates(
-        roi.sign_roi,
-        config.canny,
+        roi.sign_color_roi,
         config.sign,
         roi.frame_id,
         roi.timestamp_ms,

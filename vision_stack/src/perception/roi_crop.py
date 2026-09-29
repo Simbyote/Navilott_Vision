@@ -7,9 +7,10 @@ Purpose:
     false-positive rate before any threshold is applied.
 
 Main package:
-    ROICropResult: lane and sign ROIs cut from the gray frame (the geometry
-    branch rejects 3-channel input), a traffic ROI cut from the color frame
-    (HSV thresholding needs chroma), and each ROI's rect in source pixels so
+    ROICropResult: lane and sign ROIs cut from the gray frame, a traffic ROI
+    and a second sign ROI (sign_color_roi, same rect) cut from the color
+    frame (HSV thresholding and the sign's redness mask need chroma), and
+    each ROI's rect in source pixels so
     ROI-space detections can be mapped back to the frame. ROIs are read-only
     views, not copies.
 
@@ -85,6 +86,9 @@ class ROICropResult:
     frame_id: int
     timestamp_ms: int
     source_shape: tuple[int, int]               # (H, W) the ROIs were cut from
+    # The sign ROI again, from the color frame: the stop sign is found by color.
+    # The gray sign_roi is no longer read by any stage; a view costs nothing to keep
+    sign_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect as sign_rect
 
 
 def _validate(
@@ -150,7 +154,8 @@ def crop_rois(
         config: ROIConfig = ROIConfig()
     ) -> ROICropResult:
     """
-    Cut the three branch ROIs from one preprocessed frame.
+    Cut the branch ROIs from one preprocessed frame: lane and sign from gray,
+    traffic and the sign again from color.
 
     Inputs:
         config: ROI bounds. Defaults to LANE, TRAFFIC and SIGN.
@@ -173,6 +178,7 @@ def crop_rois(
 
     lane_roi, lane_rect = crop(pre.gray, config.lane)
     sign_roi, sign_rect = crop(pre.gray, config.sign)
+    sign_color_roi, _ = crop(pre.color, config.sign)
     traffic_roi, traffic_rect = crop(pre.color, config.traffic)
 
     return ROICropResult(
@@ -185,6 +191,7 @@ def crop_rois(
         frame_id = pre.frame_id,
         timestamp_ms = pre.timestamp_ms,
         source_shape = pre.gray.shape[:2],
+        sign_color_roi = sign_color_roi,
     )
 
 

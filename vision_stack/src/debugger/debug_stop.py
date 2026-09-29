@@ -9,10 +9,12 @@ Purpose:
     but can't show rejected contours. Coordinates are sign-ROI-relative.
 
 Main package:
-    The rendered panel pair: the sign ROI with every traced contour beside
-    the Canny edge map it came from, under a header with pass / low /
+    The rendered panel pair: the color sign ROI with every traced contour
+    beside the redness image the detector thresholded, with its red mask
+    outlined and the threshold used, under a header with pass / low /
     rejected counts, the best candidate and whether fusion passed a stop
-    sign on, over a footer of this frame's per-gate rejection counts.
+    sign on, over a footer of this frame's per-gate rejection counts. Only
+    the largest red blob is gated; the others are labeled "smaller".
 
 Flow:
     1. Pull the sign debug, accepted candidates and fused stop sign from the chain.
@@ -26,8 +28,9 @@ import src.debugger.debug_video as dv
 from src.params import STOP_SIGN
 
 # geometry sign gate names, shortened for labels
-GATE_SHORT = {"area": "area", "vertices": "vert", "hull": "hull",
+GATE_SHORT = {"area": "area", "not_largest": "smaller", "vertices": "vert", "hull": "hull",
               "solidity": "sol"}
+C_MASK = (255, 255, 0)      # cyan: the red mask's outline on the redness panel
 
 class StopView(dv.CandidateView):
     """
@@ -41,7 +44,9 @@ class StopView(dv.CandidateView):
     CSV_FIELDS = ("frame_id", "timestamp_ms", "seen", "traced", "passed",
                   "low", "best_conf", "best_vertices", "best_area",
                   "best_solidity", "rej_area", "rej_vertices", "rej_hull",
-                  "rej_solidity", "fused", "fused_conf")
+                  "rej_solidity", "fused", "fused_conf",
+                  # Appended, so no earlier column moves
+                  "rej_not_largest", "red_threshold")
 
     def __init__(self, conf_threshold=None, zoom=2):
         super().__init__(conf_threshold, zoom)
@@ -58,7 +63,8 @@ class StopView(dv.CandidateView):
         This frame's sign data from a chain result.
 
         Reads chain.geometry.sign_candidates, chain.sign_debug (sign_roi,
-        edges, reject_counts, and "trace" when the chain ran with trace=True),
+        redness, mask, threshold, reject_counts, and "trace" when the chain
+        ran with trace=True),
         and chain.fusion / fusion_debug when the process callable has fusion.
         """
         dbg = getattr(chain, "sign_debug", None) or {}
@@ -75,7 +81,9 @@ class StopView(dv.CandidateView):
             "frame_id": geo.frame_id,
             "timestamp_ms": geo.timestamp_ms,
             "roi": dbg.get("sign_roi"),
-            "edges": dbg.get("edges"),
+            "redness": dbg.get("redness"),
+            "mask": dbg.get("mask"),
+            "threshold": dbg.get("threshold"),
             "trace": dbg.get("trace"),
             "accepted": list(geo.sign_candidates),
             "counts": dict(dbg.get("reject_counts", {})),
@@ -119,6 +127,7 @@ class StopView(dv.CandidateView):
             rc.get("solidity", ""),
             "" if fused is None else len(fused),
             opt(fused[0].confidence if fused else None),
+            rc.get("not_largest", ""), opt(data["threshold"]),
         ]
 
     def report(self):
@@ -158,16 +167,21 @@ class StopView(dv.CandidateView):
         pw, ph, gap = W * s, H * s, dv.GAP_PX * s
         canvas = np.zeros((hh + ph + fh, 2 * pw + gap, 3), np.uint8)
 
-        left = cv2.resize(cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR), (pw, ph),
-                          interpolation=cv2.INTER_LINEAR)
-        canvas[hh:hh + ph, :pw] = left
-        edges = data["edges"]
-        if edges is not None:
-            right = cv2.resize(cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR),
-                               (pw, ph), interpolation=cv2.INTER_NEAREST)
+        bgr = roi if roi.ndim == 3 else cv2.cvtColor(roi, cv2.COLOR_GRAY2BGR)
+        canvas[hh:hh + ph, :pw] = cv2.resize(bgr, (pw, ph), interpolation=cv2.INTER_LINEAR)
+        redness, mask = data["redness"], data["mask"]
+        if redness is not None:
+            right = cv2.resize(cv2.cvtColor(redness, cv2.COLOR_GRAY2BGR), (pw, ph),
+                               interpolation=cv2.INTER_NEAREST)
+            if mask is not None:
+                outline = cv2.findContours(cv2.resize(mask, (pw, ph), interpolation=cv2.INTER_NEAREST),
+                                           cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[0]
+                cv2.drawContours(right, outline, -1, C_MASK, 1)
             canvas[hh:hh + ph, pw + gap:] = right
         dv.draw_text(canvas, "sign ROI", (4, hh + lh), dv.C_GRAY, fs, th)
-        dv.draw_text(canvas, "edges", (pw + gap + 4, hh + lh), dv.C_GRAY, fs, th)
+        t = data["threshold"]
+        dv.draw_text(canvas, "redness" + ("" if t is None else f"  mask > {t:.0f}"),
+                     (pw + gap + 4, hh + lh), dv.C_GRAY, fs, th)
 
         sm = self._summary(data)
         thr = self.conf_threshold
@@ -211,6 +225,7 @@ class StopView(dv.CandidateView):
 
         rc = data["counts"]
         foot = (f"seen {rc.get('seen', 0)}  area {rc.get('area', 0)}  "
+                f"smaller {rc.get('not_largest', 0)}  "
                 f"vert {rc.get('vertices', 0)}  hull {rc.get('hull', 0)}  "
                 f"sol {rc.get('solidity', 0)}  accepted {rc.get('accepted', 0)}")
         if data["trace"] is None:
@@ -226,11 +241,8 @@ class StopView(dv.CandidateView):
                 return f"vert {e['vertices']}"
             if g == "solidity":
                 return f"sol {e['solidity']:.2f}"
-            if g == "area":
-                # A sign-sized box with a tiny area is an open outline: a gap in the
-                # Canny edge made the contour double back on itself, enclosing almost
-                # nothing. The sign path doesn't close edges the way the lane path does.
-                return f"area {e['area']:.0f}"
+            if g in ("area", "not_largest"):
+                return f"{GATE_SHORT[g]} {e['area']:.0f}"
             return GATE_SHORT.get(g, g)
         label = f"v{e['vertices']} c{e['confidence']:.2f}"
         if state == "low":

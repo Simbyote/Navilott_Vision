@@ -9,8 +9,8 @@ Purpose:
 
 Main package:
     PreprocessResult: a blurred gray frame for the lane and sign ROIs, a
-    blurred BGR frame for the traffic ROI (HSV thresholding needs the chroma
-    that gray discards), the unblurred undistorted frame that detection
+    blurred BGR frame for the traffic and color sign ROIs (HSV thresholding
+    and the sign's redness need the chroma that gray discards), the unblurred undistorted frame that detection
     coordinates refer to, and the frame identity carried from capture.
 
 Flow:
@@ -64,7 +64,7 @@ class PreprocessParams:
 class PreprocessResult:
     """Output of the preprocessing stage. frame_id and timestamp_ms are copied from FrameData, never re-derived."""
     gray: np.ndarray        # (H, W) uint8, blurred; source for the lane and sign ROIs
-    color: np.ndarray       # (H, W, 3) uint8 BGR, blurred; source for the traffic ROI
+    color: np.ndarray       # (H, W, 3) uint8 BGR, blurred; source for the traffic ROI and sign_color_roi
     frame_id: int
     timestamp_ms: int
     # (H, W, 3) uint8 BGR, unblurred. Detection coordinates refer to this

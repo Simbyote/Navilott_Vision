@@ -337,3 +337,14 @@ def test_roi_crop_characterization(request, frames, artifacts):
         artifacts.image(f"{fid:06d}{LANE_ROI_SUFFIX}", r.lane_roi)
         artifacts.image(f"{fid:06d}{TRAFFIC_ROI_SUFFIX}", r.traffic_roi)
         artifacts.image(f"{fid:06d}{SIGN_ROI_SUFFIX}", r.sign_roi)
+
+@pytest.mark.software
+def test_the_color_sign_roi_is_the_sign_rect_of_the_color_frame_and_read_only():
+    rng = np.random.default_rng(3)
+    gray = rng.integers(0, 256, (FRAME_H, FRAME_W), dtype=np.uint8)
+    color = rng.integers(0, 256, (FRAME_H, FRAME_W, 3), dtype=np.uint8)
+    roi = crop_rois(PreprocessResult(gray=gray, color=color, frame_id=1, timestamp_ms=2))
+    x, y, w, h = roi.sign_rect
+    assert roi.sign_color_roi.shape == roi.sign_roi.shape + (3,)
+    assert np.array_equal(roi.sign_color_roi, color[y:y + h, x:x + w])
+    assert np.shares_memory(roi.sign_color_roi, color) and not roi.sign_color_roi.flags.writeable

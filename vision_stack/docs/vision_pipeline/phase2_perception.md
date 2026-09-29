@@ -35,7 +35,7 @@ FrameData
 preprocess_frame()        blurred gray + blurred BGR
    │
    ▼
-crop_rois()               lane + sign ROIs (gray), traffic ROI (BGR), their rects
+crop_rois()               lane + sign ROIs (gray), traffic + sign ROIs (BGR), their rects
    │
    ├────────────────────────────┐
    ▼                            ▼
@@ -70,7 +70,7 @@ BGR frame
   ├── undistort()                    only if calibration_path is set
   │
   ├── gray path:  to_grayscale → [equalize] → GaussianBlur (9, 3)   → lane + sign ROIs
-  └── color path:                             GaussianBlur (5, 5)   → traffic ROI
+  └── color path:                             GaussianBlur (5, 5)   → traffic ROI + sign_color_roi
 ```
 
 | Setting | Default | Why |
@@ -99,7 +99,7 @@ Cuts three regions so each branch only processes the part of the frame where its
 | --- | --- | --- | --- | --- |
 | lane | x 0.05–0.95, y 0.70–1.00 | (24, 189, 432, 81) | gray | Near-field road just ahead of the robot |
 | traffic | x 0.25–0.75, y 0.00–0.50 | (120, 0, 240, 135) | BGR | Where a light sits when the robot is square to an intersection |
-| sign | x 0.50–1.00, y 0.00–0.55 | (240, 0, 240, 148) | gray | Signs are posted right of the lane |
+| sign | x 0.50–1.00, y 0.00–0.55 | (240, 0, 240, 148) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane |
 
 ```
 x:  0       120      240      360      480
@@ -126,7 +126,7 @@ Traffic and sign overlap in x 240–360, y 0–135.
 
 **File:** `geometry.py` · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
 
-Finds lane boundaries, stop lines and stop-sign shapes from intensity edges. Canny runs once on the lane ROI; the lane and stop-line detectors both read that edge map. The sign detector runs its own Canny on the sign ROI.
+Finds lane boundaries and stop lines from intensity edges, and stop-sign shapes from color. Canny runs once on the lane ROI; the lane and stop-line detectors both read that edge map. The sign detector doesn't use Canny: it thresholds a redness image of the color sign ROI.
 
 ### Lane boundaries
 
@@ -185,19 +185,26 @@ Cost on a laptop: about 0.5 ms per frame, most of it the Sobel pass and contour 
 ### Stop sign
 
 ```
-sign ROI → Canny → contours → area → approxPolyDP → vertex count → convex hull → solidity
+sign_color_roi → redness R − max(G, B) → Otsu (never below min_redness) → close (5×5)
+              → external contours → drop < min_area → largest → convex hull
+              → approxPolyDP (ε = 0.02 × hull perimeter) → max_area → vertex count → solidity
 ```
 
-| Gate | Default | Rejects |
+Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor about 80, so Canny sees almost no edge; on synthetic scenes the old gray-Canny detector found no sign on a gray floor at any aperture or threshold without burying it in noise. Redness is bright on red and near 0 on gray, black and white alike, whatever their brightness. `cv2.subtract` saturates at 0 where numpy's `-` would wrap a green pixel to a large value.
+
+| Setting / gate | Default | Why |
 | --- | --- | --- |
-| `area` | 200–30000 px² | Edge noise and background |
-| `vertices` | 8–10 after `approxPolyDP` (ε = 0.03 × perimeter) | Shapes that aren't roughly octagonal |
+| `min_redness` | 20 | Otsu always splits the image, so a sign-free ROI thresholds its own noise (Otsu ≈ 1 there, with false blobs). The dimmest synthetic sign had Otsu at 22. Check on course frames |
+| `close_kernel` | 5 | Fills noise pinholes; rejoins a sign cut by a line up to ~2 px wide before blur. Wider cuts split it and only the larger half is gated |
+| `min_area` | 100 px² | Noise blobs; also decides which blobs compete for largest |
+| `max_area` | 30000 px² | A red area bigger than any sign at range |
+| `vertices` | 8–9 after `approxPolyDP` on the hull | Red shapes that aren't octagons. On the hull, so letters and noise notches don't add vertices |
 | `hull` | hull area > 0 | Degenerate outlines |
-| `solidity` | area / hull ≥ 0.80 | Fragmented or concave outlines |
+| `solidity` | contour area / hull area ≥ 0.80 | Ragged or concave blobs (measured on the raw contour; the hull alone is always 1.0) |
 
-Confidence: half closeness to 8 vertices, half area up to 5000 px².
+Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
-With `trace=True`, every contour that reached a gate is recorded with the gate that decided it. `debug_stop` draws these.
+With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the blobs set aside as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 
 ---
 
@@ -396,7 +403,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 | View | Shows |
 | --- | --- |
 | lane (always on, `debug_lane`) | Every raw candidate (green usable, red with the gate that rejected it), each anchor's foot, the chosen left and right boundaries, robot and lane center, mode and offset gauge |
-| `stop` (`debug_stop`) | Sign contours colored by the gate that decided them, with vertex count and confidence |
+| `stop` (`debug_stop`) | The color sign ROI with its red blobs colored by the gate that decided them ("smaller" for those behind the largest), with vertex count and confidence; beside it the redness image, the red mask outlined, and the threshold |
 | `traffic` (`debug_traffic`) | HSV masks and blobs against the bands |
 | `lanegeo` (`debug_lanegeo`) | On the lane ROI: every contour the lane detector traced, red if geometry refused it (gate and measured value), amber if lane offset did, green if usable, with the chosen anchors; below it, the edges with what the horizontal-line filter removed and what closing added. Needs the chain's trace (`trace=True`, which the linker sets), which adds `lane_debug["trace"]` |
 | `stopline` (`debug_stopline`) | On the lane ROI: accepted stop lines as bands, rejected top edges with their gate, the measured distance, lane candidates skipped as part of a stop line; below it, the gradient split (all edges, kept top and bottom edges, fitted lines) |
