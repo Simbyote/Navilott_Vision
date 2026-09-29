@@ -383,7 +383,7 @@ def build_fusion_scene(frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     ox, oy, r = sx + sw // 2, sy + sh // 2, int(0.3 * min(sw, sh))
     pts = np.array([(ox + r * np.cos(np.pi / 8 + 2 * np.pi * k / 8), oy + r * np.sin(np.pi / 8 + 2 * np.pi * k / 8))
                     for k in range(8)], np.int32)
-    cv2.fillPoly(frame, [pts], (230, 230, 230))
+    cv2.fillPoly(frame, [pts], (40, 40, 200))                   # stop-sign red: the sign is found by color
     tx, ty, tw, th = probe.traffic_rect
     gcx, gcy = tx + int(0.5 * tw), ty + int(0.5 * th)
     cv2.circle(frame, (gcx, gcy), int(0.1 * min(tw, th)), (0, 255, 0), -1)

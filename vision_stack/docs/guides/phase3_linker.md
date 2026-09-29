@@ -1,8 +1,8 @@
 # Checking Estimation (phase3_linker)
 
-Runs frames through all three phases headless and reports what estimation decided, frame by frame, next to the Phase 2 input it came from. When a packet looks wrong, this shows whether the input was bad or the filtering was.
+Runs frames through all three phases and reports what estimation decided, frame by frame, next to the Phase 2 input it came from. When a packet looks wrong, this shows whether the input was bad or the filtering was.
 
-It prints to the console and writes a CSV and summary. It doesn't draw or record video; for that, use `phase2_linker.md`. It doesn't drive the motors.
+It is the debug twin of the main pipeline (`src/pipeline.py`): Phase 2 through `run_chain()`, Phase 3 through `TracedPhase3Processor` (`src/estimation_debug.py`), which runs the production Phase 3 stages, records every decision and times every stage. The tests hold its packets to the pipeline's. It prints to the console, writes a CSV and summary, and records the Phase 3 video (`p3_debug.avi`), shown in a window like `phase2_linker`'s. It doesn't drive the motors.
 
 ## Requirements
 
@@ -58,6 +58,9 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--print-every N` | Status line every N frames (default once a second); 0 prints only events |
 | `--verbose` | Also print Phase 3's per-frame log |
+| `--no-video` | Don't record `p3_debug.avi` / `.csv` (text and timing only) |
+| `--no-display` | Force headless; the window also falls back on its own over ssh |
+| `--scale N` | Magnify the video and window |
 | `--out DIR` | Output folder instead of `runs/p3_<timestamp>` |
 
 With no arguments it prints the full help.
@@ -94,7 +97,10 @@ An event line appears whenever `lane_status`, `drive_state`, `stop_sign_detected
 ```
 runs/p3_<YYYYMMDD_HHMMSS>/
     p3.csv          every frame: timings, the Phase 2 lane and stop-line input, the packet, Phase 3's log
+    p3_debug.avi    the Phase 3 video, every frame (unless --no-video)
+    p3_debug.csv    every frame's Phase 3 decisions (see below)
     summary.txt     the run's report, also printed at the end
+    still_phase3_NNN.png   stills saved with s
 ```
 
 `summary.txt`:
@@ -102,13 +108,26 @@ runs/p3_<YYYYMMDD_HHMMSS>/
 | Section | Look for |
 | --- | --- |
 | `over budget` | Frames where P2 + P3 exceeded one frame period (50 ms at 20 FPS) |
-| Timing | Mean, p50, p95 and max per phase |
+| Timing | Mean, p50, p95 and max per phase, plus `render` when the video is on |
 | Lane status | Share of frames on `vision`, `hold`, `stale`; longest hold and stale runs |
 | Phase 2 lane mode | How often each mode occurred |
 | Lane offset while on vision | Mean, standard deviation, min and max |
 | Transitions | How many times each packet field changed |
+| `[TIMING]` per stage | Median and p95 of every Phase 2 stage, every Phase 3 stage (`p3_lane`, `p3_traffic`, ...) and `render`, then the total as FPS. `render` is marked `(not in total)` and is never in the P2+P3 budget: the robot doesn't pay it. Phase 3 stages run in microseconds, so they print with three decimals. These are the debug twin's times; the production stages do the same work minus the recording |
+| `[PHASE 3]` | Lane status share, lane frames not accepted by reason, frames held while the raw offset was a measurement, detections below the gate, frames with a held stop-line distance |
 
 In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. `p2_stop_line_cm` and `stop_line_distance_cm`, the last two columns, are the same in floor cm, blank without a ground homography (`calibrate_ground.md`). The status line ends with `line=<px>`, or `line=<px>/<cm>cm` with one. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
+
+### The Phase 3 video
+
+Each frame of `p3_debug.avi`, top to bottom:
+
+- **Camera frame** with the lane overlay from `phase2_linker`'s `run.avi`. Each traffic light and stop sign Phase 2 handed over is boxed green if it passed Phase 3's confidence gate and amber if not, labeled `conf >= gate` or `conf < gate`. The header's right corner has the timestamp and P1 / P2 / P3 times, and the previous frame's render time.
+- **Lane bar**, colored by status (green `vision`, amber `hold`, red `stale`): the raw offset Phase 2 measured as a hollow ring (red when Phase 3 refused it) and the filtered offset as a yellow dot, on [-1, 1]. The line above says the hold counter (`hold 3/7`) and, when the frame wasn't accepted, why: `no_result`, `unusable_mode`, or `jump_gate` with the jump and the limit.
+- **Votes**: traffic, stop sign and stop line. Each vote's buffer is a row of cells, oldest on the left (green / amber / red for go / caution / stop; red for a stop sign; white for a stop line), then this frame's raw vote and the voted state. The stop-line row says `seen <px>` or, in amber, `held <px>` when the vote stands on an earlier frame's distance.
+- **Timeline**, the last 5 s: the status band, the raw offset in gray (red dots where it was refused) and the filtered offset in yellow, then drive state, stop sign and stop line tracks. A flat yellow line across an amber band while the gray line moves is the output held while the input moved.
+
+`p3_debug.csv` has the same decisions per frame: lane mode, raw offset, accepted, reason, jump, EMA before and after, missed count, status; heading reset; each detection as `label:conf:pass|gated`; each vote's buffer (`G`/`C`/`S`, `T`/`F`, oldest first), raw vote and state; stop line seen, measured, held and reported distances.
 
 ## 5. Bench checks
 

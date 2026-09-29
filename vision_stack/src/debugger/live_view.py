@@ -219,16 +219,32 @@ class RunStats:
 
         if self.stage_ms:
             out.append("")
-            out.append("[TIMING] per stage, ms:")
-            total_med = 0.0
-            for name, vals in self.stage_ms.items():
-                v = sorted(vals)
-                med, p95 = v[len(v)//2], v[min(int(0.95*len(v)), len(v)-1)]
-                total_med += med
-                out.append(f" {name:<22} med {med:6.1f}  p95 {p95:6.1f}")
-            out.append(f" {'TOTAL (median)':<22}     {total_med:6.1f}  "
-                       f"-> {1000/max(total_med, 0.001):5.1f} FPS")
+            out.extend(stage_timing_report(self.stage_ms))
         return out
+
+
+def stage_timing_report(stage_ms: dict[str, list[float]], exclude=()) -> list[str]:
+    """
+    summary.txt's [TIMING] section: median and p95 per stage, then the summed medians as FPS.
+
+    Inputs:
+        stage_ms: stage name -> per-frame ms, in the order to print.
+        exclude: Stages printed but left out of the total (phase3_linker's
+            render, which the robot never pays).
+    """
+    out = ["[TIMING] per stage, ms:"]
+    ms = lambda v: f"{v:6.1f}" if v >= 0.1 else f"{v:6.3f}"     # Phase 3's stages run in microseconds
+    total_med = 0.0
+    for name, vals in stage_ms.items():
+        v = sorted(vals)
+        med, p95 = v[len(v)//2], v[min(int(0.95*len(v)), len(v)-1)]
+        if name not in exclude:
+            total_med += med
+        out.append(f" {name:<22} med {ms(med)}  p95 {ms(p95)}"
+                   + ("   (not in total)" if name in exclude else ""))
+    out.append(f" {'TOTAL (median)':<22}     {total_med:6.1f}  "
+               f"-> {1000/max(total_med, 0.001):5.1f} FPS")
+    return out
 
 
 class StageLog:

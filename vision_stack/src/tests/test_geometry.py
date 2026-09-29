@@ -2,7 +2,7 @@
 test_geometry.py  --  src/perception/geometry.py
 
 Detection tests use synthetic ROIs with known ground truth (white tape on a dark
-mat, a filled octagon) and their own explicit filter/Canny parameters, so
+mat, a filled red octagon in the color sign ROI) and their own explicit filter/Canny parameters, so
 retuning the shipped defaults never breaks them. Invariant tests (candidate
 bounds, reject-count bookkeeping) run on noise-and-shapes ROIs and on real data.
 Coordinates are ROI-relative; the chained tests draw shapes at positions derived
@@ -26,7 +26,8 @@ from src.perception.geometry import (
     CannyParams, GeometryBranchResult, GeometryConfig, LaneCandidate,
     LaneContourFilter, SignContourFilter, StopLineFilter,
     contour_foot_x, extract_lane_candidates, extract_sign_candidates,
-    extract_stop_line_candidates, find_lane_candidates, run_geometry_branch, run_geometry_stage,
+    detect_geometry, extract_stop_line_candidates, find_lane_candidates, run_geometry_branch,
+    run_geometry_stage,
 )
 from src.perception.preprocess import PreprocessResult, preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
@@ -43,7 +44,8 @@ TEST_LANE = LaneContourFilter(min_area=1, max_area=1e6, min_aspect=0.0, max_aspe
 TEST_LANE_FILTERED = replace(TEST_LANE, horizontal_edge_deg=20.0, horizontal_min_run_px=46.0,
                              horizontal_band_px=3.0)
 TEST_SIGN = SignContourFilter(min_area=200.0, max_area=30000.0, min_vertices=8, max_vertices=10,
-                              min_solidity=0.80, epsilon_factor=0.03, ref_area=5000.0)
+                              min_solidity=0.80, epsilon_factor=0.02, ref_area=5000.0,
+                              min_redness=20.0, close_kernel=5)
 TEST_STOP = StopLineFilter(max_tilt_deg=20.0, min_length_px=60.0, min_thickness_px=3.0,
                            max_thickness_px=40.0, min_intensity=130.0, min_edge_overlap=0.5,
                            close_kernel=(15, 1), ref_length_px=200.0)
@@ -52,9 +54,10 @@ TEST_CFG = GeometryConfig(canny=TEST_CANNY, lane=TEST_LANE, sign=TEST_SIGN, stop
 LANE_SHAPE = (108, 432)       # synthetic lane ROI, sized so the drawn scenes fit; any size works
 SIGN_SHAPE = (198, 240)       # synthetic sign ROI, same
 BG, FG = 30, 230              # dark mat, white tape
+RED = (40, 40, 200)           # stop-sign red, BGR; gray 88, redness 160
 
 LANE_BUCKETS = ("area", "degenerate", "too_few_pts", "aspect", "w_span", "h_span", "intensity", "accepted")
-SIGN_BUCKETS = ("area", "vertices", "hull", "solidity", "accepted")
+SIGN_BUCKETS = ("area", "not_largest", "vertices", "hull", "solidity", "accepted")
 STOP_BUCKETS = ("short", "tilt", "unpaired", "intensity", "accepted")
 TRACE_KEYS = {"bbox", "gate", "area", "vertices", "solidity", "confidence", "poly"}
 
@@ -84,12 +87,39 @@ def line_tape(p0, p1, shape=LANE_SHAPE, thickness=8):
     return img
 
 
-def regular_polygon(n, radius=40, center=(120, 100), shape=SIGN_SHAPE, rot=np.pi / 8):
-    """Filled regular n-gon on a dark mat; rot=pi/8 gives an octagon flat on top, like a stop sign."""
-    img = blank(shape)
-    pts = np.array([(center[0] + radius*np.cos(rot + 2*np.pi*k/n),
-                     center[1] + radius*np.sin(rot + 2*np.pi*k/n)) for k in range(n)], np.int32)
-    cv2.fillPoly(img, [pts], FG)
+def blank_bgr(shape, value=BG):
+    """Featureless color ROI at one gray level."""
+    return np.full(tuple(shape[:2]) + (3,), value, np.uint8)
+
+
+def polygon_pts(n, radius=40, center=(120, 100), rot=np.pi / 8):
+    """Vertices of a regular n-gon; rot=pi/8 gives an octagon flat on top, like a stop sign."""
+    return np.array([(center[0] + radius*np.cos(rot + 2*np.pi*k/n),
+                      center[1] + radius*np.sin(rot + 2*np.pi*k/n)) for k in range(n)], np.int32)
+
+
+def regular_polygon(n, radius=40, center=(120, 100), shape=SIGN_SHAPE, rot=np.pi / 8, color=RED, bg=BG):
+    """Filled regular n-gon in color on a gray mat, as the sign ROI sees it."""
+    img = blank_bgr(shape, bg)
+    cv2.fillPoly(img, [polygon_pts(n, radius, center, rot)], color)
+    return img
+
+
+def noisy_color_scene(seed, shape):
+    """Color noise plus random shapes, some red: many red blobs, deterministic per seed."""
+    rng = np.random.default_rng(seed)
+    h, w = shape
+    img = rng.integers(0, 60, (h, w, 3), dtype=np.uint8)
+    for _ in range(20):
+        x, y = int(rng.integers(0, w)), int(rng.integers(0, h))
+        color = tuple(int(v) for v in rng.integers(0, 256, 3))
+        kind = int(rng.integers(0, 3))
+        if kind == 0:
+            cv2.line(img, (x, y), (int(rng.integers(0, w)), int(rng.integers(0, h))), color, int(rng.integers(1, 9)))
+        elif kind == 1:
+            cv2.rectangle(img, (x, y), (x + int(rng.integers(3, 80)), y + int(rng.integers(3, 40))), color, -1)
+        else:
+            cv2.circle(img, (x, y), int(rng.integers(3, 30)), color, -1)
     return img
 
 
@@ -105,9 +135,9 @@ def octagon_contour(radius=40, center=(120, 100)):
 
 
 def star_contour(center=(120, 100)):
-    """8-vertex concave star: a sign-like vertex count with low solidity."""
-    return cont([(center[0] + (40 if k % 2 == 0 else 15)*np.cos(2*np.pi*k/8),
-                  center[1] + (40 if k % 2 == 0 else 15)*np.sin(2*np.pi*k/8)) for k in range(8)])
+    """16-point star: its hull is an octagon (8 vertices), its area far less, so low solidity."""
+    return cont([(center[0] + (40 if k % 2 == 0 else 15)*np.cos(np.pi/8 + 2*np.pi*k/16),
+                  center[1] + (40 if k % 2 == 0 else 15)*np.sin(np.pi/8 + 2*np.pi*k/16)) for k in range(16)])
 
 
 SQUARE = cont([(0, 0), (60, 0), (60, 60), (0, 60)])
@@ -223,7 +253,7 @@ def assert_geometry_contract(res, roi, lane_dbg, sign_dbg):
     assert_sign_counts(sign_dbg["reject_counts"], len(res.sign_candidates))
     assert_stop_counts(lane_dbg["stop_line"]["reject_counts"], len(res.stop_line_candidates))
     assert_edge_map(lane_dbg["edges"], roi.lane_roi)
-    assert_edge_map(sign_dbg["edges"], roi.sign_roi)
+    assert_edge_map(sign_dbg["mask"], roi.sign_color_roi)
 
 
 ROI_CONFIGS = {
@@ -245,7 +275,7 @@ def build_scene(roi_cfg, frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     cv2.line(frame, (tx, y0), (tx + 4, y1), (FG,) * 3, 8)                    # near-vertical tape
     R, ox, oy = int(0.30 * min(sw, sh)), sx + sw // 2, sy + sh // 2
     pts = np.array([(ox + R*np.cos(np.pi/8 + 2*np.pi*k/8), oy + R*np.sin(np.pi/8 + 2*np.pi*k/8)) for k in range(8)], np.int32)
-    cv2.fillPoly(frame, [pts], (FG,) * 3)                                    # octagon
+    cv2.fillPoly(frame, [pts], RED)                                          # octagon
     expect = {"tape_cx": tx + 2, "tape_cy": (y0 + y1) / 2, "sign_cx": ox, "sign_cy": oy}
     roi = crop_rois(preprocess_frame(FrameData(frame, frame_id, ts)), roi_cfg)
     return roi, expect
@@ -439,17 +469,16 @@ def test_contour_with_fewer_than_five_points_is_rejected_as_too_few():
 @pytest.mark.software
 @pytest.mark.parametrize("shape", [(1, 1), (2, 2), (3, 3), (5, 5), (1, 50), (50, 1)])
 def test_tiny_rois_do_not_raise(shape):
-    roi = np.random.default_rng(0).integers(0, 256, shape, dtype=np.uint8)
-    extract_lane_candidates(roi, TEST_CANNY, TEST_LANE, 1, 2, True)
-    extract_sign_candidates(roi, TEST_CANNY, TEST_SIGN, 1, 2, True, True)
+    rng = np.random.default_rng(0)
+    extract_lane_candidates(rng.integers(0, 256, shape, dtype=np.uint8), TEST_CANNY, TEST_LANE, 1, 2, True)
+    extract_sign_candidates(rng.integers(0, 256, shape + (3,), dtype=np.uint8), TEST_SIGN, 1, 2, True, True)
 
 
 @pytest.mark.software
 @pytest.mark.parametrize("value", [0, 255])
 def test_featureless_rois_yield_nothing(value):
-    roi = blank(LANE_SHAPE, value)
-    lane, ld = extract_lane_candidates(roi, TEST_CANNY, TEST_LANE, 1, 2, True)
-    sign, sd = extract_sign_candidates(roi, TEST_CANNY, TEST_SIGN, 1, 2, True, True)
+    lane, ld = extract_lane_candidates(blank(LANE_SHAPE, value), TEST_CANNY, TEST_LANE, 1, 2, True)
+    sign, sd = extract_sign_candidates(blank_bgr(SIGN_SHAPE, value), TEST_SIGN, 1, 2, True, True)
     assert lane == [] and sign == [] and ld["reject_counts"]["seen"] == 0 and sd["trace"] == []
 
 
@@ -484,9 +513,10 @@ def test_filtered_lane_edges_are_a_subset_of_the_raw_edges_and_feed_the_closing(
 @pytest.mark.software
 @pytest.mark.parametrize("seed", range(6))
 def test_invariants_hold_on_cluttered_rois(seed):
-    lane_img, sign_img = noisy_scene(seed, LANE_SHAPE), noisy_scene(seed + 100, SIGN_SHAPE)
+    lane_img, sign_img = noisy_scene(seed, LANE_SHAPE), noisy_color_scene(seed + 100, SIGN_SHAPE)
     lane, ld = extract_lane_candidates(lane_img, TEST_CANNY, TEST_LANE, 9, 8, False)
-    sign, sd = extract_sign_candidates(sign_img, TEST_CANNY, TEST_SIGN, 9, 8, False, True)
+    sign, sd = extract_sign_candidates(sign_img, TEST_SIGN, 9, 8, False, True)
+    assert len(sign) <= 1                                                    # the largest blob only
     assert_lane_candidates_ok(lane, LANE_SHAPE, 9, 8)
     assert_sign_candidates_ok(sign, SIGN_SHAPE, 9, 8, TEST_SIGN)
     assert_lane_counts(ld["reject_counts"], len(lane))
@@ -564,11 +594,11 @@ def test_merging_never_increases_the_candidate_count():
 @pytest.mark.software
 def test_octagon_is_found_where_it_was_drawn():
     img = regular_polygon(8, radius=40, center=(120, 100))
-    (c,), dbg = extract_sign_candidates(img, TEST_CANNY, TEST_SIGN, 5, 6, False)
+    (c,), dbg = extract_sign_candidates(img, TEST_SIGN, 5, 6, False)
     x, y, w, h = c.bbox
     a = 2 * 40 * np.sin(np.pi / 8)
     assert abs((x + w / 2) - 120) <= 4 and abs((y + h / 2) - 100) <= 4
-    # Regular octagon area 2(1 + sqrt 2)a^2 for side a; 10% for the traced outline sitting off the fill
+    # Regular octagon area 2(1 + sqrt 2)a^2 for side a; 10% for fillPoly's pixel rounding at the rim
     assert c.area == pytest.approx(2 * (1 + np.sqrt(2)) * a * a, rel=0.10)
     assert 8 <= c.vertex_count <= 10 and c.solidity >= 0.9 and c.confidence > 0.5
     assert_sign_candidates_ok([c], img.shape, 5, 6, TEST_SIGN)
@@ -578,8 +608,130 @@ def test_octagon_is_found_where_it_was_drawn():
 @pytest.mark.software
 @pytest.mark.parametrize("sides", [3, 4, 6])
 def test_polygons_with_the_wrong_vertex_count_are_rejected_as_vertices(sides):
-    cands, dbg = extract_sign_candidates(regular_polygon(sides), TEST_CANNY, TEST_SIGN, 1, 2, False)
+    cands, dbg = extract_sign_candidates(regular_polygon(sides), TEST_SIGN, 1, 2, False)
     assert cands == [] and dbg["reject_counts"]["vertices"] == 1
+
+
+def course_sign(floor, sign=RED, radius=40, seed=0, clutter=False, letters=True, noise=6):
+    """
+    A sign ROI as the camera sees it: a filled octagon with white STOP letters
+    on a floor of one gray level, with optional gray clutter boxes and lines
+    kept clear of the sign, plus sensor noise; blurred 5x5 like pre.color.
+    """
+    rng = np.random.default_rng(seed)
+    img = blank_bgr(SIGN_SHAPE, floor)
+    if clutter:
+        for _ in range(12):
+            x, y = int(rng.integers(0, SIGN_SHAPE[1])), int(rng.integers(0, SIGN_SHAPE[0]))
+            g = int(rng.integers(max(0, floor - 40), min(255, floor + 60)))
+            cv2.rectangle(img, (x, y), (x + int(rng.integers(5, 50)), y + int(rng.integers(5, 50))), (g, g, g), -1)
+        for _ in range(6):
+            g = int(rng.integers(0, 230))
+            cv2.line(img, tuple(int(v) for v in rng.integers(0, 240, 2)), tuple(int(v) for v in rng.integers(0, 198, 2)), (g, g, g), 2)
+        cv2.circle(img, (120, 100), radius + 6, (floor, floor, floor), -1)
+    cv2.fillPoly(img, [polygon_pts(8, radius, (120, 100))], sign)
+    if letters:
+        cv2.putText(img, "STOP", (120 - radius + 6, 106), cv2.FONT_HERSHEY_SIMPLEX, radius / 45, (230, 230, 230), 2)
+    img = np.clip(img.astype(int) + rng.normal(0, noise, img.shape), 0, 255).astype(np.uint8)
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+# Floors and signs whose gray levels are close or far: the gray-Canny detector
+# found none of the first three on the synthetic set (2026-09)
+SIGN_CASES = {
+    "red on gray": (80, RED, 40),                   # sign 88 vs floor 80 in gray
+    "red on black": (25, RED, 40),
+    "dark red on gray": (80, (25, 25, 120), 40),    # darker than the floor in gray
+    "dim red on black": (30, (30, 30, 80), 40),     # the dimmest case that set min_redness
+    "red on white": (220, RED, 40),
+    "small red on gray": (80, RED, 14),
+}
+
+@pytest.mark.software
+@pytest.mark.parametrize("case", SIGN_CASES)
+@pytest.mark.parametrize("clutter", [False, True])
+def test_a_red_octagon_is_found_on_any_floor_brightness(case, clutter):
+    floor, sign, radius = SIGN_CASES[case]
+    for seed in range(5):
+        img = course_sign(floor, sign, radius, seed, clutter)
+        cands, dbg = extract_sign_candidates(img, replace(TEST_SIGN, min_area=100.0), 1, 2, False, True)
+        assert len(cands) == 1, f"{case} seed {seed}: {dbg['reject_counts']}"
+        x, y, w, h = cands[0].bbox
+        assert abs(x + w / 2 - 120) <= 3 and abs(y + h / 2 - 100) <= 3
+        assert cands[0].vertex_count in (8, 9) and cands[0].solidity >= 0.9
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("floor", [25, 80, 220])
+def test_a_sign_free_roi_thresholds_at_the_floor_and_finds_nothing(floor):
+    for seed in range(10):
+        img = course_sign(floor, (floor, floor, floor), seed=seed, clutter=True, letters=False)
+        cands, dbg = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
+        # Otsu alone lands near 1 here and thresholds the noise; the floor holds it at min_redness
+        assert dbg["threshold"] == TEST_SIGN.min_redness
+        assert cands == [] and dbg["reject_counts"]["seen"] == 0
+
+
+@pytest.mark.software
+def test_otsu_sets_the_threshold_when_it_is_above_the_floor():
+    _, dbg = extract_sign_candidates(course_sign(80), TEST_SIGN, 1, 2, False)
+    assert TEST_SIGN.min_redness < dbg["threshold"] < 160          # between the floor's redness and the sign's
+    assert set(np.unique(dbg["mask"]).tolist()) <= {0, 255} and dbg["redness"].dtype == np.uint8
+
+
+@pytest.mark.software
+def test_redness_saturates_instead_of_wrapping():
+    # G > R: numpy uint8 '-' would wrap 40 - 200 to 96 and call green red
+    img = blank_bgr((10, 10))
+    img[:5] = (40, 200, 40)
+    img[5:] = (40, 40, 200)
+    red = geo._redness(img)
+    assert (red[:5] == 0).all() and (red[5:] == 160).all()
+
+
+@pytest.mark.software
+def test_only_the_largest_red_blob_is_gated_and_the_rest_are_traced_as_not_largest():
+    img = regular_polygon(8, radius=40, center=(80, 100))
+    cv2.fillPoly(img, [polygon_pts(8, 20, (200, 60))], RED)           # a second, smaller octagon
+    cands, dbg = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
+    assert len(cands) == 1 and abs(cands[0].bbox[0] + cands[0].bbox[2] / 2 - 80) <= 2
+    assert [t["gate"] for t in dbg["trace"]] == ["not_largest", None]
+    assert_sign_counts(dbg["reject_counts"], 1)
+    assert dbg["reject_counts"]["not_largest"] == 1
+
+
+@pytest.mark.software
+def test_a_largest_blob_that_fails_a_gate_yields_nothing_even_with_a_good_one_beside_it():
+    img = regular_polygon(4, radius=60, center=(80, 100))              # large red square
+    cv2.fillPoly(img, [polygon_pts(8, 25, (200, 60))], RED)
+    cands, dbg = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
+    assert cands == [] and [t["gate"] for t in dbg["trace"]] == ["not_largest", "vertices"]
+
+
+@pytest.mark.software
+def test_closing_rejoins_a_sign_cut_in_two_by_a_thin_white_line():
+    img = course_sign(80, radius=40, letters=False)
+    # Across the whole sign: two halves. 2 px, blurred, leaves a gap a 5x5 close
+    # bridges; a 3 px line blurs past it (measured 2026-09)
+    cv2.line(img, (60, 100), (180, 100), (230, 230, 230), 2)
+    closed, _ = extract_sign_candidates(img, TEST_SIGN, 1, 2, False)
+    split, dbg = extract_sign_candidates(img, replace(TEST_SIGN, close_kernel=0), 1, 2, False, True)
+    assert len(closed) == 1 and closed[0].vertex_count == 8
+    # Unclosed, only the larger half is gated, and half an octagon has too few vertices
+    assert split == [] and [t["gate"] for t in dbg["trace"]] == ["not_largest", "vertices"]
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("seed", range(8))
+def test_production_twin_matches_the_debug_path(seed):
+    for img in (noisy_color_scene(seed, SIGN_SHAPE), course_sign(80, seed=seed, clutter=True),
+                regular_polygon(8, radius=int(20 + seed * 8))):
+        a, _ = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
+        b = geo.find_sign_candidates(img, TEST_SIGN, 1, 2)
+        assert [(c.bbox, c.vertex_count, c.confidence, c.area, c.solidity) for c in a] \
+            == [(c.bbox, c.vertex_count, c.confidence, c.area, c.solidity) for c in b]
+        for x, y in zip(a, b):
+            assert np.array_equal(x.contour, y.contour)
 
 
 def run_sign_gates(contour, flt=TEST_SIGN):
@@ -627,8 +779,8 @@ def test_trace_entries_are_none_for_fields_not_measured_before_rejection():
 @pytest.mark.software
 def test_trace_is_only_present_when_requested():
     img = regular_polygon(8)
-    _, off = extract_sign_candidates(img, TEST_CANNY, TEST_SIGN, 1, 2, False, trace=False)
-    _, on = extract_sign_candidates(img, TEST_CANNY, TEST_SIGN, 1, 2, False, trace=True)
+    _, off = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, trace=False)
+    _, on = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, trace=True)
     assert "trace" not in off
     assert isinstance(on["trace"], list) and [t["gate"] for t in on["trace"]] == [None]
 
@@ -636,22 +788,24 @@ def test_trace_is_only_present_when_requested():
 @pytest.mark.software
 def test_overlays_exist_only_when_requested_and_are_three_channel():
     lane_img, sign_img = slanted_tape(), regular_polygon(8)
-    for fn, roi, args in ((extract_lane_candidates, lane_img, (TEST_LANE,)), (extract_sign_candidates, sign_img, (TEST_SIGN,))):
-        _, off = fn(roi, TEST_CANNY, *args, 1, 2, False)
-        _, on = fn(roi, TEST_CANNY, *args, 1, 2, True)
+    for fn, roi, args in ((extract_lane_candidates, lane_img, (TEST_CANNY, TEST_LANE)),
+                          (extract_sign_candidates, sign_img, (TEST_SIGN,))):
+        _, off = fn(roi, *args, 1, 2, False)
+        _, on = fn(roi, *args, 1, 2, True)
         assert "contour_overlay" not in off and "accepted_overlay" not in off
         for key in ("contour_overlay", "accepted_overlay"):
-            assert on[key].shape == roi.shape + (3,) and on[key].dtype == np.uint8
+            assert on[key].shape == roi.shape[:2] + (3,) and on[key].dtype == np.uint8
+    assert not np.shares_memory(on["accepted_overlay"], sign_img)          # drawn on a copy, not the ROI
 
 
 @pytest.mark.software
 def test_accepted_overlays_carry_the_color_annotations():
     # A single-channel overlay keeps only the first BGR component and renders annotations black
     _, ld = extract_lane_candidates(slanted_tape(), TEST_CANNY, TEST_LANE, 1, 2, True)
-    _, sd = extract_sign_candidates(regular_polygon(8), TEST_CANNY, TEST_SIGN, 1, 2, True)
+    _, sd = extract_sign_candidates(regular_polygon(8), TEST_SIGN, 1, 2, True)
     has = lambda img, bgr: bool(np.any(np.all(img == bgr, axis=2)))
     assert has(ld["accepted_overlay"], (0, 255, 0))
-    assert has(sd["accepted_overlay"], (0, 0, 255))
+    assert has(sd["accepted_overlay"], (0, 255, 0))             # green: the sign itself is red
 
 
 def run_branch(lane, sign, **kw):
@@ -659,19 +813,23 @@ def run_branch(lane, sign, **kw):
     return run_geometry_branch(lane, sign, TEST_CANNY, TEST_LANE, TEST_SIGN, **kw)
 
 
+BAD_ROIS = {
+    "lane_roi": [(None, ValueError), (np.zeros((20, 20), np.float32), TypeError),
+                 (np.zeros((20, 20, 3), np.uint8), ValueError), (np.zeros(20, np.uint8), ValueError)],
+    "sign_color_roi": [(None, ValueError), (np.zeros((20, 20, 3), np.float32), TypeError),
+                       (np.zeros((20, 20), np.uint8), ValueError), (np.zeros((20, 20, 4), np.uint8), ValueError)],
+}
+
 @pytest.mark.software
-@pytest.mark.parametrize("which", ["lane_roi", "sign_roi"])
-@pytest.mark.parametrize("bad, exc", [
-    (None, ValueError),
-    (np.zeros((20, 20), np.float32), TypeError),
-    (np.zeros((20, 20, 3), np.uint8), ValueError),
-    (np.zeros(20, np.uint8), ValueError),
-])
+@pytest.mark.parametrize("which, bad, exc", [(w, b, e) for w, cases in BAD_ROIS.items() for b, e in cases])
 def test_invalid_rois_are_rejected_and_the_offender_is_named(which, bad, exc):
-    good = blank((40, 40))
-    lane, sign = (bad, good) if which == "lane_roi" else (good, bad)
+    lane, sign = blank((40, 40)), blank_bgr((40, 40))
+    lane, sign = (bad, sign) if which == "lane_roi" else (lane, bad)
     with pytest.raises(exc, match=which):
         run_branch(lane, sign)
+    roi = SimpleNamespace(lane_roi=lane, sign_color_roi=sign, frame_id=0, timestamp_ms=0)
+    with pytest.raises(exc, match=which):
+        detect_geometry(roi, TEST_CFG)
 
 
 @pytest.mark.software
@@ -689,7 +847,7 @@ def test_stage_carries_identity_and_returns_the_documented_triple():
 def test_stage_is_the_branch_with_the_configs_unpacked():
     roi, _ = build_scene(ROIConfig())
     a, _, _ = run_geometry_stage(roi, TEST_CFG)
-    b, _, _ = run_geometry_branch(roi.lane_roi, roi.sign_roi, TEST_CANNY, TEST_LANE, TEST_SIGN, roi.frame_id, roi.timestamp_ms, False)
+    b, _, _ = run_geometry_branch(roi.lane_roi, roi.sign_color_roi, TEST_CANNY, TEST_LANE, TEST_SIGN, roi.frame_id, roi.timestamp_ms, False)
     key = lambda r: ([(c.bbox, c.confidence, c.foot_x) for c in r.lane_candidates], [(c.bbox, c.confidence) for c in r.sign_candidates])
     assert key(a) == key(b)
 
@@ -923,7 +1081,7 @@ def test_shared_canny_edges_give_the_lane_detector_what_it_computes_itself():
 @pytest.mark.software
 def test_stop_line_config_reaches_the_detector_through_the_stage():
     lane = stop_bar(100, 300, 40, 8)
-    roi = SimpleNamespace(lane_roi=lane, sign_roi=blank(SIGN_SHAPE), frame_id=3, timestamp_ms=30)
+    roi = SimpleNamespace(lane_roi=lane, sign_color_roi=blank_bgr(SIGN_SHAPE), frame_id=3, timestamp_ms=30)
     found, _, _ = run_geometry_stage(roi, TEST_CFG)
     refused, _, _ = run_geometry_stage(roi, replace(TEST_CFG, stop_line=replace(TEST_STOP, min_length_px=500.0)))
     assert len(found.stop_line_candidates) == 1 and refused.stop_line_candidates == []
@@ -1041,7 +1199,7 @@ def test_geometry_characterization(request, frames, artifacts):
         extract_lane_candidates(roi.lane_roi, cfg.canny, cfg.lane, fd.frame_id, fd.timestamp_ms, False)
         lane_ms = (time.perf_counter_ns() - t0) / 1e6
         t0 = time.perf_counter_ns()
-        extract_sign_candidates(roi.sign_roi, cfg.canny, cfg.sign, fd.frame_id, fd.timestamp_ms, False)
+        extract_sign_candidates(roi.sign_color_roi, cfg.sign, fd.frame_id, fd.timestamp_ms, False)
         sign_ms = (time.perf_counter_ns() - t0) / 1e6
 
         assert_geometry_contract(res, roi, ld, sd)               # outside the timing window
@@ -1076,7 +1234,7 @@ def test_geometry_characterization(request, frames, artifacts):
         res, ld, sd = run_geometry_stage(roi, cfg, draw_overlays=True, trace=True)
         for name, img in (("lane_edges_raw", ld["edges_raw"]), ("lane_edges", ld["edges"]),
                           ("lane_contours", ld["contour_overlay"]), ("lane_accepted", ld["accepted_overlay"]),
-                          ("sign_edges", sd["edges"]), ("sign_contours", sd["contour_overlay"]),
+                          ("sign_mask", sd["mask"]), ("sign_contours", sd["contour_overlay"]),
                           ("sign_accepted", sd["accepted_overlay"])):
             artifacts.image(f"{fid:06d}_{name}.png", img)
         artifacts.json(f"{fid:06d}_sign_trace.json", _jsonable_trace(sd["trace"]))

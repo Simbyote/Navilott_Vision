@@ -307,7 +307,7 @@ def test_debug_images_characterization(request, frames, artifacts):
                 "_lane_edges.png": chain.lane_debug["edges"],
                 "_lane_contours.png": chain.lane_debug["contour_overlay"],
                 "_lane_accepted.png": chain.lane_debug["accepted_overlay"],
-                "_sign_edges.png": chain.sign_debug["edges"],
+                "_sign_mask.png": chain.sign_debug["mask"],
                 "_sign_contours.png": chain.sign_debug["contour_overlay"],
                 "_sign_accepted.png": chain.sign_debug["accepted_overlay"],
                 "_lane_view.png": lane_view.render(lane_view.extract(chain, fd.frame)),

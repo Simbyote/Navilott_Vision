@@ -163,3 +163,9 @@ def test_threshold_report_shares_are_of_all_frames():
 def test_zoom_multiplies_the_run_scale():
     assert ScriptedView(zoom=2)._metrics(3)[0] == 6
     assert ScriptedView(zoom=0)._metrics(1)[0] == 1   # zoom floors at 1
+
+
+@pytest.mark.software
+def test_offset_x_maps_minus_one_to_one_onto_the_bar_and_clamps():
+    assert [dv.offset_x(v, 10, 110) for v in (-1.0, 0.0, 0.5, 1.0)] == [10, 60, 85, 110]
+    assert (dv.offset_x(-3.0, 10, 110), dv.offset_x(1.7, 10, 110)) == (10, 110)

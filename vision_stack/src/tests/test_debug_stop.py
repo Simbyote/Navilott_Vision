@@ -4,7 +4,7 @@ test_debug_stop.py  --  src/debugger/debug_stop.py
 Picture and statistics tests use hand-built view data (the dict extract()
 returns), so every contour sits at a known pixel with a known state; the
 extract tests feed the view real run_chain() output from a synthetic frame with
-lane tape and an octagon in the sign ROI.
+lane tape and a red octagon in the sign ROI.
 
 --software  extract, grading into pass / low / reject, labels, render, CSV row
             and summary report. No camera.
@@ -40,9 +40,10 @@ def sign_entry(gate=None, conf=0.6, bbox=(20, 15, 40, 40), vertices=8, solidity=
 
 
 def view_data(entries=(), trace=True, accepted=(), fused=None, suppressed=0, counts=None, fid=3, ts=150):
-    """Hand-built extract() output on a dark sign ROI with an empty edge map."""
+    """Hand-built extract() output on a dark color sign ROI with no redness."""
     return {"fused": fused, "suppressed": suppressed, "frame_id": fid, "timestamp_ms": ts,
-            "roi": np.full(ROI_SHAPE, 30, np.uint8), "edges": np.zeros(ROI_SHAPE, np.uint8),
+            "roi": np.full(ROI_SHAPE + (3,), 30, np.uint8), "redness": np.zeros(ROI_SHAPE, np.uint8),
+            "mask": np.zeros(ROI_SHAPE, np.uint8), "threshold": 20.0,
             "trace": list(entries) if trace else None, "accepted": list(accepted),
             "counts": counts or {}}
 
@@ -63,7 +64,7 @@ def sign_scene(frame_id=11, ts=222, sign=True):
         ox, oy, r = sx + sw // 2, sy + sh // 2, int(0.3 * min(sw, sh))
         pts = np.array([(ox + r * np.cos(np.pi / 8 + 2 * np.pi * k / 8),
                          oy + r * np.sin(np.pi / 8 + 2 * np.pi * k / 8)) for k in range(8)], np.int32)
-        cv2.fillPoly(frame, [pts], (230, 230, 230))
+        cv2.fillPoly(frame, [pts], (40, 40, 200))                           # stop-sign red, BGR
     return run_chain(frame, frame_id, ts, SCENE_CONFIG, trace=True), frame
 
 
@@ -72,7 +73,8 @@ def test_extract_reads_the_sign_branch_and_fusion_from_a_real_chain():
     chain, frame = sign_scene()
     data = StopView().extract(chain, frame)
     assert (data["frame_id"], data["timestamp_ms"]) == (11, 222)
-    assert data["roi"].ndim == 2 and data["edges"].shape == data["roi"].shape
+    assert data["roi"].ndim == 3 and data["redness"].shape == data["mask"].shape == data["roi"].shape[:2]
+    assert data["threshold"] >= SCENE_CONFIG.geometry.sign.min_redness
     assert len(data["accepted"]) == 1 and len(data["fused"]) == 1
     assert data["fused"][0].type == STOP_SIGN
     assert data["trace"] is not None and data["counts"]["accepted"] == 1
@@ -133,9 +135,10 @@ def test_each_contour_is_boxed_in_its_state_color(thr, e, color):
 @pytest.mark.software
 def test_render_leaves_the_chain_images_alone():
     data = view_data([sign_entry()])
-    roi_before, edges_before = data["roi"].copy(), data["edges"].copy()
+    data["mask"][20:60, 30:90] = 255
+    before = {k: data[k].copy() for k in ("roi", "redness", "mask")}
     StopView().render(data)
-    assert np.array_equal(data["roi"], roi_before) and np.array_equal(data["edges"], edges_before)
+    assert all(np.array_equal(data[k], before[k]) for k in before)
 
 
 @pytest.mark.software
@@ -143,6 +146,7 @@ def test_render_leaves_the_chain_images_alone():
     (sign_entry(gate="vertices", vertices=5), "vert 5"),
     (sign_entry(gate="solidity", solidity=0.612), "sol 0.61"),
     (sign_entry(gate="area", area=37.4), "area 37"),
+    (sign_entry(gate="not_largest", area=412.6), "smaller 413"),
     (sign_entry(gate="hull"), "hull"),
     (sign_entry(conf=0.684, vertices=8), "v8 c0.68"),
 ])
@@ -217,3 +221,29 @@ def test_stop_view_characterization(request, frames, artifacts):
     if not writer.frames_written:
         pytest.skip("no frames delivered")
     (artifacts.path / "stop_summary.txt").write_text("\n".join(view.report()) + "\n")
+
+@pytest.mark.software
+def test_the_red_mask_is_outlined_on_the_redness_panel_and_the_threshold_named():
+    from src.debugger.debug_stop import C_MASK
+    data = view_data()
+    view = StopView()
+    s, _, _, _, hh, _ = view._metrics(1)
+    right = lambda img: img[hh:hh + ROI_SHAPE[0] * s, ROI_SHAPE[1] * s + dv.GAP_PX * s:]
+    assert not (right(view.render(data)) == C_MASK).all(axis=2).any()
+    data["mask"][20:60, 30:90] = 255
+    assert (right(view.render(data)) == C_MASK).all(axis=2).sum() > 100
+
+
+@pytest.mark.software
+def test_a_gray_roi_still_renders():
+    data = view_data()
+    data["roi"] = np.full(ROI_SHAPE, 30, np.uint8)
+    assert StopView().render(data).shape[2] == 3
+
+
+@pytest.mark.software
+def test_row_carries_the_not_largest_count_and_the_redness_threshold():
+    data = view_data(counts={"seen": 3, "not_largest": 2, "accepted": 1})
+    data["threshold"] = 62.0
+    row = dict(zip(StopView.CSV_FIELDS, StopView().row(data)))
+    assert (row["rej_not_largest"], row["red_threshold"]) == (2, 62.0)

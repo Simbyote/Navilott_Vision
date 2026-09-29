@@ -4,7 +4,7 @@
 
 Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the last few frames, given the sensors". It smooths the lane offset, bridges short dropouts, tracks heading while vision is lost, and votes on traffic light and stop sign state. The result is one `EstimationPacket` per frame, handed to navigation.
 
-**Code:** `src/estimation.py` · **IMU:** `src/peripherals/imu.py` · **Harness:** `src/phase3_linker.py` · **Tests:** `src/tests/test_estimation.py`, `test_imu.py`
+**Code:** `src/estimation.py` · **IMU:** `src/peripherals/imu.py` · **Harness:** `src/phase3_linker.py`, with `src/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_imu.py`
 
 ---
 
@@ -176,7 +176,7 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 
 The robot's Phase 3 tuning is `MEASURED_ESTIMATION` in `src/config.py`, beside the Phase 2 `MEASURED`; it holds `Phase3Config`'s defaults until course runs tune it. The main pipeline (`src/pipeline.py`) runs Phase 3 as one stage, `Pipeline.estimate()`, with one `Phase3Processor` built when the `Pipeline` is created. When `cm_per_px` is set, the pipeline takes the lane ROI width from the config's lane ROI at 480×270 and refuses frames of another size. `test_pipeline` holds its packets to `phase3_linker`'s over a drive sequence, frame by frame.
 
-`phase3_linker` runs capture, Phase 2 and Phase 3 headless and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering.
+`phase3_linker` is the debug pipeline: it runs capture, Phase 2 (`run_chain`) and Phase 3 through `TracedPhase3Processor` (`src/estimation_debug.py`) and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering. The traced processor subclasses each production stage and calls its `update()`, so the filter and vote math exist once; it records each decision (lane: raw, reason, EMA before and after, missed count; votes: each detection's confidence against its gate, the buffer and state; stop line: seen or held; heading: reset and step) and times each stage. `pipeline.py` never imports it, and `test_estimation_debug` holds its packets to `Phase3Processor`'s. The records drive the Phase 3 video (`src/debugger/debug_phase3.py`).
 
 ```
 python3 -m src.phase3_linker --video run.avi
@@ -188,7 +188,8 @@ python3 -m src.phase3_linker --camera --limit 200 --print-every 1
 | --- | --- |
 | Console | A status line once a second, plus an event line whenever `lane_status`, `drive_state`, `stop_sign_detected` or `stop_line_detected` changes |
 | `p3.csv` | Every frame: timings, the Phase 2 lane input and stop-line distance (`p2_stop_line_px`), the packet (`stop_line_detected`, `stop_line_distance_px` included), and Phase 3's log |
-| `summary.txt` | Timing percentiles, frames over budget, lane status and mode histograms, longest hold and stale runs, offset statistics while on vision |
+| `p3_debug.avi` / `.csv` | The Phase 3 video and its per-frame decisions (on by default; `--no-video`); see `guides/phase3_linker.md` |
+| `summary.txt` | Timing percentiles, frames over budget, lane status and mode histograms, longest hold and stale runs, offset statistics while on vision, per-stage timing (Phase 2, Phase 3, render), the `[PHASE 3]` decision counts |
 
 Replays are deterministic, so Phase 3 config changes can be compared on the same footage. With the robot parked centered, the offset standard deviation in `summary.txt` is the measurement noise floor.
 

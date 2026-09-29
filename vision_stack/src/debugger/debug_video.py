@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 
 from src.params import FPS
+from src.utils import clamp
 
 FOURCC       = "MJPG"          # cheapest OpenCV encoder on ARM; use .avi
 DEFAULT_FPS  = float(FPS)
@@ -56,6 +57,18 @@ def draw_text(img: np.ndarray, s: str, org: tuple[int, int], color: tuple[int, i
     cv2.putText(img, s, org, FONT, fs, color, th, cv2.LINE_AA)
 
 _text = draw_text
+
+def offset_x(v: float, x0: int, x1: int) -> int:
+    """x of a [-1, 1] value on an offset bar running from x0 to x1; clamped to the ends."""
+    return int(x0 + (clamp(v, -1.0, 1.0) + 1) / 2 * (x1 - x0))
+
+def draw_offset_axis(img: np.ndarray, x0: int, x1: int, y: int, tick: int,
+                     color: tuple[int, int, int] = C_GRAY) -> None:
+    """The offset bar's axis: a line from x0 to x1 with ticks at -1, 0 and +1."""
+    cv2.line(img, (x0, y), (x1, y), color, 1)
+    for v in (-1.0, 0.0, 1.0):
+        tx = offset_x(v, x0, x1)
+        cv2.line(img, (tx, y - tick), (tx, y + tick), color, 1)
 
 class CandidateView:
     """

@@ -305,3 +305,13 @@ def test_live_view_characterization(request, artifacts):
     if not stats.frames:
         pytest.skip("no frames delivered")
     assert (artifacts.path / "run.avi").exists()
+
+
+@pytest.mark.software
+def test_stage_timing_report_totals_medians_leaving_out_excluded_stages():
+    lines = lv.stage_timing_report({"geometry": [1.0, 2.0, 3.0], "p3_lane": [0.004, 0.006, 0.005],
+                                    "render": [9.0, 9.0, 9.0]}, exclude=("render",))
+    assert lines[0] == "[TIMING] per stage, ms:"
+    assert "med  0.005" in lines[2]                      # sub-0.1 ms stages keep three decimals
+    assert lines[3].endswith("(not in total)")
+    assert "TOTAL (median)" in lines[-1] and " 2.0  ->" in lines[-1]
