@@ -17,6 +17,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Run the tests | `guides/pytest.md` |
 | Watch what the pipeline detects | `guides/phase2_linker.md` |
 | Check what estimation decides | `guides/phase3_linker.md` |
+| Run a drive trial: motors, encoders and IMU with vision recording | `guides/maneuver_linker.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
 | Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
 | Check an existing calibration | `guides/test_calibration.md` |
@@ -35,7 +36,8 @@ docs/
         calibrate_camera.md     lens calibration
         calibrate_ground.md     ground-plane homography: floor distances in cm
         phase2_linker.md        watching the pipeline, with video
-        phase3_linker.md        checking estimation, headless
+        phase3_linker.md        checking estimation, with video
+        maneuver_linker.md      drive trial: straight legs and a 180° turn on encoders and IMU
         pytest.md               running the test suite
         test_calibration.md     verifying a calibration
     architecture.md             hardware, wiring, power, software layout, risks

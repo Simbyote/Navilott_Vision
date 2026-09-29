@@ -359,7 +359,7 @@ class Phase3Stats:
         return lines
 
 
-class _Sensors:
+class Sensors:
     """
     The IMU and wheel encoders, each started only when asked for and imported
     here, so replays never load the board drivers or pigpio. With neither,
@@ -386,14 +386,25 @@ class _Sensors:
         if self._encoders is not None:
             self._encoders.snapshot()       # start the first speed window here, not at construction
 
+    def read(self) -> tuple[SensorSample | None, object, object]:
+        """
+        This frame window's readings, and the driver snapshots behind them.
+
+        Outputs:
+            (sample, imu_frame, encoder_frame). sample is None with no
+            sensors; each snapshot is None when its sensor wasn't started.
+            The encoder frame carries the cumulative counts the sample
+            leaves out.
+        """
+        imu = None if self._imu is None else self._imu.snapshot()
+        enc = None if self._encoders is None else self._encoders.snapshot()
+        if imu is None and enc is None:
+            return None, None, None
+        return SensorSample.from_frames(imu, enc), imu, enc
+
     def sample(self) -> SensorSample | None:
         """This frame window's readings; None with no sensors."""
-        if self._imu is None and self._encoders is None:
-            return None
-        return SensorSample.from_frames(
-            None if self._imu is None else self._imu.snapshot(),
-            None if self._encoders is None else self._encoders.snapshot(),
-        )
+        return self.read()[0]
 
     def stop(self) -> None:
         if self._imu is not None:
@@ -451,7 +462,7 @@ def run(
     stats = Phase3Stats(budget_ms=1000.0 / max(source.fps, 1))
     events = EventTracker()
     log = CsvLog(os.path.join(out_dir, "p3.csv"))
-    sensors = _Sensors(use_imu, use_encoders)
+    sensors = Sensors(use_imu, use_encoders)
     processor = None
     view = Phase3View(config.lane_offset, source.fps) if (video or display) else None
     writer = (dv.ViewWriter(os.path.join(out_dir, "p3_debug.avi"), Phase3View.CSV_FIELDS,
