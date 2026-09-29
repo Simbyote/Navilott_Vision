@@ -27,7 +27,6 @@ Flow:
     5. Call stop() and cancel() on exit to disengage hardware PWM and callbacks safely.
 """
 
-import math
 import time
 import logging
 from dataclasses import dataclass
