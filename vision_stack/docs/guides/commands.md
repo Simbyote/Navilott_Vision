@@ -80,6 +80,7 @@ python3 -m src.phase3_linker --camera                 # live
 python3 -m src.phase3_linker --video clip.mp4
 python3 -m src.phase3_linker --frames DIR
 python3 -m src.phase3_linker --camera --imu --limit 600       # 30 s with the IMU
+python3 -m src.phase3_linker --camera --imu --encoders       # IMU and wheel encoders (sudo pigpiod first)
 python3 -m src.phase3_linker --frames src/tests/data/frames   # repeatable replay
 python3 -m src.phase3_linker --camera --print-every 1         # every frame
 python3 -m src.phase3_linker --camera --print-every 0         # events only

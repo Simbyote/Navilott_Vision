@@ -246,6 +246,8 @@ class TracedPhase3Processor(Phase3Processor):
             wheel_speed = sensors.wheel_speed_mps or 0.0,
             frame_id = phase2.frame_id,
             timestamp_ms = phase2.timestamp_ms,
+            left_wheel_cps = sensors.left_wheel_cps or 0.0,
+            right_wheel_cps = sensors.right_wheel_cps or 0.0,
         )
         lap("p3_package")
         return packet, {

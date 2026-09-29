@@ -7,7 +7,9 @@ It is the debug twin of the main pipeline (`src/pipeline.py`): Phase 2 through `
 ## Requirements
 
 - Camera not in use by `phase2_linker`, `rpicam-hello` or a pytest run (`--camera` only)
-- `--imu` only: I²C enabled, MPU-6050 at 0x68, and the Adafruit MPU-6050 libraries installed. Without `--imu` it runs anywhere, including a laptop
+- `--imu` only: I²C enabled, MPU-6050 at 0x68, and the Adafruit MPU-6050 libraries installed
+- `--encoders` only: the pigpio daemon running (`sudo pigpiod`) and the encoders wired as in `peripherals/drive.py`
+- Without either flag it runs anywhere, including a laptop
 
 ## 1. Setup
 
@@ -53,6 +55,7 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
 | `--imu` | Start the MPU-6050 and feed it to Phase 3 |
+| `--encoders` | Start the wheel encoders and pass each wheel's counts per second through to the packet |
 | `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating. `--imu` doesn't calibrate, so pass it here. Applied on top of `MEASURED_ESTIMATION` (`src/config.py`), like `--cm-per-px` |
 | `--cm-per-px S` | Hand-measured ground scale; fills `lane_offset_cm` |
 | `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
@@ -116,7 +119,7 @@ runs/p3_<YYYYMMDD_HHMMSS>/
 | `[TIMING]` per stage | Median and p95 of every Phase 2 stage, every Phase 3 stage (`p3_lane`, `p3_traffic`, ...) and `render`, then the total as FPS. `render` is marked `(not in total)` and is never in the P2+P3 budget: the robot doesn't pay it. Phase 3 stages run in microseconds, so they print with three decimals. These are the debug twin's times; the production stages do the same work minus the recording |
 | `[PHASE 3]` | Lane status share, lane frames not accepted by reason, frames held while the raw offset was a measurement, detections below the gate, frames with a held stop-line distance |
 
-In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. `p2_stop_line_cm` and `stop_line_distance_cm`, the last two columns, are the same in floor cm, blank without a ground homography (`calibrate_ground.md`). The status line ends with `line=<px>`, or `line=<px>/<cm>cm` with one. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw).
+In `p3.csv`, columns starting with `p2_` are the Phase 2 input and the rest are the packet. `p2_stop_line_px` is Phase 2's distance to the nearest stop line (blank when none); `stop_line_detected` and `stop_line_distance_px` are Phase 3's vote and held distance. `p2_stop_line_cm` and `stop_line_distance_cm` are the same in floor cm, blank without a ground homography (`calibrate_ground.md`). The status line ends with `line=<px>`, or `line=<px>/<cm>cm` with one. `p3_log` says why a frame was treated as a dropout (mode, jump, missing yaw). The last two columns, `left_wheel_cps` and `right_wheel_cps`, are each wheel's encoder counts per second with `--encoders` (+ = forward), and 0.0 without it or while the wheel is stopped.
 
 ### The Phase 3 video
 
@@ -158,6 +161,8 @@ Send the archive with the terminal output and which source it ran on.
 | `No module named board` / `adafruit_mpu6050` with `--imu` | IMU libraries not installed in this environment |
 | IMU error at startup with `--imu` | Enable I²C; check wiring and address 0x68 (`i2cdetect -y 1`) |
 | `hd` always 0.0 | Normal while on `vision`; without `--imu` it never moves |
+| `pigpio daemon not reachable` with `--encoders` | Start it: `sudo pigpiod` |
+| Wheel columns stay 0.0 with `--encoders` while driving | Check the encoder wiring against the pins in `peripherals/drive.py`; `pytest --hardware -k drive` spins each wheel and checks it counts |
 | `lane_offset_cm` empty | Set `--cm-per-px` |
 | `drive_state` always `go` | No light passed the HSV ranges or Phase 3's confidence gate; check `p2_traffic` in `p3.csv`, then the ranges |
 | Mostly `stale` from the start | Phase 2 isn't finding usable boundaries; watch the same stretch with `phase2_linker` |

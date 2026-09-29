@@ -12,7 +12,8 @@ Purpose:
 Main package:
     EstimationPacket: smoothed lane offset and its status, heading change
     since vision was lost, the voted drive state, stop-sign flag and
-    stop-line flag with its distance, sensor pass-throughs, and the frame
+    stop-line flag with its distance, sensor pass-throughs (IMU yaw rate and
+    lateral accel, each wheel's encoder counts per second), and the frame
     identity carried from Phase2Output.
 
 Flow (Phase3Processor.process() is the only place the order is written):
@@ -76,7 +77,41 @@ class SensorSample:
     """Sensor readings for one frame window. None means not available."""
     yaw_rate_dps: float | None = None          # mean gyro Z over the window, deg/s; + = turning right
     lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
-    wheel_speed_mps: float | None = None       # wheel encoders, m/s; not wired yet, so only carried through
+    # @TODO fill from the encoders once counts per wheel revolution and the
+    # wheel diameter are measured; nothing sets it until then
+    wheel_speed_mps: float | None = None
+    left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
+    right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
+
+    @classmethod
+    def from_frames(
+            cls,
+            imu_frame=None,
+            encoder_frame=None,
+            wheel_speed_mps: float | None = None,
+        ) -> "SensorSample":
+        """
+        Build a SensorSample from this frame window's driver snapshots.
+
+        Inputs:
+            imu_frame: A peripherals.imu.IMUFrame, duck-typed on valid,
+                mean_yaw_rate_dps and peak_lateral_accel, so this module never
+                imports the IMU driver. None or an invalid frame (no samples)
+                gives None IMU readings.
+            encoder_frame: A peripherals.drive.EncoderFrame, duck-typed on
+                left_cps and right_cps (counts per second over the window since
+                the previous snapshot), so this module never imports pigpio.
+                None gives None wheel readings; a stopped wheel reads 0.0.
+            wheel_speed_mps: Carried through as-is.
+        """
+        imu_ok = imu_frame is not None and imu_frame.valid
+        return cls(
+            yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_ok else None,
+            lateral_accel_mps2 = imu_frame.peak_lateral_accel if imu_ok else None,
+            wheel_speed_mps = wheel_speed_mps,
+            left_wheel_cps = None if encoder_frame is None else float(encoder_frame.left_cps),
+            right_wheel_cps = None if encoder_frame is None else float(encoder_frame.right_cps),
+        )
 
     @classmethod
     def from_imu(
@@ -84,22 +119,8 @@ class SensorSample:
             imu_frame,
             wheel_speed_mps: float | None = None,
         ) -> "SensorSample":
-        """
-        Build a SensorSample from a peripherals.imu.IMUFrame.
-
-        Inputs:
-            imu_frame: Duck-typed on valid, mean_yaw_rate_dps and
-                peak_lateral_accel, so this module never imports the IMU
-                driver. None or an invalid frame (no samples) gives None readings.
-            wheel_speed_mps: Carried through as-is.
-        """
-        if imu_frame is None or not imu_frame.valid:
-            return cls(wheel_speed_mps=wheel_speed_mps)
-        return cls(
-            yaw_rate_dps = imu_frame.mean_yaw_rate_dps,
-            lateral_accel_mps2 = imu_frame.peak_lateral_accel,
-            wheel_speed_mps = wheel_speed_mps,
-        )
+        """from_frames() with the IMU only."""
+        return cls.from_frames(imu_frame, None, wheel_speed_mps)
 
 @dataclass(frozen=True)
 class LaneEstimate:
@@ -128,9 +149,15 @@ class EstimationPacket:
     stop_line_distance_cm: float | None
     yaw_rate: float                 # pass-through, deg/s; 0.0 if unavailable
     lateral_accel: float            # pass-through, m/s^2; 0.0 if unavailable
-    wheel_speed: float              # pass-through, m/s; 0.0 if unavailable
+    # pass-through, m/s; always 0.0 until the encoders are converted to m/s
+    # (@TODO: needs counts per wheel revolution and the wheel diameter)
+    wheel_speed: float
     frame_id: int
     timestamp_ms: int
+    # Encoder counts per second over the frame window, + = forward; 0.0 when
+    # stopped or with no encoders (detecting the encoders is the drivers' job)
+    left_wheel_cps: float
+    right_wheel_cps: float
 
 
 class _EMA:
@@ -446,6 +473,8 @@ class Phase3Processor:
             wheel_speed = sensors.wheel_speed_mps or 0.0,
             frame_id = phase2.frame_id,
             timestamp_ms = phase2.timestamp_ms,
+            left_wheel_cps = sensors.left_wheel_cps or 0.0,
+            right_wheel_cps = sensors.right_wheel_cps or 0.0,
         )
         return packet, {
             "frame_id": phase2.frame_id,

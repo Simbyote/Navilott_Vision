@@ -13,10 +13,6 @@ routines run instantly and wheel motion can be injected as encoder edges.
             wheel alone, both forward, reverse and in place, checks the
             counts hold when stopped, and runs the closed loop, recording
             counts per leg. WHEELS OFF THE GROUND: about 10 s of motor time.
-
-One software test is xfail(strict=True): it pins down the known cps bug in
-drive.py. Once fixed it XPASSes, which strict turns into a failure, as the
-cue to delete the mark.
 """
 import importlib
 import sys
@@ -65,6 +61,9 @@ class FakePi:
 
     def hardware_PWM(self, pin, freq, duty):
         self.pwm[pin] = (freq, duty)
+
+    def stop(self):
+        self.connected = False
 
     def edge(self, gpio, level):
         self._tick += 1
@@ -248,8 +247,6 @@ def test_cps_over_the_first_window(env):
 
 
 @pytest.mark.software
-@pytest.mark.xfail(strict=True, reason="snapshot() divides the cumulative count by the time since "
-                   "the last snapshot; it should divide the change in count since then")
 def test_cps_holds_steady_at_constant_speed(env):
     mod, pi, clock = env
     enc = mod.EncoderReader(pi)
@@ -260,6 +257,34 @@ def test_cps_holds_steady_at_constant_speed(env):
         clock.now += 0.5
         speeds.append(enc.snapshot().left_cps)
     assert speeds == pytest.approx([20.0] * 3)
+
+
+@pytest.mark.software
+def test_cps_after_a_reset_counts_only_the_new_window(env):
+    mod, pi, clock = env
+    enc = mod.EncoderReader(pi)
+    l1, l2, _, _ = _pins(mod)
+    pi.quad(l1, l2, 30, c1_leads=False)
+    clock.now += 0.5
+    enc.snapshot()
+    enc.reset()
+    pi.quad(l1, l2, 5, c1_leads=False)
+    clock.now += 0.5
+    # 5 counts in 0.5 s; without resetting the previous count too it reads (5 - 30) / 0.5
+    assert enc.snapshot().left_cps == pytest.approx(10.0)
+
+
+@pytest.mark.software
+def test_a_stopped_wheel_reads_zero_cps_after_moving(env):
+    mod, pi, clock = env
+    enc = mod.EncoderReader(pi)
+    l1, l2, _, _ = _pins(mod)
+    pi.quad(l1, l2, 10, c1_leads=False)
+    clock.now += 0.5
+    enc.snapshot()
+    clock.now += 0.5
+    f = enc.snapshot()
+    assert (f.left_count, f.left_cps) == (10, 0.0)
 
 
 @pytest.mark.software

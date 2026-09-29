@@ -77,6 +77,8 @@ class EncoderReader:
         self._left_pos = 0
         self._right_pos = 0
         self._last_time = time.perf_counter()
+        self._last_left = 0         # counts at the previous snapshot, for the per-window speed
+        self._last_right = 0
 
         self._left_c1_state = 0
         self._left_c2_state = 0
@@ -119,7 +121,7 @@ class EncoderReader:
                 self._right_pos -= 1
 
     def snapshot(self) -> EncoderFrame:
-        """Atomically read current counts and compute counts per second."""
+        """Current counts since reset(), and counts per second over the window since the previous snapshot."""
         now = time.perf_counter()
         dt = now - self._last_time
         self._last_time = now
@@ -127,8 +129,10 @@ class EncoderReader:
         l_count = self._left_pos
         r_count = self._right_pos
 
-        l_cps = (l_count / dt) if dt > 0 else 0.0
-        r_cps = (r_count / dt) if dt > 0 else 0.0
+        # Speed is the change over this window, not the total since reset()
+        l_cps = ((l_count - self._last_left) / dt) if dt > 0 else 0.0
+        r_cps = ((r_count - self._last_right) / dt) if dt > 0 else 0.0
+        self._last_left, self._last_right = l_count, r_count
 
         return EncoderFrame(
             left_count=l_count,
@@ -141,6 +145,8 @@ class EncoderReader:
         """Reset internal encoder count offsets to zero."""
         self._left_pos = 0
         self._right_pos = 0
+        self._last_left = 0
+        self._last_right = 0
 
     def cancel(self) -> None:
         """Clean up pigpio callbacks."""

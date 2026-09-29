@@ -65,9 +65,10 @@ Sources:
 
 Sensors:
     --imu starts the MPU-6050 reader and feeds it to Phase 3 each frame.
-    Without it, Phase 3 runs with no sensors: heading holds at 0 and the
-    pass-through fields read 0.0. The IMU driver is imported only with --imu,
-    so replays run off the Pi.
+    --encoders starts the wheel encoders (needs sudo pigpiod) and passes each
+    wheel's counts per second through to the packet. Without them, Phase 3
+    runs with no sensors: heading holds at 0 and the pass-through fields read
+    0.0. Each driver is imported only with its flag, so replays run off the Pi.
 
 Output (--out DIR, default <root>/runs/p3_<timestamp>):
     console      one status line every --print-every frames, plus an event
@@ -96,6 +97,7 @@ Display:
 Examples (from the repo root):
     python3 -m src.phase3_linker --video run.avi
     python3 -m src.phase3_linker --camera --imu --fps 20
+    python3 -m src.phase3_linker --camera --imu --encoders
     python3 -m src.phase3_linker --camera --limit 200 --print-every 1
     python3 -m src.phase3_linker --camera --no-display --no-video   # text and timing only
 
@@ -230,6 +232,7 @@ CSV_COLUMNS = (
     "wheel_speed", "p3_log",
     # Appended, so no earlier column moves
     "p2_stop_line_cm", "stop_line_distance_cm",
+    "left_wheel_cps", "right_wheel_cps",
 )
 
 class CsvLog:
@@ -258,6 +261,7 @@ class CsvLog:
             pk.yaw_rate, pk.lateral_accel, pk.wheel_speed,
             " | ".join(res.p3_debug.get("log", [])),
             res.chain.stop_line.distance_cm, pk.stop_line_distance_cm,     # blank without a ground homography
+            pk.left_wheel_cps, pk.right_wheel_cps,
         ))
 
     def close(self) -> None:
@@ -355,32 +359,49 @@ class Phase3Stats:
         return lines
 
 
-class _NoSensors:
-    """Stand-in when --imu isn't given: every frame runs without sensors."""
+class _Sensors:
+    """
+    The IMU and wheel encoders, each started only when asked for and imported
+    here, so replays never load the board drivers or pigpio. With neither,
+    every frame runs without sensors.
+
+    The IMU uses IMU_I2C_ADDRESS and IMU_RATE_HZ from params and isn't
+    calibrated here, so any gyro bias correction comes from --gyro-bias. The
+    encoders need the pigpio daemon (sudo pigpiod).
+    """
+    def __init__(self, imu: bool = False, encoders: bool = False) -> None:
+        self._imu = self._encoders = self._pi = None
+        if imu:
+            from src.peripherals.imu import IMUReader
+            self._imu = IMUReader()
+            self._imu.start()
+        if encoders:
+            import pigpio
+            from src.peripherals.drive import EncoderReader
+            self._pi = pigpio.pi()
+            self._encoders = EncoderReader(self._pi)
+        if self._imu is not None:
+            time.sleep(0.1)
+            self._imu.snapshot()            # drop what accumulated during startup
+        if self._encoders is not None:
+            self._encoders.snapshot()       # start the first speed window here, not at construction
+
     def sample(self) -> SensorSample | None:
-        return None
+        """This frame window's readings; None with no sensors."""
+        if self._imu is None and self._encoders is None:
+            return None
+        return SensorSample.from_frames(
+            None if self._imu is None else self._imu.snapshot(),
+            None if self._encoders is None else self._encoders.snapshot(),
+        )
 
     def stop(self) -> None:
-        pass
-
-class _ImuSensors:
-    """
-    The MPU-6050 through peripherals.imu, imported here so replays never load
-    the board drivers. Uses IMU_I2C_ADDRESS and IMU_RATE_HZ from params, and
-    doesn't calibrate, so any gyro bias correction comes from --gyro-bias.
-    """
-    def __init__(self) -> None:
-        from src.peripherals.imu import IMUReader
-        self._imu = IMUReader()
-        self._imu.start()
-        time.sleep(0.1)
-        self._imu.snapshot()        # drop what accumulated during startup
-
-    def sample(self) -> SensorSample:
-        return SensorSample.from_imu(self._imu.snapshot())
-
-    def stop(self) -> None:
-        self._imu.stop()
+        if self._imu is not None:
+            self._imu.stop()
+        if self._encoders is not None:
+            self._encoders.cancel()
+        if self._pi is not None:
+            self._pi.stop()
 
 
 def run(
@@ -395,6 +416,7 @@ def run(
         video: bool = True,
         display: bool = False,
         scale: int = 1,
+        use_encoders: bool = False,
     ) -> Phase3Stats:
     """
     Run every frame from source through all three phases.
@@ -406,6 +428,8 @@ def run(
             cm_per_px is set and lane_roi_width_px isn't, the width is taken
             from the first frame's lane ROI.
         use_imu: Start the IMU and feed it to Phase 3.
+        use_encoders: Start the wheel encoders (peripherals.drive, through
+            pigpio) and feed their counts per second to Phase 3.
         print_every: Status line every N frames; 0 prints events only.
         verbose: Also print Phase 3's per-frame debug log.
         limit: Stop after this many frames; None runs until the source ends.
@@ -427,7 +451,7 @@ def run(
     stats = Phase3Stats(budget_ms=1000.0 / max(source.fps, 1))
     events = EventTracker()
     log = CsvLog(os.path.join(out_dir, "p3.csv"))
-    sensors = _ImuSensors() if use_imu else _NoSensors()
+    sensors = _Sensors(use_imu, use_encoders)
     processor = None
     view = Phase3View(config.lane_offset, source.fps) if (video or display) else None
     writer = (dv.ViewWriter(os.path.join(out_dir, "p3_debug.avi"), Phase3View.CSV_FIELDS,
@@ -526,6 +550,8 @@ def cli(argv: list[str] | None = None) -> int:
                     help="HSV ranges JSON to use instead of MEASURED's "
                          "(calibration/hsv_ranges.json)")
     ap.add_argument("--imu", action="store_true", help="feed the MPU-6050 to Phase 3")
+    ap.add_argument("--encoders", action="store_true",
+                    help="feed the wheel encoders to Phase 3 (needs sudo pigpiod)")
     ap.add_argument("--gyro-bias", type=float, default=0.0, metavar="DPS",
                     help="gyro Z reading at standstill, subtracted before integrating")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
@@ -570,13 +596,14 @@ def cli(argv: list[str] | None = None) -> int:
 
     print(f"source   {source.label} @ {source.fps:.0f} FPS")
     print(f"output   {out_dir}")
-    print(f"sensors  {'IMU' if args.imu else 'none'}   "
+    names = [n for n, on in (("IMU", args.imu), ("encoders", args.encoders)) if on]
+    print(f"sensors  {' + '.join(names) or 'none'}   "
           f"color branch {'off' if config.color.hsv_ranges is None else 'on'}   "
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}\n")
 
     run(source, config, p3_config, args.imu, out_dir, print_every,
         args.verbose, args.limit, video=not args.no_video,
-        display=not args.no_display, scale=args.scale)
+        display=not args.no_display, scale=args.scale, use_encoders=args.encoders)
     return 0
 
 if __name__ == "__main__":

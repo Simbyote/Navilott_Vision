@@ -133,6 +133,8 @@ stop()
 
 If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is already subtracted. `phase3_linker --imu` doesn't calibrate, so pass `--gyro-bias` there instead.
 
+**Wheel encoders.** `peripherals/drive.py` owns them: `EncoderReader` counts quadrature edges on pigpio callbacks, and `snapshot()`, called once per frame like the IMU's, returns the counts since `reset()` and each wheel's counts per second over the window since the previous snapshot. `SensorSample.from_frames(imu_frame, encoder_frame)` reads those fields by name, so estimation never imports `drive.py` or pigpio, and Phase 3 passes the counts per second through to the packet unchanged. Using them (checking that a steering correction actually turned the wheels, speed control, distance travelled) is Navigation's job, since only Navigation knows what was commanded.
+
 ---
 
 ## Contract: `EstimationPacket`
@@ -150,8 +152,9 @@ If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is a
 | `stop_line_distance_cm` | `float \| None` | Floor cm forward of the reference point (the bottom of the camera's view) to where the line crosses the robot's centerline, held with the px value from the same frame; also `None` without a ground homography |
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
-| `wheel_speed` | `float` | Pass-through, m/s; 0.0 until encoders are wired in |
+| `wheel_speed` | `float` | m/s; always 0.0 for now. **To fill in:** needs the encoder counts per wheel revolution and the wheel diameter to convert counts to meters |
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
+| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from `peripherals/drive.py`'s `EncoderReader.snapshot()`; + = forward. Raw counts, not converted to distance. 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
 
 A pass-through of 0.0 can mean "zero" or "unavailable". If navigation needs to tell them apart, that's a contract change to agree on.
 
