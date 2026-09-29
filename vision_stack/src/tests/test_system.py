@@ -11,11 +11,16 @@ instantly and the display throttle can be stepped by hand.
             then shows "rdy", runs the countdown, ticks the clock for a few
             seconds and shows the final time. Watch the display.
             Button: reads it once at rest. It has no presence probe (see
-            the test), so it runs wherever pigpio does. The button is not
-            pressed; wait_for_start() would block for a person.
+            the test), so it runs wherever pigpio does.
+--hardware --interactive
+            Also asks a person to press and release the start button, runs
+            the real wait_for_start() on that press, and records reaction
+            time, hold time and contact bounce. Without --interactive it
+            skips, so unattended runs never wait for anyone.
 """
 import importlib
 import sys
+import threading
 import types
 
 import pytest
@@ -294,3 +299,57 @@ def test_start_button_at_rest(artifacts):
         "button_level_at_rest": button,         # expect 0: pull-down, not pressed
     })
     assert button == 0, "start button reads high at rest: check the pull-down and wiring"
+
+
+@pytest.mark.hardware
+def test_start_button_press(request, artifacts, capsys):
+    # A press can't be faked from software, so this one needs a person and is opt-in
+    if not request.config.getoption("--interactive", default=False):
+        pytest.skip("start button press needs a person: rerun with --interactive")
+    import time
+    pigpio_or_skip("start button").stop()
+    import pigpio
+    mod = importlib.import_module(SYSTEM_MODULE)
+    s = mod.System()
+
+    edges = []                                  # (level, tick_us) from pigpiod, so bounce is timed in hardware
+    cb = s._pi.callback(GPIO_START_BUTTON, pigpio.EITHER_EDGE, lambda g, lvl, tick: edges.append((lvl, tick)))
+    try:
+        if s._pi.read(GPIO_START_BUTTON) != 0:
+            pytest.fail("start button already reads high: stuck line, or a finger on it")
+
+        with capsys.disabled():
+            print("\n>>> Press and HOLD the start button within 15 s ...", flush=True)
+        t0 = time.monotonic()
+        waiter = threading.Thread(target=s.wait_for_start, daemon=True)   # the real debounce path
+        waiter.start()
+        waiter.join(timeout=15.0)
+        assert not waiter.is_alive(), \
+            "no press seen in 15 s: check the button goes to 3.3 V and the GPIO pin number"
+        reaction_s = time.monotonic() - t0
+
+        with capsys.disabled():
+            print(">>> Seen. Now RELEASE it ...", flush=True)
+        deadline = time.monotonic() + 10.0
+        while s._pi.read(GPIO_START_BUTTON) and time.monotonic() < deadline:
+            time.sleep(0.005)
+        released = s._pi.read(GPIO_START_BUTTON) == 0
+        time.sleep(0.1)                         # let release bounce land in the edge log
+    finally:
+        cb.cancel()
+        s.cleanup()
+
+    rises = [tick for lvl, tick in edges if lvl == 1]
+    falls = [tick for lvl, tick in edges if lvl == 0]
+    press_bounce = [tick for _, tick in edges if rises and 0 <= (tick - rises[0]) & 0xFFFFFFFF < 50_000]
+    held_ms = ((falls[-1] - rises[0]) & 0xFFFFFFFF) / 1000 if rises and falls else None   # ticks wrap at 2^32 us
+
+    artifacts.json("summary.json", {
+        "pin": GPIO_START_BUTTON,
+        "reaction_s": reaction_s,
+        "held_ms": held_ms,
+        "edges_total": len(edges),
+        "edges_in_first_50ms_of_press": len(press_bounce),   # 1 = clean contact; more = bounce the debounce absorbed
+        "released": released,
+    })
+    assert released, "button still reads high 10 s after the prompt to release: stuck switch or line"
