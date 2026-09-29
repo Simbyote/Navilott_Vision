@@ -93,6 +93,22 @@ Output: `runs/p3_<YYYYMMDD_HHMMSS>/` (`p3.csv`, `summary.txt`)
 
 ---
 
+## Drive trial — [maneuver_linker.md](maneuver_linker.md)
+
+The robot moves. Place it at the far end of the mat first; `sudo pigpiod` once per boot.
+
+```
+python3 -m src.maneuver_linker --no-motors --no-button    # bench check: nothing moves, stops at the yaw-sign check
+python3 -m src.maneuver_linker --leg-counts 800           # first run on the mat: short leg, measure it
+python3 -m src.maneuver_linker                            # full trial with the defaults (MANEUVER in config.py)
+python3 -m src.maneuver_linker --set turn_slow_band_deg=30 --kp-heading 0.02
+python3 -m src.maneuver_linker --render runs/maneuver_<YYYYMMDD_HHMMSS>   # rebuild a run's video
+```
+
+Output: `runs/maneuver_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `maneuver.csv`, `p3.csv`, `maneuver.avi`)
+
+---
+
 ## Camera calibration — [calibrate_camera.md](calibrate_camera.md), [test_calibration.md](test_calibration.md)
 
 ```

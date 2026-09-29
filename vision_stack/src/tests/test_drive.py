@@ -158,8 +158,8 @@ def _wheel_model(mod, pi, motor, right_gain=1.0, cps_at_full=400):
         if pi.levels.get(motor.stby) != 1:
             return
         for side, pwm, fwd, gain, c1, c2, fwd_leads in (
-                ("l", motor.pwma, motor.ain1, 1.0, l1, l2, False),
-                ("r", motor.pwmb, motor.bin2, right_gain, r1, r2, True)):    # right is mirrored
+                ("l", motor.pwma, motor.ain1, 1.0, l1, l2, True),
+                ("r", motor.pwmb, motor.bin2, right_gain, r1, r2, False)):   # right is mirrored
             acc[side] += pi.pwm.get(pwm, (0, 0))[1] / FULL_DUTY * gain * cps_at_full * dt
             n = int(acc[side])
             acc[side] -= n
@@ -189,13 +189,14 @@ def test_encoder_pins_are_pulled_up_inputs_with_either_edge_callbacks(env):
 
 
 @pytest.mark.software
-def test_left_counts_up_when_c2_leads_and_down_when_c1_leads(env):
+def test_left_counts_up_when_c1_leads_and_down_when_c2_leads(env):
+    # + = forward, per turning the wheel forward by hand (2026-09-29)
     mod, pi, _ = env
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 10, c1_leads=False)
+    pi.quad(l1, l2, 10, c1_leads=True)
     assert enc.snapshot().left_count == 10
-    pi.quad(l1, l2, 4, c1_leads=True)
+    pi.quad(l1, l2, 4, c1_leads=False)
     assert enc.snapshot().left_count == 6
 
 
@@ -205,9 +206,9 @@ def test_right_count_is_mirrored(env):
     mod, pi, _ = env
     enc = mod.EncoderReader(pi)
     _, _, r1, r2 = _pins(mod)
-    pi.quad(r1, r2, 7, c1_leads=True)
-    assert enc.snapshot().right_count == 7
     pi.quad(r1, r2, 7, c1_leads=False)
+    assert enc.snapshot().right_count == 7
+    pi.quad(r1, r2, 7, c1_leads=True)
     assert enc.snapshot().right_count == 0
 
 
@@ -217,8 +218,8 @@ def test_only_c1_rising_edges_count(env):
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
     pi.edge(l2, 1); pi.edge(l2, 0)              # C2 alone: nothing
-    pi.edge(l1, 1); pi.edge(l1, 0)              # C1 rise with C2 low: -1 (left is C2-leads-forward); the fall: nothing
-    assert enc.snapshot().left_count == -1
+    pi.edge(l1, 1); pi.edge(l1, 0)              # C1 rise with C2 low: +1 (left is C1-leads-forward); the fall: nothing
+    assert enc.snapshot().left_count == 1
 
 
 @pytest.mark.software
@@ -241,7 +242,7 @@ def test_cps_over_the_first_window(env):
     mod, pi, clock = env
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 10, c1_leads=False)
+    pi.quad(l1, l2, 10, c1_leads=True)
     clock.now += 0.5
     assert enc.snapshot().left_cps == pytest.approx(20.0)
 
@@ -253,7 +254,7 @@ def test_cps_holds_steady_at_constant_speed(env):
     l1, l2, _, _ = _pins(mod)
     speeds = []
     for _ in range(3):
-        pi.quad(l1, l2, 10, c1_leads=False)
+        pi.quad(l1, l2, 10, c1_leads=True)
         clock.now += 0.5
         speeds.append(enc.snapshot().left_cps)
     assert speeds == pytest.approx([20.0] * 3)
@@ -264,11 +265,11 @@ def test_cps_after_a_reset_counts_only_the_new_window(env):
     mod, pi, clock = env
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 30, c1_leads=False)
+    pi.quad(l1, l2, 30, c1_leads=True)
     clock.now += 0.5
     enc.snapshot()
     enc.reset()
-    pi.quad(l1, l2, 5, c1_leads=False)
+    pi.quad(l1, l2, 5, c1_leads=True)
     clock.now += 0.5
     # 5 counts in 0.5 s; without resetting the previous count too it reads (5 - 30) / 0.5
     assert enc.snapshot().left_cps == pytest.approx(10.0)
@@ -279,7 +280,7 @@ def test_a_stopped_wheel_reads_zero_cps_after_moving(env):
     mod, pi, clock = env
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 10, c1_leads=False)
+    pi.quad(l1, l2, 10, c1_leads=True)
     clock.now += 0.5
     enc.snapshot()
     clock.now += 0.5

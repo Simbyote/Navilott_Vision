@@ -36,6 +36,7 @@ Flow:
 from dataclasses import dataclass, field
 
 from src.estimation import Phase3Config
+from src.maneuver import ManeuverConfig
 from src.params import CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH
 from src.perception.color_branch import ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig
@@ -100,3 +101,8 @@ MEASURED = PipelineConfig(
 # when cm_per_px is set. gyro_bias_dps stays 0 until a bench measurement
 # (or phase3_linker's --gyro-bias) sets it.
 MEASURED_ESTIMATION = Phase3Config()
+
+# maneuver_linker's drive trial: ManeuverConfig's placeholders until course
+# runs set them. leg_counts in particular is a guess until counts per meter
+# are measured; maneuver_linker's flags override any field for one run.
+MANEUVER = ManeuverConfig()
