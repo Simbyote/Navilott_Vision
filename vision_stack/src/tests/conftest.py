@@ -54,6 +54,7 @@ def pytest_addoption(parser):
                 help="root for hardware-run output (default: ./artifacts)")
     g.addoption("--soak-minutes", type=float, default=None,
                 help="run the soak test for this long; it is skipped without it")
+    g.addoption("--interactive", action="store_true", help="run tests that need a person at the robot")
 
 
 def pytest_configure(config):
