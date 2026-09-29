@@ -51,6 +51,7 @@ def _raw_measured(lane: dict) -> bool:
     return lane["reason"] not in (NO_RESULT, UNUSABLE_MODE)
 
 def _cell_color(kind: str, value) -> tuple[int, int, int]:
+    
     if kind == "traffic":
         return DRIVE_COLORS.get(value, dv.C_GRAY)
     if kind == "stop_sign":
