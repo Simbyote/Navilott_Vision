@@ -112,6 +112,13 @@ def command_problems(cmd: Command) -> list[str]:
     return problems
 
 
+def check_stop_line_trigger(packet: EstimationPacket, threshold_cm: float = 3.0) -> bool:
+    """Returns True if the vehicle has reached or crossed the stop line threshold."""
+    if packet.stop_line_detected and packet.stop_line_distance_cm is not None:
+        return packet.stop_line_distance_cm <= threshold_cm
+    return False
+
+
 # =============================================================================
 # Lane Keeping Controller Implementation
 # =============================================================================
@@ -121,16 +128,18 @@ class LaneKeepingNavigator(Navigator):
     def __init__(
         self,
         base_speed: float = 0.40,
-        kp_cm: float = 0.035,        # Increased from 0.015 for faster corrections
-        kp_norm: float = 0.60,      # Increased from 0.35
-        kp_heading: float = 0.020,   # Increased from 0.008
-        max_steering_adj: float = 0.40, # Increased max steering differential from 0.25
+        kp_cm: float = 0.035,
+        kp_norm: float = 0.60,
+        kp_heading: float = 0.020,
+        max_steering_adj: float = 0.40,
+        stop_line_threshold_cm: float = 3.0,
     ) -> None:
         self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
         self.kp_cm = kp_cm
         self.kp_norm = kp_norm
         self.kp_heading = kp_heading
         self.max_steering_adj = max_steering_adj
+        self.stop_line_threshold_cm = stop_line_threshold_cm
 
     def reset(self) -> None:
         pass
@@ -140,9 +149,8 @@ class LaneKeepingNavigator(Navigator):
         if packet.drive_state == "stop" or packet.stop_sign_detected:
             return BRAKE
 
-        if packet.stop_line_detected and packet.stop_line_distance_cm is not None:
-            if packet.stop_line_distance_cm <= 10.0:
-                return BRAKE
+        if check_stop_line_trigger(packet, self.stop_line_threshold_cm):
+            return BRAKE
 
         # Proportional steering adjustment calculation
         steering_adj = 0.0
@@ -265,17 +273,19 @@ def main() -> None:
     init_motors(pi)
     navigator = LaneKeepingNavigator(
         base_speed=0.40,
-        kp_cm=0.035,           # Faster steering response
-        max_steering_adj=0.40  # Sharper maximum turn angle
+        kp_cm=0.035,
+        max_steering_adj=0.40,
+        stop_line_threshold_cm=3.0,
     )
 
-    # Test conditions with 3.0s durations per frame state
+    # Test frames executed at 0.5s intervals (2 Hz update frequency)
     test_frames = [
-        ("Centered Drive (3.0s)", create_mock_packet(1, offset_cm=0.0), 3.0),
-        ("Offset Left (-6.0 cm -> Steer Right) (3.0s)", create_mock_packet(2, offset_cm=-6.0), 3.0),
-        ("Offset Right (+6.0 cm -> Steer Left) (3.0s)", create_mock_packet(3, offset_cm=6.0), 3.0),
-        ("Approaching Stop Line (8 cm -> Brake)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=8.0), 1.5),
-        ("Stop Sign Triggered -> Brake", create_mock_packet(5, offset_cm=0.0, stop_sign=True), 1.5),
+        ("Centered Drive", create_mock_packet(1, offset_cm=0.0), 0.5),
+        ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0), 0.5),
+        ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0), 0.5),
+        ("Approaching Stop Line (5.0 cm -> Continue)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=5.0), 0.5),
+        ("Reached Stop Line (3.0 cm -> Brake)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=3.0), 0.5),
+        ("Stop Sign Triggered -> Brake", create_mock_packet(6, offset_cm=0.0, stop_sign=True), 0.5),
     ]
 
     try:
