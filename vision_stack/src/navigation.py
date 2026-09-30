@@ -16,7 +16,7 @@ Main package:
     update(EstimationPacket) -> Command once per frame, and reset().
 
 Flow:
-    Once per camera frame (~20 FPS on the Pi): the pipeline hands the frame's
+    Once per camera frame (~5 FPS at 0.2s intervals): the pipeline hands the frame's
     EstimationPacket to Navigator.update(), and drives the Command it returns.
 """
 from dataclasses import dataclass
