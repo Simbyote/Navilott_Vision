@@ -480,7 +480,7 @@ class Phase3Processor:
         heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
-        stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
+        stop_line, stop_line_px, f = self.stop_line.update(phase2.stop_line_results, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
