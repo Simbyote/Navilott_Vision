@@ -4,7 +4,10 @@ test_navigation.py  --  the Navigation contract: Command rules, the Navigator in
 A navigator that keeps the contract passes every check in navigation_checks;
 each broken navigator here breaks exactly one rule, and the checks must name it.
 """
+import subprocess
+import sys
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 import pytest
 
@@ -79,6 +82,17 @@ class NeverDrives(GoodNavigator):
 # =============================================================================
 # Command
 # =============================================================================
+
+@pytest.mark.software
+@pytest.mark.parametrize("module", ["src.navigation", "src.config", "src.maneuver", "src.lane_keeping",
+                                    "src.scripts.lane_keeping_demo"])
+def test_the_contract_and_its_users_load_without_motor_hardware(module):
+    # pigpio blocked, as on a laptop: nothing above the drivers may import it at load
+    code = f"import sys; sys.modules['pigpio'] = None; import {module}"
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       cwd=Path(__file__).resolve().parents[2])
+    assert r.returncode == 0, r.stderr
+
 
 @pytest.mark.software
 def test_brake_is_a_zero_duty_brake_and_the_default_command_coasts():
