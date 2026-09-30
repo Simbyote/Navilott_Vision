@@ -121,10 +121,10 @@ class LaneKeepingNavigator(Navigator):
     def __init__(
         self,
         base_speed: float = 0.40,
-        kp_cm: float = 0.015,
-        kp_norm: float = 0.35,
-        kp_heading: float = 0.008,
-        max_steering_adj: float = 0.25,
+        kp_cm: float = 0.035,        # Increased from 0.015 for faster corrections
+        kp_norm: float = 0.60,      # Increased from 0.35
+        kp_heading: float = 0.020,   # Increased from 0.008
+        max_steering_adj: float = 0.40, # Increased max steering differential from 0.25
     ) -> None:
         self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
         self.kp_cm = kp_cm
@@ -263,7 +263,11 @@ def main() -> None:
         return
 
     init_motors(pi)
-    navigator = LaneKeepingNavigator(base_speed=0.40)
+    navigator = LaneKeepingNavigator(
+        base_speed=0.40,
+        kp_cm=0.035,           # Faster steering response
+        max_steering_adj=0.40  # Sharper maximum turn angle
+    )
 
     # Test conditions with 3.0s durations per frame state
     test_frames = [
