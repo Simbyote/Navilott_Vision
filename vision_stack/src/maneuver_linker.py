@@ -33,6 +33,7 @@ import json
 import os
 import pickle
 import queue
+import select
 import sys
 import threading
 import time
@@ -70,6 +71,7 @@ Examples (from vision_stack/, with sudo pigpiod running):
     python3 -m src.maneuver_linker --leg-counts 2000 --speed 0.35
     python3 -m src.maneuver_linker --set turn_slow_band_deg=30 --set kp_heading=0.02
     python3 -m src.maneuver_linker --no-motors --no-button   # bench: nothing moves
+    python3 -m src.maneuver_linker --hold                 # stop after each step to measure it
     python3 -m src.maneuver_linker --render runs/maneuver_20261001_101500
 
 Output (--out DIR, default <root>/runs/maneuver_<timestamp>):
@@ -148,6 +150,26 @@ def _record(res, machine: Maneuver) -> dict:
 # The trial
 # =============================================================================
 
+class Resume:
+    """
+    --hold's continue signal: the start button (System.button_pressed(),
+    non-blocking) or Enter in the terminal, whichever comes first. Polled
+    once per frame while holding, so the loop never waits on it.
+    """
+    def __init__(self, system=None, stdin=None) -> None:
+        self._system = system
+        self._stdin = sys.stdin if stdin is None else stdin
+        self._tty = hasattr(self._stdin, "isatty") and self._stdin.isatty()
+
+    def __call__(self) -> bool:
+        if self._system is not None and self._system.button_pressed():
+            return True
+        if self._tty and select.select([self._stdin], [], [], 0)[0]:
+            self._stdin.readline()
+            return True
+        return False
+
+
 class _NoMotors:
     """--no-motors: commands are logged in maneuver.csv but never sent."""
     def drive(self, left: float, right: float) -> None:
@@ -173,6 +195,8 @@ def run(
         render: bool = True,
         display: bool = False,
         scale: int = 1,
+        hold: bool = False,
+        resume=None,
     ) -> dict:
     """
     Run one drive trial.
@@ -191,6 +215,11 @@ def run(
         clock: Seconds, monotonic; injected by tests.
         render: Render maneuver.avi after the run.
         display: Play the rendered video in a window afterwards.
+        hold: Brake after the pulses, each leg and the turn until resumed,
+            so each step can be measured by hand. Hold time doesn't count
+            against max_run_s.
+        resume: Called once per frame while holding; True continues.
+            Defaults to Resume(system): the start button or Enter.
 
     Outputs:
         The findings (see the module docstring), also written to report.json.
@@ -203,7 +232,8 @@ def run(
     with open(os.path.join(out_dir, "config.json"), "w") as f:
         json.dump(asdict(cfg), f, indent=2)
 
-    machine = Maneuver(cfg)
+    machine = Maneuver(cfg, hold=hold)
+    resume = resume if resume is not None else Resume(system)
     processor = TracedPhase3Processor(p3_config)
     stats = Phase3Stats(budget_ms=1000.0 / max(source.fps, 1))
     p3_log = CsvLog(os.path.join(out_dir, "p3.csv"))
@@ -238,6 +268,8 @@ def run(
             now = clock()
             dt, prev = (now - prev if stats.frames else 0.0), now
             sample, _, enc = sensors.read()
+            if machine.holding and resume():
+                machine.resume()
             tick = Tick(t=now - t0, dt=dt,
                         yaw_dps=None if sample is None else sample.yaw_rate_dps,
                         lateral_accel=None if sample is None else sample.lateral_accel_mps2,
@@ -368,6 +400,10 @@ def summary_lines(report: dict, cfg: ManeuverConfig) -> list[str]:
         if "lane_reacquired_s" in t:
             v = t["lane_reacquired_s"]
             out.append("   lane found again     " + ("never" if v is None else f"{v:.2f} s after the turn"))
+    for h in report.get("holds", ()):
+        held = f"held {h['held_s']:.1f} s" if "held_s" in h else "still holding when the run ended"
+        out.append(f" hold {h['point']:<16} at t={h['t']:.1f} s, counts L {h['left_count']} R {h['right_count']}, "
+                   f"{held}: {h['measure']}")
     r = report.get("run")
     if r:
         out.append(f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
@@ -415,6 +451,9 @@ def cli(argv: list[str] | None = None) -> int:
                         help=f"default {getattr(MANEUVER, name)} (config.MANEUVER.{name})")
     ap.add_argument("--set", action="append", metavar="FIELD=VALUE",
                     help="override any ManeuverConfig field for this run; repeatable")
+    ap.add_argument("--hold", action="store_true",
+                    help="brake after the spin pulses, each leg and the turn until the start "
+                         "button (or Enter) is pressed, to measure each step by hand")
     ap.add_argument("--no-motors", action="store_true",
                     help="bench run: everything but the motors; stops at the yaw-sign check")
     ap.add_argument("--no-button", action="store_true", help="start after a 3 s console countdown")
@@ -486,7 +525,8 @@ def cli(argv: list[str] | None = None) -> int:
     else:
         print("press the start button")
     report = run(source, sensors, motor, cfg, config, p3_config, out_dir, system,
-                 render=not args.no_render, display=not args.no_display, scale=args.scale)
+                 render=not args.no_render, display=not args.no_display, scale=args.scale,
+                 hold=args.hold)
     return 0 if report["completed"] else 1
 
 

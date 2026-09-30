@@ -13,7 +13,7 @@ from dataclasses import replace
 import pytest
 
 from src.maneuver import (
-    ABORTED, DONE, FORWARD_1, FORWARD_2, STOP_1, TURN, TURN_SETTLE, Maneuver, ManeuverConfig, Tick,
+    ABORTED, DONE, FORWARD_1, FORWARD_2, HOLD, STOP_1, TURN, TURN_SETTLE, Maneuver, ManeuverConfig, Tick,
 )
 from src.tests.sim_robot import FakeClock, SimRobot
 
@@ -21,11 +21,11 @@ DT = 0.04                                  # 25 FPS, the pipeline's rate on the 
 CFG = ManeuverConfig(leg_counts=400, settle_s=0.4)
 
 
-def trial(cfg=CFG, max_ticks=4000, dts=None, each=None, **robot):
+def trial(cfg=CFG, max_ticks=4000, dts=None, each=None, hold=False, **robot):
     """Run a Maneuver against a SimRobot to the end; returns (maneuver, robot, records). each(m, bot) runs before every tick."""
     clock = FakeClock()
     bot = SimRobot(clock, **robot)
-    m = Maneuver(cfg)
+    m = Maneuver(cfg, hold=hold)
     t0, records = clock(), []
     for i in range(max_ticks):
         if m.done:
@@ -288,3 +288,83 @@ def test_the_run_time_limit_and_an_outside_abort_both_stop_it():
 def test_no_imu_while_settling_stops_before_moving():
     m, bot, _ = trial(imu=False)
     assert "no IMU readings" in m.report()["abort_reason"] and not any(any(c) for c in bot.commands)
+
+
+
+# =============================================================================
+# Holds for measuring by hand
+# =============================================================================
+
+def resume_after(frames):
+    """each(): resume a hold once it has lasted this many frames."""
+    held = {"n": 0}
+
+    def each(m, bot):
+        if m.holding:
+            held["n"] += 1
+            if held["n"] >= frames:
+                m.resume()
+                held["n"] = 0
+    return each
+
+
+@pytest.mark.software
+def test_hold_stops_after_the_pulses_each_leg_and_the_turn_then_resumes():
+    m, bot, recs = trial(hold=True, each=resume_after(10))
+    steps = [r["step"] for r in recs]
+    order = [s for i, s in enumerate(steps) if i == 0 or s != steps[i - 1]]
+    assert order == ["settle", "pulse_left", "pulse_left_rest", "pulse_right", "pulse_right_rest",
+                     HOLD, FORWARD_1, STOP_1, HOLD, TURN, TURN_SETTLE, HOLD, FORWARD_2, "stop_2", HOLD, DONE]
+    rep = m.report()
+    assert rep["completed"] and rep["turn"]["success"]
+    assert [h["point"] for h in rep["holds"]] == ["after_pulses", "after_leg_1", "after_turn", "after_leg_2"]
+    assert all(h["held_s"] == pytest.approx(10 * DT, abs=DT) for h in rep["holds"])
+    held = [r for r in recs if r["step"] == HOLD]
+    assert all(r["brake"] == 1 and r["hold_point"] for r in held)
+    assert not any(r["hold_point"] for r in recs if r["step"] != HOLD)
+
+
+@pytest.mark.software
+def test_each_hold_records_the_encoder_counts_where_it_stopped():
+    m, _, recs = trial(hold=True, each=resume_after(5))
+    for h in m.report()["holds"]:
+        first = next(r for r in recs if r["step"] == HOLD and r["t"] >= h["t"])
+        assert (h["left_count"], h["right_count"]) == (first["left_count"], first["right_count"])
+
+
+@pytest.mark.software
+def test_a_hold_measures_the_same_trial_as_no_hold():
+    plain, _, _ = trial()
+    held, _, _ = trial(hold=True, each=resume_after(25))
+    a, b = plain.report(), held.report()
+    assert a["turn"]["final_deg"] == pytest.approx(b["turn"]["final_deg"], abs=0.5)
+    assert a["forward_1"]["left_counts"] == pytest.approx(b["forward_1"]["left_counts"], abs=15)
+
+
+@pytest.mark.software
+def test_an_unanswered_hold_brakes_forever_without_tripping_any_safety_stop():
+    m, bot, recs = trial(cfg=replace(CFG, max_run_s=5.0), hold=True, max_ticks=1000)
+    assert m.holding and not m.done                    # 40 s of frames, never resumed
+    assert all(r["brake"] == 1 for r in recs if r["step"] == HOLD)
+    assert m.report()["holds"][0]["point"] == "after_pulses" and "held_s" not in m.report()["holds"][0]
+
+
+@pytest.mark.software
+def test_hold_time_does_not_count_against_the_run_limit():
+    # Every hold lasts 10 s; the moving time is well under max_run_s, the wall time is not
+    m, _, recs = trial(cfg=replace(CFG, max_run_s=20.0), hold=True, each=resume_after(250))
+    assert m.report()["completed"] and recs[-1]["t"] > 40.0
+
+
+@pytest.mark.software
+def test_resume_outside_a_hold_does_nothing():
+    m, _, _ = trial(each=lambda m, bot: m.resume())
+    assert m.report()["completed"] and "holds" not in m.report()
+
+
+
+@pytest.mark.software
+def test_a_press_before_a_hold_does_not_skip_it():
+    # resume() on every frame that isn't a hold, never during one: the first hold must still stop it
+    m, _, _ = trial(hold=True, max_ticks=600, each=lambda m, bot: None if m.holding else m.resume())
+    assert m.holding and m.report()["holds"][-1]["point"] == "after_pulses"

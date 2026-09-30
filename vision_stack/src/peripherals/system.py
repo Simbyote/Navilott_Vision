@@ -55,6 +55,8 @@ class System:
         self._display.brightness(2)   # 0 (dim) - 7 (max); 2 is readable indoors
 
         self._last_display_update: float = 0.0
+        self._press_since: float | None = None      # button_pressed(): when the pin went high
+        self._press_latched = True                  # a press still held from wait_for_start() doesn't count
 
         log.info(
             "System: button GPIO %d, display CLK %d / DIO %d",
@@ -78,6 +80,30 @@ class System:
                     log.info("System: start button pressed.")
                     break
             time.sleep(0.01)   # 10 ms poll: negligible CPU, imperceptible latency
+
+    def button_pressed(self) -> bool:
+        """
+        Non-blocking: True once per press, for polling from a loop that can't wait.
+
+        A press counts once the pin has read high for 50 ms across calls
+        (the same debounce as wait_for_start()), and not again until it's
+        released. A button still held from an earlier press (wait_for_start()
+        returns while it's down) doesn't count until it's released and pressed again.
+        """
+        now = time.monotonic()
+        if not self._pi.read(GPIO_START_BUTTON):
+            self._press_since = None
+            self._press_latched = False
+            return False
+        if self._press_latched:
+            return False
+        if self._press_since is None:
+            self._press_since = now
+            return False
+        if now - self._press_since >= 0.05:
+            self._press_latched = True
+            return True
+        return False
 
     def run_countdown(self) -> None:
         """Show 5-4-3-2-1, one digit per second, then blank the display for the run. Blocks 5 s."""

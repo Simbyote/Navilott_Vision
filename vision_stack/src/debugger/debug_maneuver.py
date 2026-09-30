@@ -33,13 +33,13 @@ import numpy as np
 import src.debugger.debug_video as dv
 from src.debugger.debug_phase3 import Phase3View
 from src.maneuver import (
-    ABORTED, DONE, FORWARD_STEPS, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST,
+    ABORTED, DONE, FORWARD_STEPS, HOLD, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST,
     SETTLE, TURN, TURN_SETTLE, ManeuverConfig,
 )
 
 C_TURN = (255, 255, 0)
 STEP_COLORS = {**{s: dv.C_USABLE for s in FORWARD_STEPS},
-               TURN: C_TURN, TURN_SETTLE: C_TURN, ABORTED: dv.C_RED, DONE: dv.C_WHITE,
+               TURN: C_TURN, TURN_SETTLE: C_TURN, ABORTED: dv.C_RED, DONE: dv.C_WHITE, HOLD: (255, 0, 255),
                **{s: dv.C_AMBER for s in (SETTLE, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST)}}
 FRAMES_DIR, RECORDS_FILE = "frames", "records.pkl"
 
@@ -86,7 +86,8 @@ def draw_strip(m: dict, cfg: ManeuverConfig, width: int, scale: int = 1) -> np.n
     step = m.get("step", "")
     fmt = lambda v, spec: "--" if v in ("", None) else format(v, spec)
 
-    head = f"{step}   t={fmt(m.get('t'), '.2f')}s"
+    head = f"{step} {m['hold_point']}" if m.get("hold_point") else step
+    head += f"   t={fmt(m.get('t'), '.2f')}s"
     dv.draw_text(img, head, (6 * s, lh - 3 * s), STEP_COLORS.get(step, dv.C_WHITE), fs * 1.1, th)
     if m.get("event"):
         (tw, _), _ = cv2.getTextSize(head, dv.FONT, fs * 1.1, th)

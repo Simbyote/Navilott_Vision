@@ -19,6 +19,8 @@ Flow:
     3. FORWARD: straight on encoder and gyro corrections, to leg_counts (capped by leg_max_s).
     4. STOP, TURN (gyro angle to 180, slowing near it), TURN_SETTLE (overshoot).
     5. FORWARD back, STOP, DONE. Any safety check ends in ABORTED, motors off.
+    With hold on, the robot brakes at HOLD after the pulses, each leg and the
+    turn, until resume(), so each step can be measured by hand.
 """
 import math
 from dataclasses import dataclass, field
@@ -30,6 +32,15 @@ FORWARD_1, STOP_1, TURN, TURN_SETTLE, FORWARD_2, STOP_2 = (
     "forward_1", "stop_1", "turn", "turn_settle", "forward_2", "stop_2")
 DONE, ABORTED = "done", "aborted"
 FORWARD_STEPS = (FORWARD_1, FORWARD_2)
+HOLD = "hold"
+
+# With hold on, the step each hold comes before: (hold point, what to measure by hand)
+HOLD_BEFORE = {
+    FORWARD_1: ("after_pulses", "check the heading is back near the start"),
+    TURN: ("after_leg_1", "measure leg 1's distance"),
+    FORWARD_2: ("after_turn", "measure the turn against the start heading"),
+    DONE: ("after_leg_2", "measure leg 2's distance and how far it stopped from the start"),
+}
 
 
 @dataclass(frozen=True)
@@ -117,10 +128,17 @@ class Maneuver:
     """
     RECORD_FIELDS = ("t", "dt", "step", "cmd_left", "cmd_right", "brake", "yaw_dps", "yaw_corrected",
                      "heading_deg", "turn_deg", "leg_progress", "c_counts", "c_heading",
-                     "left_count", "right_count", "left_cps", "right_cps", "lateral_accel", "event")
+                     "left_count", "right_count", "left_cps", "right_cps", "lateral_accel", "event",
+                     "hold_point")
 
-    def __init__(self, cfg: ManeuverConfig = ManeuverConfig()) -> None:
+    def __init__(self, cfg: ManeuverConfig = ManeuverConfig(), hold: bool = False) -> None:
+        """hold: brake at each HOLD_BEFORE point until resume(), for measuring by hand."""
         self.cfg = cfg
+        self.hold = hold
+        self._held_s = 0.0                      # time spent holding; not counted against max_run_s
+        self._hold_next = None                  # the step a hold resumes into
+        self._resume = False
+        self._holds: list[dict] = []
         self.step_name = SETTLE
         self.record: dict = {}
         self._step_t = 0.0
@@ -183,8 +201,17 @@ class Maneuver:
             "left_cps": tick.left_cps, "right_cps": tick.right_cps,
             "lateral_accel": "" if tick.lateral_accel is None else round(tick.lateral_accel, 3),
             "event": event,
+            "hold_point": self._holds[-1]["point"] if self.holding else "",
         })
         return cmd
+
+    @property
+    def holding(self) -> bool:
+        return self.step_name == HOLD
+
+    def resume(self) -> None:
+        """Continue from a hold on the next step(). A call before a hold begins is dropped by it, so an early press can't skip one."""
+        self._resume = True
 
     def abort(self, reason: str) -> None:
         """Stop the trial from outside (Ctrl-C, a camera failure); the next command is stopped."""
@@ -196,8 +223,10 @@ class Maneuver:
         """The checks every step shares; returns the abort event, or ''."""
         cfg = self.cfg
         reason = None
-        if tick.t > cfg.max_run_s:
-            reason = f"run passed max_run_s {cfg.max_run_s:.0f} s"
+        if self.holding:
+            self._held_s += tick.dt
+        if tick.t - self._held_s > cfg.max_run_s:
+            reason = f"run passed max_run_s {cfg.max_run_s:.0f} s of moving time"
         elif tick.dt > cfg.max_frame_gap_s:
             reason = f"frame gap {tick.dt:.2f} s over max_frame_gap_s {cfg.max_frame_gap_s}"
         else:
@@ -215,6 +244,14 @@ class Maneuver:
         return ""
 
     def _go(self, step: str, tick: Tick) -> str:
+        if self.hold and step in HOLD_BEFORE and self._hold_next != step:
+            point, measure = HOLD_BEFORE[step]
+            self._hold_next, self._resume = step, False
+            self.step_name, self._step_t = HOLD, tick.t
+            self._holds.append({"point": point, "measure": measure, "t": round(tick.t, 3),
+                                "left_count": tick.left_count, "right_count": tick.right_count})
+            return f"-> {HOLD} {point}: {measure}, then press the start button (or Enter)"
+        self._hold_next = None
         self.step_name = step
         self._step_t = tick.t
         if step in FORWARD_STEPS:
@@ -229,6 +266,12 @@ class Maneuver:
         """The current step's command, moving to the next step when it's finished."""
         cfg, step = self.cfg, self.step_name
         still = BRAKE
+
+        if step == HOLD:
+            if not self._resume:
+                return still, ""
+            self._holds[-1]["held_s"] = round(elapsed, 3)
+            return still, self._go(self._hold_next, tick)
 
         if step == SETTLE:
             if tick.yaw_dps is not None:
@@ -390,4 +433,6 @@ class Maneuver:
                              "imbalance_pct": round(100.0 * (l - r) / max(abs(l), abs(r), 1), 2)}
         if self._turn:
             out["turn"] = {k: v for k, v in self._turn.items() if not k.startswith("start_")}
+        if self._holds:
+            out["holds"] = [dict(h) for h in self._holds]
         return out

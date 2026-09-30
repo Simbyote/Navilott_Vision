@@ -105,6 +105,38 @@ def env(monkeypatch):
     sys.modules.pop(SYSTEM_MODULE, None)        # the next import gets the real (or fresh fake) modules
 
 
+def _presses(mod, pi, clock, reads, step=0.02):
+    """button_pressed() polled once per read in reads, step s apart; returns what each call said."""
+    s = mod.System()
+    pi.reads = list(reads)
+    out = []
+    for _ in reads:
+        out.append(s.button_pressed())
+        clock.now += step
+    return out
+
+
+@pytest.mark.software
+def test_button_pressed_counts_one_press_after_the_debounce(env):
+    mod, pi, clock = env
+    # released, then held for 4 polls 20 ms apart: counts once, 60 ms in; never again while held
+    said = _presses(mod, pi, clock, [0, 1, 1, 1, 1, 1, 0])
+    assert said == [False, False, False, False, True, False, False]
+
+
+@pytest.mark.software
+def test_button_pressed_ignores_a_bounce_shorter_than_the_debounce(env):
+    mod, pi, clock = env
+    assert not any(_presses(mod, pi, clock, [0, 1, 0, 1, 0, 1, 0]))
+
+
+@pytest.mark.software
+def test_a_button_still_held_from_the_start_press_needs_releasing_first(env):
+    mod, pi, clock = env
+    said = _presses(mod, pi, clock, [1, 1, 1, 1, 0, 1, 1, 1, 1])
+    assert said.count(True) == 1 and said.index(True) > 4
+
+
 @pytest.mark.software
 def test_missing_pigpio_daemon_raises_with_the_fix(env):
     mod, pi, _ = env
