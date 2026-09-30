@@ -137,13 +137,21 @@ class FrameRecorder:
             raise RuntimeError(f"frame recorder failed: {self._error!r}") from self._error
 
 
-def _record(res, machine: Maneuver) -> dict:
-    """What render_run() needs to redraw this frame, without the images the chain carries."""
+def chain_record(res) -> dict:
+    """
+    What debug_maneuver.as_result() needs to redraw a frame's Phase 3 view,
+    without the images the chain carries. Shared with navigation_linker.
+    """
     chain = res.chain
     return {"frame_id": res.packet.frame_id, "timestamp_ms": res.packet.timestamp_ms,
             "geometry": chain.geometry, "offset": chain.offset, "offset_debug": chain.offset_debug,
             "lane_rect": chain.roi.lane_rect, "packet": res.packet, "p3_debug": res.p3_debug,
-            "timings": dict(res.timings_ms), "maneuver": dict(machine.record)}
+            "timings": dict(res.timings_ms)}
+
+
+def _record(res, machine: Maneuver) -> dict:
+    """What render_run() needs to redraw this frame: the chain plus the maneuver's record."""
+    return {**chain_record(res), "maneuver": dict(machine.record)}
 
 
 # =============================================================================

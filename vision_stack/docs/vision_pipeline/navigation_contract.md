@@ -122,11 +122,13 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 `LaneKeepingNavigator` (Ignacio, 2026-09-30) is proportional differential steering:
 
 - **Stops** on `drive_state == "stop"`, `stop_sign_detected`, or a voted stop line at or under 3.0 cm.
-- **Steers** by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. It clamps the steering to ±0.40 around a base duty of 0.40 and lifts a slow wheel to the stall duty.
+- **Steers** by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. The offset gain grows with the offset (variable gain scaling, Ignacio's ae34566): `kp × (1 + 0.05 × |offset cm|)`, so small offsets get gentle corrections. It clamps the steering to ±0.40 around a base duty of 0.40 and lifts a slow wheel to the stall duty.
 - **Contract checks:** it passes valid commands, stop and steering. It **fails `check_no_forward_on_stale`**, because it keeps driving on heading when the lane is stale. That's an open decision, marked `@TODO` in the code and as a strict `xfail` in `test_lane_keeping`.
 - **Stop sign:** it brakes on `stop_sign_detected` although the sign gate is untuned, so a false positive stops the robot.
 
-`src/scripts/lane_keeping_demo.py` drives the robot's motors from a scripted list of packets (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. The gains are first-cut values, not yet tuned on the robot.
+`src/scripts/lane_keeping_demo.py` drives the robot's motors from a scripted list of packets (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. The gains are Ignacio's bench values, not yet tuned on the course. The normalized-offset path assumes 30 cm per unit of `lane_offset` (`NORM_TO_CM`), which isn't measured.
+
+`navigator.record` says why each command is what it is (the stop trigger, or what the steering came from and its value), for the linkers' logs and video; it's debug output, not part of the contract. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and this navigator, and is the step's harness before it goes into `pipeline.py`.
 
 ---
 
