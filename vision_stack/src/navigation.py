@@ -192,3 +192,38 @@ class LaneKeepingNavigator(Navigator):
             return -STALL_DUTY
             
         return clamped
+
+    if __name__ == "__main__":
+        from dataclasses import dataclass
+
+        # Create a mock packet for testing if src.estimation isn't imported yet
+        # Adjust fields to match your real src.estimation.EstimationPacket
+        try:
+            from src.estimation import EstimationPacket
+            
+            # Instantiate a test packet
+            test_packet = EstimationPacket(
+                drive_state="drive",
+                stop_sign_detected=False,
+                stop_line_detected=False,
+                stop_line_distance_cm=None,
+                lane_status="vision",
+                lane_offset_cm=-5.0,  # Robot is 5 cm to the left of center
+                lane_offset=-0.2,
+                heading_error=0.0,
+            )
+        except Exception as e:
+            print(f"Could not import real EstimationPacket: {e}")
+            print("Run within your pipeline loop or pass a valid packet.")
+            exit(1)
+
+        # Instantiate the navigator
+        navigator = LaneKeepingNavigator(base_speed=0.40)
+
+        # Process a frame
+        command = navigator.update(test_packet)
+
+        # Print output
+        print("--- Test Run Output ---")
+        print(f"Input Packet Offset: {test_packet.lane_offset_cm} cm")
+        print(f"Resulting Command  : Left={command.left:.3f}, Right={command.right:.3f}, Brake={command.brake}")    
