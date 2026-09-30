@@ -111,6 +111,7 @@ def test_maneuver_csv_lines_up_with_p3_csv_and_logs_the_commands(tmp_path):
     assert [r["frame_id"] for r in m] == [r["frame_id"] for r in p3]
     driven = [(float(r["cmd_left"]), float(r["cmd_right"])) for r in m]
     assert driven == bot.commands                           # every command logged is the one sent
+    assert bot.brakes == sum(r["brake"] == "1" for r in m) > 0   # every stop braked, and was logged
     assert {"forward_1", "turn", "forward_2", "done"} <= {r["step"] for r in m}
 
 

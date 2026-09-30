@@ -88,9 +88,15 @@ class Tick:
 
 @dataclass(frozen=True)
 class Command:
-    """Motor duty for MotorController.drive(), each in [-1, 1]; + = forward."""
+    """Motor duty for MotorController.drive(), each in [-1, 1]; + = forward. brake: short-brake instead (MotorController.brake())."""
     left: float = 0.0
     right: float = 0.0
+    brake: bool = False
+
+
+# Every stop brakes: coasting carried the robot ~0.15-0.18 s past each stop on
+# the 2026-09-30 trial (7.9 deg past the 180), and braking holds it at rest
+BRAKE = Command(brake=True)
 
 
 @dataclass
@@ -109,7 +115,7 @@ class Maneuver:
     The trial's steps. Create one per run and call step() once per frame, in
     order; done is True once it reaches DONE or ABORTED.
     """
-    RECORD_FIELDS = ("t", "dt", "step", "cmd_left", "cmd_right", "yaw_dps", "yaw_corrected",
+    RECORD_FIELDS = ("t", "dt", "step", "cmd_left", "cmd_right", "brake", "yaw_dps", "yaw_corrected",
                      "heading_deg", "turn_deg", "leg_progress", "c_counts", "c_heading",
                      "left_count", "right_count", "left_cps", "right_cps", "lateral_accel", "event")
 
@@ -148,7 +154,7 @@ class Maneuver:
                 timer, so a missing IMU reading (yaw None) adds nothing.
 
         Outputs:
-            The motor command for this frame; Command() (stopped) once done.
+            The motor command for this frame; BRAKE whenever the robot should be still.
 
         Side effects:
             Sets self.record, this frame's row for maneuver.csv.
@@ -157,18 +163,18 @@ class Maneuver:
         yaw = None if tick.yaw_dps is None else tick.yaw_dps - self._bias
         self.record = {"c_counts": 0.0, "c_heading": 0.0, "leg_progress": ""}
 
-        cmd = Command()
+        cmd = BRAKE
         if not self.done:
             event = self._safety(tick)
         if not self.done:
-            # Every path that ends the trial returns Command(), so a done trial never drives
+            # Every path that ends the trial returns BRAKE, so a done trial never drives
             cmd, event = self._advance(tick, yaw, tick.t - self._step_t)
         self._last_cmd = cmd
 
         heading = self._legs[self.step_name].heading_deg if self.step_name in self._legs else ""
         self.record.update({
             "t": round(tick.t, 4), "dt": round(tick.dt, 4), "step": self.step_name,
-            "cmd_left": round(cmd.left, 4), "cmd_right": round(cmd.right, 4),
+            "cmd_left": round(cmd.left, 4), "cmd_right": round(cmd.right, 4), "brake": int(cmd.brake),
             "yaw_dps": "" if tick.yaw_dps is None else round(tick.yaw_dps, 3),
             "yaw_corrected": "" if yaw is None else round(yaw, 3),
             "heading_deg": heading if heading == "" else round(heading, 2),
@@ -222,7 +228,7 @@ class Maneuver:
     def _advance(self, tick: Tick, yaw: float | None, elapsed: float) -> tuple[Command, str]:
         """The current step's command, moving to the next step when it's finished."""
         cfg, step = self.cfg, self.step_name
-        still = Command()
+        still = BRAKE
 
         if step == SETTLE:
             if tick.yaw_dps is not None:
@@ -307,7 +313,7 @@ class Maneuver:
                           "heading_end_deg": round(leg.heading_deg, 2),
                           "max_c_counts": round(leg.max_c_counts, 4),
                           "max_c_heading": round(leg.max_c_heading, 4)}
-            return Command(), self._go(STOP_1 if self.step_name == FORWARD_1 else STOP_2, tick)
+            return BRAKE, self._go(STOP_1 if self.step_name == FORWARD_1 else STOP_2, tick)
         # Left ahead of right, or a drift left, both steer back: + = steer right
         c_counts = cfg.kp_counts * (dr - dl)
         c_heading = cfg.kp_heading * leg.heading_deg
@@ -326,17 +332,17 @@ class Maneuver:
             reason = f"turn passed turn_abort_deg {cfg.turn_abort_deg:.0f}"
             self._turn.update(reached=False, reason=reason)
             self.abort(reason)
-            return Command(), f"ABORT {reason}"
+            return BRAKE, f"ABORT {reason}"
         if self._turn_deg >= cfg.turn_target_deg:
             self._turn.update(reached=True, time_to_target_s=round(elapsed, 3),
                               deg_at_stop=round(self._turn_deg, 2))
-            return Command(), self._go(TURN_SETTLE, tick)
+            return BRAKE, self._go(TURN_SETTLE, tick)
         if elapsed >= cfg.turn_timeout_s:
             reason = f"turn reached {self._turn_deg:.1f} deg of {cfg.turn_target_deg:.0f} in turn_timeout_s {cfg.turn_timeout_s:.0f}"
             self._turn.update(reached=False, reason=reason, final_deg=round(self._turn_deg, 2),
                               success=False)
             self.abort(reason)
-            return Command(), f"ABORT {reason}"
+            return BRAKE, f"ABORT {reason}"
         s = cfg.turn_speed if cfg.turn_target_deg - self._turn_deg > cfg.turn_slow_band_deg else cfg.turn_slow_speed
         return Command(-s, s), ""                  # spin left in place
 

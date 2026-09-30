@@ -153,6 +153,9 @@ class _NoMotors:
     def drive(self, left: float, right: float) -> None:
         pass
 
+    def brake(self) -> None:
+        pass
+
     def stop(self) -> None:
         pass
 
@@ -179,8 +182,8 @@ def run(
         sensors: phase3_linker.Sensors with the IMU and encoders started
             (anything with read() -> (SensorSample, imu_frame, encoder_frame)
             and stop()).
-        motor: drive.MotorController, or anything with drive(left, right)
-            and stop(); _NoMotors for a bench run.
+        motor: drive.MotorController, or anything with drive(left, right),
+            brake() and stop(); _NoMotors for a bench run.
         cfg: The trial's tuning; MANEUVER from config.py plus any flags.
         config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
         system: peripherals.system.System for the start button, countdown
@@ -243,7 +246,11 @@ def run(
                         left_cps=0.0 if enc is None else enc.left_cps,
                         right_cps=0.0 if enc is None else enc.right_cps)
             cmd = machine.step(tick)
-            motor.drive(cmd.left, cmd.right)        # before vision: control never waits on it
+            # Before vision: control never waits on it
+            if cmd.brake:
+                motor.brake()
+            else:
+                motor.drive(cmd.left, cmd.right)
             if machine.record.get("event"):
                 print(f"  t={tick.t:6.2f}s  {machine.record['event']}")
 

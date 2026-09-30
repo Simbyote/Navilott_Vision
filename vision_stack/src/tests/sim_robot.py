@@ -33,15 +33,19 @@ class SimRobot:
     stalled: Wheels never turn, whatever the command (a disconnected encoder).
     lag_s: Each wheel follows its command with this time constant, so it
         coasts after a stop; 0 responds at once.
+    brake_lag_s: The same while braking (brake()); a short brake stops the
+        wheels far faster than coasting. 0 stops them at once.
     """
     def __init__(self, clock, cps_at_full=1000.0, left_gain=1.0, right_gain=1.0,
                  deg_per_count=0.12, imu_plus_is="left", bias_dps=-1.1, accel_baseline=-0.9,
-                 stalled=False, imu=True, lag_s=0.0):
+                 stalled=False, imu=True, lag_s=0.0, brake_lag_s=0.0):
         self.clock = clock
         self.cps_at_full, self.gains = cps_at_full, (left_gain, right_gain)
         self.deg_per_count, self.bias, self.accel = deg_per_count, bias_dps, accel_baseline
         self.imu_sign = 1 if imu_plus_is == "left" else -1
-        self.stalled, self.imu, self.lag_s = stalled, imu, lag_s
+        self.stalled, self.imu, self.lag_s, self.brake_lag_s = stalled, imu, lag_s, brake_lag_s
+        self.braking = False
+        self.brakes = 0
         self.cmd = (0.0, 0.0)
         self.duty = [0.0, 0.0]                  # what each wheel is actually doing
         self.counts = [0.0, 0.0]
@@ -51,8 +55,13 @@ class SimRobot:
         self._last = clock()
 
     def drive(self, left, right):
-        self.cmd = (left, right)
+        self.cmd, self.braking = (left, right), False
         self.commands.append(self.cmd)
+
+    def brake(self):
+        self.cmd, self.braking = (0.0, 0.0), True
+        self.commands.append(self.cmd)
+        self.brakes += 1
 
     def stop(self):
         self.cmd = (0.0, 0.0)
@@ -61,7 +70,8 @@ class SimRobot:
     def read(self):
         now = self.clock()
         dt, self._last = now - self._last, now
-        k = 1.0 if self.lag_s <= 0 else min(1.0, dt / self.lag_s)
+        lag = self.brake_lag_s if self.braking else self.lag_s
+        k = 1.0 if lag <= 0 else min(1.0, dt / lag)
         self.duty = [d + (c - d) * k for d, c in zip(self.duty, self.cmd)]
         rates = [0.0, 0.0] if self.stalled else [
             d * self.cps_at_full * g for d, g in zip(self.duty, self.gains)]

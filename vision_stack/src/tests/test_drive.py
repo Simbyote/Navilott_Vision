@@ -158,8 +158,12 @@ def _wheel_model(mod, pi, motor, right_gain=1.0, cps_at_full=400):
         if pi.levels.get(motor.stby) != 1:
             return
         for side, pwm, fwd, gain, c1, c2, fwd_leads in (
-                ("l", motor.pwma, motor.ain1, 1.0, l1, l2, True),
-                ("r", motor.pwmb, motor.bin2, right_gain, r1, r2, False)):   # right is mirrored
+                # The pin each motor raises for forward, after bc78064's polarity fix
+                ("l", motor.pwma, motor.ain2, 1.0, l1, l2, True),
+                ("r", motor.pwmb, motor.bin1, right_gain, r1, r2, False)):   # right is mirrored
+            other = {motor.ain2: motor.ain1, motor.bin1: motor.bin2}[fwd]
+            if pi.levels.get(fwd) and pi.levels.get(other):
+                continue                        # short brake: both pins high, the wheel stops
             acc[side] += pi.pwm.get(pwm, (0, 0))[1] / FULL_DUTY * gain * cps_at_full * dt
             n = int(acc[side])
             acc[side] -= n
@@ -322,9 +326,10 @@ def test_motor_pins_are_outputs_on_separate_pwm_channels_clear_of_the_encoders(e
 
 @pytest.mark.software
 @pytest.mark.parametrize("left, right, a_in, b_in", [
-    (0.5, 0.5, (1, 0), (0, 1)),                 # forward; B is mirrored, so forward is BIN2
-    (-0.5, -0.5, (0, 1), (1, 0)),               # reverse
-    (0.5, -0.5, (1, 0), (1, 0)),                # spin in place
+    # Pin levels per bc78064's polarity fix, from the robot driving backward before it
+    (0.5, 0.5, (0, 1), (1, 0)),                 # forward; B is mirrored, so forward is BIN1
+    (-0.5, -0.5, (1, 0), (0, 1)),               # reverse
+    (0.5, -0.5, (0, 1), (0, 1)),                # spin in place
     (0.0, 0.0, (0, 0), (0, 0)),                 # coast, never short-brake
 ])
 def test_drive_sets_standby_and_direction_pins(env, left, right, a_in, b_in):
@@ -344,6 +349,32 @@ def test_drive_scales_and_clamps_duty(env, cmd, duty):
     m = mod.MotorController(pi)
     m.drive(cmd, cmd)
     assert pi.pwm[m.pwma] == (m.pwm_freq, duty) and pi.pwm[m.pwmb] == (m.pwm_freq, duty)
+
+
+@pytest.mark.software
+def test_brake_shorts_both_motors_with_standby_up(env):
+    mod, pi, _ = env
+    m = mod.MotorController(pi)
+    m.drive(0.5, -0.3)
+    m.brake()
+    # TB6612 short brake: IN1 = IN2 = H with PWM full; standby low would float the outputs (coast)
+    assert all(pi.levels[p] == 1 for p in (m.ain1, m.ain2, m.bin1, m.bin2, m.stby))
+    assert pi.pwm[m.pwma][1] == pi.pwm[m.pwmb][1] == FULL_DUTY
+    m.stop()
+    _assert_stopped(pi, m)
+
+
+@pytest.mark.software
+def test_brake_stops_the_wheels_turning_in_the_wheel_model(env):
+    mod, pi, clock = env
+    enc, m = mod.EncoderReader(pi), mod.MotorController(pi)
+    clock.on_sleep = _wheel_model(mod, pi, m)
+    m.drive(0.5, 0.5)
+    clock.sleep(0.5)
+    moving = enc.snapshot().left_count
+    m.brake()
+    clock.sleep(0.5)
+    assert moving > 0 and enc.snapshot().left_count == moving
 
 
 @pytest.mark.software

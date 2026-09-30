@@ -37,7 +37,7 @@ def trial(cfg=CFG, max_ticks=4000, dts=None, each=None, **robot):
         cmd = m.step(Tick(clock() - t0, 0.0 if i == 0 else (DT if dts is None else dts(i)),
                           sample.yaw_rate_dps, sample.lateral_accel_mps2,
                           enc.left_count, enc.right_count, enc.left_cps, enc.right_cps))
-        bot.drive(cmd.left, cmd.right)
+        bot.brake() if cmd.brake else bot.drive(cmd.left, cmd.right)
         records.append(dict(m.record))
     return m, bot, records
 
@@ -197,11 +197,31 @@ def test_overshoot_past_the_tolerance_fails_the_turn_but_the_trial_goes_on():
 
 @pytest.mark.software
 def test_coasting_after_the_turn_is_counted_as_overshoot():
-    m, bot, _ = trial(lag_s=0.15)
+    m, bot, _ = trial(lag_s=0.15, brake_lag_s=0.15)            # a brake no better than coasting
     t = m.report()["turn"]
     assert t["final_deg"] > t["deg_at_stop"] + 1.0           # it kept turning after the stop
     assert t["overshoot_deg"] == pytest.approx(t["final_deg"] - CFG.turn_target_deg)
     assert bot.heading_deg == pytest.approx(t["final_deg"], abs=2.0)
+
+
+@pytest.mark.software
+def test_every_still_step_brakes_and_every_driving_step_drives():
+    _, _, recs = trial()
+    for r in recs:
+        still = r["cmd_left"] == 0 and r["cmd_right"] == 0
+        assert r["brake"] == int(still), r
+
+
+@pytest.mark.software
+def test_braking_holds_the_turn_inside_the_tolerance_that_coasting_misses():
+    # Coasting as on the 2026-09-30 trial: ~0.15 s to spin down, 7.9 deg past the 180
+    coasting, _, _ = trial(lag_s=0.15, brake_lag_s=0.15)
+    braked, bot, _ = trial(lag_s=0.15, brake_lag_s=0.02)
+    assert coasting.report()["turn"]["overshoot_deg"] > CFG.turn_tolerance_deg
+    assert not coasting.report()["turn"]["success"]
+    t = braked.report()["turn"]
+    assert t["success"] and abs(t["overshoot_deg"]) <= CFG.turn_tolerance_deg
+    assert bot.heading_deg == pytest.approx(180, abs=CFG.turn_tolerance_deg)
 
 
 @pytest.mark.software

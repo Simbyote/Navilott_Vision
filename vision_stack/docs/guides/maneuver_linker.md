@@ -77,7 +77,7 @@ Then:
 1. The console prints the output folder and the trial settings, and the display shows `rdy`.
 2. **Press the start button.** The display counts down 5-4-3-2-1. Step back.
 3. **Don't touch the robot for the first few seconds.** It sits still for 2 s (settling), then makes two short spins: left, then right.
-4. It drives forward, stops for 1 s, turns left in place 180°, stops, drives back and stops.
+4. It drives forward, stops for 1 s, turns left in place 180°, stops, drives back and stops. Every stop is a **short brake** (`MotorController.brake()`), not a coast, so it stops sharply; that's intended.
 5. The video renders and plays if a screen is attached; close the window or wait for it to end. The summary prints at the end.
 
 **Stopping it early:** Ctrl-C in the terminal. The motors stop first, and everything recorded so far is still saved and rendered. The run also stops itself if:
@@ -145,7 +145,7 @@ Every setting has a factory default in `MANEUVER` in `src/config.py`. For one ru
 **Sizing the leg to the mat:** after the first short run, counts per cm = `--leg-counts` ÷ the distance you measured. Pick a leg that leaves at least 30 cm before the intersection, and use that `--leg-counts` from then on. Report the counts per cm too.
 
 Typical adjustments:
-- **Turn overshoots and FAILs:** lower `--turn-speed`, or widen the slow-down band: `--set turn_slow_band_deg=30`.
+- **Turn overshoots and FAILs:** the robot brakes at 180°, so what's left is how far it turns while the brake bites. Check `maneuver.csv`: the `turn_settle` rows show how many degrees it gained after the stop. If that's still over ~4°, lower `--turn-speed`, or widen the slow-down band: `--set turn_slow_band_deg=30`. Report the numbers either way; they tell us whether the brake works as expected.
 - **Drifts off straight:** raise `--kp-heading` (e.g. 0.02). If it wobbles side to side, lower it.
 - **Leg ends by `time cap`:** raise `--leg-max-s`, or `--speed` if the motors are weak.
 
