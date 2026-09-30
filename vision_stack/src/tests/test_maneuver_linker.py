@@ -66,14 +66,15 @@ class Sensors:
         self.stopped = True
 
 
-def trial(tmp_path, cfg=CFG, cam=None, sensor_fail=None, system=None, render=True, **robot):
+def trial(tmp_path, cfg=CFG, cam=None, sensor_fail=None, system=None, render=True, hold=False,
+          resume=None, **robot):
     clock = FakeClock()
     bot = SimRobot(clock, **robot)
     cam = cam or {}
     camera, sensors = Camera(clock, **cam), Sensors(bot, sensor_fail)
     out = tmp_path / "run"
     rep = ml.run(camera, sensors, bot, cfg, SCENE_CONFIG, out_dir=str(out), system=system,
-                 clock=clock, render=render)
+                 clock=clock, render=render, hold=hold, resume=resume)
     return rep, out, bot, camera, sensors
 
 
@@ -252,3 +253,65 @@ def test_render_only_rebuilds_the_video_from_a_run_folder(tmp_path):
     while cap.read()[0]:
         n += 1
     assert n == rep["run"]["frames"]
+
+
+
+# =============================================================================
+# --hold
+# =============================================================================
+
+def press_after(polls):
+    """A resume() that says yes on every polls-th call."""
+    n = {"i": 0}
+
+    def resume():
+        n["i"] += 1
+        return n["i"] % polls == 0
+    return resume
+
+
+@pytest.mark.software
+def test_a_held_run_waits_at_each_hold_and_reports_them(tmp_path):
+    rep, out, bot, *_ = trial(tmp_path, hold=True, resume=press_after(8), render=False)
+    assert rep["completed"] and [h["point"] for h in rep["holds"]] == [
+        "after_pulses", "after_leg_1", "after_turn", "after_leg_2"]
+    held = [r for r in rows(out / "maneuver.csv") if r["step"] == "hold"]
+    assert held and all(r["brake"] == "1" and r["hold_point"] for r in held)
+    summary = (out / "summary.txt").read_text()
+    assert summary.count(" hold after_") == 4 and "measure leg 1's distance" in summary
+
+
+@pytest.mark.software
+def test_resume_is_only_asked_while_holding(tmp_path):
+    asked = []
+    rep, *_ = trial(tmp_path, hold=True, resume=lambda: asked.append(1) or True, render=False)
+    assert rep["completed"] and len(asked) == 4          # once per hold, answered at once
+
+
+@pytest.mark.software
+def test_resume_reads_the_button_and_enter_in_a_terminal():
+    press = SimpleNamespace(button_pressed=lambda: True)
+    idle = SimpleNamespace(button_pressed=lambda: False)
+    assert ml.Resume(press, stdin=SimpleNamespace(isatty=lambda: False))()
+    assert not ml.Resume(idle, stdin=SimpleNamespace(isatty=lambda: False))()
+    r, w = os.pipe()
+    with os.fdopen(r) as rf, os.fdopen(w, "w") as wf:
+        tty = SimpleNamespace(isatty=lambda: True, fileno=rf.fileno, readline=rf.readline)
+        resume = ml.Resume(idle, stdin=tty)
+        assert not resume()
+        wf.write("\n")
+        wf.flush()
+        assert resume() and not resume()                 # the Enter is used up
+
+
+@pytest.mark.software
+def test_cli_hold_flag_reaches_run(monkeypatch, tmp_path):
+    got = {}
+    monkeypatch.setattr(ml, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(ml, "Sensors", lambda **k: SimpleNamespace(stop=lambda: None))
+    monkeypatch.setattr(ml.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ml, "run", lambda *a, **k: got.update(k) or {"completed": True})
+    assert ml.cli(["--hold", "--no-motors", "--no-button", "--out", str(tmp_path)]) == 0
+    assert got["hold"] is True
+    ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path)])
+    assert got["hold"] is False

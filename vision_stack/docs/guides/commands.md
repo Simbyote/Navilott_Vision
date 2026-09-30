@@ -100,6 +100,7 @@ The robot moves. Place it at the far end of the mat first; `sudo pigpiod` once p
 ```
 python3 -m src.maneuver_linker --no-motors --no-button    # bench check: nothing moves, stops at the yaw-sign check
 python3 -m src.maneuver_linker --leg-counts 800           # first run on the mat: short leg, measure it
+python3 -m src.maneuver_linker --hold                     # stop after each step to measure by hand
 python3 -m src.maneuver_linker                            # full trial with the defaults (MANEUVER in config.py)
 python3 -m src.maneuver_linker --set turn_slow_band_deg=30 --kp-heading 0.02
 python3 -m src.maneuver_linker --render runs/maneuver_<YYYYMMDD_HHMMSS>   # rebuild a run's video

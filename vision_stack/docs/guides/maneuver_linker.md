@@ -91,6 +91,37 @@ Then:
 - the robot's actual heading after the turn: did it end up pointing back along the lane? Estimate the error in degrees if not;
 - anything odd: a wheel slipping, a lurch, a pause.
 
+### Stepped run: stopping to measure each step
+
+```
+python3 -m src.maneuver_linker --hold
+```
+
+The same trial, but the robot brakes and waits after each step until you press the **start button** (or Enter in the terminal). The console says what to measure at each stop. Take your time; waiting time doesn't count against `--max-run-s`, and nothing moves until you press. The camera and sensors keep recording during the wait.
+
+| Hold | When | Measure |
+| --- | --- | --- |
+| `after_pulses` | after the two short spins | Is it pointing back along the start heading? Estimate the error in degrees |
+| `after_leg_1` | after leg 1 stops | Distance travelled from the start line; how far it drifted sideways |
+| `after_turn` | after the 180° turn settles | The angle turned, against the start heading (tape along the start heading makes this easy) |
+| `after_leg_2` | after leg 2 stops | Distance travelled back; how far it stopped from the start mark |
+
+Paper log to copy for each run (one line per hold):
+
+```
+Run folder: runs/maneuver_______________   Battery: ____   Surface: ____________
+Settings changed (flags): _______________________________________
+
+Hold           Measured by hand                        Robot said (summary.txt)
+after_pulses   heading error ____ deg                  yaw sign ______
+after_leg_1    distance ____ cm   drift ____ cm        counts L ____ R ____
+after_turn     angle ____ deg                          final ____ deg   PASS / FAIL
+after_leg_2    distance ____ cm   from start ____ cm   counts L ____ R ____
+Notes:
+```
+
+`summary.txt` lists each hold with the encoder counts where it stopped, next to the leg and turn results, so the two columns can be filled from the same run.
+
 ## 4. Reading the results
 
 Each run writes one folder, printed at the start as `output`:
@@ -151,7 +182,7 @@ Typical adjustments:
 
 Once a value works reliably, tell whoever maintains `config.py` so it becomes the default.
 
-Other flags: `--no-button` (starts after a 3 s console countdown), `--no-display` (don't play the video), `--no-render` (skip the video), `--render RUN_DIR` (make the video later from a run folder), `--scale 2` (a bigger video), `--out DIR`.
+Other flags: `--hold` (stop after each step to measure; see section 3), `--no-button` (starts after a 3 s console countdown; with `--hold`, press Enter to continue), `--no-display` (don't play the video), `--no-render` (skip the video), `--render RUN_DIR` (make the video later from a run folder), `--scale 2` (a bigger video), `--out DIR`.
 
 ## 6. Sending results back
 
@@ -172,6 +203,7 @@ The `frames/` folder is the bulk (about 30 KB a frame). If the archive is too bi
 | `hardware error` naming `board` / `adafruit_mpu6050` / I²C | IMU libraries or I²C: `i2cdetect -y 1` must show 68 |
 | `hardware error` naming `tm1637` | Display library missing; run with `--no-button` meanwhile |
 | Nothing happens after starting | It's waiting for the start button (display shows `rdy`) |
+| It stopped mid-trial and waits (`--hold`) | That's a hold: measure, then press the start button or Enter. A button still held from the start press is ignored until released |
 | `STOPPED: yaw sign unclear ...` on the mat | The spins didn't turn the robot enough for the gyro. Check the battery; try `--set pulse_s=0.4` or `--set pulse_speed=0.5` |
 | `STOPPED: stall` | A wheel was commanded but its encoder didn't count: check the encoder cables, or the wheel is blocked |
 | `STOPPED: frame gap` | The Pi fell behind; close other programs. Report it with `summary.txt` |
