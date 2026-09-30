@@ -4,8 +4,11 @@
 #   make setup          # everything except the final reboot
 #   make reboot         # reboot once you're happy
 #   make all            # setup + reboot, no pause
+#   make session TIME="2026-09-30 23:45"   # every boot: clock, pigpiod, venv shell
 #
 # Targets are idempotent
+# This file is session.mk; run it as `make -f session.mk <target>` (e.g. `make -f session.mk help`).
+# setup.mk sits beside it.
 # Run `make help` to see all targets.
 # =============================================================================
 
@@ -25,7 +28,7 @@ CAM_STAMP     := $(STAMP_DIR)/apt-camera
 I2C_STAMP     := $(STAMP_DIR)/i2c-enabled
 PIGPIO_STAMP  := $(STAMP_DIR)/pigpio-installed
 
-.PHONY: all setup help update base-deps camera-deps check i2c pigpio venv install reboot clean distclean
+.PHONY: all setup session clock pigpiod-start shell help update base-deps camera-deps check i2c pigpio venv install reboot clean distclean
 
 # --- Meta ------------------------------------------------------------------
 
@@ -33,6 +36,7 @@ help:
 	@echo "Targets:"
 	@echo "  make setup         - run everything except reboot"
 	@echo "  make all           - setup + reboot immediately"
+	@echo "  make session TIME=\"YYYY-MM-DD HH:MM\" - every boot: clock + pigpiod + venv shell"
 	@echo "  make update        - apt update && full-upgrade"
 	@echo "  make base-deps     - base build/dev tools"
 	@echo "  make camera-deps   - libcamera/gstreamer/opencv stack"
@@ -142,6 +146,34 @@ venv:
 		pip install -e .
 	@echo ""
 	@echo "==> Remember: 'source $(VENV_DIR)/bin/activate' in new shells."
+
+# --- Session (run after every boot) -----------------------------------
+# The Pi has no RTC and no network time, so the clock is set by hand.
+#   make session TIME="2026-09-30 23:45"
+# Make can't activate a venv in your current shell (each recipe runs in its
+# own subshell), so `shell` opens a new bash with the venv active. `exit`
+# leaves it.
+
+session: clock pigpiod-start shell
+
+clock:
+	@if [ -z "$(TIME)" ]; then \
+		echo "==> Set the clock: make session TIME=\"YYYY-MM-DD HH:MM\""; \
+		exit 1; \
+	fi
+	sudo date -s "$(TIME)"
+
+pigpiod-start:
+	@if pgrep -x pigpiod > /dev/null; then \
+		echo "==> pigpiod already running"; \
+	else \
+		sudo pigpiod && echo "==> pigpiod started"; \
+	fi
+
+shell:
+	@echo "==> Venv active in $(PROJECT_DIR)/vision_stack ('exit' to leave)"
+	@cd $(PROJECT_DIR)/vision_stack && \
+		exec bash --rcfile <(echo 'source ~/.bashrc; source $(VENV_DIR)/bin/activate')
 
 # --- Cleaning ----------------------------------------------------------
 

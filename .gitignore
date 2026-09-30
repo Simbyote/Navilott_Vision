@@ -87,3 +87,5 @@ video/
 # Editor swap files (vim)
 *.swp
 *.swo
+# Pi setup markers written by setup.mk / session.mk
+.make-stamps/
