@@ -211,14 +211,14 @@ def drive(pi: pigpio.pi, left_speed: float, right_speed: float) -> None:
     # Left Motor
     spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
     pi.hardware_PWM(_pwma, 1000, spd_l)
-    pi.write(_ain1, 1 if left_speed > 0 else 0)
-    pi.write(_ain2, 1 if left_speed < 0 else 0)
+    pi.write(_ain1, 1 if left_speed < 0 else 0)
+    pi.write(_ain2, 1 if left_speed > 0 else 0)
 
     # Right Motor
     spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
     pi.hardware_PWM(_pwmb, 1000, spd_r)
-    pi.write(_bin1, 1 if right_speed < 0 else 0)
-    pi.write(_bin2, 1 if right_speed > 0 else 0)
+    pi.write(_bin1, 1 if right_speed > 0 else 0)
+    pi.write(_bin2, 1 if right_speed < 0 else 0)
 
 
 def execute_command(pi: pigpio.pi, cmd: Command) -> None:
@@ -265,25 +265,25 @@ def main() -> None:
     init_motors(pi)
     navigator = LaneKeepingNavigator(base_speed=0.40)
 
-    # Sequence of test conditions representing vision stream frames
+    # Test conditions with 3.0s durations per frame state
     test_frames = [
-        ("Centered Drive", create_mock_packet(1, offset_cm=0.0)),
-        ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0)),
-        ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0)),
-        ("Approaching Stop Line (8 cm)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=8.0)),
-        ("Stop Sign Triggered", create_mock_packet(5, offset_cm=0.0, stop_sign=True)),
+        ("Centered Drive (3.0s)", create_mock_packet(1, offset_cm=0.0), 3.0),
+        ("Offset Left (-6.0 cm -> Steer Right) (3.0s)", create_mock_packet(2, offset_cm=-6.0), 3.0),
+        ("Offset Right (+6.0 cm -> Steer Left) (3.0s)", create_mock_packet(3, offset_cm=6.0), 3.0),
+        ("Approaching Stop Line (8 cm -> Brake)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=8.0), 1.5),
+        ("Stop Sign Triggered -> Brake", create_mock_packet(5, offset_cm=0.0, stop_sign=True), 1.5),
     ]
 
     try:
-        for description, packet in test_frames:
+        for description, packet, duration_sec in test_frames:
             cmd = navigator.update(packet)
             execute_command(pi, cmd)
 
             log.info(
-                f"Frame {packet.frame_id:02d} | {description:<30} | "
-                f"Cmd -> Left: {cmd.left:.3f}, Right: {cmd.right:.3f}, Brake: {cmd.brake}"
+                f"Frame {packet.frame_id:02d} | {description:<42} | "
+                f"Cmd -> Left: {cmd.left:.3f}, Right: {cmd.right:.3f}, Brake: {cmd.brake} | Duration: {duration_sec}s"
             )
-            time.sleep(0.5)  # Simulate frame processing cadence
+            time.sleep(duration_sec)
 
     finally:
         brake(pi)
