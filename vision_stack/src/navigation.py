@@ -194,41 +194,41 @@ class LaneKeepingNavigator(Navigator):
         return clamped
 
     if __name__ == "__main__":
-    try:
-        from src.estimation import EstimationPacket
+        try:
+            from src.estimation import EstimationPacket
 
-        # Instantiate a mock packet with all required fields initialized
-        test_packet = EstimationPacket(
-            # Drive & vision status
-            drive_state="drive",
-            stop_sign_detected=False,
-            stop_line_detected=False,
-            stop_line_distance_cm=None,
-            stop_line_distance_px=None,
-            lane_status="vision",
-            lane_offset_cm=-5.0,  # Robot is 5 cm to the left of center
-            lane_offset=-0.2,
-            heading_error=0.0,
-            # Telemetry & sensor fields
-            yaw_rate=0.0,
-            lateral_accel=0.0,
-            wheel_speed=0.0,
-            left_wheel_cps=0.0,
-            right_wheel_cps=0.0,
-            frame_id=1,
-            timestamp_ms=1000,
-        )
+            # Instantiate a mock packet with all required fields initialized
+            test_packet = EstimationPacket(
+                # Drive & vision status
+                drive_state="drive",
+                stop_sign_detected=False,
+                stop_line_detected=False,
+                stop_line_distance_cm=None,
+                stop_line_distance_px=None,
+                lane_status="vision",
+                lane_offset_cm=-5.0,  # Robot is 5 cm to the left of center
+                lane_offset=-0.2,
+                heading_error=0.0,
+                # Telemetry & sensor fields
+                yaw_rate=0.0,
+                lateral_accel=0.0,
+                wheel_speed=0.0,
+                left_wheel_cps=0.0,
+                right_wheel_cps=0.0,
+                frame_id=1,
+                timestamp_ms=1000,
+            )
 
-        # Instantiate the navigator
-        navigator = LaneKeepingNavigator(base_speed=0.40)
+            # Instantiate the navigator
+            navigator = LaneKeepingNavigator(base_speed=0.40)
 
-        # Process a frame
-        command = navigator.update(test_packet)
+            # Process a frame
+            command = navigator.update(test_packet)
 
-        # Print output
-        print("--- Test Run Output ---")
-        print(f"Input Lane Offset : {test_packet.lane_offset_cm} cm")
-        print(f"Resulting Command : Left={command.left:.3f}, Right={command.right:.3f}, Brake={command.brake}")
+            # Print output
+            print("--- Test Run Output ---")
+            print(f"Input Lane Offset : {test_packet.lane_offset_cm} cm")
+            print(f"Resulting Command : Left={command.left:.3f}, Right={command.right:.3f}, Brake={command.brake}")
 
-    except Exception as e:
-        print(f"Error instantiating packet: {e}")
+        except Exception as e:
+            print(f"Error instantiating packet: {e}")
