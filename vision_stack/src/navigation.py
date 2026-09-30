@@ -277,7 +277,7 @@ def main() -> None:
         max_steering_adj=0.20,   # Lower max steering adjustment clamp
     )
 
-    run_duration_sec = 5.0
+    run_duration_sec = 6.0
     frame_interval = 0.2  # 0.2s correction interval (5 Hz)
 
     # Sequence of test lane offsets in cm
