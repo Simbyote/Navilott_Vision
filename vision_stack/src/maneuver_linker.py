@@ -267,16 +267,16 @@ def run(
 
             now = clock()
             dt, prev = (now - prev if stats.frames else 0.0), now
-            sample, _, enc = sensors.read()
+            sample, batch = sensors.read()
             if machine.holding and resume():
                 machine.resume()
             tick = Tick(t=now - t0, dt=dt,
                         yaw_dps=None if sample is None else sample.yaw_rate_dps,
                         lateral_accel=None if sample is None else sample.lateral_accel_mps2,
-                        left_count=0 if enc is None else enc.left_count,
-                        right_count=0 if enc is None else enc.right_count,
-                        left_cps=0.0 if enc is None else enc.left_cps,
-                        right_cps=0.0 if enc is None else enc.right_cps)
+                        left_count=0 if batch is None or batch.left_count is None else batch.left_count,
+                        right_count=0 if batch is None or batch.right_count is None else batch.right_count,
+                        left_cps=0.0 if sample is None or sample.left_wheel_cps is None else sample.left_wheel_cps,
+                        right_cps=0.0 if sample is None or sample.right_wheel_cps is None else sample.right_wheel_cps)
             cmd = machine.step(tick)
             # Before vision: control never waits on it
             if cmd.brake:

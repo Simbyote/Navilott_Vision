@@ -3,13 +3,14 @@ sim_robot.py  --  a simulated robot for maneuver and maneuver_linker tests
 
 Wheels count at duty x cps_at_full (times a per-wheel gain, so one wheel can
 run slow), and the body turns with the difference between them. The IMU
-reports that turn with a chosen sign convention and a constant bias, so the
-yaw-sign check and the bias measurement have something real to find.
+reports that turn with a chosen sign convention and a constant bias, as the
+sensing hub delivers it, so the yaw-sign check and the bias measurement have
+something real to find. Readings go through sensing.SensorBatch, so the wheel
+speeds are the hub's own count-delta math.
 Time is a FakeClock the tests advance; nothing sleeps.
 """
-from types import SimpleNamespace
-
 from src.estimation import SensorSample
+from src.sensing import SensorBatch, SensorReading
 
 
 class FakeClock:
@@ -24,10 +25,11 @@ class FakeClock:
 class SimRobot:
     """
     Motor, encoders and IMU in one. drive()/stop() set the wheels; read()
-    returns (SensorSample, imu_frame, encoder_frame) for the time since the
-    previous read, as phase3_linker.Sensors does.
+    returns (SensorSample, SensorBatch) for the time since the previous
+    read, as phase3_linker.Sensors does.
 
-    imu_plus_is: "left" or "right", the IMU's sign convention for yaw.
+    imu_plus_is: "left" or "right", the yaw sign as delivered. The hub flips
+        this robot's IMU to "right" (IMU_YAW_SIGN), the default.
     left_gain / right_gain: Scale each wheel's speed; below 1 it drags.
     deg_per_count: Body turn per count of (right - left) wheel travel.
     stalled: Wheels never turn, whatever the command (a disconnected encoder).
@@ -37,7 +39,7 @@ class SimRobot:
         wheels far faster than coasting. 0 stops them at once.
     """
     def __init__(self, clock, cps_at_full=1000.0, left_gain=1.0, right_gain=1.0,
-                 deg_per_count=0.12, imu_plus_is="left", bias_dps=-1.1, accel_baseline=-0.9,
+                 deg_per_count=0.12, imu_plus_is="right", bias_dps=1.1, accel_baseline=-0.9,
                  stalled=False, imu=True, lag_s=0.0, brake_lag_s=0.0):
         self.clock = clock
         self.cps_at_full, self.gains = cps_at_full, (left_gain, right_gain)
@@ -53,6 +55,7 @@ class SimRobot:
         self.commands = []
         self.stops = 0
         self._last = clock()
+        self._base = SensorReading(self._last, None, None, 0.0, 0.0)
 
     def drive(self, left, right):
         self.cmd, self.braking = (left, right), False
@@ -79,8 +82,8 @@ class SimRobot:
             self.counts[i] += rates[i] * dt
         turn_dps = (rates[1] - rates[0]) * self.deg_per_count
         self.heading_deg += turn_dps * dt
-        imu = SimpleNamespace(valid=self.imu, mean_yaw_rate_dps=self.imu_sign * turn_dps + self.bias,
-                              peak_lateral_accel=self.accel)
-        enc = SimpleNamespace(left_count=int(self.counts[0]), right_count=int(self.counts[1]),
-                              left_cps=rates[0], right_cps=rates[1])
-        return SensorSample.from_frames(imu, enc), imu, enc
+        reading = SensorReading(now, self.imu_sign * turn_dps + self.bias if self.imu else None,
+                                self.accel if self.imu else None, self.counts[0], self.counts[1])
+        batch = SensorBatch((reading,), self._base)
+        self._base = reading
+        return SensorSample.from_batch(batch), batch

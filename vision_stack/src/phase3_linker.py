@@ -50,6 +50,7 @@ from src.estimation import (
     EstimationPacket, Phase3Config, Phase3Processor, SensorSample,
 )
 from src.estimation_debug import TracedPhase3Processor
+from src.sensing import SensorBatch, SensorHub
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -64,9 +65,11 @@ Sources:
     on the same footage. Replay timestamps come from the nominal frame rate.
 
 Sensors:
-    --imu starts the MPU-6050 reader and feeds it to Phase 3 each frame.
-    --encoders starts the wheel encoders (needs sudo pigpiod) and passes each
-    wheel's counts per second through to the packet. Without them, Phase 3
+    --imu reads the MPU-6050 and feeds it to Phase 3 each frame.
+    --encoders reads the wheel encoders (needs sudo pigpiod) and passes each
+    wheel's counts per second through to the packet. Both are read together
+    at 100 Hz by src/sensing.py's SensorHub, as in production, and grouped
+    per frame; yaw reads + = turning right. Without them, Phase 3
     runs with no sensors: heading holds at 0 and the pass-through fields read
     0.0. Each driver is imported only with its flag, so replays run off the Pi.
 
@@ -361,58 +364,40 @@ class Phase3Stats:
 
 class Sensors:
     """
-    The IMU and wheel encoders, each started only when asked for and imported
-    here, so replays never load the board drivers or pigpio. With neither,
-    every frame runs without sensors.
+    The linkers' view of production sensing: a sensing.SensorHub over the
+    IMU and wheel encoders, each opened only when asked for, so replays
+    never load the board drivers or pigpio. With neither, every frame runs
+    without sensors.
 
-    The IMU uses IMU_I2C_ADDRESS and IMU_RATE_HZ from params and isn't
-    calibrated here, so any gyro bias correction comes from --gyro-bias. The
-    encoders need the pigpio daemon (sudo pigpiod).
+    The IMU uses IMU_I2C_ADDRESS from params and isn't calibrated here, so
+    any gyro bias correction comes from --gyro-bias, in the hub's frame
+    (+ = turning right). The encoders need the pigpio daemon (sudo pigpiod).
     """
     def __init__(self, imu: bool = False, encoders: bool = False) -> None:
-        self._imu = self._encoders = self._pi = None
-        if imu:
-            from src.peripherals.imu import IMUReader
-            self._imu = IMUReader()
-            self._imu.start()
-        if encoders:
-            import pigpio
-            from src.peripherals.drive import EncoderReader
-            self._pi = pigpio.pi()
-            self._encoders = EncoderReader(self._pi)
-        if self._imu is not None:
-            time.sleep(0.1)
-            self._imu.snapshot()            # drop what accumulated during startup
-        if self._encoders is not None:
-            self._encoders.snapshot()       # start the first speed window here, not at construction
+        self._hub = SensorHub.open(imu=imu, encoders=encoders)
+        if self._hub.has_sensors:
+            self._hub.start()
 
-    def read(self) -> tuple[SensorSample | None, object, object]:
+    def read(self) -> tuple[SensorSample | None, SensorBatch | None]:
         """
-        This frame window's readings, and the driver snapshots behind them.
+        This frame window's readings.
 
         Outputs:
-            (sample, imu_frame, encoder_frame). sample is None with no
-            sensors; each snapshot is None when its sensor wasn't started.
-            The encoder frame carries the cumulative counts the sample
-            leaves out.
+            (sample, batch): Phase 3's SensorSample and the SensorBatch it came
+            from, which also carries the cumulative counts the sample leaves
+            out. (None, None) with no sensors.
         """
-        imu = None if self._imu is None else self._imu.snapshot()
-        enc = None if self._encoders is None else self._encoders.snapshot()
-        if imu is None and enc is None:
-            return None, None, None
-        return SensorSample.from_frames(imu, enc), imu, enc
+        if not self._hub.has_sensors:
+            return None, None
+        batch = self._hub.drain()
+        return SensorSample.from_batch(batch), batch
 
     def sample(self) -> SensorSample | None:
         """This frame window's readings; None with no sensors."""
         return self.read()[0]
 
     def stop(self) -> None:
-        if self._imu is not None:
-            self._imu.stop()
-        if self._encoders is not None:
-            self._encoders.cancel()
-        if self._pi is not None:
-            self._pi.stop()
+        self._hub.stop()
 
 
 def run(

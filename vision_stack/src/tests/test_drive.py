@@ -227,6 +227,18 @@ def test_only_c1_rising_edges_count(env):
 
 
 @pytest.mark.software
+def test_counts_are_the_live_totals_and_leave_the_speed_window_alone(env):
+    mod, pi, clock = env
+    enc = mod.EncoderReader(pi)
+    l1, l2, r1, r2 = _pins(mod)
+    pi.quad(l1, l2, 12, c1_leads=True); pi.quad(r1, r2, 5, c1_leads=False)
+    assert enc.counts() == (12, 5)
+    assert enc.counts() == (12, 5)                  # reading changes nothing
+    clock.now += 0.5
+    assert enc.snapshot().left_cps == pytest.approx(24.0)    # the window still starts at construction
+
+
+@pytest.mark.software
 def test_reset_zeroes_and_cancel_stops_counting(env):
     mod, pi, _ = env
     enc = mod.EncoderReader(pi)

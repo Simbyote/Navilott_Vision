@@ -110,6 +110,23 @@ def test_calibrate_raises_when_every_read_fails():
 
 
 @pytest.mark.software
+def test_read_is_one_bias_corrected_reading_in_degrees_in_the_drivers_frame():
+    mpu = FakeMPU(gz_dps=0.5, ay=-0.3)
+    r = reader(mpu)
+    r.calibrate(samples=5)
+    mpu.gz_rad = math.radians(10.5)
+    yaw, ay = r.read()
+    assert yaw == pytest.approx(10.0, abs=1e-6) and ay == -0.3      # no sign flip: that's sensing's job
+    assert r.snapshot().sample_count == 0                             # read() doesn't feed the accumulator
+
+
+@pytest.mark.software
+def test_read_raises_a_failed_read_for_its_caller_to_count():
+    with pytest.raises(OSError):
+        reader(FakeMPU(fail_every=1)).read()
+
+
+@pytest.mark.software
 def test_worker_subtracts_the_calibrated_bias_and_converts_to_degrees():
     mpu = FakeMPU(gz_dps=0.5, ay=-0.3)
     r = reader(mpu)

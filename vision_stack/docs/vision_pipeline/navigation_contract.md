@@ -45,7 +45,7 @@ class Navigator(Protocol):
 | `lane_status` | Steer by `lane_offset` only on `vision` or `hold`. On `stale`, the offset is an old value: **don't drive forward on it** |
 | `drive_state` | On `stop`, **don't drive forward**. `caution` is Navigation's call |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
-| `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window, + = forward. 0.0 means stopped **or** no encoders |
+| `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders |
 | `wheel_speed` | Always 0.0 for now (`@TODO`: counts per revolution and wheel diameter). Don't use it |
 | `stop_sign_detected` | The sign gate is untuned (see `phase3_estimation.md`, "Open items"). Don't rely on it yet |
 | `timestamp_ms` | Capture time on `time.monotonic_ns() // 1_000_000`. Differences between packets give dt |
@@ -76,13 +76,13 @@ Measured on this robot with `maneuver_linker`, 2026-09-30:
 | `BRAKE` | Stops sharply. With it, a gyro target of **171°** gives a real **180°** turn |
 | Below 0.25 duty | Stalls under load |
 
-Gyro bias at rest is about −1.0 °/s. It is measured again at every start and shouldn't be trusted as a constant. Lateral acceleration reads about −0.9 m/s² at rest from the mount's tilt, so only changes in it mean anything.
+Gyro bias at rest is about −1.0 °/s raw, +1.0 °/s after the flip. It is measured again at every start and shouldn't be trusted as a constant. Lateral acceleration reads about −0.9 m/s² at rest from the mount's tilt, so only changes in it mean anything.
 
 ---
 
 ## Yaw sign
 
-This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the robot turns left**. The maneuver trial measures this with its spin pulses. Estimation's convention is + = right, so the raw value is flipped once, per robot, when the sensors are read. The flip (`IMU_YAW_SIGN`) lands with sensor collection. Until then, `yaw_rate` and `heading_error` on this robot read + for left.
+This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the robot turns left**. The maneuver trial measures this with its spin pulses. Estimation's convention is + = right, so `src/sensing.py`'s `SensorHub` flips the raw value once, per robot, when the sensors are read (`IMU_YAW_SIGN = -1` in `params.py`). `yaw_rate` and `heading_error` in the packet read **+ = turning right**. Gyro bias is in the same flipped frame: about **+1.0 °/s** at rest on this robot.
 
 ---
 

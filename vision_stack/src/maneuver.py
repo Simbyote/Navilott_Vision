@@ -71,9 +71,10 @@ class ManeuverConfig:
     turn_tolerance_deg: float = 5.0     # pass: final angle within target +/- this
     turn_timeout_s: float = 6.0         # pass: target reached within this
     turn_abort_deg: float = 270.0       # safety: a turn past this is stopped
-    # Starting gyro bias, deg/s: the mean yaw at rest from the 2026-09-29
-    # phase3_linker run. SETTLE measures it again and uses the measurement
-    gyro_bias_dps: float = -1.1
+    # Starting gyro bias, deg/s, in sensing's + = right frame: the mean raw yaw
+    # at rest from the 2026-09-29 phase3_linker run was -1.1, and IMU_YAW_SIGN
+    # flips it. SETTLE measures it again and uses the measurement
+    gyro_bias_dps: float = 1.1
     settle_s: float = 2.0
     pulse_speed: float = 0.40
     pulse_s: float = 0.25

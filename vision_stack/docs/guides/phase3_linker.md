@@ -54,9 +54,9 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--limit N` | Stop after N frames |
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
-| `--imu` | Start the MPU-6050 and feed it to Phase 3 |
+| `--imu` | Read the MPU-6050 through the sensing hub (`src/sensing.py`, 100 Hz, grouped per frame, yaw flipped to + = right) and feed it to Phase 3 |
 | `--encoders` | Start the wheel encoders and pass each wheel's counts per second through to the packet |
-| `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating. `--imu` doesn't calibrate, so pass it here. Applied on top of `MEASURED_ESTIMATION` (`src/config.py`), like `--cm-per-px` |
+| `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating, in the flipped + = right frame (about +1.0 on this robot). `--imu` doesn't calibrate, so pass it here. Applied on top of `MEASURED_ESTIMATION` (`src/config.py`), like `--cm-per-px` |
 | `--cm-per-px S` | Hand-measured ground scale; fills `lane_offset_cm` |
 | `--hsv PATH` | HSV ranges to use instead of `calibration/hsv_ranges.json`, which `MEASURED` already loads |
 | `--print-every N` | Status line every N frames (default once a second); 0 prints only events |
@@ -140,7 +140,7 @@ Each takes about a minute with the robot on the course.
 
 **Noise floor.** Park the robot centered and still, run `--camera --limit 300`. The `std` under "lane offset while on vision" is the measurement noise. Differences smaller than that between two settings aren't meaningful.
 
-**IMU yaw sign.** Run `--camera --imu --print-every 1`, cover the lens so vision drops to `hold`, and turn the robot right by hand. `hd` should go positive. If it goes negative, the IMU sign doesn't match what `estimation.py` expects; see `vision_stack/phase3_estimation.md`.
+**IMU yaw sign.** Run `--camera --imu --print-every 1`, cover the lens so vision drops to `hold`, and turn the robot right by hand. `hd` should go positive. If it goes negative, `IMU_YAW_SIGN` in `params.py` is wrong for this robot's mount; see `vision_stack/phase3_estimation.md`, "Sign conventions".
 
 **Gyro bias.** With the robot still and the lens covered, `hd` should stay near 0. If it drifts steadily, note how fast (degrees per second) and pass that value as `--gyro-bias`.
 
