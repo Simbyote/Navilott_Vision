@@ -93,7 +93,8 @@ def draw_strip(m: dict, cfg: ManeuverConfig, width: int, scale: int = 1) -> np.n
         color = dv.C_RED if m["event"].startswith("ABORT") else dv.C_GRAY
         dv.draw_text(img, m["event"], (6 * s + tw + 12 * s, lh - 3 * s), color, fs, th)
 
-    dv.draw_text(img, (f"cmd {fmt(m.get('cmd_left'), '+.2f')}/{fmt(m.get('cmd_right'), '+.2f')}  "
+    cmd = "BRAKE" if m.get("brake") else f"{fmt(m.get('cmd_left'), '+.2f')}/{fmt(m.get('cmd_right'), '+.2f')}"
+    dv.draw_text(img, (f"cmd {cmd}  "
                        f"cnt {fmt(m.get('c_counts'), '+.3f')} hdg {fmt(m.get('c_heading'), '+.3f')}  "
                        f"cps {fmt(m.get('left_cps'), '.0f')}/{fmt(m.get('right_cps'), '.0f')}  "
                        f"yaw {fmt(m.get('yaw_corrected'), '+.0f')}"),

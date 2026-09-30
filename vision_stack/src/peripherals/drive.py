@@ -227,6 +227,24 @@ class MotorController:
         self._pi.write(self.bin2, 0)
         self._pi.write(self.stby, 0)
 
+    def brake(self) -> None:
+        """
+        Short-brake both motors: they stop in a fraction of the time stop() lets them coast.
+
+        TB6612 with IN1 = IN2 = HIGH ties both motor terminals to the same
+        rail, so a spinning motor's back-EMF drives current through its own
+        winding and brakes it; stop() leaves the terminals open and the
+        wheels freewheel. STBY stays HIGH (standby would float the outputs,
+        which is coasting) and PWM is full on, as the datasheet specifies
+        for short brake. At standstill it draws no current. Call stop()
+        afterwards to put the driver in standby.
+        """
+        self._pi.write(self.stby, 1)
+        for pin in (self.ain1, self.ain2, self.bin1, self.bin2):
+            self._pi.write(pin, 1)
+        self._pi.hardware_PWM(self.pwma, self.pwm_freq, 1000000)
+        self._pi.hardware_PWM(self.pwmb, self.pwm_freq, 1000000)
+
     def drive_straight_closed_loop(
         self,
         encoders: EncoderReader,
