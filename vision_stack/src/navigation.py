@@ -1,4 +1,5 @@
-"""Navigation contract: what Navigation receives each frame and what it must give back.
+"""
+Navigation contract: what Navigation receives each frame and what it must give back.
 
 Purpose:
     The handoff between the vision stack and Navigation, fixed before
@@ -86,3 +87,108 @@ def command_problems(cmd: Command) -> list[str]:
     if cmd.brake and (cmd.left, cmd.right) != (0.0, 0.0):
         problems.append(f"brake with duty ({cmd.left}, {cmd.right}); a brake carries none")
     return problems
+
+# =============================================================================
+# Lane Keeping Navigator Implementation
+# =============================================================================
+
+class LaneKeepingNavigator(Navigator):
+    """
+    Proportional differential steering navigator for lane keeping.
+    """
+
+    def __init__(
+        self,
+        base_speed: float = 0.40,
+        kp_cm: float = 0.015,
+        kp_norm: float = 0.35,
+        kp_heading: float = 0.008,
+        max_steering_adj: float = 0.25,
+    ) -> None:
+        """
+        Initialize navigator gains and parameters.
+
+        Args:
+            base_speed: Nominal forward motor duty (default: 0.40).
+            kp_cm: Proportional gain when using physical lane_offset_cm.
+            kp_norm: Proportional gain when using normalized lane_offset [-1, 1].
+            kp_heading: Proportional gain for heading correction when vision is lost.
+            max_steering_adj: Maximum differential duty correction allowed.
+        """
+        self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
+        self.kp_cm = kp_cm
+        self.kp_norm = kp_norm
+        self.kp_heading = kp_heading
+        self.max_steering_adj = max_steering_adj
+
+    def reset(self) -> None:
+        """Reset internal navigator state."""
+        pass
+
+    def update(self, packet: EstimationPacket) -> Command:
+        """
+        Processes an EstimationPacket and returns a valid Command.
+        """
+        # Rule 1: High priority stop signals (Red lights or detected stop line/sign)
+        if packet.drive_state == "stop" or packet.stop_sign_detected:
+            return BRAKE
+
+        # Stop line safety check: apply brake if stop line is near
+        if packet.stop_line_detected and packet.stop_line_distance_cm is not None:
+            if packet.stop_line_distance_cm <= 10.0:  # Within 10 cm of stop line
+                return BRAKE
+
+        # Rule 2: Determine steering error correction
+        steering_adj = 0.0
+
+        if packet.lane_status == "vision":
+            # Primary vision tracking: positive lane_offset means robot is to the right of center
+            if packet.lane_offset_cm is not None:
+                # Steering adjustment based on cm offset
+                steering_adj = packet.lane_offset_cm * self.kp_cm
+            else:
+                # Fallback to normalized offset [-1.0, 1.0]
+                steering_adj = packet.lane_offset * self.kp_norm
+
+        elif packet.lane_status in ("hold", "stale"):
+            # Vision dropped: perform heading correction using IMU heading error
+            steering_adj = packet.heading_error * self.kp_heading
+
+        # Clamp maximum steering correction adjustment
+        steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
+
+        # Rule 3: Compute raw wheel duties (positive offset -> steer left)
+        left_duty = self.base_speed - steering_adj
+        right_duty = self.base_speed + steering_adj
+
+        # Rule 4: Apply STALL_DUTY limits and bounds clamping
+        left_duty = self._sanitize_duty(left_duty)
+        right_duty = self._sanitize_duty(right_duty)
+
+        cmd = Command(left=left_duty, right=right_duty, brake=False)
+
+        # Final Contract Safety Check
+        problems = command_problems(cmd)
+        if problems:
+            # Fallback to safe brake if an invalid command condition occurs
+            return BRAKE
+
+        return cmd
+
+    def _sanitize_duty(self, duty: float) -> float:
+        """
+        Enforces stall limits and clamps motor duty within valid ranges.
+        """
+        if abs(duty) < 1e-4:
+            return 0.0
+        
+        # Clamp duty to [-1.0, 1.0]
+        clamped = max(-1.0, min(1.0, duty))
+        
+        # Enforce minimum STALL_DUTY magnitude for moving wheels
+        if 0.0 < clamped < STALL_DUTY:
+            return STALL_DUTY
+        elif -STALL_DUTY < clamped < 0.0:
+            return -STALL_DUTY
+            
+        return clamped

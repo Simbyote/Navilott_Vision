@@ -13,7 +13,7 @@ Main package:
     EncoderFrame: one frame window's cumulative encoder counts and calculated 
         instantaneous wheel speeds (counts per second).
     EncoderReader: non-blocking quadrature decoder registering state transitions 
-        on left (GPIO 21/20) and right (GPIO 16/19) channel interrupts via pigpio.
+        on left (GPIO 16/19) and right (GPIO 21/20) channel interrupts via pigpio.
     MotorController: abstraction layer translating normalized speed vectors (-1.0 
         to 1.0) into TB6612 direction control pins and hardware PWM duty cycles, 
         and encapsulating closed-loop execution routines.
@@ -26,11 +26,13 @@ Flow:
        execute routines with real-time feedback logging.
     5. Call stop() and cancel() on exit to disengage hardware PWM and callbacks safely.
 """
-
+import math
 import time
 import logging
 from dataclasses import dataclass
+from typing import Callable, Any, Dict, List
 import pigpio
+from System import System
 
 # =============================================================================
 # Logging Setup
@@ -60,14 +62,12 @@ class EncoderFrame:
 # =============================================================================
 class EncoderReader:
     """
-    Reads quadrature encoders on Left (GPIO 21/20) and Right (GPIO 16/19) motors.
+    Reads quadrature encoders on Left (GPIO 16/19) and Right (GPIO 21/20) motors.
     """
-    # Measured 2026-09-29: the encoder on 21/20 turns with motor A (left).
-    # Each side's decode direction moved with its pins.
-    LEFT_C1  = 21
-    LEFT_C2  = 20
-    RIGHT_C1 = 16
-    RIGHT_C2 = 19
+    LEFT_C1  = 16
+    LEFT_C2  = 19
+    RIGHT_C1 = 21
+    RIGHT_C2 = 20
 
     def __init__(self, pi: pigpio.pi) -> None:
         self._pi = pi
@@ -77,8 +77,6 @@ class EncoderReader:
         self._left_pos = 0
         self._right_pos = 0
         self._last_time = time.perf_counter()
-        self._last_left = 0         # counts at the previous snapshot, for the per-window speed
-        self._last_right = 0
 
         self._left_c1_state = 0
         self._left_c2_state = 0
@@ -102,8 +100,6 @@ class EncoderReader:
         elif gpio == self.LEFT_C2:
             self._left_c2_state = level
 
-        # + = forward: measured 2026-09-29 by turning each wheel forward by
-        # hand, which read negative under the previous decode
         if gpio == self.LEFT_C1 and level == 1:
             if self._left_c2_state == 0:
                 self._left_pos += 1
@@ -122,12 +118,8 @@ class EncoderReader:
             else:
                 self._right_pos += 1
 
-    def counts(self) -> tuple[int, int]:
-        """(left, right) counts since reset(), + = forward. Changes no state, so any thread may call it."""
-        return self._left_pos, self._right_pos
-
     def snapshot(self) -> EncoderFrame:
-        """Current counts since reset(), and counts per second over the window since the previous snapshot."""
+        """Atomically read current counts and compute counts per second."""
         now = time.perf_counter()
         dt = now - self._last_time
         self._last_time = now
@@ -135,10 +127,8 @@ class EncoderReader:
         l_count = self._left_pos
         r_count = self._right_pos
 
-        # Speed is the change over this window, not the total since reset()
-        l_cps = ((l_count - self._last_left) / dt) if dt > 0 else 0.0
-        r_cps = ((r_count - self._last_right) / dt) if dt > 0 else 0.0
-        self._last_left, self._last_right = l_count, r_count
+        l_cps = (l_count / dt) if dt > 0 else 0.0
+        r_cps = (r_count / dt) if dt > 0 else 0.0
 
         return EncoderFrame(
             left_count=l_count,
@@ -151,8 +141,6 @@ class EncoderReader:
         """Reset internal encoder count offsets to zero."""
         self._left_pos = 0
         self._right_pos = 0
-        self._last_left = 0
-        self._last_right = 0
 
     def cancel(self) -> None:
         """Clean up pigpio callbacks."""
@@ -163,12 +151,12 @@ class EncoderReader:
 
 
 # =============================================================================
-# Motor Controller Class (TB6612 Driver & Closed-Loop Control)
+# Motor Controller Class (TB6612 Driver & Control Routines)
 # =============================================================================
 class MotorController:
     """
     Controls a dual DC motor setup via a TB6612 motor driver and pigpio.
-    Handles raw motor command generation and higher-level closed-loop routines.
+    Handles raw motor commands, closed-loop routines, and step orchestration.
     """
 
     def __init__(
@@ -196,6 +184,9 @@ class MotorController:
         self.stby = stby
         self.pwm_freq = pwm_freq
 
+        self.timing_records: List[Dict[str, Any]] = []
+        self._run_start_time: float = 0.0
+
         self._init_gpio()
 
     def _init_gpio(self) -> None:
@@ -209,17 +200,16 @@ class MotorController:
         """
         self._pi.write(self.stby, 1)
 
-        # Left Motor Direction & Duty Cycle (0 to 1,000,000 for hardware_PWM)
         spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
         self._pi.hardware_PWM(self.pwma, self.pwm_freq, spd_l)
-        self._pi.write(self.ain1, 1 if left_speed < 0 else 0)
-        self._pi.write(self.ain2, 1 if left_speed > 0 else 0)
+        self._pi.write(self.ain1, 1 if left_speed > 0 else 0)
+        self._pi.write(self.ain2, 1 if left_speed < 0 else 0)
 
         # Right Motor Direction & Duty Cycle
         spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
         self._pi.hardware_PWM(self.pwmb, self.pwm_freq, spd_r)
-        self._pi.write(self.bin1, 1 if right_speed > 0 else 0)
-        self._pi.write(self.bin2, 1 if right_speed < 0 else 0)
+        self._pi.write(self.bin1, 1 if right_speed < 0 else 0)
+        self._pi.write(self.bin2, 1 if right_speed > 0 else 0)
 
     def stop(self) -> None:
         """Stop both motors immediately and set standby LOW."""
@@ -230,24 +220,6 @@ class MotorController:
         self._pi.write(self.bin1, 0)
         self._pi.write(self.bin2, 0)
         self._pi.write(self.stby, 0)
-
-    def brake(self) -> None:
-        """
-        Short-brake both motors: they stop in a fraction of the time stop() lets them coast.
-
-        TB6612 with IN1 = IN2 = HIGH ties both motor terminals to the same
-        rail, so a spinning motor's back-EMF drives current through its own
-        winding and brakes it; stop() leaves the terminals open and the
-        wheels freewheel. STBY stays HIGH (standby would float the outputs,
-        which is coasting) and PWM is full on, as the datasheet specifies
-        for short brake. At standstill it draws no current. Call stop()
-        afterwards to put the driver in standby.
-        """
-        self._pi.write(self.stby, 1)
-        for pin in (self.ain1, self.ain2, self.bin1, self.bin2):
-            self._pi.write(pin, 1)
-        self._pi.hardware_PWM(self.pwma, self.pwm_freq, 1000000)
-        self._pi.hardware_PWM(self.pwmb, self.pwm_freq, 1000000)
 
     def drive_straight_closed_loop(
         self,
@@ -275,9 +247,9 @@ class MotorController:
                 correction = error * kp
                 correction = max(-max_corr, min(max_corr, correction))
 
-                # Adjust speeds: slow the wheel that is ahead
-                left_cmd = max(min_speed, min(1.0, base_speed - correction))
-                right_cmd = max(min_speed, min(1.0, base_speed + correction))
+                # Adjust speeds
+                left_cmd = max(min_speed, min(1.0, base_speed + correction))
+                right_cmd = max(min_speed, min(1.0, base_speed - correction))
 
                 self.drive(left_cmd, right_cmd)
 
@@ -316,3 +288,52 @@ class MotorController:
                 time.sleep(0.05)
         finally:
             self.stop()
+
+    def start_sequence(self) -> None:
+        """Resets run timing and clears previous timing logs."""
+        self.timing_records.clear()
+        self._run_start_time = time.perf_counter()
+
+    def run_step(
+        self,
+        step_name: str,
+        drive_fn: Callable[..., None],
+        system: System,
+        encoders: EncoderReader,
+        **kwargs,
+    ) -> None:
+        """
+        Waits for a user button trigger via `System`, executes the countdown,
+        runs the given drive maneuver, and records step execution telemetry.
+        """
+        if self._run_start_time == 0.0:
+            self._run_start_time = time.perf_counter()
+
+        log.info(f"Waiting for button press for {step_name}...")
+        system.wait_for_start()
+        btn_press_time = time.perf_counter()
+
+        system.run_countdown()
+        step_start_time = time.perf_counter()
+
+        log.info(f"Executing {step_name}...")
+        drive_fn(encoders, **kwargs)
+        step_end_time = time.perf_counter()
+
+        self.timing_records.append({
+            "step": step_name,
+            "btn_press_rel": btn_press_time - self._run_start_time,
+            "btn_press_time": time.strftime("%H:%M:%S", time.localtime()),
+            "execution_duration": step_end_time - step_start_time,
+        })
+
+    def print_timing_summary(self) -> None:
+        """Log a summary of execution timings for all completed steps."""
+        log.info("================ TIMING SUMMARY ================")
+        for record in self.timing_records:
+            log.info(
+                f"{record['step']} | Button Pressed: {record['btn_press_time']} "
+                f"(+{record['btn_press_rel']:.2f}s into run) | "
+                f"Drive Duration: {record['execution_duration']:.2f}s"
+            )
+        log.info("================================================")
