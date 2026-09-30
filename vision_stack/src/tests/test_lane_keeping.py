@@ -8,7 +8,7 @@ steers by, the steering clamp and the stall-duty floor.
 import pytest
 
 from src.lane_keeping import (
-    BASE_SPEED, KP_CM, KP_HEADING, KP_NORM, MAX_STEERING_ADJ, STOP_LINE_THRESHOLD_CM,
+    BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, KP_NORM, NORM_TO_CM, MAX_STEERING_ADJ, STOP_LINE_THRESHOLD_CM,
     LaneKeepingNavigator, check_stop_line_trigger,
 )
 from src.navigation import BRAKE, STALL_DUTY, Command, Navigator, command_problems
@@ -104,15 +104,17 @@ def test_centered_drives_straight_at_the_base_speed():
 @pytest.mark.software
 def test_on_vision_it_steers_by_cm_when_there_is_a_scale():
     cmd = nav().update(packet(lane_offset=0.9, lane_offset_cm=2.0))
-    assert cmd.left == pytest.approx(BASE_SPEED - 2.0 * KP_CM)
-    assert cmd.right == pytest.approx(BASE_SPEED + 2.0 * KP_CM)
+    steer = 2.0 * KP_CM * (1.0 + GAIN_SCALE * 2.0)
+    assert cmd.left == pytest.approx(BASE_SPEED - steer)
+    assert cmd.right == pytest.approx(BASE_SPEED + steer)
 
 
 @pytest.mark.software
 def test_on_vision_without_a_scale_it_steers_by_the_normalized_offset():
     cmd = nav().update(packet(lane_offset=-0.2))
-    assert cmd.left == pytest.approx(BASE_SPEED + 0.2 * KP_NORM)
-    assert cmd.right == pytest.approx(BASE_SPEED - 0.2 * KP_NORM)
+    steer = -0.2 * KP_NORM * (1.0 + GAIN_SCALE * 0.2 * NORM_TO_CM)
+    assert cmd.left == pytest.approx(BASE_SPEED - steer)
+    assert cmd.right == pytest.approx(BASE_SPEED + steer)
 
 
 @pytest.mark.software
@@ -176,3 +178,58 @@ def test_a_command_the_contract_rejects_becomes_a_brake(monkeypatch):
     n = nav()
     monkeypatch.setattr(n, "_sanitize_duty", lambda duty: 0.1)
     assert n.update(packet()) == BRAKE
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("field, small, large", [("lane_offset_cm", 1.0, 4.0), ("lane_offset", 0.05, 0.2)])
+def test_the_steering_gain_grows_with_the_offset_the_same_way_both_sides(field, small, large):
+    def steer(offset):
+        cmd = nav(max_steering_adj=1.0).update(packet(**{field: offset}))
+        return (cmd.right - cmd.left) / 2.0
+    assert steer(large) / large > steer(small) / small > 0      # bigger offset, bigger gain
+    assert steer(-large) == pytest.approx(-steer(large))         # symmetric
+
+
+@pytest.mark.software
+def test_zero_gain_scale_is_plain_proportional_steering():
+    cmd = nav(gain_scale=0.0).update(packet(lane_offset_cm=3.0))
+    assert cmd.left == pytest.approx(BASE_SPEED - 3.0 * KP_CM)
+
+
+# =============================================================================
+# record
+# =============================================================================
+
+@pytest.mark.software
+@pytest.mark.parametrize("fields, reason", [
+    ({"drive_state": "stop", "stop_sign_detected": True}, "drive_state_stop"),     # the light wins
+    ({"stop_sign_detected": True, "stop_line_detected": True, "stop_line_distance_cm": 0.0}, "stop_sign"),
+    ({"stop_line_detected": True, "stop_line_distance_cm": 0.0}, "stop_line"),
+])
+def test_record_names_the_stop_trigger(fields, reason):
+    n = nav()
+    assert n.update(packet(**fields)) == BRAKE
+    assert n.record == {"reason": reason, "source": "none", "steer": 0.0}
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("fields, source", [
+    ({"lane_offset_cm": 2.0}, "offset_cm"), ({"lane_offset": 0.2}, "offset"),
+    ({"lane_status": "hold", "heading_error": 5.0}, "heading"),
+    ({"lane_status": "stale", "heading_error": 5.0}, "heading"), ({"lane_status": "unknown"}, "none"),
+])
+def test_record_names_what_the_steering_came_from_and_its_value(fields, source):
+    n = nav()
+    cmd = n.update(packet(**fields))
+    assert n.record["reason"] == "steer" and n.record["source"] == source
+    assert n.record["steer"] == pytest.approx((cmd.right - cmd.left) / 2.0)
+
+
+@pytest.mark.software
+def test_record_says_rejected_and_reset_clears_it(monkeypatch):
+    n = nav()
+    monkeypatch.setattr(n, "_sanitize_duty", lambda duty: 0.1)
+    n.update(packet())
+    assert n.record["reason"] == "rejected"
+    n.reset()
+    assert n.record == {}

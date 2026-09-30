@@ -1,0 +1,428 @@
+"""
+test_navigation_linker.py  --  src/navigation_linker.py
+
+The linker end to end on synthetic camera frames and a fake motor: the run
+folder it writes, that the motors get exactly the navigator's commands (and
+a brake when a command breaks the contract), how a run ends (the run-time
+cap, the source ending, a frame limit, Ctrl-C, an error) with the motors
+stopped first every time, the start-button hooks, sensors reaching Phase 3,
+and the command line: which sources may drive the motors, render-only.
+
+--software  run() / cli() with fakes. No camera, motors or GPIO.
+"""
+import csv
+import json
+from dataclasses import replace
+import sys
+import types
+from types import SimpleNamespace
+
+import cv2
+import pytest
+
+import src.navigation_linker as nl
+from src.estimation import SensorSample
+from src.lane_keeping import LaneKeepingNavigator
+from src.navigation import BRAKE, Command
+from src.tests.scenes import SCENE_CONFIG, SCENES
+from src.tests.sim_robot import FakeClock
+
+DT = 0.05
+
+
+class Camera:
+    """FrameSource stand-in: one scene per frame from a script, advancing the fake clock by DT per read."""
+    fps, label = 20, "sim"
+
+    def __init__(self, clock, script=("two_boundary",), end_at=None, fail_at=None, drop_at=()):
+        self.clock, self.script, self.end_at, self.fail_at, self.drop_at = clock, script, end_at, fail_at, drop_at
+        self.i, self.closed = 0, False
+
+    def read(self):
+        self.clock.now += DT
+        self.i += 1
+        if self.i == self.fail_at:
+            raise KeyboardInterrupt
+        if self.end_at is not None and self.i >= self.end_at:
+            return None
+        if self.i in self.drop_at:
+            return None, None, None
+        return SCENES[self.script[min(self.i - 1, len(self.script) - 1)]], self.i, int(self.i * 1000 * DT)
+
+    def close(self):
+        self.closed = True
+
+
+class Motor:
+    """MotorController stand-in: logs every call in order."""
+    def __init__(self):
+        self.calls = []
+
+    def drive(self, left, right):
+        self.calls.append(("drive", left, right))
+
+    def brake(self):
+        self.calls.append(("brake",))
+
+    def stop(self):
+        self.calls.append(("stop",))
+
+
+class Spy:
+    """Wraps a navigator and keeps every packet and command."""
+    def __init__(self, inner=None):
+        self.inner = inner or LaneKeepingNavigator()
+        self.packets, self.commands, self.resets = [], [], 0
+
+    @property
+    def record(self):
+        return self.inner.record
+
+    def update(self, packet):
+        self.packets.append(packet)
+        cmd = self.inner.update(packet)
+        self.commands.append(cmd)
+        return cmd
+
+    def reset(self):
+        self.resets += 1
+        self.inner.reset()
+
+
+class Sensors:
+    """phase3_linker.Sensors stand-in: a fixed sample each read."""
+    def __init__(self, sample):
+        self.sample, self.reads, self.stopped = sample, 0, False
+
+    def read(self):
+        self.reads += 1
+        return self.sample, None
+
+    def stop(self):
+        self.stopped = True
+
+
+def go(tmp_path, cam=None, nav=None, sensors=None, system=None, render=False, **kw):
+    clock = FakeClock()
+    camera = Camera(clock, **({"end_at": 9} if cam is None else cam))
+    motor, nav = Motor(), nav or Spy()
+    out = tmp_path / "run"
+    rep = nl.run(camera, sensors, motor, nav, SCENE_CONFIG, out_dir=str(out), system=system,
+                 clock=clock, render=render, **kw)
+    return rep, out, motor, nav, camera
+
+
+def rows(path):
+    return list(csv.DictReader(open(path)))
+
+
+# =============================================================================
+# A run
+# =============================================================================
+
+@pytest.mark.software
+def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
+    rep, out, motor, _, camera = go(tmp_path, render=True)
+    n = rep["run"]["frames"]
+    assert n == 8 and rep["ended_by"] == nl.END_SOURCE
+    for name in ("summary.txt", "report.json", "nav.csv", "p3.csv", "records.pkl", "nav.avi", "nav_video.csv"):
+        assert (out / name).stat().st_size > 0, name
+    assert len(rows(out / "nav.csv")) == len(rows(out / "p3.csv")) == n
+    assert rep["run"]["video_frames"] == rep["run"]["recorder_written"] == n
+    assert motor.calls[-1] == ("stop",) and camera.closed
+    assert json.load(open(out / "report.json"))["nav"]["frames"] == n
+    assert "[NAVIGATION] ended by the source ended" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_the_motors_get_exactly_the_navigators_commands_in_frame_order(tmp_path):
+    rep, out, motor, nav, _ = go(tmp_path)
+    sent = motor.calls[:-1]                            # all but the final stop
+    assert sent == [("brake",) if c.brake else ("drive", c.left, c.right) for c in nav.commands]
+    assert [p.frame_id for p in nav.packets] == [int(r["frame_id"]) for r in rows(out / "p3.csv")]
+    assert nav.resets == 1
+    logged = rows(out / "nav.csv")
+    assert [(float(r["cmd_left"]), float(r["cmd_right"]), int(r["brake"])) for r in logged] == \
+           [(c.left, c.right, int(c.brake)) for c in nav.commands]
+
+
+@pytest.mark.software
+def test_a_centered_lane_drives_and_the_log_says_why(tmp_path):
+    rep, out, motor, nav, _ = go(tmp_path)
+    driven = [r for r in rows(out / "nav.csv") if r["lane_status"] == "vision"]
+    assert driven and all(r["reason"] == "steer" and r["brake"] == "0" for r in driven)
+    assert rep["nav"]["driving"] >= len(driven) and rep["nav"]["rejected"] == 0
+
+
+@pytest.mark.software
+def test_a_stop_sign_brakes_and_the_summary_counts_it(tmp_path):
+    # The synthetic scenes can't raise a voted stop sign through Phase 3 yet (the
+    # sign gate is uncalibrated), so the sign is set on the packets frames 4-6 carry
+    class SignOn(Spy):
+        def update(self, packet):
+            on = 4 <= packet.frame_id <= 6
+            return super().update(replace(packet, stop_sign_detected=on))
+    rep, out, motor, nav, _ = go(tmp_path, nav=SignOn())
+    logged = rows(out / "nav.csv")
+    braked = [int(r["frame_id"]) for r in logged if r["brake"] == "1"]
+    assert braked == [4, 5, 6] and all(r["reason"] == "stop_sign" for r in logged if r["brake"] == "1")
+    assert motor.calls[3:6] == [("brake",)] * 3
+    assert rep["nav"]["brake_reasons"] == {"stop_sign": 3}
+    assert [r["event"] for r in logged if r["event"]] == ["-> steer", "-> stop_sign", "-> steer"]
+
+
+@pytest.mark.software
+def test_reason_changes_are_logged_as_events(tmp_path):
+    rep, out, *_ = go(tmp_path, cam={"script": ("two_boundary",) * 4 + ("sign_and_lights",), "end_at": 14})
+    events = [r["event"] for r in rows(out / "nav.csv") if r["event"]]
+    reasons = [r["reason"] for r in rows(out / "nav.csv")]
+    assert events[0] == f"-> {reasons[0]}"
+    assert len(events) == 1 + sum(a != b for a, b in zip(reasons, reasons[1:]))
+
+
+# =============================================================================
+# The contract
+# =============================================================================
+
+@pytest.mark.software
+def test_a_command_that_breaks_the_contract_is_braked_and_counted(tmp_path):
+    class Stalls:
+        record = {}
+        def update(self, packet):
+            return Command(0.1, 0.1)
+        def reset(self):
+            pass
+    rep, out, motor, _, _ = go(tmp_path, nav=Stalls())
+    assert set(motor.calls[:-1]) == {("brake",)}
+    logged = rows(out / "nav.csv")
+    assert all(r["reason"] == nl.REASON_CONTRACT and "stall" in r["event"] for r in logged)
+    assert rep["nav"]["rejected"] == len(logged) == rep["nav"]["brake_reasons"][nl.REASON_CONTRACT]
+
+
+@pytest.mark.software
+def test_a_navigator_without_a_record_is_logged_as_drive_or_brake(tmp_path):
+    class Plain:
+        def __init__(self):
+            self.n = 0
+        def update(self, packet):
+            self.n += 1
+            return BRAKE if self.n % 2 else Command(0.4, 0.4)
+        def reset(self):
+            pass
+    _, out, *_ = go(tmp_path, nav=Plain())
+    assert [r["reason"] for r in rows(out / "nav.csv")][:4] == ["brake", "drive", "brake", "drive"]
+
+
+# =============================================================================
+# How a run ends
+# =============================================================================
+
+@pytest.mark.software
+def test_the_run_time_cap_ends_the_run_and_stops_the_motors(tmp_path):
+    rep, out, motor, _, _ = go(tmp_path, cam={}, max_run_s=0.5)
+    assert rep["ended_by"] == nl.END_CAP and motor.calls[-1] == ("stop",)
+    assert rep["run"]["frames"] == pytest.approx(0.5 / DT, abs=1)
+
+
+@pytest.mark.software
+def test_a_frame_limit_ends_the_run(tmp_path):
+    rep, *_ = go(tmp_path, cam={}, limit=5)
+    assert rep["ended_by"] == nl.END_LIMIT and rep["run"]["frames"] == 5
+
+
+@pytest.mark.software
+def test_ctrl_c_stops_the_motors_and_still_writes_the_summary(tmp_path):
+    rep, out, motor, _, _ = go(tmp_path, cam={"fail_at": 5}, render=True)
+    assert rep["ended_by"] == nl.END_INTERRUPT and motor.calls[-1] == ("stop",)
+    assert (out / "summary.txt").exists() and rep["run"]["video_frames"] == 4
+
+
+@pytest.mark.software
+def test_an_error_stops_the_motors_saves_the_traceback_and_is_raised(tmp_path):
+    class Breaks(Spy):
+        def update(self, packet):
+            if len(self.packets) == 3:
+                raise ValueError("navigator bug")
+            return super().update(packet)
+    clock, motor = FakeClock(), Motor()
+    with pytest.raises(ValueError, match="navigator bug"):
+        nl.run(Camera(clock, end_at=9), None, motor, Breaks(), SCENE_CONFIG,
+               out_dir=str(tmp_path / "run"), clock=clock, render=False)
+    assert motor.calls[-1] == ("stop",)
+    assert "navigator bug" in (tmp_path / "run" / "error.txt").read_text()
+    assert "ended by error" in (tmp_path / "run" / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_dropped_camera_frames_are_counted_and_skipped(tmp_path):
+    rep, *_ = go(tmp_path, cam={"end_at": 9, "drop_at": (3, 4)})
+    assert rep["run"]["camera_drops"] == 2 and rep["run"]["frames"] == 6
+
+
+# =============================================================================
+# Sensors and the start button
+# =============================================================================
+
+@pytest.mark.software
+def test_sensor_readings_reach_the_packet_and_the_sensors_are_stopped(tmp_path):
+    sensors = Sensors(SensorSample(yaw_rate_dps=0.0, left_wheel_cps=900.0, right_wheel_cps=880.0))
+    rep, out, _, nav, _ = go(tmp_path, sensors=sensors)
+    assert sensors.reads == rep["run"]["frames"] + 1          # one at the go, one per frame
+    assert all((p.left_wheel_cps, p.right_wheel_cps) == (900.0, 880.0) for p in nav.packets)
+    assert sensors.stopped
+    assert {r["left_cps"] for r in rows(out / "nav.csv")} == {"900.0"}
+
+
+@pytest.mark.software
+def test_the_start_button_is_waited_for_and_the_display_kept(tmp_path):
+    calls = []
+    system = SimpleNamespace(wait_for_start=lambda: calls.append("wait"),
+                             run_countdown=lambda: calls.append("countdown"),
+                             update_display=lambda t: calls.append("tick"),
+                             show_final_time=lambda t: calls.append("final"),
+                             cleanup=lambda: calls.append("cleanup"))
+    rep, *_ = go(tmp_path, system=system)
+    assert calls[:2] == ["wait", "countdown"] and calls[-2:] == ["final", "cleanup"]
+    assert calls.count("tick") == rep["run"]["frames"]
+
+
+@pytest.mark.software
+def test_ctrl_c_while_waiting_for_the_button_still_stops_everything(tmp_path):
+    def wait():
+        raise KeyboardInterrupt
+    system = SimpleNamespace(wait_for_start=wait, run_countdown=lambda: None, update_display=lambda t: None,
+                             show_final_time=lambda t: None, cleanup=lambda: None)
+    rep, out, motor, _, camera = go(tmp_path, system=system)
+    assert rep["ended_by"] == nl.END_INTERRUPT and rep["run"]["frames"] == 0
+    assert motor.calls == [("stop",)] and camera.closed
+
+
+# =============================================================================
+# The summary
+# =============================================================================
+
+@pytest.mark.software
+def test_nav_stats_counts_driving_braking_steering_and_latency():
+    s = nl.NavStats()
+    for n in ({"reason": "steer", "brake": 0, "source": "offset", "steer": 0.2, "latency_ms": 10.0},
+              {"reason": "steer", "brake": 0, "source": "heading", "steer": -0.1, "latency_ms": 30.0},
+              {"reason": "stop_sign", "brake": 1, "source": "none", "steer": 0.0, "latency_ms": 20.0},
+              {"reason": nl.REASON_CONTRACT, "brake": 1, "source": "none", "steer": 0.0, "latency_ms": 40.0}):
+        s.update(n)
+    r = s.report()
+    assert (r["frames"], r["driving"], r["braked"], r["rejected"]) == (4, 2, 2, 1)
+    assert r["brake_reasons"] == {"stop_sign": 1, nl.REASON_CONTRACT: 1}
+    assert r["steer_sources"] == {"offset": 1, "heading": 1}
+    assert r["steer_abs_mean"] == pytest.approx(0.15) and r["steer_abs_max"] == pytest.approx(0.2)
+    assert r["latency_ms"]["max"] == 40.0 and r["latency_ms"]["p50"] == pytest.approx(25.0)
+
+
+@pytest.mark.software
+def test_an_empty_run_still_summarizes():
+    r = nl.NavStats().report()
+    lines = nl.summary_lines({"ended_by": "x", "motors": False, "nav": r,
+                              "run": {"frames": 0, "wall_s": 0.0, "fps": 0.0, "camera_drops": 0,
+                                      "recorder_dropped": 0}})
+    assert lines[0] == "[NAVIGATION] ended by x   motors OFF (dry run)"
+
+
+# =============================================================================
+# Command line
+# =============================================================================
+
+@pytest.fixture
+def cli_env(monkeypatch, tmp_path):
+    """cli() with every source, sensor, motor and button replaced; returns what run() was given."""
+    got = {}
+    fake_source = lambda *a, **k: SimpleNamespace(label="fake", fps=20, close=lambda: None)
+    for name in ("CameraFrameSource", "VideoFrameSource", "DirectoryFrameSource"):
+        monkeypatch.setattr(nl, name, fake_source)
+    monkeypatch.setattr(nl, "Sensors", lambda **k: SimpleNamespace(kind="sensors", stop=lambda: None))
+    drive = types.ModuleType("src.peripherals.drive")
+    drive.MotorController = lambda pi: SimpleNamespace(kind="motor", stop=lambda: None)
+    pigpio = types.ModuleType("pigpio")
+    pigpio.pi = lambda: "pi"
+    system = types.ModuleType("src.peripherals.system")
+    system.System = lambda: SimpleNamespace(kind="system")
+    monkeypatch.setitem(sys.modules, "src.peripherals.drive", drive)
+    monkeypatch.setitem(sys.modules, "pigpio", pigpio)
+    monkeypatch.setitem(sys.modules, "src.peripherals.system", system)
+    monkeypatch.setattr(nl.time, "sleep", lambda s: None)
+
+    def run(source, sensors, motor, navigator, config, p3_config, out_dir, system, **kw):
+        got.update(sensors=sensors, motor=motor, navigator=navigator, p3_config=p3_config,
+                   system=system, out_dir=out_dir, **kw)
+        return {}
+    monkeypatch.setattr(nl, "run", run)
+    return got, tmp_path
+
+
+@pytest.mark.software
+def test_the_camera_drives_the_motors_with_sensors_and_the_button(cli_env):
+    got, tmp = cli_env
+    assert nl.cli(["--camera", "--out", str(tmp / "o")]) == 0
+    assert got["motor"].kind == "motor" and got["motors_on"] is True
+    assert got["sensors"].kind == "sensors" and got["system"].kind == "system"
+    assert isinstance(got["navigator"], LaneKeepingNavigator) and got["max_run_s"] == nl.MAX_RUN_S
+
+
+@pytest.mark.software
+def test_no_motors_and_no_button_on_the_camera(cli_env):
+    got, tmp = cli_env
+    assert nl.cli(["--camera", "--no-motors", "--no-button", "--max-run-s", "7"]) == 0
+    assert isinstance(got["motor"], nl._NoMotors) and got["motors_on"] is False
+    assert got["system"] is None and got["max_run_s"] == 7.0
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("flag", ["--video", "--frames"])
+def test_replays_never_drive_the_motors_or_open_sensors(cli_env, flag):
+    got, tmp = cli_env
+    assert nl.cli([flag, str(tmp), "--limit", "3"]) == 0
+    assert isinstance(got["motor"], nl._NoMotors) and got["motors_on"] is False
+    assert got["sensors"] is None and got["system"] is None and got["limit"] == 3
+
+
+@pytest.mark.software
+def test_estimation_flags_reach_phase_3(cli_env):
+    got, tmp = cli_env
+    nl.cli(["--frames", str(tmp), "--gyro-bias", "0.7", "--cm-per-px", "0.05"])
+    assert (got["p3_config"].gyro_bias_dps, got["p3_config"].cm_per_px) == (0.7, 0.05)
+    nl.cli(["--frames", str(tmp)])
+    assert got["p3_config"].gyro_bias_dps == nl.MANEUVER.gyro_bias_dps
+
+
+@pytest.mark.software
+def test_a_source_that_wont_open_is_exit_2(monkeypatch, capsys):
+    def broken(*a, **k):
+        raise OSError("no such file")
+    monkeypatch.setattr(nl, "VideoFrameSource", broken)
+    assert nl.cli(["--video", "missing.avi"]) == 2
+    assert "no such file" in capsys.readouterr().out
+
+
+@pytest.mark.software
+def test_render_only_rebuilds_the_video_from_a_run_folder(tmp_path):
+    rep, out, *_ = go(tmp_path)
+    assert not (out / nl.VIDEO_FILE).exists()
+    assert nl.cli(["--render", str(out)]) == 0
+    cap = cv2.VideoCapture(str(out / nl.VIDEO_FILE))
+    n = 0
+    while cap.read()[0]:
+        n += 1
+    assert n == rep["run"]["frames"]
+
+
+@pytest.mark.software
+def test_the_stop_line_distance_is_logged_only_while_the_line_is_voted(tmp_path, monkeypatch):
+    # No ground homography in the synthetic scenes, so the packet's cm distance is set here
+    real = nl.run_phase3_chain
+
+    def chain(frame, fid, *a, **k):
+        res = real(frame, fid, *a, **k)
+        line = {3: (True, 8.0), 4: (False, 5.0)}.get(fid, (False, None))
+        return replace(res, packet=replace(res.packet, stop_line_detected=line[0], stop_line_distance_cm=line[1]))
+    monkeypatch.setattr(nl, "run_phase3_chain", chain)
+    _, out, *_ = go(tmp_path)
+    logged = {int(r["frame_id"]): r["stop_line_cm"] for r in rows(out / "nav.csv")}
+    assert logged[3] == "8.0" and logged[4] == "" and logged[2] == ""

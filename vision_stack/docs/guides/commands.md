@@ -112,6 +112,22 @@ Lane keeping bench demo (wheels off the ground; scripted packets, no camera): `p
 
 ---
 
+## Navigation — [navigation_linker.md](navigation_linker.md)
+
+The whole chain drives the robot with `--camera`; replays never move it. `sudo pigpiod` once per boot.
+
+```
+python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 10   # bench: nothing moves
+python3 -m src.navigation_linker --camera --max-run-s 10    # short first run on the mat
+python3 -m src.navigation_linker --camera                   # start button, 30 s cap
+python3 -m src.navigation_linker --video runs/<run>.avi     # what it would have commanded
+python3 -m src.navigation_linker --render runs/nav_<YYYYMMDD_HHMMSS>   # rebuild a run's video
+```
+
+Output: `runs/nav_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `nav.csv`, `p3.csv`, `nav.avi`)
+
+---
+
 ## Camera calibration — [calibrate_camera.md](calibrate_camera.md), [test_calibration.md](test_calibration.md)
 
 ```

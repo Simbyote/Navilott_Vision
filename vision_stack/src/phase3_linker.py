@@ -362,6 +362,20 @@ class Phase3Stats:
         return lines
 
 
+def make_processor(frame, fid: int, ts: int, config: PipelineConfig,
+                   p3_config: Phase3Config) -> TracedPhase3Processor:
+    """
+    The traced Phase 3 processor for a run, built on its first frame.
+
+    With cm_per_px set, lane_offset_cm needs the lane ROI width in px, which
+    comes from running Phase 2 on the first frame; otherwise the frame isn't used.
+    """
+    if p3_config.cm_per_px is not None and p3_config.lane_roi_width_px is None:
+        lane_w = run_chain(frame, fid, ts, config).roi.lane_rect[2]
+        p3_config = replace(p3_config, lane_roi_width_px=int(lane_w))
+    return TracedPhase3Processor(p3_config)
+
+
 class Sensors:
     """
     The linkers' view of production sensing: a sensing.SensorHub over the
@@ -467,11 +481,7 @@ def run(
 
             sample = sensors.sample()
             if processor is None:
-                # Built on the first frame so the lane ROI width is known
-                if p3_config.cm_per_px is not None and p3_config.lane_roi_width_px is None:
-                    lane_w = run_chain(frame, fid, ts, config).roi.lane_rect[2]
-                    p3_config = replace(p3_config, lane_roi_width_px=int(lane_w))
-                processor = TracedPhase3Processor(p3_config)
+                processor = make_processor(frame, fid, ts, config, p3_config)
 
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
             quit_ = False
