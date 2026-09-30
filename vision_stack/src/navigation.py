@@ -284,7 +284,7 @@ def main() -> None:
         ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0), 0.5),
         ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0), 0.5),
         ("Approaching Stop Line (5.0 cm -> Continue)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=5.0), 0.5),
-        ("Reached Stop Line (3.0 cm -> Brake)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=3.0), 0.5),
+        ("Reached Stop Line (3.0 cm -> Brake)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=0.5), 0.5),
         ("Stop Sign Triggered -> Brake", create_mock_packet(6, offset_cm=0.0, stop_sign=True), 0.5),
     ]
 
