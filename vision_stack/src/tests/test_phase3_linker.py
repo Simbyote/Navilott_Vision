@@ -10,6 +10,7 @@ budget and the total, and Ctrl-C still leaves a playable video.
 """
 import importlib
 import sys
+import time
 import types
 
 import cv2
@@ -155,8 +156,41 @@ def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_
 
 
 @pytest.mark.software
+def test_the_imu_is_read_through_the_sensing_hub_with_yaw_flipped(monkeypatch):
+    class RawIMU:
+        def __init__(self):
+            pass
+        def read(self):
+            return 25.0, -0.9                            # raw: + = left on this robot
+    imu_mod = types.ModuleType("src.peripherals.imu")
+    imu_mod.IMUReader = RawIMU
+    monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
+    sensors = p3.Sensors(imu=True)
+    time.sleep(0.05)
+    sample, batch = sensors.read()
+    sensors.stop()
+    assert batch.imu_count > 0
+    assert (sample.yaw_rate_dps, sample.lateral_accel_mps2) == (-25.0, -0.9)
+    assert sample.left_wheel_cps is None                 # no encoders asked for
+
+
+@pytest.mark.software
+def test_encoder_reads_carry_the_cumulative_counts(fake_encoders):
+    drive, pi = fake_encoders
+    enc = drive.EncoderReader
+    sensors = p3.Sensors(encoders=True)
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
+    _, batch = sensors.read()
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 5, c1_leads=True)
+    _, batch = sensors.read()
+    sensors.stop()
+    assert batch.left_count == 25 and batch.right_count == 0
+
+
+@pytest.mark.software
 def test_no_sensors_gives_no_sample():
     assert p3.Sensors().sample() is None
+    assert p3.Sensors().read() == (None, None)
 
 
 @pytest.mark.software

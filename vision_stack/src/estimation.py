@@ -122,6 +122,30 @@ class SensorSample:
         """from_frames() with the IMU only."""
         return cls.from_frames(imu_frame, None, wheel_speed_mps)
 
+    @classmethod
+    def from_batch(
+            cls,
+            batch,
+            wheel_speed_mps: float | None = None,
+        ) -> "SensorSample":
+        """
+        Build a SensorSample from one frame window's sensing.SensorBatch.
+
+        Inputs:
+            batch: Duck-typed on mean_yaw_dps (already + = turning right),
+                peak_lateral_accel, left_cps and right_cps, so this module
+                never imports sensing. Each is None when its sensor isn't
+                there or gave nothing this window.
+            wheel_speed_mps: Carried through as-is.
+        """
+        return cls(
+            yaw_rate_dps = batch.mean_yaw_dps,
+            lateral_accel_mps2 = batch.peak_lateral_accel,
+            wheel_speed_mps = wheel_speed_mps,
+            left_wheel_cps = batch.left_cps,
+            right_wheel_cps = batch.right_cps,
+        )
+
 @dataclass(frozen=True)
 class LaneEstimate:
     """Output of the lane filter for one frame."""

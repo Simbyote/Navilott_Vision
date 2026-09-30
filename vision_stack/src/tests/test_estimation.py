@@ -356,6 +356,16 @@ def test_from_frames_combines_the_imu_and_the_encoders():
 
 
 @pytest.mark.software
+def test_from_batch_reads_each_field_off_the_batch():
+    batch = SimpleNamespace(mean_yaw_dps=-12.5, peak_lateral_accel=0.8, left_cps=100.0, right_cps=0.0)
+    s = SensorSample.from_batch(batch, wheel_speed_mps=0.2)
+    assert s == SensorSample(yaw_rate_dps=-12.5, lateral_accel_mps2=0.8, wheel_speed_mps=0.2,
+                             left_wheel_cps=100.0, right_wheel_cps=0.0)
+    none = SimpleNamespace(mean_yaw_dps=None, peak_lateral_accel=None, left_cps=None, right_cps=None)
+    assert SensorSample.from_batch(none) == SensorSample()
+
+
+@pytest.mark.software
 def test_wheel_counts_per_second_pass_through_to_the_packet_and_wheel_speed_stays_zero():
     pkt, _ = Phase3Processor().process(p2(), SensorSample(left_wheel_cps=240.0, right_wheel_cps=-15.5))
     assert (pkt.left_wheel_cps, pkt.right_wheel_cps) == (240.0, -15.5)

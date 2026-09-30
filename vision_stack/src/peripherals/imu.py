@@ -136,6 +136,20 @@ class IMUReader:
         log.info("IMU gyro-Z bias: %.3f deg/s (%d samples)", bias_dps, n)
         return bias_dps
 
+    def read(self) -> tuple[float, float]:
+        """
+        One reading, now, in the driver's frame: (bias-corrected gyro Z in
+        deg/s, + = left for a Z-up mount; accel Y in m/s^2). For a caller
+        that paces its own sampling (src/sensing.py's SensorHub) instead of
+        start()'s thread.
+
+        Raises:
+            Whatever the driver raises on a failed I2C read.
+        """
+        gz = self._mpu.gyro[2]                  # rad/s
+        ay = self._mpu.acceleration[1]          # m/s^2
+        return math.degrees(gz - self._gz_bias_rad), ay
+
     def start(self) -> None:
         """Start the background sampling thread; a no-op if it's already running."""
         if self._thread is not None and self._thread.is_alive():
@@ -184,9 +198,7 @@ class IMUReader:
 
         while not self._stop_evt.is_set():
             try:
-                gz      = self._mpu.gyro[2]           # rad/s
-                ay      = self._mpu.acceleration[1]   # m/s^2
-                yaw_dps = math.degrees(gz - self._gz_bias_rad)
+                yaw_dps, ay = self.read()
                 with self._lock:
                     self._acc.add(yaw_dps, ay)
             except Exception as exc:

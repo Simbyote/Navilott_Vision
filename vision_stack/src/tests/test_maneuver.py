@@ -33,10 +33,10 @@ def trial(cfg=CFG, max_ticks=4000, dts=None, each=None, hold=False, **robot):
         if each is not None:
             each(m, bot)
         clock.now += DT if dts is None else dts(i)
-        sample, _, enc = bot.read()
+        sample, batch = bot.read()
         cmd = m.step(Tick(clock() - t0, 0.0 if i == 0 else (DT if dts is None else dts(i)),
                           sample.yaw_rate_dps, sample.lateral_accel_mps2,
-                          enc.left_count, enc.right_count, enc.left_cps, enc.right_cps))
+                          batch.left_count, batch.right_count, sample.left_wheel_cps, sample.right_wheel_cps))
         bot.brake() if cmd.brake else bot.drive(cmd.left, cmd.right)
         records.append(dict(m.record))
     return m, bot, records
@@ -260,10 +260,10 @@ def test_a_stall_while_driving_stops_the_trial():
         clock.now += DT
         if m.step_name == FORWARD_1:
             bot.stalled = True                               # the wheels jam once the leg begins
-        s, _, e = bot.read()
+        s, b = bot.read()
         bot.drive(*(lambda c: (c.left, c.right))(m.step(Tick(clock() - t0, DT, s.yaw_rate_dps, 0.0,
-                                                               e.left_count, e.right_count,
-                                                               e.left_cps, e.right_cps))))
+                                                               b.left_count, b.right_count,
+                                                               s.left_wheel_cps, s.right_wheel_cps))))
     assert "stall" in m.report()["abort_reason"] and "forward_1" in m.report()["abort_reason"]
 
 

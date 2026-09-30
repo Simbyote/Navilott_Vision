@@ -48,6 +48,19 @@ GPIO_START_BUTTON = 17      # active-high, pull-down, header pin 11
 # --- IMU ---
 IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
 IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 44 Hz to match
+# Multiplies raw gyro Z so yaw reads + = turning right, Estimation's convention.
+# This robot's IMU is mounted upside down: its raw gyro Z reads + for a LEFT
+# turn (measured 2026-09-30 by maneuver_linker's spin pulses). Per robot: a
+# robot with the IMU mounted Z-up would need its own measurement.
+IMU_YAW_SIGN = -1
+
+# --- Sensor collection (src/sensing.py) ---
+# The hub reads the IMU and both encoders together at this rate. It samples
+# the IMU, so it runs at the rate the on-chip filter is set for
+SENSOR_RATE_HZ = IMU_RATE_HZ
+# Readings kept between drains. Once per frame (~50 ms) empties it; 2 s only
+# fills if the frame loop stalls, and then the oldest readings are dropped
+SENSOR_HISTORY_S = 2.0
 
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"

@@ -4,7 +4,7 @@
 
 Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the last few frames, given the sensors". It smooths the lane offset, bridges short dropouts, tracks heading while vision is lost, and votes on traffic light and stop sign state. The result is one `EstimationPacket` per frame, handed to navigation.
 
-**Code:** `src/estimation.py` · **IMU:** `src/peripherals/imu.py` · **Harness:** `src/phase3_linker.py`, with `src/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_imu.py`
+**Code:** `src/estimation.py` · **Sensors:** `src/sensing.py` over `src/peripherals/imu.py` and `drive.py` · **Harness:** `src/phase3_linker.py`, with `src/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_sensing.py`, `test_imu.py`
 
 ---
 
@@ -116,24 +116,26 @@ The hold lasts only as long as the vote: with a window of 3, one missed frame ke
 
 ---
 
-## IMU
+## Sensors
 
-`IMUReader` samples the MPU-6050 at 0x68 on a background thread at 100 Hz (`IMU_RATE_HZ`), with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit. The camera frame rate is too slow to integrate the gyro cleanly, so the thread accumulates between frames.
+The IMU and wheel encoders run faster than the camera (100 Hz against ~20 FPS), so `src/sensing.py` collects them between frames and hands each frame one group. `SensorHub` reads both together on one background thread at 100 Hz (`SENSOR_RATE_HZ`), stamps each `SensorReading` on `time.monotonic` (the camera's clock), and keeps up to 2 s of them (`SENSOR_HISTORY_S`; older ones are dropped and counted).
 
 ```
-calibrate()       average gyro Z at standstill → bias (2 s at 200 samples)
-start()           background thread, paced to 100 Hz; read errors counted, not fatal
-snapshot()        once per frame: swap out the accumulator → IMUFrame
-stop()
+SensorHub.open(imu=, encoders=)   open only the drivers asked for
+start()     the first window's starting counts; background thread at 100 Hz
+drain()     once per frame: close the window with a fresh encoder reading
+            (no I2C in the frame loop) → SensorBatch of every reading since
+            the last drain
+stop()      end the thread; release the encoders and pigpio
 ```
 
-`snapshot()` holds the lock only long enough to swap accumulators, so the cost is the same whatever the frame rate. Each `IMUFrame` carries the mean bias-corrected yaw rate, the signed lateral acceleration with the largest magnitude, and a sample count; it's invalid if no sample arrived.
+Each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (−1 on this robot, whose IMU is upside down), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
 
-`SensorSample.from_imu()` converts it for Phase 3. An invalid frame gives `None` readings, which the heading tracker treats as "hold".
+A `SensorBatch` gives Phase 3 what it needs: the mean yaw rate over its IMU readings, the signed lateral acceleration with the largest magnitude, and each wheel's counts per second from the previous batch's last reading to this one's (0.0 stopped). It also carries the cumulative counts, which the packet leaves out. `SensorSample.from_batch()` reads those by name, so `estimation.py` never imports `sensing.py` or the drivers, and it still runs on a laptop from replays with no sensors.
 
-If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is already subtracted. `phase3_linker --imu` doesn't calibrate, so pass `--gyro-bias` there instead.
+The MPU-6050 is at 0x68, with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit of 100 Hz sampling. The hub doesn't calibrate it, so `Phase3Config.gyro_bias_dps` (`phase3_linker --gyro-bias`) carries the bias, **in the flipped frame**: the raw −1.0 °/s measured at rest is +1.0 here. `IMUReader` keeps its own accumulator thread (`start()` / `snapshot()`) for `test_imu`'s bench characterization; the pipeline and the linkers read through the hub.
 
-**Wheel encoders.** `peripherals/drive.py` owns them: `EncoderReader` counts quadrature edges on pigpio callbacks, and `snapshot()`, called once per frame like the IMU's, returns the counts since `reset()` and each wheel's counts per second over the window since the previous snapshot. `SensorSample.from_frames(imu_frame, encoder_frame)` reads those fields by name, so estimation never imports `drive.py` or pigpio, and Phase 3 passes the counts per second through to the packet unchanged. Using them (checking that a steering correction actually turned the wheels, speed control, distance travelled) is Navigation's job, since only Navigation knows what was commanded.
+Using the encoder readings (checking that a steering correction actually turned the wheels, speed control, distance travelled) is Navigation's job, since only Navigation knows what was commanded.
 
 ---
 
@@ -169,13 +171,11 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 | Quantity | + means | Source |
 | --- | --- | --- |
 | `lane_offset` | Robot right of lane center | `lane_offset.py` |
-| `heading_error`, `yaw_rate` (per `estimation.py`) | Turning right | `estimation.py` |
-| Gyro Z (per `imu.py`) | Counter-clockwise, turning **left**, for a flat Z-up mount | `imu.py` |
+| `heading_error`, `yaw_rate` | Turning right | `estimation.py`, applied by `sensing.py` |
+| Raw gyro Z (per `imu.py`) | Counter-clockwise, turning **left**, for a flat Z-up mount. **On this robot the raw reading is + for a left turn** (measured) | `imu.py` |
 | Accel Y (per `imu.py`) | Accelerating left | `imu.py` |
 
-**Measured (2026-09-30):** on this robot the raw gyro Z reads **+ for a left turn**; the IMU is mounted upside down, and `maneuver_linker`'s spin pulses confirm the sign on every run. The per-robot flip to Estimation's + = right lands with sensor collection (`navigation_contract.md`, "Yaw sign"). Until then, what follows still holds for the raw path.
-
-**These disagree.** `imu.py` documents + yaw as turning left, `estimation.py` documents it as turning right, and `SensorSample.from_imu()` passes the value through unchanged. Either the IMU is mounted so the axis is flipped, or `heading_error` has the wrong sign. Check on the bench: rotate the robot right by hand with `phase3_linker --camera --imu` running, and see which way `yaw_rate` goes. Then negate in `from_imu()` if needed and fix whichever comment is wrong.
+**Resolved (2026-09-30).** The raw gyro on this robot reads + for a left turn (`maneuver_linker`'s spin pulses measure it every run). `SensorHub` multiplies it by `IMU_YAW_SIGN = -1`, so `yaw_rate` and `heading_error` read + = turning right as `estimation.py` documents. `IMU_YAW_SIGN` is per robot: a different mount needs its own measurement. To check on the bench: `phase3_linker --camera --imu`, cover the lens so vision drops to `hold`, turn the robot right by hand, and `hd` should go positive.
 
 ---
 
@@ -213,7 +213,6 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Open items
 
-- **IMU yaw sign**: measured as + = left on this robot; apply the flip (sensor collection) before anyone uses `heading_error`.
 - **Stop-sign gate.** The stop sign reaches the vote at 0.45 on untuned geometry. Keep the gate high, or have navigation ignore `stop_sign_detected`, until the sign branch is tuned on course frames.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
 - **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement.

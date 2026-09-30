@@ -122,6 +122,10 @@ class EncoderReader:
             else:
                 self._right_pos += 1
 
+    def counts(self) -> tuple[int, int]:
+        """(left, right) counts since reset(), + = forward. Changes no state, so any thread may call it."""
+        return self._left_pos, self._right_pos
+
     def snapshot(self) -> EncoderFrame:
         """Current counts since reset(), and counts per second over the window since the previous snapshot."""
         now = time.perf_counter()
