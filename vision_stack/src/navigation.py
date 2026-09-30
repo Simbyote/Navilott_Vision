@@ -21,23 +21,6 @@ Flow:
     EstimationPacket to Navigator.update(), and drives the Command it returns.
 """
 
-"""
-Lane Keeping Navigation System
-
-Provides:
-- EstimationPacket data structure
-- Command & Navigator protocol contract
-- LaneKeepingNavigator proportional controller
-- Interactive test runner for all operating modes
-"""
-
-"""
-LaneKeepingDrive.py
-
-Integrates LaneKeepingNavigator with pigpio motor outputs to control physical drive hardware.
-Processes EstimationPackets to dispatch motor speed and brake instructions per frame.
-"""
-
 import time
 import logging
 from dataclasses import dataclass
