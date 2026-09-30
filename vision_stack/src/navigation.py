@@ -278,16 +278,25 @@ def main() -> None:
         stop_line_threshold_cm=3.0,
     )
 
-    # Test frames executed at 0.5s intervals (2 Hz update frequency)
+    # Test frames executed at 0.1s intervals (2 Hz update frequency)
+    # test_frames = [
+    #     ("Centered Drive", create_mock_packet(1, offset_cm=0.0), 0.1),
+    #     ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0), 0.1),
+    #     ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0), 0.1),
+    #     ("Approaching Stop Line (2.0 cm -> Continue)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=2.0), 0.1),
+    #     ("Approaching Stop Line (1.0 cm -> Continue)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=1.0), 0.1),
+    #     ("Reached Stop Line (0.5 cm -> Brake)", create_mock_packet(6, offset_cm=0.0, stop_line_dist=0.5), 0.1),
+    #     ("Crossed Stop Line (0.2 cm -> Brake)", create_mock_packet(7, offset_cm=0.0, stop_line_dist=0.2), 0.1),
+    #     ("Stop Sign Triggered -> Brake", create_mock_packet(8, offset_cm=0.0, stop_sign=True), 0.1),
+    # ]
+
     test_frames = [
         ("Centered Drive", create_mock_packet(1, offset_cm=0.0), 0.1),
-        ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0), 0.1),
-        ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0), 0.1),
-        ("Approaching Stop Line (2.0 cm -> Continue)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=2.0), 0.1),
-        ("Approaching Stop Line (1.0 cm -> Continue)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=1.0), 0.1),
-        ("Reached Stop Line (0.5 cm -> Brake)", create_mock_packet(6, offset_cm=0.0, stop_line_dist=0.5), 0.1),
-        ("Crossed Stop Line (0.2 cm -> Brake)", create_mock_packet(7, offset_cm=0.0, stop_line_dist=0.2), 0.1),
-        ("Stop Sign Triggered -> Brake", create_mock_packet(8, offset_cm=0.0, stop_sign=True), 0.1),
+        ("Offset Left (-2.0 cm)", create_mock_packet(2, offset_cm=-2.0), 0.1),
+        ("Offset Left (-6.0 cm)", create_mock_packet(3, offset_cm=-6.0), 0.1),
+        ("Offset Right (+3.0 cm)", create_mock_packet(4, offset_cm=3.0), 0.1),
+        ("Offset Right (+6.0 cm)", create_mock_packet(5, offset_cm=6.0), 0.1),
+        ("Centered Drive", create_mock_packet(6, offset_cm=0.0), 0.1),
     ]
 
     try:
