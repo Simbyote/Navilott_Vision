@@ -13,6 +13,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Understand the whole system | `architecture.md`, then `vision_stack/` in order |
 | Know what the system must do, and what's proven so far | `requirements.md` |
 | Know the course and camera measurements the tuning depends on | `course.md` |
+| Write Navigation: what it receives, what it returns, how the robot responds | `vision_stack/navigation_contract.md` |
 | Consume the vision output in navigation code | `vision_stack/phase3_estimation.md`, "Contract" and "Sign conventions" |
 | Run the tests | `guides/pytest.md` |
 | Watch what the pipeline detects | `guides/phase2_linker.md` |
@@ -32,6 +33,7 @@ docs/
         phase1_capture.md       camera → timestamped frames
         phase2_perception.md    frame → detections and lane offset
         phase3_estimation.md    detections + IMU → navigation packet
+        navigation_contract.md  packet in, motor command out; what Navigation must do
     guides/
         calibrate_camera.md     lens calibration
         calibrate_ground.md     ground-plane homography: floor distances in cm

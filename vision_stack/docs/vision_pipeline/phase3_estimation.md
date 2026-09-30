@@ -156,6 +156,8 @@ If `calibrate()` is used, leave `Phase3Config.gyro_bias_dps` at 0; the bias is a
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
 | `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from `peripherals/drive.py`'s `EncoderReader.snapshot()`; + = forward. Raw counts, not converted to distance. 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
 
+What Navigation must do with each field, and what it returns, is `navigation_contract.md`.
+
 A pass-through of 0.0 can mean "zero" or "unavailable". If navigation needs to tell them apart, that's a contract change to agree on.
 
 The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time.monotonic_ns() // 1_000_000`). What navigation does with a stale packet or one that's too old is its decision, but it should be written down alongside this table.
@@ -170,6 +172,8 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 | `heading_error`, `yaw_rate` (per `estimation.py`) | Turning right | `estimation.py` |
 | Gyro Z (per `imu.py`) | Counter-clockwise, turning **left**, for a flat Z-up mount | `imu.py` |
 | Accel Y (per `imu.py`) | Accelerating left | `imu.py` |
+
+**Measured (2026-09-30):** on this robot the raw gyro Z reads **+ for a left turn**; the IMU is mounted upside down, and `maneuver_linker`'s spin pulses confirm the sign on every run. The per-robot flip to Estimation's + = right lands with sensor collection (`navigation_contract.md`, "Yaw sign"). Until then, what follows still holds for the raw path.
 
 **These disagree.** `imu.py` documents + yaw as turning left, `estimation.py` documents it as turning right, and `SensorSample.from_imu()` passes the value through unchanged. Either the IMU is mounted so the axis is flipped, or `heading_error` has the wrong sign. Check on the bench: rotate the robot right by hand with `phase3_linker --camera --imu` running, and see which way `yaw_rate` goes. Then negate in `from_imu()` if needed and fix whichever comment is wrong.
 
@@ -209,8 +213,8 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Open items
 
-- **IMU yaw sign**, as above, before anyone uses `heading_error`.
+- **IMU yaw sign**: measured as + = left on this robot; apply the flip (sensor collection) before anyone uses `heading_error`.
 - **Stop-sign gate.** The stop sign reaches the vote at 0.45 on untuned geometry. Keep the gate high, or have navigation ignore `stop_sign_detected`, until the sign branch is tuned on course frames.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
 - **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement.
-- **The navigation contract.** Agree with navigation on the stale-packet behavior and the pass-through ambiguity above, and record it here.
+- **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior, the pass-through ambiguity above, and whether the packet carries cumulative encoder counts.

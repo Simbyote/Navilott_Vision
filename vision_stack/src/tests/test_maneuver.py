@@ -55,7 +55,7 @@ def test_the_trial_runs_every_step_in_order_and_turns_the_robot_around():
                      FORWARD_1, STOP_1, TURN, TURN_SETTLE, FORWARD_2, "stop_2", DONE]
     rep = m.report()
     assert rep["completed"] and rep["abort_reason"] is None
-    assert bot.heading_deg == pytest.approx(180, abs=CFG.turn_tolerance_deg)   # the real body turned
+    assert bot.heading_deg == pytest.approx(CFG.turn_target_deg, abs=CFG.turn_tolerance_deg)   # the sim body lands on the target; the real one needs 171 for 180
     assert rep["turn"]["success"] and rep["turn"]["reached"]
     assert rep["forward_1"]["ended_by"] == rep["forward_2"]["ended_by"] == "counts"
 
@@ -86,7 +86,7 @@ def test_settle_measures_the_gyro_bias_and_the_accel_baseline(bias):
 def test_a_wrong_configured_bias_is_replaced_by_the_measured_one():
     # Configured far off: the turn would be wrong by bias x time if it were used
     m, bot, _ = trial(cfg=replace(CFG, gyro_bias_dps=+8.0), bias_dps=-1.1)
-    assert m.report()["turn"]["success"] and bot.heading_deg == pytest.approx(180, abs=5)
+    assert m.report()["turn"]["success"] and bot.heading_deg == pytest.approx(CFG.turn_target_deg, abs=5)
 
 
 @pytest.mark.software
@@ -96,7 +96,7 @@ def test_the_pulses_find_the_yaw_sign_either_way_and_the_turn_still_goes_left(pl
     y = m.report()["yaw_sign"]
     assert y["plus_yaw_is"] == plus
     assert (y["left_deg"] > 0) == (plus == "left") and (y["right_deg"] > 0) == (plus == "right")
-    assert bot.heading_deg == pytest.approx(180, abs=5)        # + = left on the body, whatever the IMU says
+    assert bot.heading_deg == pytest.approx(CFG.turn_target_deg, abs=5)        # + = left on the body, whatever the IMU says
 
 
 @pytest.mark.software
@@ -221,7 +221,7 @@ def test_braking_holds_the_turn_inside_the_tolerance_that_coasting_misses():
     assert not coasting.report()["turn"]["success"]
     t = braked.report()["turn"]
     assert t["success"] and abs(t["overshoot_deg"]) <= CFG.turn_tolerance_deg
-    assert bot.heading_deg == pytest.approx(180, abs=CFG.turn_tolerance_deg)
+    assert bot.heading_deg == pytest.approx(CFG.turn_target_deg, abs=CFG.turn_tolerance_deg)
 
 
 @pytest.mark.software

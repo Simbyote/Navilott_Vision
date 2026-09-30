@@ -148,7 +148,7 @@ runs/maneuver_<YYYYMMDD_HHMMSS>/
 | `lateral accel at rest` | Sideways acceleration while still | Not zero: the IMU mount's tilt. Note it; later work subtracts it |
 | `yaw sign` | Which way a positive gyro reading turns, found by the two spins | **Report this value.** It settles a known disagreement in the code comments |
 | `forward_1`, `forward_2` | Encoder counts per wheel, imbalance, time, whether it ended on counts or the time cap, gyro heading at the end, largest correction from each source | Heading at end near 0 means it drove straight. `time cap` means the leg was cut short (motors slow or `--leg-counts` too big) |
-| `turn 180  PASS/FAIL` | Final gyro angle, time to reach it, overshoot | **PASS: within 180 ± 5° in under 6 s.** Compare with what you saw |
+| `turn 180  PASS/FAIL` | Final gyro angle, time to reach it, overshoot | **PASS: within the target ± 5° in under 6 s.** The gyro target is 171°, which gives a real 180° on this robot (the rest turns while the brake bites). Compare with what you saw |
 | `encoders during the turn` | Counts per wheel while turning, counts per degree | Report counts per degree; it calibrates future encoder-only turns |
 | `lane found again` | How soon vision saw both lane lines after the turn | Should be well under a second; `never` is worth a note |
 | `run` | Frames, time, FPS, dropped frames | FPS should be about 20 or more; any `recorder dropped` just means video gaps |
@@ -168,7 +168,7 @@ Every setting has a factory default in `MANEUVER` in `src/config.py`. For one ru
 | `--gyro-bias DPS` | −1.1 | Starting gyro bias; the settle step measures and replaces it |
 | `--kp-counts K` | 0.0015 | How hard the encoders pull it straight |
 | `--kp-heading K` | 0.01 | How hard the gyro pulls it straight |
-| `--turn-tolerance DEG` | 5 | PASS band around 180° |
+| `--turn-tolerance DEG` | 5 | PASS band around the turn target (171°) |
 | `--turn-timeout S` | 6 | PASS time limit for the turn |
 | `--max-run-s S` | 60 | Hard limit on the whole run |
 | `--set FIELD=VALUE` | | Any other `ManeuverConfig` field, e.g. `--set turn_slow_band_deg=30`; repeatable |
@@ -176,7 +176,7 @@ Every setting has a factory default in `MANEUVER` in `src/config.py`. For one ru
 **Sizing the leg to the mat:** after the first short run, counts per cm = `--leg-counts` ÷ the distance you measured. Pick a leg that leaves at least 30 cm before the intersection, and use that `--leg-counts` from then on. Report the counts per cm too.
 
 Typical adjustments:
-- **Turn overshoots and FAILs:** the robot brakes at 180°, so what's left is how far it turns while the brake bites. Check `maneuver.csv`: the `turn_settle` rows show how many degrees it gained after the stop. If that's still over ~4°, lower `--turn-speed`, or widen the slow-down band: `--set turn_slow_band_deg=30`. Report the numbers either way; they tell us whether the brake works as expected.
+- **Turn overshoots and FAILs:** the robot brakes at the turn target (171°, set so the real turn ends at 180°), so what's left is how far it turns while the brake bites. Check `maneuver.csv`: the `turn_settle` rows show how many degrees it gained after the stop. If that's still over ~4°, lower `--turn-speed`, or widen the slow-down band: `--set turn_slow_band_deg=30`. Report the numbers either way; they tell us whether the brake works as expected.
 - **Drifts off straight:** raise `--kp-heading` (e.g. 0.02). If it wobbles side to side, lower it.
 - **Leg ends by `time cap`:** raise `--leg-max-s`, or `--speed` if the motors are weak.
 

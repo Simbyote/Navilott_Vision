@@ -25,6 +25,8 @@ Flow:
 import math
 from dataclasses import dataclass, field
 
+from src.navigation import BRAKE, Command
+
 # Steps, in order. ABORTED can follow any of them
 SETTLE, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST = (
     "settle", "pulse_left", "pulse_left_rest", "pulse_right", "pulse_right_rest")
@@ -97,17 +99,6 @@ class Tick:
     right_cps: float
 
 
-@dataclass(frozen=True)
-class Command:
-    """Motor duty for MotorController.drive(), each in [-1, 1]; + = forward. brake: short-brake instead (MotorController.brake())."""
-    left: float = 0.0
-    right: float = 0.0
-    brake: bool = False
-
-
-# Every stop brakes: coasting carried the robot ~0.15-0.18 s past each stop on
-# the 2026-09-30 trial (7.9 deg past the 180), and braking holds it at rest
-BRAKE = Command(brake=True)
 
 
 @dataclass
