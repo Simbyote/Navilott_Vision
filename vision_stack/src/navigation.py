@@ -31,29 +31,60 @@ Provides:
 - Interactive test runner for all operating modes
 """
 
+"""
+LaneKeepingDrive.py
+
+Integrates LaneKeepingNavigator with pigpio motor outputs to control physical drive hardware.
+Processes EstimationPackets to dispatch motor speed and brake instructions per frame.
+"""
+
+import time
+import logging
 from dataclasses import dataclass
 from typing import Optional, Protocol, runtime_checkable
+import pigpio
 
-# Minimum motor duty to turn N20 motors under load without stalling
+# =============================================================================
+# Logging Setup
+# =============================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("navigation")
+
+# Minimum motor duty to prevent N20 motor stalling under load
 STALL_DUTY = 0.25
 
+# =============================================================================
+# Hardware Pin Definitions (TB6612 Motor Driver)
+# =============================================================================
+_ain1 = 24
+_ain2 = 25
+_pwma = 13
+
+_bin1 = 27
+_bin2 = 22
+_pwmb = 12
+_stby = 23
+
 
 # =============================================================================
-# Pipeline Contract & Data Structures
+# Contracts & Data Structures
 # =============================================================================
-
 @dataclass(frozen=True)
 class EstimationPacket:
     """Telemetry packet supplied by the vision/estimation stack every frame."""
-    drive_state: str                    # "drive", "stop", etc.
+    drive_state: str                    # "drive", "stop"
     stop_sign_detected: bool
     stop_line_detected: bool
     stop_line_distance_cm: Optional[float]
     stop_line_distance_px: Optional[float]
     lane_status: str                    # "vision", "hold", "stale", or "none"
     lane_offset_cm: Optional[float]     # + = right of center, - = left of center
-    lane_offset: float                  # Normalized offset in [-1.0, 1.0]
-    heading_error: float                # Radians or degrees error relative to lane path
+    lane_offset: float                  # Normalized offset [-1.0, 1.0]
+    heading_error: float                # Yaw error relative to lane path
     yaw_rate: float
     lateral_accel: float
     wheel_speed: float
@@ -65,7 +96,7 @@ class EstimationPacket:
 
 @dataclass(frozen=True)
 class Command:
-    """Motor duty instruction returned to the vehicle drive controller."""
+    """Motor duty instruction returned to vehicle drive controller."""
     left: float = 0.0                   # [-1.0, 1.0]
     right: float = 0.0                  # [-1.0, 1.0]
     brake: bool = False                 # Hard short-brake activation
@@ -76,7 +107,6 @@ BRAKE = Command(brake=True)
 
 @runtime_checkable
 class Navigator(Protocol):
-    """Interface required for all Navigation implementations."""
     def update(self, packet: EstimationPacket) -> Command:
         ...
 
@@ -85,7 +115,7 @@ class Navigator(Protocol):
 
 
 def command_problems(cmd: Command) -> list[str]:
-    """Validates command against motor and safety boundary rules."""
+    """Validates command parameters against physical safety rules."""
     problems = []
     if not isinstance(cmd, Command):
         return [f"not a Command: {cmd!r}"]
@@ -100,16 +130,10 @@ def command_problems(cmd: Command) -> list[str]:
 
 
 # =============================================================================
-# Lane Keeping Navigator Implementation
+# Lane Keeping Controller Implementation
 # =============================================================================
-
 class LaneKeepingNavigator(Navigator):
-    """
-    Proportional differential steering navigator.
-    
-    Computes left/right wheel duties to steer the robot toward lane center.
-    Automatically handles stop signs, close stop lines, and vision fallback.
-    """
+    """Proportional differential steering navigator for lane keeping."""
 
     def __init__(
         self,
@@ -126,113 +150,164 @@ class LaneKeepingNavigator(Navigator):
         self.max_steering_adj = max_steering_adj
 
     def reset(self) -> None:
-        """Resets internal controller state across test/run resets."""
         pass
 
     def update(self, packet: EstimationPacket) -> Command:
-        """Processes a single frame EstimationPacket and returns a motor Command."""
-        # Rule 1: High priority stop triggers (State override / Stop sign / Nearby stop line)
+        # High priority stop triggers
         if packet.drive_state == "stop" or packet.stop_sign_detected:
             return BRAKE
 
         if packet.stop_line_detected and packet.stop_line_distance_cm is not None:
-            if packet.stop_line_distance_cm <= 10.0:  # Brake within 10 cm
+            if packet.stop_line_distance_cm <= 10.0:
                 return BRAKE
 
-        # Rule 2: Determine steering error correction
+        # Proportional steering adjustment calculation
         steering_adj = 0.0
 
         if packet.lane_status == "vision":
             if packet.lane_offset_cm is not None:
-                # Primary steering: physical offset in cm
                 steering_adj = packet.lane_offset_cm * self.kp_cm
             else:
-                # Fallback: normalized offset [-1.0, 1.0]
                 steering_adj = packet.lane_offset * self.kp_norm
 
         elif packet.lane_status in ("hold", "stale"):
-            # Vision loss fallback: IMU/gyro heading correction
             steering_adj = packet.heading_error * self.kp_heading
 
-        # Clamp maximum differential steering adjustment
         steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
 
-        # Rule 3: Differential duty calculation
-        # (+ offset -> vehicle is right of center -> lower right duty / increase left duty -> steer left)
+        # Differential speed calculation
         left_duty = self.base_speed - steering_adj
         right_duty = self.base_speed + steering_adj
 
-        # Rule 4: Apply stall thresholding and clamping bounds
         left_duty = self._sanitize_duty(left_duty)
         right_duty = self._sanitize_duty(right_duty)
 
         cmd = Command(left=left_duty, right=right_duty, brake=False)
 
-        # Final safety contract verification
-        problems = command_problems(cmd)
-        if problems:
+        if command_problems(cmd):
             return BRAKE
 
         return cmd
 
     def _sanitize_duty(self, duty: float) -> float:
-        """Enforces minimum STALL_DUTY limits and [-1.0, 1.0] bounds."""
         if abs(duty) < 1e-4:
             return 0.0
-        
         clamped = max(-1.0, min(1.0, duty))
-        
         if 0.0 < clamped < STALL_DUTY:
             return STALL_DUTY
         elif -STALL_DUTY < clamped < 0.0:
             return -STALL_DUTY
-            
         return clamped
 
 
 # =============================================================================
-# Automated Self-Test Harness
+# Motor Driver Interface
 # =============================================================================
+def init_motors(pi: pigpio.pi) -> None:
+    """Initialize GPIO pins for the TB6612 motor driver."""
+    for pin in [_ain1, _ain2, _bin1, _bin2, _stby]:
+        pi.set_mode(pin, pigpio.OUTPUT)
 
-def create_mock_packet(**kwargs) -> EstimationPacket:
-    """Generates an EstimationPacket populated with safe default values."""
-    defaults = {
-        "drive_state": "drive",
-        "stop_sign_detected": False,
-        "stop_line_detected": False,
-        "stop_line_distance_cm": None,
-        "stop_line_distance_px": None,
-        "lane_status": "vision",
-        "lane_offset_cm": 0.0,
-        "lane_offset": 0.0,
-        "heading_error": 0.0,
-        "yaw_rate": 0.0,
-        "lateral_accel": 0.0,
-        "wheel_speed": 0.0,
-        "left_wheel_cps": 0.0,
-        "right_wheel_cps": 0.0,
-        "frame_id": 100,
-        "timestamp_ms": 5000,
-    }
-    defaults.update(kwargs)
-    return EstimationPacket(**defaults)
+
+def brake(pi: pigpio.pi) -> None:
+    """Activates TB6612 short brake mode on both motor channels."""
+    pi.write(_stby, 1)
+    pi.write(_ain1, 1)
+    pi.write(_ain2, 1)
+    pi.hardware_PWM(_pwma, 1000, 1000000)
+
+    pi.write(_bin1, 1)
+    pi.write(_bin2, 1)
+    pi.hardware_PWM(_pwmb, 1000, 1000000)
+
+
+def drive(pi: pigpio.pi, left_speed: float, right_speed: float) -> None:
+    """Drives left and right motors with normalized speeds (-1.0 to 1.0)."""
+    pi.write(_stby, 1)
+
+    # Left Motor
+    spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
+    pi.hardware_PWM(_pwma, 1000, spd_l)
+    pi.write(_ain1, 1 if left_speed > 0 else 0)
+    pi.write(_ain2, 1 if left_speed < 0 else 0)
+
+    # Right Motor
+    spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
+    pi.hardware_PWM(_pwmb, 1000, spd_r)
+    pi.write(_bin1, 1 if right_speed < 0 else 0)
+    pi.write(_bin2, 1 if right_speed > 0 else 0)
+
+
+def execute_command(pi: pigpio.pi, cmd: Command) -> None:
+    """Dispatches Command object instructions directly to motor driver functions."""
+    if cmd.brake:
+        brake(pi)
+    else:
+        drive(pi, cmd.left, cmd.right)
+
+
+# =============================================================================
+# Main Execution Loop
+# =============================================================================
+def create_mock_packet(frame_id: int, offset_cm: Optional[float] = 0.0, stop_sign: bool = False, stop_line_dist: Optional[float] = None) -> EstimationPacket:
+    """Helper to assemble a test frame packet."""
+    return EstimationPacket(
+        drive_state="drive",
+        stop_sign_detected=stop_sign,
+        stop_line_detected=stop_line_dist is not None,
+        stop_line_distance_cm=stop_line_dist,
+        stop_line_distance_px=None,
+        lane_status="vision",
+        lane_offset_cm=offset_cm,
+        lane_offset=0.0 if offset_cm is None else offset_cm / 30.0,
+        heading_error=0.0,
+        yaw_rate=0.0,
+        lateral_accel=0.0,
+        wheel_speed=0.0,
+        left_wheel_cps=0.0,
+        right_wheel_cps=0.0,
+        frame_id=frame_id,
+        timestamp_ms=int(time.perf_counter() * 1000),
+    )
+
+
+def main() -> None:
+    log.info("Starting Lane Keeping Navigation Motor Loop...")
+
+    pi = pigpio.pi()
+    if not pi.connected:
+        log.error("Failed to connect to pigpio daemon. Run 'sudo pigpiod' first.")
+        return
+
+    init_motors(pi)
+    navigator = LaneKeepingNavigator(base_speed=0.40)
+
+    # Sequence of test conditions representing vision stream frames
+    test_frames = [
+        ("Centered Drive", create_mock_packet(1, offset_cm=0.0)),
+        ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0)),
+        ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0)),
+        ("Approaching Stop Line (8 cm)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=8.0)),
+        ("Stop Sign Triggered", create_mock_packet(5, offset_cm=0.0, stop_sign=True)),
+    ]
+
+    try:
+        for description, packet in test_frames:
+            cmd = navigator.update(packet)
+            execute_command(pi, cmd)
+
+            log.info(
+                f"Frame {packet.frame_id:02d} | {description:<30} | "
+                f"Cmd -> Left: {cmd.left:.3f}, Right: {cmd.right:.3f}, Brake: {cmd.brake}"
+            )
+            time.sleep(0.5)  # Simulate frame processing cadence
+
+    finally:
+        brake(pi)
+        pi.write(_stby, 0)
+        pi.stop()
+        log.info("Motor driver cleaned up safely.")
 
 
 if __name__ == "__main__":
-    navigator = LaneKeepingNavigator(base_speed=0.40)
-
-    test_scenarios = [
-        ("Centered on Lane", create_mock_packet(lane_offset_cm=0.0)),
-        ("Offset Left (-6.0 cm -> Steer Right)", create_mock_packet(lane_offset_cm=-6.0)),
-        ("Offset Right (+6.0 cm -> Steer Left)", create_mock_packet(lane_offset_cm=6.0)),
-        ("Stop Sign Trigger", create_mock_packet(stop_sign_detected=True)),
-        ("Stop Line Near (8 cm)", create_mock_packet(stop_line_detected=True, stop_line_distance_cm=8.0)),
-        ("Vision Lost (Heading Correction)", create_mock_packet(lane_status="stale", heading_error=15.0)),
-    ]
-
-    print(f"{'Scenario':<38} | {'Left Duty':<10} | {'Right Duty':<10} | {'Brake':<6}")
-    print("-" * 75)
-
-    for name, packet in test_scenarios:
-        cmd = navigator.update(packet)
-        print(f"{name:<38} | {cmd.left:<10.3f} | {cmd.right:<10.3f} | {str(cmd.brake):<6}")
+    main()
