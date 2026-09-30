@@ -111,9 +111,28 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 
 `contract_problems(nav)` runs them all. Each returns a list of problems (`[]` when the navigator passes), so a test can print them all. `test_navigation.py` checks the checks themselves with a navigator that obeys the contract and ones that each break one rule.
 
+### Keeping hardware out
+
+`navigation.py` holds only the contract: no pigpio, no motor code, no copies of the packet. A navigator is pure logic too: it imports `EstimationPacket` from `estimation.py` and `Command` from here, and returns commands. Only whatever runs the loop (a script, a linker, the pipeline) opens the motors, through `MotorController` in `peripherals/drive.py`, importing it inside the function that opens hardware. `test_navigation` loads the contract and its users with pigpio blocked, as on a laptop, to keep it that way.
+
+---
+
+## The first navigator: `src/lane_keeping.py`
+
+`LaneKeepingNavigator` (Ignacio, 2026-09-30) is proportional differential steering:
+
+- **Stops** on `drive_state == "stop"`, `stop_sign_detected`, or a voted stop line at or under 3.0 cm.
+- **Steers** by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. It clamps the steering to ±0.40 around a base duty of 0.40 and lifts a slow wheel to the stall duty.
+- **Contract checks:** it passes valid commands, stop and steering. It **fails `check_no_forward_on_stale`**, because it keeps driving on heading when the lane is stale. That's an open decision, marked `@TODO` in the code and as a strict `xfail` in `test_lane_keeping`.
+- **Stop sign:** it brakes on `stop_sign_detected` although the sign gate is untuned, so a false positive stops the robot.
+
+`src/scripts/lane_keeping_demo.py` drives the robot's motors from a scripted list of packets (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. The gains are first-cut values, not yet tuned on the robot.
+
 ---
 
 ## Open items
+
+- **Stale lane.** `LaneKeepingNavigator` drives on heading when the lane is stale; the contract says it shouldn't drive forward. Pick one and make the other agree.
 
 - **Distance.** The maneuver trial measured leg length with cumulative encoder counts. The packet carries only counts per second, so Navigation integrates `cps × dt` itself. Whether the packet should carry cumulative counts is a contract change to agree on.
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).

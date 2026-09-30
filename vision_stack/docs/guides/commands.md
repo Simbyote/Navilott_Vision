@@ -108,6 +108,8 @@ python3 -m src.maneuver_linker --render runs/maneuver_<YYYYMMDD_HHMMSS>   # rebu
 
 Output: `runs/maneuver_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `maneuver.csv`, `p3.csv`, `maneuver.avi`)
 
+Lane keeping bench demo (wheels off the ground; scripted packets, no camera): `python3 -m src.scripts.lane_keeping_demo`
+
 ---
 
 ## Camera calibration — [calibrate_camera.md](calibrate_camera.md), [test_calibration.md](test_calibration.md)

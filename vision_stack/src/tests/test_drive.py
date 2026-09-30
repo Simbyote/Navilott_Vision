@@ -15,8 +15,11 @@ routines run instantly and wheel motion can be injected as encoder edges.
             counts per leg. WHEELS OFF THE GROUND: about 10 s of motor time.
 """
 import importlib
+import subprocess
 import sys
+import time
 import types
+from pathlib import Path
 
 import pytest
 
@@ -387,6 +390,48 @@ def test_brake_stops_the_wheels_turning_in_the_wheel_model(env):
     m.brake()
     clock.sleep(0.5)
     assert moving > 0 and enc.snapshot().left_count == moving
+
+
+@pytest.mark.software
+def test_run_step_waits_for_the_button_counts_down_drives_and_records_timing(env, monkeypatch):
+    mod, pi, clock = env
+    monkeypatch.setattr(clock, "strftime", time.strftime, raising=False)
+    monkeypatch.setattr(clock, "localtime", time.localtime, raising=False)
+    m = mod.MotorController(pi)
+    order = []
+
+    class FakeSystem:
+        def wait_for_start(self):
+            order.append("button"); clock.now += 2.0
+
+        def run_countdown(self):
+            order.append("countdown"); clock.now += 3.0
+
+    def leg(encoders, speed):
+        order.append(("drive", encoders, speed)); clock.now += 1.5
+
+    m.start_sequence()
+    m.run_step("leg 1", leg, FakeSystem(), "enc", speed=0.4)
+    m.run_step("leg 2", leg, FakeSystem(), "enc", speed=0.5)
+    assert order == ["button", "countdown", ("drive", "enc", 0.4), "button", "countdown", ("drive", "enc", 0.5)]
+    first, second = m.timing_records
+    assert (first["step"], second["step"]) == ("leg 1", "leg 2")
+    assert first["btn_press_rel"] == pytest.approx(2.0) and second["btn_press_rel"] == pytest.approx(8.5)
+    assert first["execution_duration"] == pytest.approx(1.5)
+    m.print_timing_summary()
+    m.start_sequence()
+    assert m.timing_records == []
+
+
+@pytest.mark.software
+def test_drive_loads_without_the_display_driver():
+    # System is a type hint only: importing the motor driver mustn't pull in the
+    # start button / display module (tm1637) or anything outside src/
+    code = ("import sys, types; sys.modules['tm1637'] = None; "
+            "p = types.ModuleType('pigpio'); p.pi = object; sys.modules['pigpio'] = p; import " + DRIVE_MODULE)
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       cwd=Path(__file__).resolve().parents[2])
+    assert r.returncode == 0, r.stderr
 
 
 @pytest.mark.software
