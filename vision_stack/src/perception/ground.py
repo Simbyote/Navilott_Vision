@@ -19,6 +19,8 @@ Main package:
     fit_ground_homography(): H from matched frame and floor points, with the
         per-point error in cm; the calibration script and the tests share it.
     lens_id(): the identifier of a lens calibration a homography is tied to.
+    fit_conditions_problem(): why a calibration fit on undistorted frames
+        doesn't match how preprocess runs now; shared with stop_line_table.
 
 Flow:
     1. calibrate_ground fits H on undistorted frames and writes the JSON.
@@ -161,6 +163,32 @@ def fit_ground_homography(
 # Loading
 # =============================================================================
 
+def fit_conditions_problem(size, alpha: float, lens: str | None, preprocess,
+                           frame_size: tuple[int, int]) -> str | None:
+    """
+    Why a calibration fit on undistorted frames can't be used now, or None if it can.
+
+    Inputs:
+        size: (width, height) it was fit at.
+        alpha, lens: The undistort_alpha and lens_id() it was fit under.
+        preprocess: The PreprocessParams the pipeline runs with.
+        frame_size: (height, width) of the frames the pipeline will see.
+    """
+    height, width = frame_size
+    if tuple(size) != (width, height):
+        return f"fit at {size[0]}x{size[1]}, frames are {width}x{height}"
+    if abs(alpha - float(preprocess.undistort_alpha)) > 1e-9:
+        return f"fit with undistort_alpha {alpha}, preprocess uses {preprocess.undistort_alpha}"
+    if preprocess.calibration_path is None:
+        return "undistortion is off, but it was fit on undistorted frames"
+    current = lens_id(preprocess.calibration_path)
+    if current is None:
+        return f"lens calibration {preprocess.calibration_path} not found"
+    if current != lens:
+        return "fit against a different lens calibration"
+    return None
+
+
 def _refuse(path, why: str) -> None:
     warnings.warn(f"ground: {Path(path).name} not used ({why}); floor distances in cm are off "
                   "for this run. Rerun scripts/calibrate_ground.py.", stacklevel=3)
@@ -201,18 +229,9 @@ def load_ground_homography(
     except (KeyError, TypeError, ValueError) as exc:
         return _refuse(path, f"malformed: {exc}")
 
-    height, width = frame_size
-    if size != (width, height):
-        return _refuse(path, f"fit at {size[0]}x{size[1]}, frames are {width}x{height}")
-    if abs(alpha - float(preprocess.undistort_alpha)) > 1e-9:
-        return _refuse(path, f"fit with undistort_alpha {alpha}, preprocess uses {preprocess.undistort_alpha}")
-    if preprocess.calibration_path is None:
-        return _refuse(path, "undistortion is off, but the homography was fit on undistorted frames")
-    current = lens_id(preprocess.calibration_path)
-    if current is None:
-        return _refuse(path, f"lens calibration {preprocess.calibration_path} not found")
-    if current != lens:
-        return _refuse(path, "fit against a different lens calibration")
+    problem = fit_conditions_problem(size, alpha, lens, preprocess, frame_size)
+    if problem is not None:
+        return _refuse(path, problem)
     try:
         return GroundHomography.from_matrix(H, size, alpha, lens,
                                             err.get("mean", 0.0), err.get("max", 0.0))

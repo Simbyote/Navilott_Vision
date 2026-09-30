@@ -81,7 +81,7 @@ pytest --hardware --frames=300 src/tests/test_calibration.py     # move the boar
 
 ## 5. Results
 
-Next, for floor distances in cm: `calibrate_ground.md`. A new lens calibration makes any existing ground homography invalid; the pipeline refuses it until it's refit.
+Next, for floor distances in cm: `calibrate_stop_line.md` (the stop line, from tape marks) or `calibrate_ground.md` (full floor X/Y, from a checkerboard). A new lens calibration makes both invalid; the pipeline refuses them until they're redone.
 
 
 ```

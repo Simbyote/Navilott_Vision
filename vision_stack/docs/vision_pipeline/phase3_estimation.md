@@ -151,7 +151,7 @@ Using the encoder readings (checking that a steering correction actually turned 
 | `stop_sign_detected` | `bool` | Voted |
 | `stop_line_detected` | `bool` | Voted |
 | `stop_line_distance_px` | `float \| None` | Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it), held through a missed frame; `None` unless `stop_line_detected` |
-| `stop_line_distance_cm` | `float \| None` | Floor cm forward of the reference point (the bottom of the camera's view) to where the line crosses the robot's centerline, held with the px value from the same frame; also `None` without a ground homography |
+| `stop_line_distance_cm` | `float \| None` | Floor cm forward of the reference point (the bottom of the camera's view) to where the line crosses the robot's centerline, held with the px value from the same frame; from the stop-line table (cm ahead of where its marks were measured from) when there's no ground homography; also `None` with neither |
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `wheel_speed` | `float` | m/s; always 0.0 for now. **To fill in:** needs the encoder counts per wheel revolution and the wheel diameter to convert counts to meters |

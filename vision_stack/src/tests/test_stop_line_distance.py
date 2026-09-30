@@ -9,6 +9,7 @@ geometry stage. Its debug and production versions are held to each other.
             confidence gate, the nothing-found result, stamps, and the
             p3.csv columns phase3_linker writes from it. No camera.
 """
+from dataclasses import replace
 from types import SimpleNamespace
 
 import cv2
@@ -22,7 +23,7 @@ from src.perception.stop_line_distance import (
     StopLineDistanceConfig, StopLineResult, compute_stop_line_distance, estimate_stop_line_distance,
 )
 from src.phase2_linker import run_chain
-from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND, same
+from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE, same
 
 ROI_H = 81
 ROI = SimpleNamespace(lane_rect=(24, 189, 432, ROI_H), frame_id=7, timestamp_ms=350, source_shape=(270, 480))
@@ -40,10 +41,10 @@ def line(y_near, confidence=0.8, clipped=False, x=(100.0, 300.0), tilt=0.0):
 def geometry(*lines, frame_id=7, ts=350):
     return GeometryBranchResult([], [], frame_id, ts, list(lines))
 
-def both(geo, cfg=StopLineDistanceConfig(), ground=None, roi=ROI):
+def both(geo, cfg=StopLineDistanceConfig(), ground=None, roi=ROI, table=None):
     """The debug and production results, checked equal."""
-    debug, summary = compute_stop_line_distance(geo, roi, cfg, ground)
-    same(debug, estimate_stop_line_distance(geo, roi, cfg, ground))
+    debug, summary = compute_stop_line_distance(geo, roi, cfg, ground, table)
+    same(debug, estimate_stop_line_distance(geo, roi, cfg, ground, table))
     return debug, summary
 
 
@@ -196,3 +197,51 @@ def test_the_lane_roi_origin_is_added_before_projecting():
 def test_the_log_reports_cm_when_there_is_a_ground_plane():
     _, s = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND)
     assert any("cm ahead" in e for e in s["log"])
+
+
+# =============================================================================
+# The stop-line table
+# =============================================================================
+
+@pytest.mark.software
+@pytest.mark.parametrize("y_near", [10.0, 40.0, 72.5])
+def test_without_a_homography_the_table_gives_the_cm_at_the_lines_rows(y_near):
+    r, s = both(geometry(line(y_near)), table=SYNTHETIC_STOP_LINE_TABLE)
+    assert r.distance_px == ROI_H - y_near
+    assert r.distance_cm == pytest.approx(SYNTHETIC_STOP_LINE_TABLE.to_cm(ROI_H - y_near), abs=0.01)
+    assert any("cm ahead" in e for e in s["log"])
+
+
+@pytest.mark.software
+def test_a_line_the_robot_is_on_is_at_zero_cm_from_the_table_too():
+    r, _ = both(geometry(line(float(ROI_H), clipped=True)), table=SYNTHETIC_STOP_LINE_TABLE)
+    assert r.distance_cm == 0.0
+
+
+@pytest.mark.software
+def test_the_homography_wins_over_the_table():
+    r, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND, table=SYNTHETIC_STOP_LINE_TABLE)
+    assert r.distance_cm == pytest.approx(floor_y(189 + 40.0), abs=0.01)
+    assert r.distance_cm != pytest.approx(SYNTHETIC_STOP_LINE_TABLE.to_cm(41.0), abs=0.01)
+
+
+@pytest.mark.software
+def test_a_homography_fit_at_another_size_falls_back_to_the_table():
+    other = replace(SYNTHETIC_GROUND, image_size=(640, 360))
+    r, _ = both(geometry(line(40.0)), ground=other, table=SYNTHETIC_STOP_LINE_TABLE)
+    assert r.distance_cm == pytest.approx(SYNTHETIC_STOP_LINE_TABLE.to_cm(41.0), abs=0.01)
+
+
+@pytest.mark.software
+def test_a_table_fit_at_another_frame_size_gives_no_cm():
+    other_size = SimpleNamespace(**{**vars(ROI), "source_shape": (360, 640)})
+    r, _ = both(geometry(line(40.0)), roi=other_size, table=SYNTHETIC_STOP_LINE_TABLE)
+    assert r.detected and r.distance_cm is None
+
+
+@pytest.mark.software
+def test_the_chain_reports_the_tables_cm_on_a_drawn_stop_line():
+    cfg = replace(SCENE_CONFIG, stop_line_table=SYNTHETIC_STOP_LINE_TABLE)
+    s = run_chain(SCENES["stop_line_wide"], 1, 50, cfg).stop_line
+    assert s.detected and s.distance_cm == pytest.approx(SYNTHETIC_STOP_LINE_TABLE.to_cm(s.distance_px), abs=0.01)
+    assert run_chain(SCENES["stop_line_wide"], 1, 50, SCENE_CONFIG).stop_line.distance_cm is None

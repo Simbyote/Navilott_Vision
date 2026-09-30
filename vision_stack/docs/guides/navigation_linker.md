@@ -95,7 +95,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **Stale lane:** the navigator keeps driving by heading on a stale lane, which the contract says it shouldn't. It's an open decision (`navigation_contract.md`).
-- **Stop line:** the stop line needs a ground homography (`calibrate_ground.md`) to have a cm distance. Without one it never triggers.
+- **Stop line:** the stop line needs a cm distance, from the stop-line table (`calibrate_stop_line.md`, tape marks, the easy way) or a ground homography (`calibrate_ground.md`). Without either it never triggers.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
 - **Gains:** Ignacio's bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
 
