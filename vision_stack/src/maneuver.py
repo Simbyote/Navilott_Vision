@@ -65,7 +65,7 @@ class ManeuverConfig:
     turn_speed: float = 0.45
     turn_slow_speed: float = 0.30       # over the last turn_slow_band_deg, to limit overshoot
     turn_slow_band_deg: float = 20.0
-    turn_target_deg: float = 180.0
+    turn_target_deg: float = 171.0
     turn_tolerance_deg: float = 5.0     # pass: final angle within target +/- this
     turn_timeout_s: float = 6.0         # pass: target reached within this
     turn_abort_deg: float = 270.0       # safety: a turn past this is stopped
