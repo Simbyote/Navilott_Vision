@@ -150,6 +150,19 @@ pytest --hardware --frames=300 src/tests/test_calibration.py  # move the board a
 
 ---
 
+## Stop-line distance in cm — [calibrate_stop_line.md](calibrate_stop_line.md), [calibrate_ground.md](calibrate_ground.md)
+
+Tape strips at measured distances, no checkerboard (lens calibration first):
+
+```
+python3 -m src.scripts.calibrate_stop_line                      # one mark at a time; Enter to fit
+python3 -m src.scripts.calibrate_stop_line --marks 3:6.2,6:24.9,10:41.5,15:55   # refit, no camera
+```
+
+Or the full floor homography, from a checkerboard: `python3 -m src.scripts.calibrate_ground --square-cm=2.46 --origin-x-cm=-9.8`
+
+---
+
 ## Analyze runs — [analysis.md](analysis.md)
 
 ```

@@ -169,3 +169,24 @@ def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_pat
     out = subprocess.run([sys.executable, "-W", "ignore", "-c", probe], cwd=PIPELINE_ROOT,
                          capture_output=True, text=True, check=True).stdout.split()
     assert out == ["True", "True", "True"]
+
+
+@pytest.mark.software
+def test_measured_loads_the_stop_line_table_against_its_own_preprocess(tmp_path):
+    """A matching table at STOP_LINE_TABLE_PATH ends up in MEASURED.stop_line_table; SCENE_CONFIG never has one."""
+    import json
+    from src.perception.ground import lens_id
+    table = tmp_path / "stop_line_table.json"
+    table.write_text(json.dumps({
+        "curve": [800.0, 160.0, -2.0], "image_size": [FRAME_W, FRAME_H],
+        "undistort_alpha": MEASURED.preprocess.undistort_alpha,
+        "lens_calibration": {"sha256": lens_id(MEASURED.preprocess.calibration_path)},
+        "marks": [{"cm": 3.0, "rows": 0.0}, {"cm": 6.9, "rows": 70.0}]}))
+    probe = ("import src.params as p, pathlib; "
+             f"p.STOP_LINE_TABLE_PATH = pathlib.Path({str(table)!r}); "
+             "import src.config as c, src.tests.scenes as s; "
+             "t = c.MEASURED.stop_line_table; "
+             "print(t is not None, round(t.to_cm(0.0), 3), s.SCENE_CONFIG.stop_line_table is None)")
+    out = subprocess.run([sys.executable, "-W", "ignore", "-c", probe], cwd=PIPELINE_ROOT,
+                         capture_output=True, text=True, check=True).stdout.split()
+    assert out == ["True", "3.0", "True"]

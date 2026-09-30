@@ -33,8 +33,8 @@ from src.estimation_debug import TracedPhase3Processor
 from src.phase3_linker import run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
-    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, differs, drive_sequence, scene,
-    same, sweep_frame,
+    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE,
+    differs, drive_sequence, scene, same, sweep_frame,
 )
 
 # MEASURED undistorts; synthetic frames come out warped, but both paths warp
@@ -224,6 +224,7 @@ PACKET_CASES = {
     "cm_scale": (SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=0.05)),
     "alt": (ALT_CONFIG, ALT_ESTIMATION),
     "ground": (replace(SCENE_CONFIG, ground=SYNTHETIC_GROUND), MEASURED_ESTIMATION),
+    "stop_line_table": (replace(SCENE_CONFIG, stop_line_table=SYNTHETIC_STOP_LINE_TABLE), MEASURED_ESTIMATION),
 }
 DRIVE = drive_sequence()
 

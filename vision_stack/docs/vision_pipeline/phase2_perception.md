@@ -303,7 +303,7 @@ candidates → confidence gate (≥ 0.4) → nearest (largest y_near_px) → dis
 The reference is the bottom of the lane ROI, which is the bottom of the frame: the nearest floor the camera sees, about 3 cm ahead of the robot. Both distances fall to 0 as the robot reaches the line (a clipped line is at 0).
 
 - **`distance_px`** is in lane-ROI rows and needs no calibration.
-- **`distance_cm`** is the floor distance forward from the reference point to where the line's near edge crosses the robot's centerline (X = 0), through `PipelineConfig.ground` (`perception/ground.py`). The near edge's two ends go from lane-ROI to frame coordinates (adding the ROI origin), onto the floor, and the crossing is taken there; a straight line stays straight through a homography, so this is exact even for a line seen at an angle or off to one side. `None` when there is no ground homography or the frame isn't the size it was fit at. `cm_per_px` isn't used: it only holds at the bottom row.
+- **`distance_cm`** is the floor distance forward from the reference point to where the line's near edge crosses the robot's centerline (X = 0), through `PipelineConfig.ground` (`perception/ground.py`). The near edge's two ends go from lane-ROI to frame coordinates (adding the ROI origin), onto the floor, and the crossing is taken there; a straight line stays straight through a homography, so this is exact even for a line seen at an angle or off to one side. Without a usable ground homography (none, or fit at another frame size), it comes from the stop-line table instead (below). `None` with neither. `cm_per_px` isn't used: it only holds at the bottom row.
 - **`proximity`** is `y_near_px / ROI height` in [0, 1], the same closeness measure lane candidates carry (1 = at the ROI bottom).
 
 `StopLineResult` also has `y_near_px`, the line's ends and tilt, `clipped`, the confidence and how many candidates geometry found. With nothing confident, `detected` is False and the numbers are None. Phase 3 votes on it and holds the distances (see `phase3_estimation.md`).
@@ -313,6 +313,12 @@ The reference is the bottom of the lane ROI, which is the bottom of the frame: t
 **File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`guides/calibrate_ground.md`)
 
 One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+, origin at the reference point). It is fit on frames from `preprocess_frame` with `MEASURED`'s settings and records the lens calibration (a SHA-256 of its `image_size`, `camera_matrix` and `dist_coeffs`), `undistort_alpha` and image size it was fit under. `config.py` loads it once into `MEASURED.ground`; if it's missing, or any of those three differ from what preprocess uses, or undistortion is off, it warns and leaves `ground` None, which only turns the cm outputs off. `SCENE_CONFIG` has none, since synthetic frames aren't undistorted. Nothing reads it per frame.
+
+### Stop-line table
+
+**File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`guides/calibrate_stop_line.md`)
+
+The board-free alternative for the stop line. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C`, is then fit through them by linear least squares. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
 **Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the hand-set `expected_half_lane_px` (228) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
@@ -420,5 +426,5 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 - **`expected_half_lane_px`** from calibration instead of the hand-set 228 px.
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
-- **`distance_px` to cm:** needs a ground homography, not `cm_per_px`.
+- **`distance_px` to cm:** needs a ground homography or a stop-line table, not `cm_per_px`.
 - **Offset sign on hardware:** confirm + = robot right of center on the propped-up chassis before tuning anything downstream.

@@ -39,7 +39,7 @@ from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
 from src.config import MEASURED, PipelineConfig
-from src.tests.scenes import ALT_CONFIG, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, same as _same, sweep_frame
+from src.tests.scenes import ALT_CONFIG, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE, same as _same, sweep_frame
 
 
 # ALT_CONFIG moves every stage's tuning, so a twin that ignores part of its
@@ -295,5 +295,6 @@ def test_stop_line_distance_twins_fuzz():
         g = geo.GeometryBranchResult([], [], roi.frame_id, roi.timestamp_ms, cands)
         cfg = sld.StopLineDistanceConfig(min_confidence=0.4)
         ground = SYNTHETIC_GROUND if i % 2 else None
-        _same(sld.compute_stop_line_distance(g, roi, cfg, ground)[0],
-              sld.estimate_stop_line_distance(g, roi, cfg, ground))
+        table = SYNTHETIC_STOP_LINE_TABLE if i % 3 else None
+        _same(sld.compute_stop_line_distance(g, roi, cfg, ground, table)[0],
+              sld.estimate_stop_line_distance(g, roi, cfg, ground, table))

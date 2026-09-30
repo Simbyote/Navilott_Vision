@@ -37,7 +37,9 @@ from dataclasses import dataclass, field
 
 from src.estimation import Phase3Config
 from src.maneuver import ManeuverConfig
-from src.params import CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH
+from src.params import (
+    CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, STOP_LINE_TABLE_PATH,
+)
 from src.perception.color_branch import ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig
 from src.perception.ground import GroundHomography, load_ground_homography
@@ -45,6 +47,7 @@ from src.perception.lane_offset import LaneOffsetConfig
 from src.perception.preprocess import PreprocessParams
 from src.perception.roi_crop import ROIConfig
 from src.perception.stop_line_distance import StopLineDistanceConfig
+from src.perception.stop_line_table import StopLineTable, load_stop_line_table
 
 
 # =============================================================================
@@ -61,6 +64,8 @@ class PipelineConfig:
     lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
     stop_line: StopLineDistanceConfig = field(default_factory=StopLineDistanceConfig)
     ground: GroundHomography | None = None      # frame px -> floor cm; None turns the cm outputs off
+    # Stop-line rows -> cm from tape marks; used for the stop line's cm when ground is None
+    stop_line_table: StopLineTable | None = None
 
 
 # =============================================================================
@@ -83,11 +88,14 @@ class PipelineConfig:
 #
 # The ground homography was fit on frames from exactly this preprocess, so it
 # is loaded against it; any other lens calibration, alpha or size refuses it.
+# The stop-line table (tape marks, scripts/calibrate_stop_line.py) is the
+# same, and gives the stop line's cm when there's no homography.
 _MEASURED_PREPROCESS = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH))
 MEASURED = PipelineConfig(
     preprocess = _MEASURED_PREPROCESS,
     color = load_color_config(str(HSV_RANGES_PATH)),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
+    stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,

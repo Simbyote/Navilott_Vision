@@ -2,6 +2,8 @@
 
 Fits the homography that turns a point in the undistorted frame into centimeters on the floor, and writes `calibration/ground_homography.json`. With it loaded, the stop-line distance is reported in cm (`distance_cm`) as well as in lane-ROI rows (`distance_px`). Without it, everything runs and the cm fields are empty.
 
+> **Only need the stop line's distance?** `calibrate_stop_line.md` does that with a few strips of tape and no checkerboard. The pipeline uses it whenever there's no homography.
+
 The camera is rigidly mounted and the floor is flat, so one homography covers every floor point the camera sees. It is fit on the frames `preprocess_frame` produces with the robot's own settings (`MEASURED`), and is only valid for exactly those: the lens calibration, `undistort_alpha` and the 480×270 output. The file records all three, and the pipeline refuses it, with a warning, if any of them has changed.
 
 ## Requirements

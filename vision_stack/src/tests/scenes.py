@@ -22,9 +22,10 @@ Main package:
     SWEEP, sweep_frame(): mark brightness x width x noise across the lane gates.
     drive_sequence(): a stamped frame-and-sensor sequence long enough to move
         every Phase 3 vote, hold and integrator, for packet parity.
-    SCENE_CONFIG: MEASURED with undistortion off and no ground plane.
+    SCENE_CONFIG: MEASURED with undistortion off and no ground plane or stop-line table.
     SYNTHETIC_GROUND: a known ground homography for 480x270 frames: floor
         cm from the bottom-center of the frame, 30 cm ahead at the lane ROI top.
+    SYNTHETIC_STOP_LINE_TABLE: a known stop-line table for 480x270 frames.
     ALT_CONFIG: SCENE_CONFIG with every stage's tuning changed, so a stage
         that ignores its config can't pass a parity test.
     ALT_ESTIMATION: MEASURED_ESTIMATION with every Phase 3 field changed, for
@@ -44,6 +45,7 @@ from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
 from src.perception.ground import GroundHomography
+from src.perception.stop_line_table import StopLineTable
 from src.perception.roi_crop import LANE, ROIBounds, resolve
 from src.perception.stop_line_distance import StopLineDistanceConfig
 
@@ -62,12 +64,19 @@ SYNTHETIC_GROUND = GroundHomography.from_matrix(
         np.float32([[-15, 0], [15, 0], [-15, 30], [15, 30]])),
     image_size=(FRAME_W, FRAME_H), undistort_alpha=0.0, lens_sha256=None)
 
+# A known stop-line table for 480x270 frames: 3 cm at the view bottom, growing
+# the way a flat floor does toward a horizon 160 rows up. Only its being known
+# matters to the tests.
+SYNTHETIC_STOP_LINE_TABLE = StopLineTable(a=800.0, b=160.0, c=-2.0, image_size=(FRAME_W, FRAME_H),
+                                          undistort_alpha=0.0, lens_sha256=None, max_rows=70.0)
+
 # Synthetic frames are drawn already undistorted, and a ground plane fit on
 # real undistorted frames doesn't describe them, so both are off here
 SCENE_CONFIG = replace(
     MEASURED,
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
     ground = None,
+    stop_line_table = None,
 )
 
 # Every stage's tuning moved off SCENE_CONFIG's. The values matter only in
