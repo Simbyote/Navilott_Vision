@@ -123,19 +123,21 @@ def check_stop_line_trigger(packet: EstimationPacket, threshold_cm: float = 3.0)
 # Lane Keeping Controller Implementation
 # =============================================================================
 class LaneKeepingNavigator(Navigator):
-    """Proportional differential steering navigator for lane keeping."""
+    """Proportional differential steering navigator with variable gain scaling."""
 
     def __init__(
         self,
         base_speed: float = 0.40,
-        kp_cm: float = 0.015,             # Reduced proportional gain for milder steering
-        kp_norm: float = 0.30,            # Reduced normalized gain
-        kp_heading: float = 0.010,        # Reduced heading gain
-        max_steering_adj: float = 0.20,   # Capped maximum steering correction
+        kp_cm: float = 0.015,             # Base gain for small offsets
+        gain_scale: float = 0.05,         # Scaling factor: larger offset = larger gain
+        kp_norm: float = 0.30,
+        kp_heading: float = 0.010,
+        max_steering_adj: float = 0.40,
         stop_line_threshold_cm: float = 3.0,
     ) -> None:
         self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
         self.kp_cm = kp_cm
+        self.gain_scale = gain_scale
         self.kp_norm = kp_norm
         self.kp_heading = kp_heading
         self.max_steering_adj = max_steering_adj
@@ -152,18 +154,23 @@ class LaneKeepingNavigator(Navigator):
         if check_stop_line_trigger(packet, self.stop_line_threshold_cm):
             return BRAKE
 
-        # Proportional steering adjustment calculation
         steering_adj = 0.0
 
         if packet.lane_status == "vision":
             if packet.lane_offset_cm is not None:
-                steering_adj = packet.lane_offset_cm * self.kp_cm
+                # Progressive gain scaling: Kp increases proportionally with error magnitude
+                offset_cm = packet.lane_offset_cm
+                effective_kp = self.kp_cm * (1.0 + self.gain_scale * abs(offset_cm))
+                steering_adj = offset_cm * effective_kp
             else:
-                steering_adj = packet.lane_offset * self.kp_norm
+                offset_norm = packet.lane_offset
+                effective_kp_norm = self.kp_norm * (1.0 + self.gain_scale * abs(offset_norm) * 30.0)
+                steering_adj = offset_norm * effective_kp_norm
 
         elif packet.lane_status in ("hold", "stale"):
             steering_adj = packet.heading_error * self.kp_heading
 
+        # Clamp steering adjustment to hardware maximum
         steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
 
         # Differential speed calculation
@@ -273,11 +280,12 @@ def main() -> None:
     init_motors(pi)
     navigator = LaneKeepingNavigator(
         base_speed=0.40,
-        kp_cm=0.015,             # Reduced steering response
-        max_steering_adj=0.20,   # Lower max steering adjustment clamp
+        kp_cm=0.015,
+        gain_scale=0.05,        # 5% gain boost per cm of offset
+        max_steering_adj=0.40,
     )
 
-    run_duration_sec = 6.0
+    run_duration_sec = 5.0
     frame_interval = 0.2  # 0.2s correction interval (5 Hz)
 
     # Sequence of test lane offsets in cm
