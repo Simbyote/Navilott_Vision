@@ -240,13 +240,13 @@ def execute_command(pi: pigpio.pi, cmd: Command) -> None:
 # =============================================================================
 # Main Execution Loop
 # =============================================================================
-def create_mock_packet(frame_id: int, offset_cm: Optional[float] = 0.0, stop_sign: bool = False, stop_line_dist: Optional[float] = None) -> EstimationPacket:
+def create_mock_packet(frame_id: int, offset_cm: Optional[float] = 0.0) -> EstimationPacket:
     """Helper to assemble a test frame packet."""
     return EstimationPacket(
         drive_state="drive",
-        stop_sign_detected=stop_sign,
-        stop_line_detected=stop_line_dist is not None,
-        stop_line_distance_cm=stop_line_dist,
+        stop_sign_detected=False,
+        stop_line_detected=False,
+        stop_line_distance_cm=None,
         stop_line_distance_px=None,
         lane_status="vision",
         lane_offset_cm=offset_cm,
@@ -263,7 +263,7 @@ def create_mock_packet(frame_id: int, offset_cm: Optional[float] = 0.0, stop_sig
 
 
 def main() -> None:
-    log.info("Starting Lane Keeping Navigation Motor Loop...")
+    log.info("Starting Lane Keeping Navigation Motor Loop (5-Second Run)...")
 
     pi = pigpio.pi()
     if not pi.connected:
@@ -275,46 +275,50 @@ def main() -> None:
         base_speed=0.40,
         kp_cm=0.035,
         max_steering_adj=0.40,
-        stop_line_threshold_cm=3.0,
     )
 
-    # Test frames executed at 0.1s intervals (2 Hz update frequency)
-    # test_frames = [
-    #     ("Centered Drive", create_mock_packet(1, offset_cm=0.0), 0.1),
-    #     ("Offset Left (-6.0 cm)", create_mock_packet(2, offset_cm=-6.0), 0.1),
-    #     ("Offset Right (+6.0 cm)", create_mock_packet(3, offset_cm=6.0), 0.1),
-    #     ("Approaching Stop Line (2.0 cm -> Continue)", create_mock_packet(4, offset_cm=0.0, stop_line_dist=2.0), 0.1),
-    #     ("Approaching Stop Line (1.0 cm -> Continue)", create_mock_packet(5, offset_cm=0.0, stop_line_dist=1.0), 0.1),
-    #     ("Reached Stop Line (0.5 cm -> Brake)", create_mock_packet(6, offset_cm=0.0, stop_line_dist=0.5), 0.1),
-    #     ("Crossed Stop Line (0.2 cm -> Brake)", create_mock_packet(7, offset_cm=0.0, stop_line_dist=0.2), 0.1),
-    #     ("Stop Sign Triggered -> Brake", create_mock_packet(8, offset_cm=0.0, stop_sign=True), 0.1),
-    # ]
+    run_duration_sec = 5.0
+    target_fps = 20.0
+    frame_interval = 1.0 / target_fps  # 0.05 seconds per frame
 
-    test_frames = [
-        ("Centered Drive", create_mock_packet(1, offset_cm=0.0), 0.1),
-        ("Offset Left (-2.0 cm)", create_mock_packet(2, offset_cm=-2.0), 0.1),
-        ("Offset Left (-6.0 cm)", create_mock_packet(3, offset_cm=-6.0), 0.1),
-        ("Offset Right (+3.0 cm)", create_mock_packet(4, offset_cm=3.0), 0.1),
-        ("Offset Right (+6.0 cm)", create_mock_packet(5, offset_cm=6.0), 0.1),
-        ("Centered Drive", create_mock_packet(6, offset_cm=0.0), 0.1),
-    ]
+    # Sequence of test lane offsets in cm to cycle through over the run
+    offset_pattern = [0.0, -2.0, -5.0, -3.0, 0.0, 3.0, 6.0, 4.0, 1.0, -1.0]
+    pattern_length = len(offset_pattern)
+
+    start_time = time.time()
+    frame_id = 1
 
     try:
-        for description, packet, duration_sec in test_frames:
+        while (time.time() - start_time) < run_duration_sec:
+            loop_start = time.time()
+            elapsed = loop_start - start_time
+
+            # Step through test offsets without relying on math library functions
+            simulated_offset_cm = offset_pattern[(frame_id - 1) % pattern_length]
+
+            packet = create_mock_packet(frame_id, offset_cm=simulated_offset_cm)
             cmd = navigator.update(packet)
             execute_command(pi, cmd)
 
             log.info(
-                f"Frame {packet.frame_id:02d} | {description:<42} | "
-                f"Cmd -> Left: {cmd.left:.3f}, Right: {cmd.right:.3f}, Brake: {cmd.brake} | Duration: {duration_sec}s"
+                f"Frame {packet.frame_id:03d} | Elapsed: {elapsed:.2f}s | "
+                f"Offset: {simulated_offset_cm:+5.2f} cm | "
+                f"Cmd -> L: {cmd.left:.3f}, R: {cmd.right:.3f}, Brake: {cmd.brake}"
             )
-            time.sleep(duration_sec)
+
+            frame_id += 1
+
+            # Precision loop timing to maintain exactly 20 FPS
+            computation_time = time.time() - loop_start
+            sleep_time = frame_interval - computation_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
     finally:
         brake(pi)
         pi.write(_stby, 0)
         pi.stop()
-        log.info("Motor driver cleaned up safely.")
+        log.info("Finished 5-second run. Motor driver cleaned up safely.")
 
 
 if __name__ == "__main__":
