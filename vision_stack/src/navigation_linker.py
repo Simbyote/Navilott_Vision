@@ -321,7 +321,7 @@ def run(
             source.close()
             if system is not None:
                 system.show_final_time(0.0 if t0 is None else clock() - t0)
-                system.cleanup()
+                system.cleanup(blank=False)          # the final time stays up
 
     wall = 0.0 if t0 is None else clock() - t0
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,

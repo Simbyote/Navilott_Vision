@@ -20,6 +20,20 @@ sudo timedatectl set-time "YYYY-MM-DD HH:MM:SS"
 
 ---
 
+## Production run — [production_run.md](production_run.md)
+
+The course run: route on the terminal, `St N` on the display, start button, time on the display. Nothing is recorded.
+
+```
+sudo pigpiod                                    # once per boot
+python3 -m src.main                             # route.json, 300 s cap
+python3 -m src.main --route my_route.json       # another route
+```
+
+Afterwards: the final time; `E  N` / time alternating = ended early at step N (Ctrl-C to exit); `E  t` = the run cap; `Err ` = an error (traceback on the terminal).
+
+---
+
 ## Tests — [pytest.md](pytest.md), [tests.md](tests.md)
 
 Software (any machine):

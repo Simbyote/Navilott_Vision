@@ -311,9 +311,9 @@ def test_the_start_button_is_waited_for_and_the_display_kept(tmp_path):
                              run_countdown=lambda: calls.append("countdown"),
                              update_display=lambda t: calls.append("tick"),
                              show_final_time=lambda t: calls.append("final"),
-                             cleanup=lambda: calls.append("cleanup"))
+                             cleanup=lambda blank=True: calls.append(f"cleanup blank={blank}"))
     rep, *_ = go(tmp_path, system=system)
-    assert calls[:2] == ["wait", "countdown"] and calls[-2:] == ["final", "cleanup"]
+    assert calls[:2] == ["wait", "countdown"] and calls[-2:] == ["final", "cleanup blank=False"]
     assert calls.count("tick") == rep["run"]["frames"]
 
 
@@ -322,7 +322,7 @@ def test_ctrl_c_while_waiting_for_the_button_still_stops_everything(tmp_path):
     def wait():
         raise KeyboardInterrupt
     system = SimpleNamespace(wait_for_start=wait, run_countdown=lambda: None, update_display=lambda t: None,
-                             show_final_time=lambda t: None, cleanup=lambda: None)
+                             show_final_time=lambda t: None, cleanup=lambda blank=True: None)
     rep, out, motor, _, camera = go(tmp_path, system=system)
     assert rep["ended_by"] == nl.END_INTERRUPT and rep["run"]["frames"] == 0
     assert motor.calls == [("stop",)] and camera.closed
