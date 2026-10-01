@@ -186,6 +186,7 @@ class MotorController:
         pwmb: int = 13,   # right motor: PWM
         bin1: int = 25,   # right motor: high = forward
         bin2: int = 24,   # right motor: high = reverse
+        stby: int = 23,
         pwm_freq: int = 1000,
     ) -> None:
         self._pi = pi
