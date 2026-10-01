@@ -24,7 +24,7 @@ Flow:
 import time
 
 from src.estimation import (
-    LANE_VISION, USABLE_LANE_MODES, EstimationPacket, HeadingTracker, LaneFilter,
+    LANE_VISION, USABLE_LANE_MODES, EstimationPacket, HeadingTracker, LaneFilter, lane_mode_of,
     Phase3Config, Phase3Processor, SensorSample, StopLineClassifier,
     StopSignClassifier, TrafficClassifier,
 )
@@ -248,6 +248,7 @@ class TracedPhase3Processor(Phase3Processor):
             timestamp_ms = phase2.timestamp_ms,
             left_wheel_cps = sensors.left_wheel_cps or 0.0,
             right_wheel_cps = sensors.right_wheel_cps or 0.0,
+            lane_mode = lane_mode_of(phase2),
         )
         lap("p3_package")
         return packet, {

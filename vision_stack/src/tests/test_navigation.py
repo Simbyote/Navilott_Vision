@@ -1,247 +1,185 @@
 """
-test_navigation.py  --  the Navigation contract: Command rules, the Navigator interface, and the checks
+test_navigation.py  --  src/navigation.py, the navigation subsystem's orchestrator
 
-A navigator that keeps the contract passes every check in navigation_checks;
-each broken navigator here breaks exactly one rule, and the checks must name it.
+The rules in priority order over lane keeping: lane keeping when no rule
+speaks; the first rule that speaks wins, but every rule sees every frame and
+is told when a higher one already decided; record names the deciding part;
+the contract checks and the intersection scenarios end to end; reset; the
+contract re-exported.
 """
-import subprocess
-import sys
-from dataclasses import FrozenInstanceError, replace
-from pathlib import Path
-
 import pytest
 
-from src.navigation import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+import src.navigation as navigation
+import src.navigation_contract as contract
+from src.navigation import (
+    RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, Navigation,
+)
+from src.navigation_contract import BRAKE, Command, Navigator
+from src.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
 from src.tests.navigation_checks import (
-    CASE_FRAMES, FRAME_MS, WARMUP_FRAMES, check_commands, check_no_forward_on_stale,
-    check_no_forward_on_stop, check_steers_toward_center, contract_problems, frames, forward, packet,
+    APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_no_forward_on_stale, check_steers_toward_center,
+    frames, intersection, packet,
 )
 
-BASE_DUTY = 0.40      # maneuver_linker's leg duty
-GAIN = 0.10           # duty per unit of lane_offset
+MS = 50
 
 
-class GoodNavigator:
-    """Brakes on stop or a stale lane; otherwise drives forward and steers against the offset."""
-    def __init__(self):
-        self.calls = 0
+class Says:
+    """A rule stub: a fixed answer, logging what it was told."""
+    def __init__(self, answer):
+        self.answer, self.calls, self.resets, self.record = answer, [], 0, {"reason": "stub"}
 
-    def update(self, packet):
-        self.calls += 1
-        if packet.drive_state == "stop" or packet.lane_status == "stale":
-            return BRAKE
-        return Command(BASE_DUTY - GAIN * packet.lane_offset, BASE_DUTY + GAIN * packet.lane_offset)
+    def update(self, packet, held=False):
+        self.calls.append(held)
+        return self.answer
 
     def reset(self):
-        self.calls = 0
+        self.resets += 1
 
 
-class Overdrives(GoodNavigator):
-    def update(self, packet):
-        cmd = super().update(packet)
-        return cmd if cmd.brake else Command(1.5, 1.5)
+def stubbed(*answers):
+    nav = Navigation()
+    nav.rules = [(f"r{i}", Says(a)) for i, a in enumerate(answers)]
+    return nav
 
 
-class Stalls(GoodNavigator):
-    def update(self, packet):
-        cmd = super().update(packet)
-        return cmd if cmd.brake else Command(0.1, 0.1)
-
-
-class BrakesWithDuty(GoodNavigator):
-    def update(self, packet):
-        cmd = super().update(packet)
-        return Command(0.4, 0.4, brake=True) if cmd.brake else cmd
-
-
-class ReturnsNone(GoodNavigator):
-    def update(self, packet):
-        return None
-
-
-class DrivesOnStale(GoodNavigator):
-    def update(self, packet):
-        return super().update(replace(packet, lane_status="vision"))
-
-
-class DrivesOnStop(GoodNavigator):
-    def update(self, packet):
-        return super().update(replace(packet, drive_state="go"))
-
-
-class SteersAway(GoodNavigator):
-    def update(self, packet):
-        return super().update(replace(packet, lane_offset=-packet.lane_offset))
-
-
-class NeverDrives(GoodNavigator):
-    def update(self, packet):
-        return BRAKE
+def run(nav, case):
+    """(packet, command, record) per frame of a case."""
+    nav.reset()
+    out = []
+    for p in frames(case):
+        out.append((p, nav.update(p), dict(nav.record)))
+    return out
 
 
 # =============================================================================
-# Command
+# The orchestration
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.parametrize("module", ["src.navigation", "src.config", "src.maneuver", "src.lane_keeping",
-                                    "src.scripts.lane_keeping_demo"])
-def test_the_contract_and_its_users_load_without_motor_hardware(module):
-    # pigpio blocked, as on a laptop: nothing above the drivers may import it at load
-    code = f"import sys; sys.modules['pigpio'] = None; import {module}"
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
-                       cwd=Path(__file__).resolve().parents[2])
-    assert r.returncode == 0, r.stderr
+def test_the_rules_in_priority_order():
+    assert [name for name, _ in Navigation().rules] == [RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION]
 
 
 @pytest.mark.software
-def test_brake_is_a_zero_duty_brake_and_the_default_command_coasts():
-    assert (BRAKE.left, BRAKE.right, BRAKE.brake) == (0.0, 0.0, True)
-    assert (Command().left, Command().right, Command().brake) == (0.0, 0.0, False)
+def test_with_no_rule_speaking_lane_keeping_steers():
+    nav = stubbed(None, None)
+    cmd = nav.update(packet(lane_offset=0.3))
+    assert cmd == nav.lane.update(packet(lane_offset=0.3))
+    assert nav.record["rule"] == RULE_LANE_KEEPING and nav.record["source"] == "offset"
 
 
 @pytest.mark.software
-def test_commands_are_frozen():
-    with pytest.raises(FrozenInstanceError):
-        BRAKE.left = 0.5
+def test_the_first_rule_that_speaks_wins_and_every_rule_still_sees_the_frame():
+    nav = stubbed(None, BRAKE, Command(0.4, 0.4))
+    assert nav.update(packet()) == BRAKE
+    first, second, third = (rule for _, rule in nav.rules)
+    assert (first.calls, second.calls, third.calls) == ([False], [False], [True])     # held after the winner
+    assert nav.record == {"rule": "r1", "phase": IDLE, "reason": "stub"}
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("cmd", [BRAKE, Command(), Command(1.0, -1.0), Command(-STALL_DUTY, STALL_DUTY),
-                                 Command(0.0, 0.4), Command(-0.45, 0.45)])
-def test_valid_commands_have_no_problems(cmd):
-    assert command_problems(cmd) == []
+def test_the_tracker_advances_before_the_rules_are_asked():
+    nav, seen = Navigation(), []
+
+    class Peek(Says):
+        def update(self, packet, held=False):
+            seen.append(nav.tracker.phase)
+            return None
+    nav.rules = [("peek", Peek(None))]
+    nav.update(packet(stop_line_detected=True, stop_line_distance_px=10.0))
+    assert seen == [APPROACH]
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("cmd, words", [
-    (Command(1.01, 0.5), ["left", "outside"]),
-    (Command(0.5, -1.01), ["right", "outside"]),
-    (Command(0.24, 0.5), ["left", "stall"]),
-    (Command(0.5, -0.1), ["right", "stall"]),
-    (Command(0.0, 0.4, brake=True), ["brake"]),
-    (Command(0.4, 0.0, brake=True), ["brake"]),
-])
-def test_each_broken_rule_is_named(cmd, words):
-    problems = command_problems(cmd)
-    assert len(problems) == 1 and all(w in problems[0] for w in words), problems
+def test_reset_resets_the_tracker_every_rule_and_lane_keeping(monkeypatch):
+    nav = stubbed(None, None)
+    nav.update(packet(stop_line_detected=True, stop_line_distance_px=10.0))
+    lane_resets = []
+    monkeypatch.setattr(nav.lane, "reset", lambda: lane_resets.append(1))
+    nav.reset()
+    assert nav.tracker.phase == IDLE and nav.record == {} and lane_resets == [1]
+    assert all(rule.resets == 1 for _, rule in nav.rules)
 
 
 @pytest.mark.software
-def test_every_broken_rule_is_listed_not_just_the_first():
-    assert len(command_problems(Command(2.0, 0.1, brake=True))) == 3
+def test_a_given_lane_keeper_and_tracker_are_shared_with_the_rules():
+    from src.lane_keeping import LaneKeepingNavigator
+    from src.stop_line import StopLineTracker
+    lane, tracker = LaneKeepingNavigator(base_speed=0.5), StopLineTracker()
+    nav = Navigation(lane=lane, tracker=tracker, gyro_bias_dps=1.1)
+    assert all(rule.tracker is tracker for _, rule in nav.rules)
+    crossing = dict(nav.rules)[RULE_INTERSECTION]
+    assert crossing.lane is lane and crossing.gyro_bias_dps == 1.1
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("bad", [None, (0.4, 0.4), 0.4])
-def test_anything_but_a_command_is_a_problem(bad):
-    assert command_problems(bad) == [f"not a Command: {bad!r}"]
+def test_it_is_a_navigator_and_re_exports_the_contract():
+    assert isinstance(Navigation(), Navigator)
+    for name in ("BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems"):
+        assert getattr(navigation, name) is getattr(contract, name)
 
 
 # =============================================================================
-# Navigator
+# The contract, end to end
 # =============================================================================
 
 @pytest.mark.software
-def test_the_navigator_interface_is_update_and_reset():
-    assert isinstance(GoodNavigator(), Navigator)
+def test_every_command_is_valid():
+    mixed = frames(intersection({"stop_sign_detected": True}, {"drive_state": "stop"}, after_frames=40)
+                   + [{"lane_status": s, "lane_offset": o} for s in ("vision", "hold", "stale")
+                      for o in (-1.0, 0.0, 1.0)])
+    assert check_commands(Navigation(), mixed) == []
 
-    class NoReset:
-        def update(self, packet):
-            return BRAKE
-    assert not isinstance(NoReset(), Navigator)
+
+@pytest.mark.software
+def test_steers_toward_center():
+    assert check_steers_toward_center(Navigation()) == []
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("check", INTERSECTION_CHECKS, ids=lambda c: c.__name__)
+def test_every_intersection_check_passes(check):
+    assert check(Navigation()) == []
+
+
+@pytest.mark.software
+@pytest.mark.xfail(strict=True, reason="open decision: lane keeping drives on heading when the lane is stale")
+def test_no_forward_drive_on_a_stale_lane():
+    assert check_no_forward_on_stale(Navigation()) == []
 
 
 # =============================================================================
-# Packet builders
+# Who decides, frame by frame
 # =============================================================================
 
-@pytest.mark.software
-def test_built_packets_are_numbered_and_spaced_a_frame_apart():
-    ps = frames([{}, {"lane_offset": 0.3}, {}], start=5)
-    assert [p.frame_id for p in ps] == [5, 6, 7]
-    assert [p.timestamp_ms for p in ps] == [5 * FRAME_MS, 6 * FRAME_MS, 7 * FRAME_MS]
-    assert ps[1].lane_offset == 0.3 and ps[0].lane_offset == 0.0
+def rules_over(out):
+    """The deciding rule per frame, collapsed to its runs."""
+    runs = []
+    for _, _, rec in out:
+        if not runs or runs[-1] != rec["rule"]:
+            runs.append(rec["rule"])
+    return runs
 
 
 @pytest.mark.software
-def test_the_default_packet_is_a_centered_go_on_vision():
-    p = packet()
-    assert (p.lane_offset, p.lane_status, p.drive_state) == (0.0, "vision", "go")
+def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
+    n = len(APPROACH_ROWS)
+    red_ms = STOP_DELAY_MS + 3000                        # still red after the 2 s stop-sign hold
+    case = intersection({"stop_sign_detected": True, "drive_state": "stop"}, after_frames=0)
+    case += [{"drive_state": "stop", "lane_mode": "right_only"}] * (red_ms // MS)
+    case += [{"lane_mode": "right_only"}] * 10 + [{}] * 10
+    out = run(Navigation(), case)
+    assert rules_over(out) == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
+                               RULE_INTERSECTION, RULE_LANE_KEEPING]
+    assert out[n][2]["phase"] == CROSSING
+    assert all(cmd == BRAKE for _, cmd, rec in out if rec["rule"] in (RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT))
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("cmd, fwd", [(Command(0.4, 0.4), True), (Command(0.3, 0.0), True),
-                                      (Command(-0.45, 0.45), False), (Command(-0.4, -0.4), False),
-                                      (Command(), False), (BRAKE, False),
-                                      (Command(0.4, 0.4, brake=True), False)])
-def test_forward_means_a_positive_mean_duty_without_a_brake(cmd, fwd):
-    assert forward(cmd) == fwd
-
-
-# =============================================================================
-# The checks
-# =============================================================================
-
-@pytest.mark.software
-def test_a_navigator_that_keeps_the_contract_passes_every_check():
-    assert contract_problems(GoodNavigator()) == []
-
-
-@pytest.mark.software
-def test_every_check_resets_warms_up_and_feeds_the_whole_case():
-    nav = GoodNavigator()
-    nav.calls = 99                   # left over from an earlier run; reset() clears it
-    check_no_forward_on_stop(nav)
-    assert nav.calls == WARMUP_FRAMES + CASE_FRAMES
-
-
-@pytest.mark.software
-def test_the_command_check_resets_first_and_feeds_every_packet():
-    nav = GoodNavigator()
-    nav.calls = 99
-    check_commands(nav, frames([{}] * 7))
-    assert nav.calls == 7
-
-
-@pytest.mark.software
-@pytest.mark.parametrize("nav, check, word", [
-    (Overdrives(), lambda n: check_commands(n, frames([{}])), "outside"),
-    (Stalls(), lambda n: check_commands(n, frames([{}])), "stall"),
-    (BrakesWithDuty(), lambda n: check_commands(n, frames([{"drive_state": "stop"}])), "brake"),
-    (ReturnsNone(), lambda n: check_commands(n, frames([{}])), "not a Command"),
-    (DrivesOnStale(), check_no_forward_on_stale, "stale"),
-    (DrivesOnStop(), check_no_forward_on_stop, "stop"),
-    (SteersAway(), check_steers_toward_center, "toward center"),
-    (NeverDrives(), check_steers_toward_center, "never drove forward"),
-])
-def test_each_broken_navigator_is_caught_by_its_check(nav, check, word):
-    problems = check(nav)
-    assert problems and all(word in p for p in problems), problems
-
-
-@pytest.mark.software
-@pytest.mark.parametrize("nav", [Overdrives(), Stalls(), BrakesWithDuty(), DrivesOnStale(),
-                                 DrivesOnStop(), SteersAway(), NeverDrives()])
-def test_the_full_contract_catches_every_broken_navigator(nav):
-    assert contract_problems(nav)
-
-
-@pytest.mark.software
-def test_steering_is_checked_both_ways():
-    class OnlyRightOffsets(GoodNavigator):
-        """Steers correctly for + offsets, the wrong way for - ones."""
-        def update(self, packet):
-            return super().update(replace(packet, lane_offset=abs(packet.lane_offset)))
-    problems = check_steers_toward_center(OnlyRightOffsets())
-    assert problems and all("offset -0.5" in p for p in problems)
-
-
-@pytest.mark.software
-def test_stale_is_checked_at_every_old_offset():
-    class DrivesOnStaleRight(GoodNavigator):
-        def update(self, packet):
-            if packet.lane_status == "stale" and packet.lane_offset > 0:
-                return Command(0.4, 0.4)
-            return super().update(packet)
-    assert check_no_forward_on_stale(DrivesOnStaleRight())
+def test_a_green_line_is_crossed_straight_then_lane_keeping_takes_over():
+    case = intersection(after={"lane_mode": "right_only", "lane_offset": -0.9}, after_frames=40) + [{}] * 5
+    out = run(Navigation(), case)
+    assert rules_over(out) == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_LANE_KEEPING]
+    crossing = [cmd for _, cmd, rec in out if rec["rule"] == RULE_INTERSECTION]
+    assert all(cmd == Command(0.4, 0.4) for cmd in crossing)          # straight, not chasing the offset

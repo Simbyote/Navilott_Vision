@@ -21,9 +21,11 @@ import cv2
 import pytest
 
 import src.navigation_linker as nl
+from src.stop_line import STOP_DELAY_MS
+from src.stop_sign import STOP_SIGN_HOLD_TIME_MS
 from src.estimation import SensorSample
-from src.lane_keeping import LaneKeepingNavigator
-from src.navigation import BRAKE, Command
+from src.navigation import Navigation
+from src.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
 from src.tests.sim_robot import FakeClock
 
@@ -71,7 +73,7 @@ class Motor:
 class Spy:
     """Wraps a navigator and keeps every packet and command."""
     def __init__(self, inner=None):
-        self.inner = inner or LaneKeepingNavigator()
+        self.inner = inner or Navigation()
         self.packets, self.commands, self.resets = [], [], 0
 
     @property
@@ -155,20 +157,33 @@ def test_a_centered_lane_drives_and_the_log_says_why(tmp_path):
 
 
 @pytest.mark.software
-def test_a_stop_sign_brakes_and_the_summary_counts_it(tmp_path):
+def test_a_stop_sign_line_stops_the_robot_and_the_log_says_which_rule(tmp_path):
     # The synthetic scenes can't raise a voted stop sign through Phase 3 yet (the
-    # sign gate is uncalibrated), so the sign is set on the packets frames 4-6 carry
-    class SignOn(Spy):
+    # sign gate is uncalibrated), so frames 2-4 carry a stop line coming down the
+    # view with a sign; from frame 5 it's gone. At 50 ms a frame the robot reaches
+    # the line STOP_DELAY_MS later and holds STOP_SIGN_HOLD_TIME_MS (no encoders:
+    # the wheels read stopped at once)
+    lines = {2: 30.0, 3: 15.0, 4: 5.0}
+
+    class SignAndLine(Spy):
         def update(self, packet):
-            on = 4 <= packet.frame_id <= 6
-            return super().update(replace(packet, stop_sign_detected=on))
-    rep, out, motor, nav, _ = go(tmp_path, nav=SignOn())
+            rows = lines.get(packet.frame_id)
+            return super().update(replace(packet, stop_sign_detected=rows is not None,
+                                          stop_line_detected=rows is not None, stop_line_distance_px=rows))
+    rep, out, motor, nav, _ = go(tmp_path, nav=SignAndLine(), cam={"end_at": 85})
     logged = rows(out / "nav.csv")
     braked = [int(r["frame_id"]) for r in logged if r["brake"] == "1"]
-    assert braked == [4, 5, 6] and all(r["reason"] == "stop_sign" for r in logged if r["brake"] == "1")
-    assert motor.calls[3:6] == [("brake",)] * 3
-    assert rep["nav"]["brake_reasons"] == {"stop_sign": 3}
-    assert [r["event"] for r in logged if r["event"]] == ["-> steer", "-> stop_sign", "-> steer"]
+    reached = 5 + STOP_DELAY_MS // 50
+    assert braked == list(range(reached, reached + STOP_SIGN_HOLD_TIME_MS // 50))
+    assert {r["reason"] for r in logged if r["brake"] == "1"} == {"stop_sign_hold"}
+    assert {r["rule"] for r in logged if r["brake"] == "1"} == {"stop_sign"}
+    assert [motor.calls[i - 1] for i in braked] == [("brake",)] * len(braked)
+    assert rep["nav"]["brake_reasons"] == {"stop_sign_hold": len(braked)}
+    assert [r["event"] for r in logged if r["event"]] == ["-> steer", "-> crossing", "-> stop_sign_hold",
+                                                         "-> crossing", "-> steer"]
+    assert {r["rule"] for r in logged if r["reason"] == "crossing"} == {"intersection"}
+    assert rep["nav"]["decided_by"]["stop_sign"] == len(braked)
+    assert "decided by" in (out / "summary.txt").read_text()
 
 
 @pytest.mark.software
@@ -363,7 +378,7 @@ def test_the_camera_drives_the_motors_with_sensors_and_the_button(cli_env):
     assert nl.cli(["--camera", "--out", str(tmp / "o")]) == 0
     assert got["motor"].kind == "motor" and got["motors_on"] is True
     assert got["sensors"].kind == "sensors" and got["system"].kind == "system"
-    assert isinstance(got["navigator"], LaneKeepingNavigator) and got["max_run_s"] == nl.MAX_RUN_S
+    assert isinstance(got["navigator"], Navigation) and got["max_run_s"] == nl.MAX_RUN_S
 
 
 @pytest.mark.software
@@ -388,6 +403,7 @@ def test_estimation_flags_reach_phase_3(cli_env):
     got, tmp = cli_env
     nl.cli(["--frames", str(tmp), "--gyro-bias", "0.7", "--cm-per-px", "0.05"])
     assert (got["p3_config"].gyro_bias_dps, got["p3_config"].cm_per_px) == (0.7, 0.05)
+    assert dict(got["navigator"].rules)["intersection"].gyro_bias_dps == 0.7      # the heading hold too
     nl.cli(["--frames", str(tmp)])
     assert got["p3_config"].gyro_bias_dps == nl.MANEUVER.gyro_bias_dps
 

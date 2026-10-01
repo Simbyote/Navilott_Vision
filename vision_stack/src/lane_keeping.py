@@ -22,7 +22,7 @@ Flow:
        STALL_DUTY; anything the contract rejects becomes BRAKE.
 """
 from src.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
-from src.navigation import BRAKE, STALL_DUTY, Command, command_problems
+from src.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
 
 # Gains and limits (Ignacio, 2026-09-30, commit ae34566: variable gain
 # scaling, set on the bench demo); not yet tuned on the course
@@ -113,8 +113,23 @@ class LaneKeepingNavigator:
             # lane; this keeps driving on heading. Decide which is wanted.
             steering_adj = packet.heading_error * self.kp_heading
             source = SOURCE_HEADING
-        steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
+        return self.steer(steering_adj, source)
 
+    def steer(self, steering_adj: float, source: str = SOURCE_NONE) -> Command:
+        """
+        Forward at base_speed with this steering split across the wheels.
+
+        Shared with the intersection rule, so both steer with the same base
+        duty, clamp and stall floor.
+
+        Inputs:
+            steering_adj: + turns left (left wheel slower); clamped to
+                max_steering_adj.
+            source: What the steering came from, for record.
+        Outputs:
+            The command; BRAKE if the contract rejects it.
+        """
+        steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
         cmd = Command(left=self._sanitize_duty(self.base_speed - steering_adj),
                       right=self._sanitize_duty(self.base_speed + steering_adj))
         if command_problems(cmd):

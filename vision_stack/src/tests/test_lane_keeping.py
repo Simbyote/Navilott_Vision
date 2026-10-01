@@ -8,12 +8,12 @@ steers by, the steering clamp and the stall-duty floor.
 import pytest
 
 from src.lane_keeping import (
-    BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, KP_NORM, NORM_TO_CM, MAX_STEERING_ADJ, STOP_LINE_THRESHOLD_CM,
-    LaneKeepingNavigator, check_stop_line_trigger,
+    BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, KP_NORM, NORM_TO_CM, MAX_STEERING_ADJ,
+    LaneKeepingNavigator,
 )
-from src.navigation import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
 from src.tests.navigation_checks import (
-    check_commands, check_no_forward_on_stale, check_no_forward_on_stop,
+    check_commands, check_no_forward_on_stale,
     check_steers_toward_center, frames, packet,
 )
 
@@ -40,11 +40,6 @@ def test_every_command_is_valid():
 
 
 @pytest.mark.software
-def test_no_forward_drive_on_stop():
-    assert check_no_forward_on_stop(nav()) == []
-
-
-@pytest.mark.software
 def test_steers_toward_center_both_ways():
     assert check_steers_toward_center(nav()) == []
 
@@ -57,39 +52,16 @@ def test_no_forward_drive_on_a_stale_lane():
 
 
 # =============================================================================
-# Stop triggers
+# Stopping is the rules' job now
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.parametrize("fields", [{"drive_state": "stop"}, {"stop_sign_detected": True},
-                                    {"stop_line_detected": True, "stop_line_distance_cm": 1.0}])
-def test_each_stop_trigger_brakes(fields):
-    assert nav().update(packet(**fields)) == BRAKE
-
-
-@pytest.mark.software
-@pytest.mark.parametrize("detected, cm, fires", [
-    (True, STOP_LINE_THRESHOLD_CM, True),           # at the threshold counts as reached
-    (True, STOP_LINE_THRESHOLD_CM + 0.01, False),
-    (True, 0.0, True),
-    (True, None, False),                            # no ground homography: never fires
-    (False, 1.0, False),                            # not voted: the distance alone doesn't count
-])
-def test_the_stop_line_fires_at_or_under_the_threshold(detected, cm, fires):
-    p = packet(stop_line_detected=detected, stop_line_distance_cm=cm)
-    assert check_stop_line_trigger(p) == fires
-    assert (nav().update(p) == BRAKE) == fires
-
-
-@pytest.mark.software
-def test_the_threshold_is_configurable():
-    p = packet(stop_line_detected=True, stop_line_distance_cm=5.0)
-    assert nav().update(p) != BRAKE and nav(stop_line_threshold_cm=6.0).update(p) == BRAKE
-
-
-@pytest.mark.software
-def test_caution_still_drives():
-    assert nav().update(packet(drive_state="caution")) == Command(BASE_SPEED, BASE_SPEED)
+@pytest.mark.parametrize("fields", [{"drive_state": "stop"}, {"drive_state": "caution"}, {"stop_sign_detected": True},
+                                    {"stop_line_detected": True, "stop_line_distance_px": 2.0,
+                                     "stop_line_distance_cm": 0.0}])
+def test_lane_keeping_never_stops_for_signs_lights_or_lines(fields):
+    # navigation.Navigation's rules decide stops; lane keeping only steers
+    assert nav().update(packet(**fields)) == Command(BASE_SPEED, BASE_SPEED)
 
 
 # =============================================================================
@@ -201,18 +173,6 @@ def test_zero_gain_scale_is_plain_proportional_steering():
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.parametrize("fields, reason", [
-    ({"drive_state": "stop", "stop_sign_detected": True}, "drive_state_stop"),     # the light wins
-    ({"stop_sign_detected": True, "stop_line_detected": True, "stop_line_distance_cm": 0.0}, "stop_sign"),
-    ({"stop_line_detected": True, "stop_line_distance_cm": 0.0}, "stop_line"),
-])
-def test_record_names_the_stop_trigger(fields, reason):
-    n = nav()
-    assert n.update(packet(**fields)) == BRAKE
-    assert n.record == {"reason": reason, "source": "none", "steer": 0.0}
-
-
-@pytest.mark.software
 @pytest.mark.parametrize("fields, source", [
     ({"lane_offset_cm": 2.0}, "offset_cm"), ({"lane_offset": 0.2}, "offset"),
     ({"lane_status": "hold", "heading_error": 5.0}, "heading"),
@@ -233,3 +193,24 @@ def test_record_says_rejected_and_reset_clears_it(monkeypatch):
     assert n.record["reason"] == "rejected"
     n.reset()
     assert n.record == {}
+
+
+# =============================================================================
+# steer(): shared with the intersection rule
+# =============================================================================
+
+@pytest.mark.software
+def test_steer_splits_clamps_and_records_like_update():
+    n = nav()
+    assert n.steer(0.05, "heading_hold") == Command(BASE_SPEED - 0.05, BASE_SPEED + 0.05)
+    assert n.record == {"reason": "steer", "source": "heading_hold", "steer": 0.05}
+    assert n.steer(5.0).right == pytest.approx(BASE_SPEED + MAX_STEERING_ADJ)
+    assert n.record["steer"] == MAX_STEERING_ADJ and n.record["source"] == "none"
+    assert n.steer(-5.0).left == pytest.approx(BASE_SPEED + MAX_STEERING_ADJ)
+
+
+@pytest.mark.software
+def test_update_steers_through_steer(monkeypatch):
+    n, seen = nav(), []
+    monkeypatch.setattr(n, "steer", lambda adj, source="none": seen.append((adj, source)) or BRAKE)
+    assert n.update(packet(lane_offset=0.2)) == BRAKE and seen[0][1] == "offset" and seen[0][0] > 0

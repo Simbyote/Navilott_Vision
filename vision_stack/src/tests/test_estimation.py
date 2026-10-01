@@ -8,7 +8,7 @@ change to the Phase 2 contract breaks these tests rather than the robot.
 
 --software  Stage behavior and packet contract. No camera, no IMU.
 """
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from types import SimpleNamespace
 
 import pytest
@@ -372,3 +372,14 @@ def test_wheel_counts_per_second_pass_through_to_the_packet_and_wheel_speed_stay
     assert pkt.wheel_speed == 0.0                        # not converted to m/s yet
     pkt, _ = Phase3Processor().process(p2())
     assert (pkt.left_wheel_cps, pkt.right_wheel_cps) == (0.0, 0.0)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("mode", ["two_boundary", "right_only", "none"])
+def test_the_frames_lane_mode_passes_through_unfiltered(mode):
+    from src.estimation import lane_mode_of
+    p2_ = p2()
+    p2_ = replace(p2_, lane_offset_results=[replace(r, mode=mode) for r in p2_.lane_offset_results])
+    pkt, _ = Phase3Processor().process(p2_)
+    assert pkt.lane_mode == mode == lane_mode_of(p2_)
+    assert lane_mode_of(replace(p2_, lane_offset_results=[])) == "none"
