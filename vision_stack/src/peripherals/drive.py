@@ -180,13 +180,12 @@ class MotorController:
     def __init__(
         self,
         pi: pigpio.pi,
-        pwma: int = 13,
-        ain1: int = 25,
-        ain2: int = 24,
-        pwmb: int = 12,
-        bin1: int = 22,
-        bin2: int = 27,
-        stby: int = 23,
+        pwma: int = 12,   # left motor: PWM
+        ain1: int = 22,   # left motor: high = reverse
+        ain2: int = 27,   # left motor: high = forward
+        pwmb: int = 13,   # right motor: PWM
+        bin1: int = 25,   # right motor: high = forward
+        bin2: int = 24,   # right motor: high = reverse
         pwm_freq: int = 1000,
     ) -> None:
         self._pi = pi
