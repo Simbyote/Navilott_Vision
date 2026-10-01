@@ -53,7 +53,7 @@ IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 
 # This robot's IMU is mounted upside down: its raw gyro Z reads + for a LEFT
 # turn (measured 2026-09-30 by maneuver_linker's spin pulses). Per robot: a
 # robot with the IMU mounted Z-up would need its own measurement.
-IMU_YAW_SIGN = 1
+IMU_YAW_SIGN = -1
 
 # --- Sensor collection (src/peripherals/sensing.py) ---
 # The hub reads the IMU and both encoders together at this rate. It samples
