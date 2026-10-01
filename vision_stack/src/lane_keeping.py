@@ -1,9 +1,8 @@
-"""Lane keeping: the first Navigator, proportional differential steering on the lane.
+"""Lane keeping: proportional differential steering on the lane.
 
 Purpose:
     Turns each frame's EstimationPacket into a motor Command under the
-    Navigation contract (src/navigation.py): brake for a red light, a stop
-    sign or a reached stop line; otherwise drive at a base duty and steer
+    Navigation contract (src/navigation.py): drives at a base duty and steers
     against the lane offset (on vision) or the heading turned since vision
     was lost (on hold / stale). Pure logic: it never imports pigpio or the
     motor driver, so it runs and tests anywhere; whoever runs the loop drives
@@ -13,15 +12,13 @@ Main package:
     LaneKeepingNavigator: the navigator. update(packet) -> Command, reset().
         Steering gain grows with the offset (variable gain scaling), so
         small offsets get gentle corrections and large ones firm ones.
-    check_stop_line_trigger(): whether a packet's stop line has been reached.
     REASON_*: why a frame's command is what it is, in LaneKeepingNavigator.record.
 
 Flow:
-    1. Stop triggers first: drive_state stop, stop sign, stop line reached -> BRAKE.
-    2. Steering: lane_offset_cm (or lane_offset without a scale) on vision,
+    1. Steering: lane_offset_cm (or lane_offset without a scale) on vision,
        times a gain that grows with |offset|; heading_error on hold / stale;
        clamped to max_steering_adj.
-    3. Left = base - steering, right = base + steering, each kept at or above
+    2. Left = base - steering, right = base + steering, each kept at or above
        STALL_DUTY; anything the contract rejects becomes BRAKE.
 """
 from src.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
@@ -41,32 +38,14 @@ GAIN_SCALE = 0.05
 NORM_TO_CM = 30.0
 KP_HEADING = 0.010              # duty per degree of heading_error while vision is lost
 MAX_STEERING_ADJ = 0.40         # largest steering duty either way
-STOP_LINE_THRESHOLD_CM = 3.0    # brake once the stop line is this close (floor cm)
 # Duties this close to zero are treated as zero, not bumped up to the stall duty
 ZERO_DUTY_EPS = 1e-4
 
 # LaneKeepingNavigator.record["reason"]: what decided this frame's command
-REASON_DRIVE_STATE = "drive_state_stop"
-REASON_STOP_SIGN = "stop_sign"
-REASON_STOP_LINE = "stop_line"
 REASON_REJECTED = "rejected"            # the contract refused the steered command
 REASON_STEER = "steer"
 # record["source"]: what the steering came from
 SOURCE_CM, SOURCE_NORM, SOURCE_HEADING, SOURCE_NONE = "offset_cm", "offset", "heading", "none"
-
-
-def check_stop_line_trigger(packet: EstimationPacket, threshold_cm: float = STOP_LINE_THRESHOLD_CM) -> bool:
-    """
-    True once the robot has reached or crossed the stop line.
-
-    Inputs:
-        packet: Uses stop_line_detected and stop_line_distance_cm; a line
-            with no cm distance (no ground homography) never triggers.
-        threshold_cm: Distance at or under which it counts as reached.
-    """
-    if packet.stop_line_detected and packet.stop_line_distance_cm is not None:
-        return packet.stop_line_distance_cm <= threshold_cm
-    return False
 
 
 class LaneKeepingNavigator:
@@ -80,7 +59,6 @@ class LaneKeepingNavigator:
         gain_scale: How fast the offset gains grow with |offset|; 0 is plain
             proportional steering.
         max_steering_adj: Steering clamp.
-        stop_line_threshold_cm: See check_stop_line_trigger().
 
     record: Why the last update() returned what it did, for the linkers'
         logs and video: {"reason": REASON_*, "source": SOURCE_*,
@@ -95,7 +73,6 @@ class LaneKeepingNavigator:
         kp_norm: float = KP_NORM,
         kp_heading: float = KP_HEADING,
         max_steering_adj: float = MAX_STEERING_ADJ,
-        stop_line_threshold_cm: float = STOP_LINE_THRESHOLD_CM,
     ) -> None:
         self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
         self.kp_cm = kp_cm
@@ -103,7 +80,6 @@ class LaneKeepingNavigator:
         self.kp_norm = kp_norm
         self.kp_heading = kp_heading
         self.max_steering_adj = max_steering_adj
-        self.stop_line_threshold_cm = stop_line_threshold_cm
         self.record: dict = {}
 
     def reset(self) -> None:
@@ -119,17 +95,10 @@ class LaneKeepingNavigator:
         This frame's command.
 
         Outputs:
-            BRAKE on a stop trigger or a command the contract rejects;
+            BRAKE only if a command is rejected by the contract;
             otherwise forward duty with the steering split across the wheels
             (+ steering = left slower = turn left, against a + offset).
         """
-        if packet.drive_state == "stop":
-            return self._brake(REASON_DRIVE_STATE)
-        if packet.stop_sign_detected:
-            return self._brake(REASON_STOP_SIGN)
-        if check_stop_line_trigger(packet, self.stop_line_threshold_cm):
-            return self._brake(REASON_STOP_LINE)
-
         steering_adj, source = 0.0, SOURCE_NONE
         if packet.lane_status == LANE_VISION:
             source = SOURCE_CM if packet.lane_offset_cm is not None else SOURCE_NORM
