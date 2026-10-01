@@ -47,7 +47,7 @@ from src.debugger.live_view import (
 )
 from src.estimation.estimation import (
     LANE_VISION, LANE_HOLD, LANE_STALE,
-    EstimationPacket, Phase3Config, Phase3Processor, SensorSample,
+    EstimationPacket, Phase3Config, Phase3Processor, SensorSample, with_lane_roi_width,
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
 from src.peripherals.sensing import SensorBatch, SensorHub
@@ -367,13 +367,11 @@ def make_processor(frame, fid: int, ts: int, config: PipelineConfig,
     """
     The traced Phase 3 processor for a run, built on its first frame.
 
-    With cm_per_px set, lane_offset_cm needs the lane ROI width in px, which
-    comes from running Phase 2 on the first frame; otherwise the frame isn't used.
+    With cm_per_px set, lane_offset_cm needs the lane ROI width in px, taken
+    from config's lane ROI at the first frame's size, as the pipeline does
+    (with_lane_roi_width); fid and ts aren't used.
     """
-    if p3_config.cm_per_px is not None and p3_config.lane_roi_width_px is None:
-        lane_w = run_chain(frame, fid, ts, config).roi.lane_rect[2]
-        p3_config = replace(p3_config, lane_roi_width_px=int(lane_w))
-    return TracedPhase3Processor(p3_config)
+    return TracedPhase3Processor(with_lane_roi_width(p3_config, config.roi, frame.shape[:2]))
 
 
 class Sensors:

@@ -8,13 +8,16 @@ tuning, so a stage that is skipped, reordered or handed the wrong config
 shows up as a field that differs.
 
 --software  perceive() against run_chain() field by field on the shared
-            scenes and the gate sweep; estimate() and step() against
-            phase3_linker over a drive sequence, Phase 2 checked first on
-            every frame; config reach for both phases; opt-in timing; the
-            import boundary. No camera.
+            scenes and the gate sweep; estimate() against phase3_linker over
+            a drive sequence, Phase 2 checked first on every frame; step()
+            against navigation_linker over a course that moves every
+            navigation rule, command by command; config reach for both
+            phases; the contract guard; opt-in timing; the import boundary.
+            No camera or motors.
 """
 import subprocess
 import sys
+import time
 from dataclasses import fields, replace
 
 import numpy as np
@@ -29,12 +32,17 @@ from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, Phase3
 from src.params import LANE_BOUNDARY, PIPELINE_ROOT, STOP_SIGN, TRAFFIC_LIGHT
 from src.perception.color_branch import ColorConfig
 from src.phase2_linker import run_chain
-from src.debugger.estimation_debug import TracedPhase3Processor
-from src.phase3_linker import run_phase3_chain
+import src.navigation_linker as nl
+from src.navigation.navigation import (
+    BRAKE, RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
+    Command, Navigation,
+)
+from src.navigation.route import Route
+from src.phase3_linker import make_processor, run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
     ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE,
-    differs, drive_sequence, scene, same, sweep_frame,
+    course_sequence, differs, drive_sequence, scene, same, sweep_frame,
 )
 
 # MEASURED undistorts; synthetic frames come out warped, but both paths warp
@@ -229,19 +237,13 @@ PACKET_CASES = {
 DRIVE = drive_sequence()
 
 
-def _linker_processor(config, estimation, first_frame):
-    """The processor phase3_linker.run() builds: traced, with the lane ROI width from the first frame when cm_per_px is set."""
-    if estimation.cm_per_px is not None and estimation.lane_roi_width_px is None:
-        lane_w = run_chain(first_frame, 0, 0, config).roi.lane_rect[2]
-        estimation = replace(estimation, lane_roi_width_px=int(lane_w))
-    return TracedPhase3Processor(estimation)
 
 def _packets(pipeline, sequence=DRIVE):
-    """step() over a sequence: every packet with Phase 3's debug beside it."""
+    """step() over a sequence: every packet (last_packet) with Phase 3's debug beside it."""
     out = []
     for sf in sequence:
-        out.append((pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors),
-                    pipeline.last_estimation_debug))
+        pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors)
+        out.append((pipeline.last_packet, pipeline.last_estimation_debug))
     return out
 
 
@@ -254,7 +256,8 @@ def test_packets_match_phase3_linker_over_a_drive(case):
     """
     config, estimation = PACKET_CASES[case]
     pipeline = Pipeline(config, estimation)
-    processor = _linker_processor(config, estimation, DRIVE[0].frame)
+    sf0 = DRIVE[0]
+    processor = make_processor(sf0.frame, sf0.frame_id, sf0.timestamp_ms, config, estimation)
     for sf in DRIVE:
         where = f"{sf.segment} f{sf.frame_id}"
         res = run_phase3_chain(sf.frame, sf.frame_id, sf.timestamp_ms, processor, sf.sensors, config)
@@ -268,14 +271,17 @@ def test_packets_match_phase3_linker_over_a_drive(case):
 
 @pytest.mark.software
 @pytest.mark.parametrize("case", PACKET_CASES)
-def test_step_is_perceive_then_estimate(case):
+def test_step_is_perceive_estimate_then_navigate(case):
     config, estimation = PACKET_CASES[case]
-    split = Pipeline(config, estimation)
-    stepped = _packets(Pipeline(config, estimation))
-    for sf, (packet, debug) in zip(DRIVE, stepped):
-        same(split.estimate(split.perceive(sf.frame, sf.frame_id, sf.timestamp_ms), sf.sensors),
-             packet, f"{sf.segment} f{sf.frame_id}")
-        same(split.last_estimation_debug, debug)
+    split, stepped = Pipeline(config, estimation), Pipeline(config, estimation)
+    for sf in DRIVE:
+        cmd = stepped.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors)
+        packet = split.estimate(split.perceive(sf.frame, sf.frame_id, sf.timestamp_ms), sf.sensors)
+        where = f"{sf.segment} f{sf.frame_id}"
+        same(packet, stepped.last_packet, where)
+        same(split.last_estimation_debug, stepped.last_estimation_debug, where)
+        assert split.navigate(packet) == cmd and isinstance(cmd, Command), where
+        same(split.navigation.record, stepped.navigation.record, where)
 
 
 @pytest.mark.software
@@ -357,15 +363,170 @@ def test_phase3_state_is_built_once_and_kept():
 
 
 @pytest.mark.software
-def test_step_timing_adds_phase3_only_when_on():
+def test_step_timing_adds_phase3_and_navigation_only_when_on():
     sf = DRIVE[0]
     timed, plain = Pipeline(SCENE_CONFIG, timing=True), Pipeline(SCENE_CONFIG)
     same(timed.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors),
          plain.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors))
     stages = list(run_chain(sf.frame, 0, 0, SCENE_CONFIG).timings_ms)
-    assert list(timed.last_timings_ms) == stages + ["phase3"]
-    assert timed.last_timings_ms["phase3"] >= 0.0
+    assert list(timed.last_timings_ms) == stages + ["phase3", "navigation"]
+    assert timed.last_timings_ms["phase3"] >= 0.0 and timed.last_timings_ms["navigation"] >= 0.0
     assert plain.last_timings_ms == {}
+
+
+@pytest.mark.software
+def test_each_stage_time_leaves_out_the_wait_between_stages():
+    sf = DRIVE[0]
+    timed = Pipeline(SCENE_CONFIG, timing=True)
+    p2 = timed.perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
+    time.sleep(0.05)
+    packet = timed.estimate(p2, sf.sensors)
+    time.sleep(0.05)
+    timed.navigate(packet)
+    assert timed.last_timings_ms["phase3"] < 40.0 and timed.last_timings_ms["navigation"] < 40.0
+
+
+# =============================================================================
+# Navigation: step() against navigation_linker
+# =============================================================================
+
+COURSE = course_sequence()
+COURSE_ROUTE = Route(("left",))
+COURSE_CONFIGS = {"scene": SCENE_CONFIG, "alt": ALT_CONFIG}     # alt also sees the synthetic stop sign
+ALL_RULES = {RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_END_OF_COURSE}
+
+
+class _CourseSource:
+    """live_view FrameSource stand-in replaying a sequence; current is the frame last read."""
+    fps, label = 20, "course"
+
+    def __init__(self, sequence):
+        self.frames, self.current = iter(sequence), None
+
+    def read(self):
+        self.current = next(self.frames, None)
+        sf = self.current
+        return None if sf is None else (sf.frame, sf.frame_id, sf.timestamp_ms)
+
+    def close(self):
+        pass
+
+
+class _CourseSensors:
+    """phase3_linker.Sensors stand-in: the current frame's readings (none before the first frame)."""
+    def __init__(self, source):
+        self.source = source
+
+    def read(self):
+        return (None if self.source.current is None else self.source.current.sensors), None
+
+    def stop(self):
+        pass
+
+
+class _Motor:
+    """MotorController stand-in: the Command each frame drove, in order."""
+    def __init__(self):
+        self.commands = []
+
+    def drive(self, left, right):
+        self.commands.append(Command(left, right))
+
+    def brake(self):
+        self.commands.append(BRAKE)
+
+    def stop(self):
+        pass
+
+
+class _Watched(Navigation):
+    """Navigation keeping each packet and record, so the linker's run can be compared frame by frame."""
+    def reset(self):
+        super().reset()
+        self.packets, self.records = [], []
+
+    def update(self, packet):
+        cmd = super().update(packet)
+        self.packets.append(packet)
+        self.records.append(self.record)
+        return cmd
+
+
+def _pipeline_course(config, sequence=COURSE):
+    """step() over the course until Navigation finishes: (pipeline, commands, packets, records)."""
+    pipeline = Pipeline(config, route=COURSE_ROUTE)
+    cmds, packets, records = [], [], []
+    for sf in sequence:
+        cmds.append(pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors))
+        packets.append(pipeline.last_packet)
+        records.append(pipeline.navigation.record)
+        if pipeline.finished:
+            break
+    return pipeline, cmds, packets, records
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("case", COURSE_CONFIGS)
+def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
+    """Frame by frame: the packet the navigator saw, its record, and the command the motors got; then how the run ended."""
+    config = COURSE_CONFIGS[case]
+    source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE)
+    report = nl.run(source, _CourseSensors(source), motor, nav, config, MEASURED_ESTIMATION,
+                    out_dir=str(tmp_path / "run"), max_run_s=1e9, render=False)
+    pipeline, cmds, packets, records = _pipeline_course(config)
+    assert len(motor.commands) == len(cmds)
+    for i, sf in enumerate(COURSE[:len(cmds)]):
+        where = f"{sf.segment} f{sf.frame_id}"
+        same(packets[i], nav.packets[i], f"{where} packet")
+        same(records[i], nav.records[i], f"{where} record")
+        assert cmds[i] == motor.commands[i], where
+    assert report["ended_by"] == nl.END_COURSE and pipeline.finished
+    assert (report["outcome"], report["end_step"]) == (pipeline.navigation.outcome, pipeline.navigation.end_step)
+
+
+@pytest.mark.software
+def test_the_course_moves_every_navigation_rule_and_finishes():
+    """Guards the command parity test: every rule decides some frame, the route is counted, the run finishes."""
+    seen = set()
+    for config in COURSE_CONFIGS.values():
+        pipeline, cmds, _, records = _pipeline_course(config)
+        seen |= {r["rule"] for r in records}
+        assert BRAKE in cmds and any(not c.brake for c in cmds)
+        assert pipeline.finished and (pipeline.navigation.outcome, pipeline.navigation.end_step) == ("finished", 1)
+        assert len(cmds) < len(COURSE)                       # it ended on the course, not at the sequence's end
+    assert seen == ALL_RULES
+
+
+@pytest.mark.software
+def test_a_command_that_breaks_the_contract_is_braked_and_says_why():
+    pipeline = Pipeline(SCENE_CONFIG)
+    pipeline.navigation.update = lambda packet: Command(0.1, 2.0)
+    sf = DRIVE[0]
+    assert pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors) == BRAKE
+    assert len(pipeline.last_problems) == 2
+    pipeline.navigation.update = lambda packet: Command(0.5, 0.5)
+    assert pipeline.navigate(pipeline.last_packet) == Command(0.5, 0.5) and pipeline.last_problems == []
+
+
+@pytest.mark.software
+def test_the_route_and_the_gyro_bias_reach_navigation():
+    route = Route(("right", "straight"), "stop_line")
+    pipeline = Pipeline(SCENE_CONFIG, replace(MEASURED_ESTIMATION, gyro_bias_dps=1.5), route=route)
+    assert pipeline.navigation.progress.route is route
+    intersection = dict(pipeline.navigation.rules)[RULE_INTERSECTION]
+    assert intersection.gyro_bias_dps == 1.5
+    assert Pipeline(SCENE_CONFIG).navigation.progress.route == Route()
+
+
+@pytest.mark.software
+def test_navigation_state_is_built_once_and_finished_follows_it():
+    pipeline = Pipeline(SCENE_CONFIG)
+    navigation = pipeline.navigation
+    assert pipeline.last_packet is None and pipeline.last_problems == [] and not pipeline.finished
+    _packets(pipeline, DRIVE[:3])
+    assert pipeline.navigation is navigation and pipeline.last_packet.frame_id == DRIVE[2].frame_id
+    dict(navigation.rules)[RULE_END_OF_COURSE]._end("finished")
+    assert pipeline.finished
 
 
 # =============================================================================

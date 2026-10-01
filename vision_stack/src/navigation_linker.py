@@ -45,12 +45,14 @@ from dataclasses import replace
 import numpy as np
 
 from src.capture.camera import CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
+from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
 from src.estimation.estimation import Phase3Config
 from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
-from src.navigation.navigation import BRAKE, Navigation, command_problems
+from src.navigation.end_of_course import OUTCOME_EARLY
+from src.navigation.navigation import Navigation, enforce
+from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
@@ -60,13 +62,14 @@ from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_
 # reaches a stop line stays braked there until it
 MAX_RUN_S = 30.0
 
-END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT, END_COURSE = (
-    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit",
-    "end of course (the lane stayed lost)")
+END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
+    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit")
+END_COURSE = "end of course"                    # the navigator finished the route
+END_EARLY = "ended early (lane lost before the route was done)"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "step", "maneuver", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "event")
 
@@ -150,7 +153,9 @@ def summary_lines(report: dict) -> list[str]:
     rules = ", ".join(f"{k} {v}" for k, v in sorted(n["decided_by"].items())) or "none"
     lat = n["latency_ms"]
     return [
-        f"[NAVIGATION] ended by {report['ended_by']}   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
+        f"[NAVIGATION] ended by {report['ended_by']}"
+        + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
+        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
         f" decided by            {rules}",
@@ -260,11 +265,9 @@ def run(
             pkt = res.packet
 
             n0 = clock()
-            cmd = navigator.update(pkt)
+            cmd, problems = enforce(navigator.update(pkt))     # as the pipeline: a bad command brakes
             rec = dict(getattr(navigator, "record", {}) or {})
-            problems = command_problems(cmd)
-            if problems:                            # the harness enforces the contract, whatever the navigator
-                cmd = BRAKE
+            if problems:
                 rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
             nav_ms = (clock() - n0) * 1000.0
             if cmd.brake:
@@ -279,7 +282,8 @@ def run(
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
-                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "lane_mode": pkt.lane_mode,
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
+                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
@@ -297,7 +301,7 @@ def run(
             if system is not None:
                 system.update_display(arrived - t0)
             if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
-                ended_by = END_COURSE
+                ended_by = END_EARLY if getattr(navigator, "outcome", None) == OUTCOME_EARLY else END_COURSE
                 break
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT
@@ -317,10 +321,11 @@ def run(
             source.close()
             if system is not None:
                 system.show_final_time(0.0 if t0 is None else clock() - t0)
-                system.cleanup()
+                system.cleanup(blank=False)          # the final time stays up
 
     wall = 0.0 if t0 is None else clock() - t0
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
               "nav": nav_stats.report(),
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
@@ -377,6 +382,8 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--max-run-s", type=float, default=MAX_RUN_S,
                     help=f"brake and end after this long (default {MAX_RUN_S:.0f})")
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
+    ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
+                    help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
     ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps, metavar="DPS",
                     help=f"gyro Z at rest, + = right frame (default {MANEUVER.gyro_bias_dps}, config.MANEUVER)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
@@ -406,6 +413,11 @@ def cli(argv: list[str] | None = None) -> int:
               f"{os.path.join(args.render, VIDEO_FILE)}")
         return 0
 
+    try:
+        route = load_route(args.route)
+    except RouteError as exc:
+        print(f"route error: {exc}")
+        return 2
     out_dir = args.out or str(RUNS_DIR / ("nav_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
@@ -438,13 +450,15 @@ def cli(argv: list[str] | None = None) -> int:
     print(f"output   {out_dir}")
     print(f"motors   {'ON' if motors_on else 'OFF (dry run)'}   cap {args.max_run_s:.0f} s   "
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}")
+    print("\n".join(route.describe()))
     if args.camera and system is None:
         for n in (3, 2, 1):
             print(f"  starting in {n}")
             time.sleep(1.0)
     elif system is not None:
         print("press the start button")
-    run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias), config, p3_config, out_dir, system,
+    run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
+        out_dir, system,
         max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
         render=not args.no_render, display=not args.no_display, scale=args.scale)
     return 0

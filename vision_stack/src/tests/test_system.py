@@ -230,6 +230,33 @@ def test_cleanup_blanks_the_display_and_releases_pigpio(env):
 
 
 @pytest.mark.software
+def test_cleanup_can_leave_the_last_screen_up(env):
+    mod, pi, _ = env
+    s = mod.System()
+    s.show_final_time(65)
+    s.cleanup(blank=False)
+    assert s._display.writes == [(1, 5)] and pi.stopped
+
+
+@pytest.mark.software
+def test_wait_for_start_shows_the_text_it_is_given(env):
+    mod, pi, _ = env
+    s = mod.System()
+    pi.reads = [1, 1]
+    s.wait_for_start("St 3")
+    assert s._display.writes == ["St 3"] and pi.reads == []
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("text, shown", [("E  2", "E  2"), ("Err", "Err "), ("", "    "), ("St 123", "St 1")])
+def test_show_text_fills_the_four_digits(env, text, shown):
+    mod, _, _ = env
+    s = mod.System()
+    s.show_text(text)
+    assert s._display.writes == [shown]
+
+
+@pytest.mark.software
 def test_cleanup_still_releases_pigpio_if_the_display_fails(env):
     # cleanup runs in the finally block; a dead display must not leak the daemon handle
     mod, pi, _ = env

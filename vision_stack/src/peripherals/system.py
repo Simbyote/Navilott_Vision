@@ -12,11 +12,14 @@ Main package:
     System: owns the display and the button for one run.
 
 Flow:
-    1. wait_for_start(): show "rdy" and block until a debounced press.
+    1. wait_for_start(text): show text ("rdy" by default; the production run
+       shows the route's step count) and block until a debounced press.
     2. run_countdown(): 5-4-3-2-1, one per second, then blank.
     3. update_display(elapsed_s), every frame; throttled internally.
-    4. show_final_time(elapsed_s) once the loop exits.
-    5. cleanup(), in the finally block.
+    4. show_final_time(elapsed_s) once the loop exits, or show_text() for
+       a code (the production run's "E  2", "Err ").
+    5. cleanup(), in the finally block; cleanup(blank=False) leaves the
+       last screen up after the program exits.
 """
 
 import time
@@ -63,14 +66,17 @@ class System:
             GPIO_START_BUTTON, GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO,
         )
 
-    def wait_for_start(self) -> None:
+    def wait_for_start(self, text: str = "rdy ") -> None:
         """
-        Block until the start button is pressed, showing "rdy" meanwhile.
+        Block until the start button is pressed, showing text meanwhile.
+
+        Inputs:
+            text: Up to 4 characters, one per digit (show_text()).
 
         A press counts only if the pin is still high 50 ms later, which
         debounces contact bounce.
         """
-        self._display.show("rdy ")         # show() takes 4 chars, one per digit
+        self.show_text(text)
         log.info("System: waiting for start button (GPIO %d)...", GPIO_START_BUTTON)
 
         while True:
@@ -104,6 +110,16 @@ class System:
             self._press_latched = True
             return True
         return False
+
+    def show_text(self, text: str) -> None:
+        """
+        Show text, padded or cut to the display's 4 digits.
+
+        Inputs:
+            text: Digits, letters (drawn as the 7-segment font allows),
+                spaces and "-".
+        """
+        self._display.show(f"{text:<4}"[:4])           # show() takes 4 chars, one per digit
 
     def run_countdown(self) -> None:
         """Show 5-4-3-2-1, one digit per second, then blank the display for the run. Blocks 5 s."""
@@ -149,11 +165,20 @@ class System:
         self._display.numbers(minutes, seconds)
         log.info("System: final time %02d:%02d", minutes, seconds)
 
-    def cleanup(self) -> None:
-        """Blank the display and release pigpio. Safe to call even if the display write fails."""
-        try:
-            self._display.show("    ")
-        except Exception:
-            pass
+    def cleanup(self, blank: bool = True) -> None:
+        """
+        Release pigpio, blanking the display first unless told not to.
+
+        Inputs:
+            blank: False leaves the last screen (the final time or an end
+                code) up: the TM1637 holds it while powered.
+
+        Safe to call even if the display write fails.
+        """
+        if blank:
+            try:
+                self._display.show("    ")
+            except Exception:
+                pass
         self._pi.stop()
         log.info("System: cleanup complete.")

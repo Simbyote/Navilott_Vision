@@ -84,6 +84,18 @@ class Spy:
     def finished(self):
         return getattr(self.inner, "finished", False)
 
+    @property
+    def outcome(self):
+        return getattr(self.inner, "outcome", None)
+
+    @property
+    def end_step(self):
+        return getattr(self.inner, "end_step", None)
+
+    @property
+    def progress(self):
+        return getattr(self.inner, "progress", None)
+
     def update(self, packet):
         self.packets.append(packet)
         cmd = self.inner.update(packet)
@@ -299,9 +311,9 @@ def test_the_start_button_is_waited_for_and_the_display_kept(tmp_path):
                              run_countdown=lambda: calls.append("countdown"),
                              update_display=lambda t: calls.append("tick"),
                              show_final_time=lambda t: calls.append("final"),
-                             cleanup=lambda: calls.append("cleanup"))
+                             cleanup=lambda blank=True: calls.append(f"cleanup blank={blank}"))
     rep, *_ = go(tmp_path, system=system)
-    assert calls[:2] == ["wait", "countdown"] and calls[-2:] == ["final", "cleanup"]
+    assert calls[:2] == ["wait", "countdown"] and calls[-2:] == ["final", "cleanup blank=False"]
     assert calls.count("tick") == rep["run"]["frames"]
 
 
@@ -310,7 +322,7 @@ def test_ctrl_c_while_waiting_for_the_button_still_stops_everything(tmp_path):
     def wait():
         raise KeyboardInterrupt
     system = SimpleNamespace(wait_for_start=wait, run_countdown=lambda: None, update_display=lambda t: None,
-                             show_final_time=lambda t: None, cleanup=lambda: None)
+                             show_final_time=lambda t: None, cleanup=lambda blank=True: None)
     rep, out, motor, _, camera = go(tmp_path, system=system)
     assert rep["ended_by"] == nl.END_INTERRUPT and rep["run"]["frames"] == 0
     assert motor.calls == [("stop",)] and camera.closed
@@ -454,8 +466,49 @@ def test_a_lane_that_stays_lost_ends_the_run_as_the_end_of_the_course(tmp_path):
     # The blind scene has no lane; Phase 3 holds, goes stale, the end-of-course rule creeps then finishes
     rep, out, motor, nav, camera = go(tmp_path, cam={"script": ("two_boundary",) * 5 + ("blind",), "end_at": 200})
     logged = rows(out / "nav.csv")
-    assert rep["ended_by"] == nl.END_COURSE and camera.i < 200
+    assert rep["ended_by"] == nl.END_COURSE and camera.i < 200 and rep["outcome"] == "finished"
     assert logged[-1]["reason"] == "end_of_course" and logged[-1]["brake"] == "1"
     assert any(r["reason"] == "lane_stale_slow" for r in logged)
     assert motor.calls[-2:] == [("brake",), ("stop",)]
     assert "end of course" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_a_lane_lost_before_the_route_is_done_ends_early_and_says_so(tmp_path):
+    from src.navigation.route import Route
+    nav = Spy(Navigation(route=Route(("left", "right"))))
+    rep, out, motor, _, _ = go(tmp_path, nav=nav, cam={"script": ("two_boundary",) * 5 + ("blind",), "end_at": 200})
+    assert rep["ended_by"] == nl.END_EARLY and (rep["outcome"], rep["end_step"]) == ("ended_early", 0)
+    assert "ended early" in (out / "summary.txt").read_text() and "at step 0" in (out / "summary.txt").read_text()
+    assert {r["step"] for r in rows(out / "nav.csv")} == {"0/2"}      # no stop line crossed
+    assert motor.calls[-1] == ("stop",)
+
+
+@pytest.mark.software
+def test_the_route_file_reaches_the_navigator(cli_env, tmp_path):
+    got, tmp = cli_env
+    route = tmp_path / "r.json"
+    route.write_text('{"maneuvers": ["left", "straight"], "finish": "stop_line"}')
+    assert nl.cli(["--frames", str(tmp), "--route", str(route)]) == 0
+    assert got["navigator"].progress.route.maneuvers == ("left", "straight")
+    assert got["navigator"].progress.route.finish == "stop_line"
+
+
+@pytest.mark.software
+def test_a_bad_route_file_stops_before_anything_opens(monkeypatch, tmp_path, capsys):
+    opened = []
+    monkeypatch.setattr(nl, "DirectoryFrameSource", lambda *a, **k: opened.append(1))
+    route = tmp_path / "r.json"
+    route.write_text('{"maneuvers": ["lfet"]}')
+    assert nl.cli(["--frames", str(tmp_path), "--route", str(route)]) == 2
+    assert "route error" in capsys.readouterr().out and opened == []
+
+
+@pytest.mark.software
+def test_the_default_route_is_config_s(cli_env):
+    got, tmp = cli_env
+    from src.config import ROUTE_PATH
+    from src.navigation.route import load_route
+    nl.cli(["--frames", str(tmp)])
+    assert got["navigator"].progress.route == load_route(ROUTE_PATH)
+

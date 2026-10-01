@@ -218,9 +218,9 @@ def test_the_start_button_is_waited_for_and_the_display_kept(tmp_path):
                              run_countdown=lambda: calls.append("countdown"),
                              update_display=lambda t: calls.append("tick"),
                              show_final_time=lambda t: calls.append(("final", round(t, 1))),
-                             cleanup=lambda: calls.append("cleanup"))
+                             cleanup=lambda blank=True: calls.append(f"cleanup blank={blank}"))
     rep, *_ = trial(tmp_path, system=system, render=False)
-    assert calls[:2] == ["wait", "countdown"] and calls[-1] == "cleanup"
+    assert calls[:2] == ["wait", "countdown"] and calls[-1] == "cleanup blank=False"
     assert calls.count("tick") == rep["run"]["frames"] and calls[-2][0] == "final"
 
 

@@ -15,6 +15,8 @@ Main package:
     stop-line flag with its distance, sensor pass-throughs (IMU yaw rate and
     lateral accel, each wheel's encoder counts per second), and the frame
     identity carried from Phase2Output.
+    with_lane_roi_width(): the lane ROI width the cm scale needs, from Phase
+    2's ROI tuning; the pipeline and phase3_linker both build Phase 3 with it.
 
 Flow (Phase3Processor.process() is the only place the order is written):
     1. LaneFilter: EMA, per-frame jump gate and dropout hold on the lane offset.
@@ -26,7 +28,7 @@ Flow (Phase3Processor.process() is the only place the order is written):
     6. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from src.params import (
     GREEN, MODE_LEFT_ONLY, MODE_NONE, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY, RED, STOP_SIGN,
@@ -36,6 +38,7 @@ from src.utils import clamp
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
 from src.perception.phase2_out import Phase2Output
+from src.perception.roi_crop import ROIConfig, resolve
 from src.perception.stop_line_distance import StopLineResult
 
 # LaneOffsetResult modes that carry a measurement. "none" and
@@ -70,6 +73,25 @@ class Phase3Config:
     gyro_bias_dps: float = 0.0              # gyro Z at standstill, subtracted before integrating
     heading_limit_deg: float = 90.0         # clamp on the integrated heading
     max_dt_s: float = 0.5                   # longer frame gaps are clamped so a stall can't integrate a large heading step
+
+
+def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
+                        frame_size: tuple[int, int]) -> Phase3Config:
+    """
+    Fill in lane_roi_width_px for the cm scale.
+
+    Inputs:
+        estimation: The Phase 3 tuning.
+        roi: Phase 2's ROI tuning; the lane ROI's width is read from it.
+        frame_size: (height, width) of the frames Phase 2 will crop.
+    Outputs:
+        estimation with lane_roi_width_px set to the lane ROI's width at
+        frame_size when it sets cm_per_px and leaves the width unset;
+        estimation itself (the same object) otherwise.
+    """
+    if estimation.cm_per_px is None or estimation.lane_roi_width_px is not None:
+        return estimation
+    return replace(estimation, lane_roi_width_px=int(resolve(roi.lane, frame_size)[2]))
 
 
 @dataclass(frozen=True)

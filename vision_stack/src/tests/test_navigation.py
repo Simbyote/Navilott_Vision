@@ -76,7 +76,7 @@ def test_the_first_rule_that_speaks_wins_and_every_rule_still_sees_the_frame():
     assert nav.update(packet()) == BRAKE
     first, second, third = (rule for _, rule in nav.rules)
     assert (first.calls, second.calls, third.calls) == ([False], [False], [True])     # held after the winner
-    assert nav.record == {"rule": "r1", "phase": IDLE, "reason": "stub"}
+    assert nav.record == {"rule": "r1", "phase": IDLE, "step": "0/0", "reason": "stub"}
 
 
 @pytest.mark.software
@@ -118,7 +118,7 @@ def test_a_given_lane_keeper_and_tracker_are_shared_with_the_rules():
 @pytest.mark.software
 def test_it_is_a_navigator_and_re_exports_the_contract():
     assert isinstance(Navigation(), Navigator)
-    for name in ("BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems"):
+    for name in ("BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce"):
         assert getattr(navigation, name) is getattr(contract, name)
 
 
@@ -225,3 +225,63 @@ def test_once_finished_no_rule_is_asked_again():
     for p in frames(intersection(after_frames=20), start=100):
         assert nav.update(p) == BRAKE and nav.record["rule"] == RULE_END_OF_COURSE
     assert asked == [] and nav.tracker.phase == IDLE
+
+
+# =============================================================================
+# The route
+# =============================================================================
+
+def course(n_lines, tail):
+    """n_lines intersections (green, no sign), then tail."""
+    case = []
+    for _ in range(n_lines):
+        case += intersection(after={"lane_mode": "right_only"}, after_frames=40) + [{}] * 5
+    return case + tail
+
+
+LOST = [{"lane_status": "stale"}] * 40
+
+
+@pytest.mark.software
+def test_each_intersection_is_the_next_step_of_the_route():
+    from src.navigation.route import Route
+    nav = Navigation(route=Route(("left", "straight", "right")))
+    out = run(nav, course(3, [{}] * 3))
+    steps = [rec["step"] for _, _, rec in out if rec["rule"] == RULE_INTERSECTION]
+    assert [s for i, s in enumerate(steps) if i == 0 or s != steps[i - 1]] == ["1/3 left", "2/3 straight", "3/3 right"]
+    assert nav.progress.done and not nav.finished
+
+
+@pytest.mark.software
+def test_a_lost_lane_after_the_route_finishes_and_before_it_ends_early():
+    from src.navigation.end_of_course import OUTCOME_EARLY, OUTCOME_FINISHED
+    from src.navigation.route import Route
+    done = Navigation(route=Route(("left", "right")))
+    run(done, course(2, LOST))
+    assert (done.outcome, done.end_step) == (OUTCOME_FINISHED, 2)
+    early = Navigation(route=Route(("left", "right")))
+    run(early, course(1, LOST))
+    assert (early.outcome, early.end_step) == (OUTCOME_EARLY, 1)
+
+
+@pytest.mark.software
+def test_with_a_finish_line_the_robot_stops_at_the_line_after_the_last_maneuver():
+    from src.navigation.end_of_course import OUTCOME_FINISHED
+    from src.navigation.route import Route
+    nav = Navigation(route=Route(("left",), "stop_line"))
+    out = run(nav, course(2, [{}] * 10))
+    first = next(i for i, (_, _, rec) in enumerate(out) if rec.get("reason") == "end_of_course")
+    assert (nav.outcome, nav.end_step) == (OUTCOME_FINISHED, 2)
+    assert out[first][2]["rule"] == RULE_END_OF_COURSE and all(cmd == BRAKE for _, cmd, _ in out[first:])
+    assert out[first - 1][2]["rule"] == RULE_INTERSECTION                    # beat the crossing at the line
+    assert out[first - 1][2]["step"] == "2/1 finish"
+
+
+@pytest.mark.software
+def test_reset_starts_the_route_over():
+    from src.navigation.route import Route
+    nav = Navigation(route=Route(("left",)))
+    run(nav, course(1, []))
+    nav.reset()
+    assert nav.progress.step == 0 and nav.outcome is None and nav.end_step is None
+

@@ -20,6 +20,20 @@ sudo timedatectl set-time "YYYY-MM-DD HH:MM:SS"
 
 ---
 
+## Production run — [production_run.md](production_run.md)
+
+The course run: route on the terminal, `St N` on the display, start button, time on the display. Nothing is recorded.
+
+```
+sudo pigpiod                                    # once per boot
+python3 -m src.main                             # route.json, 300 s cap
+python3 -m src.main --route my_route.json       # another route
+```
+
+Afterwards: the final time; `E  N` / time alternating = ended early at step N (Ctrl-C to exit); `E  t` = the run cap; `Err ` = an error (traceback on the terminal).
+
+---
+
 ## Tests — [pytest.md](pytest.md), [tests.md](tests.md)
 
 Software (any machine):
@@ -122,9 +136,18 @@ python3 -m src.navigation_linker --camera --max-run-s 10    # short first run on
 python3 -m src.navigation_linker --camera                   # start button, 30 s cap
 python3 -m src.navigation_linker --video runs/<run>.avi     # what it would have commanded
 python3 -m src.navigation_linker --render runs/nav_<YYYYMMDD_HHMMSS>   # rebuild a run's video
+python3 -m src.navigation_linker --camera --route my_route.json   # another route (default: route.json)
 ```
 
 Output: `runs/nav_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `nav.csv`, `p3.csv`, `nav.avi`)
+
+The course plan is `route.json` in `vision_stack/`, read at startup; edit it between runs:
+
+```json
+{"maneuvers": ["left", "straight", "right"], "finish": "edge"}
+```
+
+`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right are driven straight until the turn logic lands.
 
 ---
 

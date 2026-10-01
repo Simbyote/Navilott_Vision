@@ -127,14 +127,31 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 
 `src/navigation/navigation.py`'s `Navigation` is the Navigator the robot drives with. It orchestrates the subsystem, and each decision lives in its own file as a **rule** that returns a `Command` or `None` ("nothing to say"). Every frame:
 
-1. **`stop_line.py` `StopLineTracker`** advances, once, for every rule: line in view (APPROACH) → gone from the bottom of the view (CROSSING) → **reached** 1.5 s later (`STOP_DELAY_MS`), since the view ends about 10 cm ahead of the robot and braking at the moment it left stopped the robot short. A line lost while still above `NEAR_BOTTOM_ROWS` (25 rows) is flicker, not reached.
+1. **`stop_line.py` `StopLineTracker`** advances, once, for every rule: line in view (APPROACH) → gone from the bottom of the view (CROSSING; `entered` is True on that one frame) → **reached** 1.5 s later (`STOP_DELAY_MS`), since the view ends about 10 cm ahead of the robot and braking at the moment it left stopped the robot short. A line lost while still above `NEAR_BOTTOM_ROWS` (25 rows) is flicker, not reached. Each `entered` is one intersection: the route's progress advances on it (below).
 2. **`stop_sign.py` `StopSignRule`:** at a reached line with a stop sign seen in the last 5 s, brake until the wheels read stopped (≤ 20 counts/s each, or after 1 s of braking), hold 2 s, go.
 3. **`traffic_light.py` `TrafficLightRule`:** at a reached line with the light red, brake until it isn't. Caution drives on.
-4. **`intersection.py` `IntersectionRule`:** from the moment the line leaves the view, drive straight on a gyro heading hold, not on lane keeping, which gets pulled left by the crossing street's boundary. The crossing ends once the robot has reached the line and Phase 2 sees both boundaries (`lane_mode`) for 3 frames in a row, or after 4 s of driving. It is straight through only: **turns are TBD** (Ignacio's logic will plug into this rule, which is what keeps lane keeping out of the intersection).
-5. **`end_of_course.py` `EndOfCourseRule`:** the course ends at the mat's edge, where the lane lines end. On a `stale` lane it creeps at `SLOW_DUTY` (0.30; half of 0.40 would stall under the 0.25 stall duty), steering by the heading turned. If the lane is still stale after `END_STALE_MS` (1 s) of that, it brakes and sets `finished`. The count pauses while a higher rule holds the frame: no lane boundaries in the middle of an intersection, or stopped at a sign or light, isn't the end. A dedicated final stop line could replace this later.
+4. **`intersection.py` `IntersectionRule`:** from the moment the line leaves the view, drive straight on a gyro heading hold, not on lane keeping, which gets pulled left by the crossing street's boundary. The crossing ends once the robot has reached the line and Phase 2 sees both boundaries (`lane_mode`) for 3 frames in a row, or after 4 s of driving. It is straight through only: **turns are TBD** (Ignacio's logic will plug into this rule, which is what keeps lane keeping out of the intersection). Its record carries the route step and maneuver, with `tbd` set when the plan asked for a turn that was driven straight.
+5. **`end_of_course.py` `EndOfCourseRule`:** ends the run, how depending on the route (below). On a `stale` lane it creeps at `SLOW_DUTY` (0.30; half of 0.40 would stall under the 0.25 stall duty), steering by the heading turned. If the lane is still stale after `END_STALE_MS` (1 s) of that, it brakes and sets `finished`: `outcome` is `finished` when the route is done and finishes at the edge, otherwise `ended_early` (a safety stop off course), with `end_step` the step it got to. With a `stop_line` finish, it brakes at the finish line once the tracker reaches it (`finished`). The count pauses while a higher rule holds the frame: no lane boundaries in the middle of an intersection, or stopped at a sign or light, isn't the end.
 6. **`lane_keeping.py` `LaneKeepingNavigator`** when no rule speaks.
 
-**`Navigation.finished`** is the run's end: once set, every command is `BRAKE` (no rule is asked again), and whatever runs the loop (`navigation_linker`, the production run) ends on it.
+**`Navigation.finished`** is the run's end: once set, every command is `BRAKE` (no rule is asked again), and whatever runs the loop (`navigation_linker`, the production run) ends on it. `Navigation.outcome` (`finished` / `ended_early`) and `end_step` say how.
+
+### The route (`route.py`)
+
+The course plan: one maneuver per intersection, read from `config.ROUTE_PATH` (`vision_stack/route.json`) and checked once at startup, so it can be edited between runs without touching code:
+
+```json
+{"maneuvers": ["left", "straight", "right"], "finish": "edge"}
+```
+
+- **`maneuvers`:** `straight`, `left` or `right`, in order; case-insensitive. Left and right are **TBD** (Ignacio): they are driven straight and logged as TBD until his turn logic lands in the intersection rule.
+- **`finish`** (default `edge`):
+  - `edge`: after the last maneuver, a lane that stays lost (the mat's edge) is the finish. Extra intersections past the plan are crossed straight.
+  - `stop_line`: the first stop line after the last maneuver is the finish line; the robot stops at it (1.5 s after it leaves the view, like any stop).
+- **Ended early:** a lane that stays lost before the route is done is a safety stop, `outcome` `ended_early`, with the step reached.
+- A bad file (missing, bad JSON, unknown key or name) is a `RouteError` at startup, before anything opens.
+
+`RouteProgress` (`Navigation.progress`) counts intersections: every stop line `entered` is the next step. `Navigation.record["step"]` labels it: `0/3` before the first, `2/3 right`, `4/3 finish`, `5/3 extra`. `Route.describe()` gives the startup screen's lines.
 
 The first rule that speaks wins. Every rule still sees every frame, told whether a higher one already decided (`held`), so its state stays current: the light is watched during a stop sign's hold, and the crossing's clock and boundary count don't run while the robot is braked at the line.
 
@@ -144,14 +161,17 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 
 **Contract checks:** `Navigation` passes every check. Lane keeping on its own doesn't pass the stale one; slowing and ending are the end-of-course rule's job.
 
-`src/scripts/lane_keeping_demo.py` drives the motors from scripted packets through `Navigation`: lane keeping, then a stop-sign intersection (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and `Navigation`, and is the step's harness before it goes into `pipeline.py`.
+`src/scripts/lane_keeping_demo.py` drives the motors from scripted packets through `Navigation`: lane keeping, then a stop-sign intersection (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and `Navigation`; it is the debug twin of the Navigation step.
+
+**In the pipeline:** `src/pipeline.py` runs Navigation as its last stage, `Pipeline.navigate(packet)`: `Navigation.update()`, then `enforce()` (`navigation_contract.py`), which returns `BRAKE` (and the reasons, on `Pipeline.last_problems`) for a command that breaks the contract. `navigation_linker` drives through the same `enforce()`. `Pipeline.step()` is frame in, `Command` out; driving the motors with it is the run loop's job: `src/main.py`, the production run (`guides/production_run.md`). The route comes in as `Pipeline(route=...)`, and the intersection's gyro bias is Phase 3's (`Phase3Config.gyro_bias_dps`). `test_pipeline` holds the pipeline's commands to `navigation_linker`'s motor calls frame by frame over `course_sequence()`, a synthetic course in which every rule decides some frame.
 
 ---
 
 ## Open items
 
 - **Turns at intersections.** TBD (Ignacio): the crossing goes straight only.
-- **End of course.** A lost lane ends the run; measure the roll-out past the lane's end on the mat and tune `END_STALE_MS`. A final stop line, if the course gets one, would be exact.
+- **End of course.** A lost lane ends the run; measure the roll-out past the lane's end on the mat and tune `END_STALE_MS`. A final stop line, if the course gets one, is the route's `stop_line` finish.
+- **Counting intersections.** Every stop line passing under the view counts as one. A missed line (glare) or a false one shifts every later maneuver; watch the `step` column in `nav.csv`.
 - **Tuning on the mat:** `STOP_DELAY_MS` (1.5 s), `SIGN_MEMORY_MS` (5 s), `STOPPED_CPS` (20), `MAX_CROSS_MS` (4 s). The sign and traffic-light gates are still uncalibrated.
 
 - **Distance.** The maneuver trial measured leg length with cumulative encoder counts. The packet carries only counts per second, so Navigation integrates `cps × dt` itself. Whether the packet should carry cumulative counts is a contract change to agree on.

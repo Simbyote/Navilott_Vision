@@ -16,7 +16,7 @@ import pytest
 from src.estimation.estimation import (
     CAUTION, GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP,
     HeadingTracker, LaneFilter, Phase3Config, Phase3Processor, SensorSample,
-    StopLineClassifier, StopSignClassifier, TrafficClassifier,
+    StopLineClassifier, StopSignClassifier, TrafficClassifier, with_lane_roi_width,
 )
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
@@ -383,3 +383,17 @@ def test_the_frames_lane_mode_passes_through_unfiltered(mode):
     pkt, _ = Phase3Processor().process(p2_)
     assert pkt.lane_mode == mode == lane_mode_of(p2_)
     assert lane_mode_of(replace(p2_, lane_offset_results=[])) == "none"
+
+
+
+@pytest.mark.software
+def test_with_lane_roi_width_fills_the_width_only_for_a_cm_scale_without_one():
+    from src.perception.roi_crop import ROIConfig, resolve
+    roi = ROIConfig()
+    scaled = Phase3Config(cm_per_px=0.05)
+    filled = with_lane_roi_width(scaled, roi, (480, 640))
+    assert filled.lane_roi_width_px == resolve(roi.lane, (480, 640))[2] and filled.cm_per_px == 0.05
+    assert with_lane_roi_width(scaled, roi, (240, 320)).lane_roi_width_px == resolve(roi.lane, (240, 320))[2]
+    plain, given = Phase3Config(), Phase3Config(cm_per_px=0.05, lane_roi_width_px=123)
+    assert with_lane_roi_width(plain, roi, (480, 640)) is plain        # no cm scale: unchanged
+    assert with_lane_roi_width(given, roi, (480, 640)) is given        # width given: kept

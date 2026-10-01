@@ -22,8 +22,9 @@ Main package:
     IDLE, APPROACH, CROSSING: its phases.
 
 Flow:
-    IDLE -> APPROACH (line voted in) -> CROSSING (voted out near the bottom)
-    -> reached on the frame STOP_DELAY_MS after it left -> IDLE.
+    IDLE -> APPROACH (line voted in) -> CROSSING (voted out near the bottom:
+    entered, one intersection) -> reached on the frame STOP_DELAY_MS after it
+    left -> IDLE.
     APPROACH -> IDLE when it's voted out far away.
 """
 from src.estimation.estimation import EstimationPacket
@@ -46,6 +47,8 @@ class StopLineTracker:
 
     Attributes, read by the rules after update():
         phase: IDLE, APPROACH or CROSSING.
+        entered: True only on the frame the line leaves the view near the
+            bottom (CROSSING starts): one intersection, for the route's count.
         reached: True only on the frame the robot reaches the line.
         last_rows: The line's last seen stop_line_distance_px; None in IDLE.
         lost_ms: timestamp_ms the line left the view; None unless CROSSING.
@@ -58,13 +61,13 @@ class StopLineTracker:
     def reset(self) -> None:
         """Back to IDLE, no line."""
         self.phase = IDLE
-        self.reached = False
+        self.entered = self.reached = False
         self.last_rows: float | None = None
         self.lost_ms: int | None = None
 
     def update(self, packet: EstimationPacket) -> None:
         """Advance on this frame's packet (stop_line_detected, stop_line_distance_px, timestamp_ms)."""
-        self.reached = False
+        self.entered = self.reached = False
         seen = bool(packet.stop_line_detected)
         if self.phase == IDLE:
             if seen:
@@ -74,6 +77,7 @@ class StopLineTracker:
                 self.last_rows = packet.stop_line_distance_px
             elif self.last_rows is not None and self.last_rows <= self.near_bottom_rows:
                 self.phase, self.lost_ms = CROSSING, packet.timestamp_ms
+                self.entered = True
             else:
                 self.reset()                    # lost far away: not this robot driving over it
         elif packet.timestamp_ms - self.lost_ms >= self.delay_ms:     # CROSSING; a re-sighting is the same line flickering

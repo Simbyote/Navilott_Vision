@@ -56,7 +56,7 @@ def test_it_drives_straight_from_the_line_leaving_the_view():
     _, out = drive([{"lane_mode": "right_only", "lane_offset": -0.8}] * 10)
     assert active(out)[0] == LOST and out[LOST][0] == Command(BASE_SPEED, BASE_SPEED)   # ignores the offset
     assert out[LOST][1] == {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD, "steer": 0.0,
-                            "heading_deg": 0.0}
+                            "heading_deg": 0.0, "step": "0/0", "maneuver": None, "tbd": False}
 
 
 @pytest.mark.software
@@ -120,3 +120,20 @@ def test_reset_stops_crossing():
     rule.reset()
     rule.tracker.reset()                            # the line itself forgotten too
     assert rule.update(packet(timestamp_ms=10_000)) is None and rule.record == {}
+
+
+@pytest.mark.software
+def test_the_record_names_the_route_step_and_maneuver_and_flags_turns_as_tbd():
+    from src.navigation.route import LEFT, STRAIGHT, Route, RouteProgress
+    for maneuver, tbd in ((LEFT, True), (STRAIGHT, False)):
+        tracker = StopLineTracker()
+        progress = RouteProgress(Route((maneuver,)))
+        rule = IntersectionRule(tracker, LaneKeepingNavigator(), progress=progress)
+        for i, r in enumerate(LINE + [None]):
+            p = packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=r is not None, stop_line_distance_px=r)
+            tracker.update(p)
+            if tracker.entered:
+                progress.enter()
+            cmd = rule.update(p)
+        assert cmd == Command(BASE_SPEED, BASE_SPEED)                     # a turn is driven straight for now
+        assert (rule.record["step"], rule.record["maneuver"], rule.record["tbd"]) == (f"1/1 {maneuver}", maneuver, tbd)
