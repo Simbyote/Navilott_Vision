@@ -80,6 +80,12 @@ class LaneKeepingNavigator:
         gain_scale: How fast the offset gains grow with |offset|; 0 is plain
             proportional steering.
         max_steering_adj: Steering clamp.
+        stop_line_threshold_cm: See check_stop_line_trigger().
+
+    record: Why the last update() returned what it did, for the linkers'
+        logs and video: {"reason": REASON_*, "source": SOURCE_*,
+        "steer": clamped steering duty (0.0 when braking)}. Debug output
+        only; not part of the Navigator contract.
     """
     def __init__(
         self,
