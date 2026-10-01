@@ -80,6 +80,10 @@ class Spy:
     def record(self):
         return self.inner.record
 
+    @property
+    def finished(self):
+        return getattr(self.inner, "finished", False)
+
     def update(self, packet):
         self.packets.append(packet)
         cmd = self.inner.update(packet)
@@ -442,3 +446,16 @@ def test_the_stop_line_distance_is_logged_only_while_the_line_is_voted(tmp_path,
     _, out, *_ = go(tmp_path)
     logged = {int(r["frame_id"]): r["stop_line_cm"] for r in rows(out / "nav.csv")}
     assert logged[3] == "8.0" and logged[4] == "" and logged[2] == ""
+
+
+
+@pytest.mark.software
+def test_a_lane_that_stays_lost_ends_the_run_as_the_end_of_the_course(tmp_path):
+    # The blind scene has no lane; Phase 3 holds, goes stale, the end-of-course rule creeps then finishes
+    rep, out, motor, nav, camera = go(tmp_path, cam={"script": ("two_boundary",) * 5 + ("blind",), "end_at": 200})
+    logged = rows(out / "nav.csv")
+    assert rep["ended_by"] == nl.END_COURSE and camera.i < 200
+    assert logged[-1]["reason"] == "end_of_course" and logged[-1]["brake"] == "1"
+    assert any(r["reason"] == "lane_stale_slow" for r in logged)
+    assert motor.calls[-2:] == [("brake",), ("stop",)]
+    assert "end of course" in (out / "summary.txt").read_text()

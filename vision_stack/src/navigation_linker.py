@@ -27,8 +27,9 @@ Flow:
     1. Open the source, sensors, motors and start button; wait for the press.
     2. Per frame: read the camera and sensors, run the vision chain, ask the
        navigator, check the command, drive the motors, log, queue the frame.
-    3. On the run-time cap, the source ending, Ctrl-C or an error: stop the
-       motors first, flush the recorder, write the summary.
+    3. On the navigator finishing (end of course), the run-time cap, the
+       source ending, Ctrl-C or an error: stop the motors first, flush the
+       recorder, write the summary.
     4. Render nav.avi from the recording, and play it if there's a display.
 """
 import argparse
@@ -59,8 +60,9 @@ from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_
 # reaches a stop line stays braked there until it
 MAX_RUN_S = 30.0
 
-END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
-    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit")
+END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT, END_COURSE = (
+    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit",
+    "end of course (the lane stayed lost)")
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
@@ -71,12 +73,13 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
-navigation (stop sign, red light and intersection rules over lane keeping) -> motors. The video is rendered after the
-run, so recording never slows the steering.
+navigation (stop sign, red light, intersection and end-of-course rules over
+lane keeping) -> motors. The video is rendered after the run, so recording
+never slows the steering.
 
-SAFETY: with --camera the robot moves. Ctrl-C stops the motors, and every
-run brakes and ends after --max-run-s. A run that reaches a stop line stays
-braked there until then.
+SAFETY: with --camera the robot moves. Ctrl-C stops the motors. A run ends
+when the lane stays lost (the end of the course: it creeps, then brakes),
+or after --max-run-s, whichever comes first.
 
 Examples (from vision_stack/, with sudo pigpiod running):
     python3 -m src.navigation_linker --camera                 # drive, start button
@@ -293,6 +296,9 @@ def run(
             recorder.put(fid, frame, {**chain_record(res), "nav": n})
             if system is not None:
                 system.update_display(arrived - t0)
+            if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
+                ended_by = END_COURSE
+                break
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT
     except Exception as exc:

@@ -13,7 +13,7 @@ from src.navigation.lane_keeping import (
 )
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
 from src.tests.navigation_checks import (
-    check_commands, check_no_forward_on_stale,
+    check_commands, check_stale_lane_slows_then_stops,
     check_steers_toward_center, frames, packet,
 )
 
@@ -45,10 +45,10 @@ def test_steers_toward_center_both_ways():
 
 
 @pytest.mark.software
-@pytest.mark.xfail(strict=True, reason="open decision: it keeps driving on heading when the lane "
-                                       "is stale; the contract says no forward drive on stale")
-def test_no_forward_drive_on_a_stale_lane():
-    assert check_no_forward_on_stale(nav()) == []
+def test_alone_it_keeps_full_speed_on_a_stale_lane():
+    # Slowing and ending the run on a stale lane is the end-of-course rule's job
+    # (navigation.Navigation); lane keeping on its own just steers by heading
+    assert check_stale_lane_slows_then_stops(nav())
 
 
 # =============================================================================

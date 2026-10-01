@@ -12,7 +12,7 @@ Main package:
     frames(): numbered, 50 ms-spaced packets from a list of overrides.
     intersection(): frames approaching a stop line, the line passing under
     the view, then the time after.
-    check_commands, check_no_forward_on_stale, check_steers_toward_center,
+    check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
     and the intersection checks (decided 2026-10-01: a stop line stops the
     robot only with a stop sign or a red light, once the robot reaches it):
     check_stops_at_a_red_line, check_crosses_a_green_line,
@@ -42,6 +42,14 @@ _BASE = EstimationPacket(
     yaw_rate=0.0, lateral_accel=0.0, wheel_speed=0.0,
     frame_id=0, timestamp_ms=0, left_wheel_cps=0.0, right_wheel_cps=0.0, lane_mode="two_boundary",
 )
+
+# A stale lane: mean wheel duty no more than this while it stays stale (plus
+# room for a slow wheel lifted to the stall duty), and stopped within
+# STALE_STOP_WITHIN_FRAMES (~2 s; the end-of-course rule stops in ~1 s)
+STALE_MAX_DUTY = 0.30
+STALE_LIFT_ROOM = 0.05
+STALE_STOP_WITHIN_FRAMES = 40
+STALE_FRAMES = 60
 
 # A stop line coming down the image to the view bottom (lane-ROI rows above it)
 APPROACH_ROWS = (60.0, 50.0, 40.0, 30.0, 20.0, 10.0, 5.0)
@@ -101,11 +109,28 @@ def check_commands(nav, packets: list[EstimationPacket]) -> list[str]:
     return problems
 
 
-def check_no_forward_on_stale(nav) -> list[str]:
-    """A stale lane never gets forward drive, whatever its (old) offset says."""
-    case = [{"lane_status": "stale", "lane_offset": off} for off in (0.0, 0.3, -0.3) for _ in range(CASE_FRAMES // 3)]
-    return [f"frame {p.frame_id}: drives forward {cmd} on a stale lane"
-            for p, cmd in _run(nav, case) if forward(cmd)]
+def check_stale_lane_slows_then_stops(nav, stale_frames: int = STALE_FRAMES) -> list[str]:
+    """
+    A stale lane (decided 2026-10-01): mean duty at most STALE_MAX_DUTY while it stays
+    stale, then a stop within STALE_STOP_WITHIN_FRAMES that holds: the lane
+    staying lost means the course has ended.
+
+    Inputs:
+        nav: The Navigator.
+        stale_frames: How long the case keeps the lane stale.
+    Outputs:
+        One line per too-fast frame; one if it never stopped, or drove again after.
+    """
+    case = [{"lane_status": "stale", "lane_offset": off, "heading_error": hd}
+            for off, hd in ((0.0, 0.0), (0.4, 5.0), (-0.4, -5.0)) for _ in range(stale_frames // 3)]
+    results = _run(nav, case)
+    problems = [f"frame {p.frame_id}: {cmd} faster than {STALE_MAX_DUTY} on a stale lane"
+                for p, cmd in results if forward(cmd) and (cmd.left + cmd.right) / 2 > STALE_MAX_DUTY + STALE_LIFT_ROOM]
+    stops = [i for i, (_, cmd) in enumerate(results) if not forward(cmd)]
+    if not stops or stops[0] >= STALE_STOP_WITHIN_FRAMES:
+        return problems + [f"never stopped within {STALE_STOP_WITHIN_FRAMES} frames of a stale lane"]
+    return problems + [f"frame {p.frame_id}: drives again on a lane that stayed stale"
+                       for p, cmd in results[stops[0]:] if forward(cmd)]
 
 
 def check_steers_toward_center(nav, offset: float = 0.5) -> list[str]:
@@ -213,9 +238,9 @@ INTERSECTION_CHECKS = (check_stops_at_a_red_line, check_crosses_a_green_line,
 
 
 def contract_problems(nav) -> list[str]:
-    """Every check above on nav, with a mixed packet sequence for check_commands."""
+    """Every check above on nav, with a mixed packet sequence for check_commands (ending on a stale lane long enough to stop)."""
     mixed = frames([{"lane_status": s, "lane_offset": o, "drive_state": d}
                     for s in ("vision", "hold", "stale") for o in (-1.0, -0.2, 0.0, 0.2, 1.0)
-                    for d in ("go", "caution", "stop")])
-    return (check_commands(nav, mixed) + check_no_forward_on_stale(nav) + check_steers_toward_center(nav)
+                    for d in ("go", "caution", "stop")] + [{"lane_status": "stale"}] * STALE_FRAMES)
+    return (check_commands(nav, mixed) + check_stale_lane_slows_then_stops(nav) + check_steers_toward_center(nav)
             + [p for check in INTERSECTION_CHECKS for p in check(nav)])

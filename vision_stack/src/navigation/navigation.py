@@ -13,7 +13,7 @@ Purpose:
     them without importing this module; they're re-exported here.
 
 Main package:
-    Navigation: update(packet) -> Command, reset(), record.
+    Navigation: update(packet) -> Command, reset(), record, finished.
     RULE_*: which part decided a frame, in record["rule"].
 
 Flow, every frame:
@@ -21,12 +21,15 @@ Flow, every frame:
     2. StopSignRule      stop sign at the line: stop, hold, go
     3. TrafficLightRule  red light at the line: wait for it
     4. IntersectionRule  past the line: straight on the gyro until both lane
-                         boundaries are back
-    5. LaneKeepingNavigator, when none of them spoke.
+                         boundaries are back (turns: TBD, Ignacio's)
+    5. EndOfCourseRule   lane stale: creep; stale too long: brake, finished
+    6. LaneKeepingNavigator, when none of them spoke.
+    Once finished, every frame is BRAKE and the run's loop ends on it.
     Every rule sees every frame (held = a higher rule already decided it),
     so each keeps its own state current whether or not it's the one heard.
 """
 from src.estimation.estimation import EstimationPacket
+from src.navigation.end_of_course import EndOfCourseRule
 from src.navigation.intersection import IntersectionRule
 from src.navigation.lane_keeping import LaneKeepingNavigator
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
@@ -35,10 +38,11 @@ from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "Navigation",
-           "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_LANE_KEEPING"]
+           "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
+           "RULE_LANE_KEEPING"]
 
-RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION, RULE_LANE_KEEPING = (
-    "stop_sign", "traffic_light", "intersection", "lane_keeping")
+RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION, RULE_END_OF_COURSE, RULE_LANE_KEEPING = (
+    "stop_sign", "traffic_light", "intersection", "end_of_course", "lane_keeping")
 
 
 class Navigation:
@@ -63,7 +67,9 @@ class Navigation:
             (RULE_STOP_SIGN, StopSignRule(self.tracker)),
             (RULE_TRAFFIC_LIGHT, TrafficLightRule(self.tracker)),
             (RULE_INTERSECTION, IntersectionRule(self.tracker, self.lane, gyro_bias_dps=gyro_bias_dps)),
+            (RULE_END_OF_COURSE, EndOfCourseRule(self.lane)),
         ]
+        self._end = self.rules[-1][1]
         self.record: dict = {}
 
     def reset(self) -> None:
@@ -74,8 +80,16 @@ class Navigation:
         self.lane.reset()
         self.record = {}
 
+    @property
+    def finished(self) -> bool:
+        """The run is over (the end-of-course rule saw the lane stay lost); every command is BRAKE from here."""
+        return self._end.finished
+
     def update(self, packet: EstimationPacket) -> Command:
-        """This frame's command: the first rule that speaks, else lane keeping."""
+        """This frame's command: BRAKE once finished, else the first rule that speaks, else lane keeping."""
+        if self.finished:
+            self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, "reason": "end_of_course"}
+            return BRAKE
         self.tracker.update(packet)
         decided = None
         for name, rule in self.rules:
