@@ -115,23 +115,28 @@ class LaneKeepingNavigator:
             source = SOURCE_HEADING
         return self.steer(steering_adj, source)
 
-    def steer(self, steering_adj: float, source: str = SOURCE_NONE) -> Command:
+    def steer(self, steering_adj: float, source: str = SOURCE_NONE, base_speed: float | None = None,
+              max_steering_adj: float | None = None) -> Command:
         """
-        Forward at base_speed with this steering split across the wheels.
+        Forward with this steering split across the wheels.
 
-        Shared with the intersection rule, so both steer with the same base
-        duty, clamp and stall floor.
+        Shared with the intersection and end-of-course rules, so all steer
+        with the same split, clamp and stall floor.
 
         Inputs:
-            steering_adj: + turns left (left wheel slower); clamped to
-                max_steering_adj.
+            steering_adj: + turns left (left wheel slower); clamped.
             source: What the steering came from, for record.
+            base_speed, max_steering_adj: This call's base duty and clamp;
+                None uses the navigator's own (the end-of-course rule creeps
+                at a slower base with a smaller clamp).
         Outputs:
             The command; BRAKE if the contract rejects it.
         """
-        steering_adj = max(-self.max_steering_adj, min(self.max_steering_adj, steering_adj))
-        cmd = Command(left=self._sanitize_duty(self.base_speed - steering_adj),
-                      right=self._sanitize_duty(self.base_speed + steering_adj))
+        base = self.base_speed if base_speed is None else base_speed
+        limit = self.max_steering_adj if max_steering_adj is None else max_steering_adj
+        steering_adj = max(-limit, min(limit, steering_adj))
+        cmd = Command(left=self._sanitize_duty(base - steering_adj),
+                      right=self._sanitize_duty(base + steering_adj))
         if command_problems(cmd):
             return self._brake(REASON_REJECTED)
         self.record = {"reason": REASON_STEER, "source": source, "steer": steering_adj}

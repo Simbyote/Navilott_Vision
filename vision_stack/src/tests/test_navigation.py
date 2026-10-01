@@ -12,13 +12,13 @@ import pytest
 import src.navigation.navigation as navigation
 import src.navigation.navigation_contract as contract
 from src.navigation.navigation import (
-    RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, Navigation,
+    RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, Navigation,
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
 from src.tests.navigation_checks import (
-    APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_no_forward_on_stale, check_steers_toward_center,
-    frames, intersection, packet,
+    APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
+    contract_problems, frames, intersection, packet,
 )
 
 MS = 50
@@ -58,7 +58,8 @@ def run(nav, case):
 
 @pytest.mark.software
 def test_the_rules_in_priority_order():
-    assert [name for name, _ in Navigation().rules] == [RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION]
+    assert [name for name, _ in Navigation().rules] == [RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION,
+                                                        RULE_END_OF_COURSE]
 
 
 @pytest.mark.software
@@ -108,9 +109,10 @@ def test_a_given_lane_keeper_and_tracker_are_shared_with_the_rules():
     from src.navigation.stop_line import StopLineTracker
     lane, tracker = LaneKeepingNavigator(base_speed=0.5), StopLineTracker()
     nav = Navigation(lane=lane, tracker=tracker, gyro_bias_dps=1.1)
-    assert all(rule.tracker is tracker for _, rule in nav.rules)
-    crossing = dict(nav.rules)[RULE_INTERSECTION]
-    assert crossing.lane is lane and crossing.gyro_bias_dps == 1.1
+    rules = dict(nav.rules)
+    assert all(rules[r].tracker is tracker for r in (RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION))
+    assert rules[RULE_INTERSECTION].lane is lane and rules[RULE_INTERSECTION].gyro_bias_dps == 1.1
+    assert rules[RULE_END_OF_COURSE].lane is lane
 
 
 @pytest.mark.software
@@ -144,9 +146,33 @@ def test_every_intersection_check_passes(check):
 
 
 @pytest.mark.software
-@pytest.mark.xfail(strict=True, reason="open decision: lane keeping drives on heading when the lane is stale")
-def test_no_forward_drive_on_a_stale_lane():
-    assert check_no_forward_on_stale(Navigation()) == []
+def test_a_stale_lane_slows_then_stops():
+    assert check_stale_lane_slows_then_stops(Navigation()) == []
+
+
+@pytest.mark.software
+def test_the_whole_contract():
+    assert contract_problems(Navigation()) == []
+
+
+@pytest.mark.software
+def test_a_lost_lane_finishes_the_run_and_every_command_after_is_brake():
+    nav = Navigation()
+    out = run(nav, [{}] * 5 + [{"lane_status": "stale"}] * 30 + [{}] * 10)
+    first = next(i for i, (_, _, rec) in enumerate(out) if rec.get("reason") == "end_of_course")
+    assert nav.finished and all(cmd == BRAKE for _, cmd, _ in out[first:])
+    assert {rec["rule"] for _, _, rec in out[5:first]} == {RULE_END_OF_COURSE}
+    assert all(rec["rule"] == RULE_END_OF_COURSE for _, _, rec in out[first:])
+    nav.reset()
+    assert not nav.finished
+
+
+@pytest.mark.software
+def test_a_stale_lane_while_crossing_an_intersection_does_not_end_the_run():
+    # No lane boundaries in the middle of an intersection: stale while the crossing drives
+    case = intersection(after={"lane_status": "stale", "lane_mode": "none"}, after_frames=60) + [{}] * 5
+    out = run(Navigation(), case)
+    assert not any(rec.get("reason") == "end_of_course" for _, _, rec in out)
 
 
 # =============================================================================
@@ -183,3 +209,19 @@ def test_a_green_line_is_crossed_straight_then_lane_keeping_takes_over():
     assert rules_over(out) == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_LANE_KEEPING]
     crossing = [cmd for _, cmd, rec in out if rec["rule"] == RULE_INTERSECTION]
     assert all(cmd == Command(0.4, 0.4) for cmd in crossing)          # straight, not chasing the offset
+
+
+
+@pytest.mark.software
+def test_once_finished_no_rule_is_asked_again():
+    # A stop line passing under the view after the finish would make the intersection rule speak
+    nav = Navigation()
+    run(nav, [{}] * 5 + [{"lane_status": "stale"}] * 30)
+    assert nav.finished
+    asked = []
+    for _, rule in nav.rules:
+        real = rule.update
+        rule.update = lambda p, held=False, real=real: asked.append(1) or real(p, held)
+    for p in frames(intersection(after_frames=20), start=100):
+        assert nav.update(p) == BRAKE and nav.record["rule"] == RULE_END_OF_COURSE
+    assert asked == [] and nav.tracker.phase == IDLE

@@ -16,22 +16,18 @@ from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navig
 from src.tests.navigation_checks import (
     APPROACH_ROWS, CASE_FRAMES, FRAME_MS, WARMUP_FRAMES, check_commands, check_crosses_a_green_line,
     check_goes_when_the_light_turns_green, check_ignores_a_red_light_without_a_line,
-    check_no_forward_on_stale, check_steers_toward_center, check_stops_at_a_red_line,
+    check_stale_lane_slows_then_stops, check_steers_toward_center, check_stops_at_a_red_line,
     check_stops_at_a_stop_sign_line_then_goes, contract_problems, frames, forward, intersection, packet,
 )
 
 class GoodNavigator:
-    """
-    navigation.Navigation, braking on a stale lane: a navigator that keeps
-    the whole contract (Navigation alone drives on a stale lane, an open decision).
-    """
+    """navigation.Navigation, counting its calls: a navigator that keeps the whole contract."""
     def __init__(self):
         self.nav, self.calls = Navigation(), 0
 
     def update(self, packet):
         self.calls += 1
-        cmd = self.nav.update(packet)
-        return BRAKE if packet.lane_status == "stale" else cmd
+        return self.nav.update(packet)
 
     def reset(self):
         self.calls = 0
@@ -64,6 +60,53 @@ class ReturnsNone(GoodNavigator):
 class DrivesOnStale(GoodNavigator):
     def update(self, packet):
         return super().update(replace(packet, lane_status="vision"))
+
+
+class SpeedsOnStale(GoodNavigator):
+    """Full speed on a stale lane, though it still stops in the end."""
+    def update(self, packet):
+        cmd = super().update(packet)
+        return Command(0.4, 0.4) if packet.lane_status == "stale" and not cmd.brake else cmd
+
+
+class NeverEndsOnStale(GoodNavigator):
+    """Creeps on a stale lane forever."""
+    def update(self, packet):
+        return Command(0.3, 0.3) if packet.lane_status == "stale" else super().update(packet)
+
+
+class StopsTooLate(GoodNavigator):
+    """Creeps on a stale lane and stops, but only after 50 frames."""
+    def __init__(self):
+        super().__init__()
+        self.stale = 0
+
+    def update(self, packet):
+        self.stale = self.stale + 1 if packet.lane_status == "stale" else 0
+        if packet.lane_status != "stale":
+            return super().update(packet)
+        return BRAKE if self.stale > 50 else Command(0.3, 0.3)
+
+    def reset(self):
+        super().reset()
+        self.stale = 0
+
+
+class ResumesOnStale(GoodNavigator):
+    """Stops on a stale lane, then creeps on again."""
+    def __init__(self):
+        super().__init__()
+        self.stale = 0
+
+    def update(self, packet):
+        self.stale = self.stale + 1 if packet.lane_status == "stale" else 0
+        if packet.lane_status != "stale":
+            return super().update(packet)
+        return BRAKE if 10 <= self.stale < 15 else Command(0.3, 0.3)
+
+    def reset(self):
+        super().reset()
+        self.stale = 0
 
 
 class RunsRedLines(GoodNavigator):
@@ -107,7 +150,7 @@ class NeverGoesAgain(GoodNavigator):
 
     def update(self, packet):
         cmd = super().update(packet)
-        self.stuck = self.stuck or (cmd.brake and packet.lane_status != "stale")
+        self.stuck = self.stuck or cmd.brake
         return BRAKE if self.stuck else cmd
 
     def reset(self):
@@ -256,9 +299,13 @@ def test_the_command_check_resets_first_and_feeds_every_packet():
 @pytest.mark.parametrize("nav, check, word", [
     (Overdrives(), lambda n: check_commands(n, frames([{}])), "outside"),
     (Stalls(), lambda n: check_commands(n, frames([{}])), "stall"),
-    (BrakesWithDuty(), lambda n: check_commands(n, frames([{"lane_status": "stale"}])), "brake"),
+    (BrakesWithDuty(), lambda n: check_commands(n, frames([{"drive_state": "stop"}] * 7 + [{"lane_status": "stale"}] * 30)), "brake"),
     (ReturnsNone(), lambda n: check_commands(n, frames([{}])), "not a Command"),
-    (DrivesOnStale(), check_no_forward_on_stale, "stale"),
+    (DrivesOnStale(), check_stale_lane_slows_then_stops, "stale"),
+    (SpeedsOnStale(), check_stale_lane_slows_then_stops, "faster than"),
+    (NeverEndsOnStale(), check_stale_lane_slows_then_stops, "never stopped"),
+    (StopsTooLate(), check_stale_lane_slows_then_stops, "never stopped within"),
+    (ResumesOnStale(), check_stale_lane_slows_then_stops, "drives again"),
     (RunsRedLines(), check_stops_at_a_red_line, "never braked at a red light"),
     (RunsRedLines(), check_goes_when_the_light_turns_green, "never stopped at the red light"),
     (StopsForRedAnywhere(), check_ignores_a_red_light_without_a_line, "no stop line"),
@@ -277,7 +324,8 @@ def test_each_broken_navigator_is_caught_by_its_check(nav, check, word):
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("nav", [Overdrives(), Stalls(), BrakesWithDuty(), DrivesOnStale(), RunsRedLines(),
+@pytest.mark.parametrize("nav", [Overdrives(), Stalls(), BrakesWithDuty(), DrivesOnStale(), SpeedsOnStale(),
+                                 NeverEndsOnStale(), StopsTooLate(), ResumesOnStale(), RunsRedLines(),
                                  StopsForRedAnywhere(), IgnoresStopSigns(), StopsAtEveryLine(),
                                  BrakesOnSight(), NeverGoesAgain(), SteersAway(), NeverDrives()])
 def test_the_full_contract_catches_every_broken_navigator(nav):
@@ -299,9 +347,10 @@ def test_stale_is_checked_at_every_old_offset():
     class DrivesOnStaleRight(GoodNavigator):
         def update(self, packet):
             if packet.lane_status == "stale" and packet.lane_offset > 0:
-                return Command(0.4, 0.4)
+                return Command(0.6, 0.6)
             return super().update(packet)
-    assert check_no_forward_on_stale(DrivesOnStaleRight())
+    problems = check_stale_lane_slows_then_stops(DrivesOnStaleRight())
+    assert any("faster than" in p for p in problems)
 
 
 @pytest.mark.software

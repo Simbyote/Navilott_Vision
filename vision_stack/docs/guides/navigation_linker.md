@@ -30,7 +30,8 @@ What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 
 | Ends it | Notes |
 | --- | --- |
-| `--max-run-s` (default 30 s) | The only linker-level safety stop |
+| **The end of the course** | The lane stays lost: the robot creeps at 0.30 for 1 s, then brakes (`ended by end of course`). The production run ends the same way |
+| `--max-run-s` (default 30 s) | The linker's safety backstop |
 | Ctrl-C | Motors stop first, then everything is saved and the video rendered |
 | The source ending | Replays only |
 | `--limit N` frames | Mostly for replays |
@@ -76,8 +77,8 @@ Everything goes to `runs/nav_<timestamp>/`.
 | `ended by` | What ended the run; motors ON or OFF | `run time cap` is normal |
 | `run` | Frames, time, FPS, camera and recorder drops | FPS about 20; recorder drops only mean video gaps |
 | `driving` | Frames driving, and what the steering came from (`offset_cm`, `offset`, `heading`) | Mostly `offset` or `offset_cm` on a visible lane. Lots of `heading` means vision kept dropping |
-| `decided by` | Frames each part decided: `lane_keeping`, `intersection`, `stop_sign`, `traffic_light` | `intersection` at every stop line; `stop_sign` / `traffic_light` only where you expect a stop |
-| `braked` | Frames braked and why (`stop_sign_stopping`, `stop_sign_hold`, `red_light`, `rejected`, `contract`) | Brakes you didn't expect: a false stop sign shows here |
+| `decided by` | Frames each part decided: `lane_keeping`, `intersection`, `stop_sign`, `traffic_light`, `end_of_course` | `intersection` at every stop line; `stop_sign` / `traffic_light` only where you expect a stop |
+| `braked` | Frames braked and why (`stop_sign_stopping`, `stop_sign_hold`, `red_light`, `end_of_course`, `rejected`, `contract`) | Brakes you didn't expect: a false stop sign shows here |
 | `steering \|duty\|` | Mean and largest steering | A max stuck at 0.40 means it hit the clamp |
 | `command latency` | Frame in → motors, p50 / p95 / max | Well under the 50 ms frame time |
 | `contract` | Commands the linker had to brake | Should be 0: anything else is a navigator bug |
@@ -101,9 +102,9 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 
 ## 5. Known limits
 
-- **Stale lane:** the navigator keeps driving by heading on a stale lane, which the contract says it shouldn't. It's an open decision (`navigation_contract.md`).
+- **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
 - **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
-- **Turns:** the crossing goes straight only; left and right turns need a route.
+- **Turns:** TBD; the crossing goes straight only.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
 - **Gains:** Ignacio's bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
 
