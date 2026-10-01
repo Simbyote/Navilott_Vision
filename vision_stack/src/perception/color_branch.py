@@ -66,7 +66,7 @@ class HSVRanges:
 class BlobFilter:
     """Blob gates for traffic-light candidates. Defaults are placeholders, not tuned."""
     min_area: float = 30.0      # px^2; rejects mask speckle
-    max_area: float = 70.0    # px^2; rejects large background regions caught by a band
+    max_area: float = 5000.0    # px^2; rejects large background regions caught by a band
     min_aspect: float = 0.3     # w/h; together with max_aspect, rejects elongated streaks
     max_aspect: float = 3.0
     ref_area: float = 800.0     # px^2 scoring confidence 1.0: the expected lamp size at detection range
