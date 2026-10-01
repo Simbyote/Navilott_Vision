@@ -129,3 +129,13 @@ def test_missing_frames_are_skipped_and_counted(run_dir):
 @pytest.mark.software
 def test_an_empty_run_folder_renders_nothing(tmp_path):
     assert render_run(str(tmp_path), SCENE_CONFIG.lane_offset, 20.0)["rendered"] == 0
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("n", [DRIVE, BRAKED], ids=["drive", "brake"])
+def test_the_first_line_names_the_deciding_rule_and_phase(n):
+    first = slice(0, LH)
+    plain = draw_strip(n, W)[first]
+    assert not np.array_equal(draw_strip({**n, "rule": "stop_sign"}, W)[first], plain)
+    assert not np.array_equal(draw_strip({**n, "rule": "stop_sign", "phase": "crossing"}, W)[first],
+                              draw_strip({**n, "rule": "stop_sign"}, W)[first])

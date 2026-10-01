@@ -4,7 +4,7 @@
 
 Navigation doesn't exist yet. This page fixes the handoff so the vision stack and Navigation build against the same thing. Everything in it was measured on the robot in the 2026-09-30 `maneuver_linker` trials, or is enforced by code. Anything not proven is listed under **Open items**, not stated as fact.
 
-**Code:** `src/navigation.py` (`Command`, `BRAKE`, `Navigator`, `command_problems`) · **Packet:** `src/estimation.py` (`EstimationPacket`) · **Checks:** `src/tests/navigation_checks.py` · **Tests:** `src/tests/test_navigation.py`
+**Code:** `src/navigation_contract.py` (`Command`, `BRAKE`, `Navigator`, `command_problems`; re-exported by `src/navigation.py`) · **Packet:** `src/estimation.py` (`EstimationPacket`) · **Checks:** `src/tests/navigation_checks.py` · **Tests:** `src/tests/test_navigation_contract.py`
 
 ---
 
@@ -37,13 +37,15 @@ class Navigator(Protocol):
 
 ## The packet
 
-`EstimationPacket` is unchanged from what `maneuver_linker` produces through `run_phase3_chain()`. The field table is in `phase3_estimation.md`, "Contract". The rules Navigation must follow:
+`EstimationPacket` is what `maneuver_linker` produces through `run_phase3_chain()`, plus `lane_mode` (added 2026-10-01: this frame's Phase 2 lane mode, passed through unfiltered, so Navigation can tell when both lane boundaries are back after an intersection). The field table is in `phase3_estimation.md`, "Contract". The rules Navigation must follow:
 
 | Field | Rule |
 | --- | --- |
 | `lane_offset` | + = robot **right** of lane center, so correcting it means steering **left** (left duty < right duty) |
 | `lane_status` | Steer by `lane_offset` only on `vision` or `hold`. On `stale`, the offset is an old value: **don't drive forward on it** |
-| `drive_state` | On `stop`, **don't drive forward**. `caution` is Navigation's call |
+| `drive_state` | `stop` (red) **stops the robot at a stop line**, not before it and not without one; `go` and `caution` drive on (decided 2026-10-01) |
+| `stop_line_detected`, `stop_line_distance_px` | A stop line says an intersection is coming. It stops the robot only with a stop sign or a red light, once the robot reaches it: 1.5 s after it leaves the bottom of the view |
+| `lane_mode` | Phase 2's mode this frame; `two_boundary` = both lane boundaries seen |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
 | `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders |
 | `wheel_speed` | Always 0.0 for now (`@TODO`: counts per revolution and wheel diameter). Don't use it |
@@ -92,7 +94,7 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 | --- | --- |
 | One packet per frame, stamped at capture | One `Command` per packet |
 | Says how much to trust the lane (`lane_status`) | Decides what to do on `hold` and `stale` |
-| Votes `drive_state`, stop sign, stop line | Stops, waits and goes |
+| Votes `drive_state`, stop sign, stop line | Decides at each stop line: stop, wait, cross |
 | Passes IMU and encoder readings through | Uses them: speed control, turns, distance |
 | Never drives the motors | Never reads the camera or the sensors directly |
 
@@ -106,35 +108,48 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 | --- | --- |
 | `check_commands(nav, packets)` | Every packet gets a `Command` that passes `command_problems()` |
 | `check_no_forward_on_stale(nav)` | A `stale` lane never gets forward drive |
-| `check_no_forward_on_stop(nav)` | `drive_state == "stop"` never gets forward drive |
+| `check_stops_at_a_red_line(nav)` | A red light at a stop line: no braking while the line is in view, then braking after it, for as long as it's red |
+| `check_crosses_a_green_line(nav)` | A stop line with a green light and no sign: never brakes, keeps driving |
+| `check_ignores_a_red_light_without_a_line(nav)` | A red light with no stop line doesn't stop the robot |
+| `check_stops_at_a_stop_sign_line_then_goes(nav)` | A stop sign at a stop line: no braking while the line is in view, a stop after it, then driving on |
+| `check_goes_when_the_light_turns_green(nav)` | Waiting at a red line, green lets the robot drive on |
 | `check_steers_toward_center(nav)` | On `vision`, driving forward with the robot right of center, left duty < right duty; and the mirror case |
 
-`contract_problems(nav)` runs them all. Each returns a list of problems (`[]` when the navigator passes), so a test can print them all. `test_navigation.py` checks the checks themselves with a navigator that obeys the contract and ones that each break one rule.
+`contract_problems(nav)` runs them all. Each returns a list of problems (`[]` when the navigator passes), so a test can print them all. `test_navigation_contract.py` checks the checks themselves with a navigator that obeys the contract (`Navigation`, braking on a stale lane) and ones that each break one rule.
 
 ### Keeping hardware out
 
-`navigation.py` holds only the contract: no pigpio, no motor code, no copies of the packet. A navigator is pure logic too: it imports `EstimationPacket` from `estimation.py` and `Command` from here, and returns commands. Only whatever runs the loop (a script, a linker, the pipeline) opens the motors, through `MotorController` in `peripherals/drive.py`, importing it inside the function that opens hardware. `test_navigation` loads the contract and its users with pigpio blocked, as on a laptop, to keep it that way.
+`navigation_contract.py` holds only the contract: no pigpio, no motor code, no copies of the packet. The navigation subsystem is pure logic too: it imports `EstimationPacket` from `estimation.py` and `Command` from the contract, and returns commands. Only whatever runs the loop (a script, a linker, the pipeline) opens the motors, through `MotorController` in `peripherals/drive.py`, importing it inside the function that opens hardware. `test_navigation_contract` loads the contract, the orchestrator and every rule with pigpio blocked, as on a laptop, to keep it that way.
 
 ---
 
-## The first navigator: `src/lane_keeping.py`
+## The navigation subsystem
 
-`LaneKeepingNavigator` (Ignacio, 2026-09-30) is proportional differential steering:
+`src/navigation.py`'s `Navigation` is the Navigator the robot drives with. It orchestrates the subsystem, and each decision lives in its own file as a **rule** that returns a `Command` or `None` ("nothing to say"). Every frame:
 
-- **Stops** on `drive_state == "stop"`, `stop_sign_detected`, or a voted stop line at or under 3.0 cm.
-- **Steers** by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. The offset gain grows with the offset (variable gain scaling, Ignacio's ae34566): `kp × (1 + 0.05 × |offset cm|)`, so small offsets get gentle corrections. It clamps the steering to ±0.40 around a base duty of 0.40 and lifts a slow wheel to the stall duty.
-- **Contract checks:** it passes valid commands, stop and steering. It **fails `check_no_forward_on_stale`**, because it keeps driving on heading when the lane is stale. That's an open decision, marked `@TODO` in the code and as a strict `xfail` in `test_lane_keeping`.
-- **Stop sign:** it brakes on `stop_sign_detected` although the sign gate is untuned, so a false positive stops the robot.
+1. **`stop_line.py` `StopLineTracker`** advances, once, for every rule: line in view (APPROACH) → gone from the bottom of the view (CROSSING) → **reached** 1.5 s later (`STOP_DELAY_MS`), since the view ends about 10 cm ahead of the robot and braking at the moment it left stopped the robot short. A line lost while still above `NEAR_BOTTOM_ROWS` (25 rows) is flicker, not reached.
+2. **`stop_sign.py` `StopSignRule`:** at a reached line with a stop sign seen in the last 5 s, brake until the wheels read stopped (≤ 20 counts/s each, or after 1 s of braking), hold 2 s, go.
+3. **`traffic_light.py` `TrafficLightRule`:** at a reached line with the light red, brake until it isn't. Caution drives on.
+4. **`intersection.py` `IntersectionRule`:** from the moment the line leaves the view, drive straight on a gyro heading hold, not on lane keeping, which gets pulled left by the crossing street's boundary. The crossing ends once the robot has reached the line and Phase 2 sees both boundaries (`lane_mode`) for 3 frames in a row, or after 4 s of driving. It is straight through only: turns need a route.
+5. **`lane_keeping.py` `LaneKeepingNavigator`** when no rule speaks.
 
-`src/scripts/lane_keeping_demo.py` drives the robot's motors from a scripted list of packets (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. The gains are Ignacio's bench values, not yet tuned on the course. The normalized-offset path assumes 30 cm per unit of `lane_offset` (`NORM_TO_CM`), which isn't measured.
+The first rule that speaks wins. Every rule still sees every frame, told whether a higher one already decided (`held`), so its state stays current: the light is watched during a stop sign's hold, and the crossing's clock and boundary count don't run while the robot is braked at the line.
 
-`navigator.record` says why each command is what it is (the stop trigger, or what the steering came from and its value), for the linkers' logs and video; it's debug output, not part of the contract. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and this navigator, and is the step's harness before it goes into `pipeline.py`.
+`Navigation.record` names the deciding part (`rule`), the tracker's phase and that part's own reason, for the linkers' logs and video; it's debug output, not part of the contract.
+
+**Lane keeping** (Ignacio, 2026-09-30) steers by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. The offset gain grows with the offset (`kp × (1 + 0.05 × |offset cm|)`, his ae34566). Steering is clamped to ±0.40 around a base duty of 0.40, and a slow wheel is lifted to the stall duty. `steer()` is shared with the intersection rule. The gains are bench values; the normalized-offset path assumes 30 cm per unit of `lane_offset` (`NORM_TO_CM`), unmeasured.
+
+**Contract checks:** `Navigation` passes every check except `check_no_forward_on_stale` (lane keeping drives on heading when the lane is stale, an open decision, a strict `xfail`).
+
+`src/scripts/lane_keeping_demo.py` drives the motors from scripted packets through `Navigation`: lane keeping, then a stop-sign intersection (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and `Navigation`, and is the step's harness before it goes into `pipeline.py`.
 
 ---
 
 ## Open items
 
 - **Stale lane.** `LaneKeepingNavigator` drives on heading when the lane is stale; the contract says it shouldn't drive forward. Pick one and make the other agree.
+- **Turns at intersections.** The crossing goes straight only; left and right need a route.
+- **Tuning on the mat:** `STOP_DELAY_MS` (1.5 s), `SIGN_MEMORY_MS` (5 s), `STOPPED_CPS` (20), `MAX_CROSS_MS` (4 s). The sign and traffic-light gates are still uncalibrated.
 
 - **Distance.** The maneuver trial measured leg length with cumulative encoder counts. The packet carries only counts per second, so Navigation integrates `cps × dt` itself. Whether the packet should carry cumulative counts is a contract change to agree on.
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).

@@ -3,9 +3,10 @@
 Purpose:
     The integration test of the Navigation step, ahead of adding it to
     pipeline.py. Every frame runs capture, Phase 2 and the traced Phase 3
-    (run_phase3_chain, reused from phase3_linker), hands the packet to a
-    Navigator (LaneKeepingNavigator), checks the Command against the
-    contract, and drives the motors with it. Nothing is drawn while the robot
+    (run_phase3_chain, reused from phase3_linker), hands the packet to the
+    Navigation subsystem (navigation.Navigation: the stop sign, traffic light
+    and intersection rules over lane keeping, which is everything behind it),
+    checks the Command against the contract, and drives the motors with it. Nothing is drawn while the robot
     drives: frames and per-frame records go to disk on maneuver_linker's
     background recorder, and nav.avi is rendered once the run ends, so the
     run measures the real control loop.
@@ -18,8 +19,9 @@ Main package:
     run(): one run; returns its findings. The run folder holds nav.csv,
     p3.csv, frames/, records.pkl, report.json, summary.txt and, after
     rendering, nav.avi.
-    NavStats: the [NAVIGATION] summary: how the run ended, time driving and
-    braked (and why), steering, command latency.
+    NavStats: the [NAVIGATION] summary: how the run ended, which rule decided
+    how many frames, time driving and braked (and why), steering, command
+    latency.
 
 Flow:
     1. Open the source, sensors, motors and start button; wait for the press.
@@ -46,9 +48,8 @@ from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
 from src.estimation import Phase3Config
-from src.lane_keeping import LaneKeepingNavigator
 from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
-from src.navigation import BRAKE, command_problems
+from src.navigation import BRAKE, Navigation, command_problems
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
@@ -63,14 +64,14 @@ END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
-navigation (LaneKeepingNavigator) -> motors. The video is rendered after the
+navigation (stop sign, red light and intersection rules over lane keeping) -> motors. The video is rendered after the
 run, so recording never slows the steering.
 
 SAFETY: with --camera the robot moves. Ctrl-C stops the motors, and every
@@ -106,6 +107,7 @@ class NavStats:
         self.frames = self.driving = self.rejected = 0
         self.brake_reasons: Counter = Counter()
         self.sources: Counter = Counter()
+        self.rules: Counter = Counter()
         self.steer_abs: list[float] = []
         self.latency_ms: list[float] = []
 
@@ -113,6 +115,7 @@ class NavStats:
         """Count one frame's record["nav"]."""
         self.frames += 1
         self.latency_ms.append(n["latency_ms"])
+        self.rules[n.get("rule") or "-"] += 1
         if n["reason"] == REASON_CONTRACT:
             self.rejected += 1
         if n["brake"]:
@@ -127,6 +130,7 @@ class NavStats:
         steer = np.array(self.steer_abs) if self.steer_abs else np.zeros(1)
         return {"frames": self.frames, "driving": self.driving, "braked": self.frames - self.driving,
                 "brake_reasons": dict(self.brake_reasons), "steer_sources": dict(self.sources),
+                "decided_by": dict(self.rules),
                 "steer_abs_mean": round(float(steer.mean()), 4), "steer_abs_max": round(float(steer.max()), 4),
                 "latency_ms": {"p50": round(float(np.percentile(lat, 50)), 2),
                                "p95": round(float(np.percentile(lat, 95)), 2),
@@ -140,11 +144,13 @@ def summary_lines(report: dict) -> list[str]:
     pct = lambda k: 100.0 * k / n["frames"] if n["frames"] else 0.0
     reasons = ", ".join(f"{k} {v}" for k, v in sorted(n["brake_reasons"].items())) or "none"
     sources = ", ".join(f"{k} {v}" for k, v in sorted(n["steer_sources"].items())) or "none"
+    rules = ", ".join(f"{k} {v}" for k, v in sorted(n["decided_by"].items())) or "none"
     lat = n["latency_ms"]
     return [
         f"[NAVIGATION] ended by {report['ended_by']}   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
+        f" decided by            {rules}",
         f" driving               {n['driving']} frames ({pct(n['driving']):.0f}%), steering by: {sources}",
         f" braked                {n['braked']} frames ({pct(n['braked']):.0f}%): {reasons}",
         f" steering |duty|       mean {n['steer_abs_mean']:.3f}, max {n['steer_abs_max']:.3f}",
@@ -184,8 +190,8 @@ def run(
             batch) and stop()); None runs Phase 3 without sensors.
         motor: drive.MotorController, or anything with drive(left, right),
             brake() and stop(); _NoMotors for a dry run.
-        navigator: A Navigator; LaneKeepingNavigator. Its record, if it has
-            one, says why each command is what it is.
+        navigator: A Navigator; navigation.Navigation. Its record, if it has
+            one, says which rule decided each command and why.
         config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
         system: peripherals.system.System for the start button, countdown
             and run-time display; None starts at once.
@@ -256,7 +262,7 @@ def run(
             problems = command_problems(cmd)
             if problems:                            # the harness enforces the contract, whatever the navigator
                 cmd = BRAKE
-                rec = {"reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
+                rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
             nav_ms = (clock() - n0) * 1000.0
             if cmd.brake:
                 motor.brake()
@@ -270,6 +276,7 @@ def run(
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
@@ -431,7 +438,7 @@ def cli(argv: list[str] | None = None) -> int:
             time.sleep(1.0)
     elif system is not None:
         print("press the start button")
-    run(source, sensors, motor, LaneKeepingNavigator(), config, p3_config, out_dir, system,
+    run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias), config, p3_config, out_dir, system,
         max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
         render=not args.no_render, display=not args.no_display, scale=args.scale)
     return 0

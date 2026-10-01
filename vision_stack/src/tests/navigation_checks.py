@@ -10,8 +10,14 @@ Purpose:
 Main package:
     packet(): an EstimationPacket with contract-neutral defaults.
     frames(): numbered, 50 ms-spaced packets from a list of overrides.
-    check_commands, check_no_forward_on_stale, check_no_forward_on_stop,
-    check_steers_toward_center: the checks.
+    intersection(): frames approaching a stop line, the line passing under
+    the view, then the time after.
+    check_commands, check_no_forward_on_stale, check_steers_toward_center,
+    and the intersection checks (decided 2026-10-01: a stop line stops the
+    robot only with a stop sign or a red light, once the robot reaches it):
+    check_stops_at_a_red_line, check_crosses_a_green_line,
+    check_ignores_a_red_light_without_a_line,
+    check_stops_at_a_stop_sign_line_then_goes, check_goes_when_the_light_turns_green.
 
 Flow:
     Each check resets the navigator, warms it on centered vision frames so
@@ -20,7 +26,7 @@ Flow:
 from dataclasses import replace
 
 from src.estimation import EstimationPacket
-from src.navigation import Command, command_problems
+from src.navigation_contract import Command, command_problems
 
 # Frame spacing for built packets: the ~19.8 FPS measured by maneuver_linker (2026-09-30)
 FRAME_MS = 50
@@ -34,8 +40,14 @@ _BASE = EstimationPacket(
     drive_state="go", stop_sign_detected=False, stop_line_detected=False,
     stop_line_distance_px=None, stop_line_distance_cm=None,
     yaw_rate=0.0, lateral_accel=0.0, wheel_speed=0.0,
-    frame_id=0, timestamp_ms=0, left_wheel_cps=0.0, right_wheel_cps=0.0,
+    frame_id=0, timestamp_ms=0, left_wheel_cps=0.0, right_wheel_cps=0.0, lane_mode="two_boundary",
 )
+
+# A stop line coming down the image to the view bottom (lane-ROI rows above it)
+APPROACH_ROWS = (60.0, 50.0, 40.0, 30.0, 20.0, 10.0, 5.0)
+# Frames after the line leaves the view: 6 s, room for any stop delay, a
+# stop sign's hold and the robot driving on
+AFTER_FRAMES = 120
 
 
 def packet(**fields) -> EstimationPacket:
@@ -96,13 +108,6 @@ def check_no_forward_on_stale(nav) -> list[str]:
             for p, cmd in _run(nav, case) if forward(cmd)]
 
 
-def check_no_forward_on_stop(nav) -> list[str]:
-    """drive_state stop never gets forward drive, even on a good centered lane."""
-    case = [{"drive_state": "stop"}] * CASE_FRAMES
-    return [f"frame {p.frame_id}: drives forward {cmd} on drive_state stop"
-            for p, cmd in _run(nav, case) if forward(cmd)]
-
-
 def check_steers_toward_center(nav, offset: float = 0.5) -> list[str]:
     """
     On vision, driving forward off center steers back: robot right of center
@@ -127,10 +132,90 @@ def check_steers_toward_center(nav, offset: float = 0.5) -> list[str]:
     return problems
 
 
+def intersection(approach: dict | None = None, after: dict | None = None,
+                 after_frames: int = AFTER_FRAMES) -> list[dict]:
+    """
+    Overrides for a stop line coming into view, passing under it, and the time after.
+
+    Inputs:
+        approach: Fields for the frames the line is in view (e.g. a stop sign).
+        after: Fields for every frame after it left (e.g. the light).
+    Outputs:
+        len(APPROACH_ROWS) + after_frames overrides, for _run() or frames().
+    """
+    approach, after = approach or {}, after or {}
+    return ([{"stop_line_detected": True, "stop_line_distance_px": rows, **approach} for rows in APPROACH_ROWS]
+            + [dict(after) for _ in range(after_frames)])
+
+
+def _split(results):
+    """(the frames with the line in view, the frames after it left)."""
+    n = len(APPROACH_ROWS)
+    return results[:n], results[n:]
+
+
+def _braked_on_approach(seen) -> list[str]:
+    return [f"frame {p.frame_id}: brakes with the stop line still in view, before reaching it"
+            for p, cmd in seen if not forward(cmd)]
+
+
+def check_stops_at_a_red_line(nav) -> list[str]:
+    """A red light at a stop line: drive to the line, then brake and keep braking while it's red."""
+    seen, after = _split(_run(nav, intersection({"drive_state": "stop"}, {"drive_state": "stop"})))
+    problems = _braked_on_approach(seen)
+    braking = [i for i, (_, cmd) in enumerate(after) if cmd.brake]
+    if not braking:
+        return problems + ["never braked at a red light after reaching the stop line"]
+    return problems + [f"frame {p.frame_id}: drives again while the light is still red"
+                       for p, cmd in after[braking[0]:] if not cmd.brake]
+
+
+def check_crosses_a_green_line(nav) -> list[str]:
+    """A stop line with no sign and a green light is only an intersection: never brake, keep driving."""
+    return [f"frame {p.frame_id}: {'brakes' if cmd.brake else 'stops driving'} at a green stop line"
+            for p, cmd in _run(nav, intersection()) if not forward(cmd)]
+
+
+def check_ignores_a_red_light_without_a_line(nav) -> list[str]:
+    """A red light with no stop line in sight doesn't stop the robot: it stops at the line."""
+    return [f"frame {p.frame_id}: stops for a red light with no stop line"
+            for p, cmd in _run(nav, [{"drive_state": "stop"}] * CASE_FRAMES) if not forward(cmd)]
+
+
+def check_stops_at_a_stop_sign_line_then_goes(nav) -> list[str]:
+    """A stop sign at a stop line: drive to the line, brake to a stop there, then drive on."""
+    seen, after = _split(_run(nav, intersection({"stop_sign_detected": True})))
+    problems = _braked_on_approach(seen)
+    braking = [i for i, (_, cmd) in enumerate(after) if cmd.brake]
+    if not braking:
+        return problems + ["never stopped at a stop sign's line"]
+    if not any(forward(cmd) for _, cmd in after[braking[-1] + 1:]):
+        problems.append("never drove on after stopping at a stop sign")
+    return problems
+
+
+def check_goes_when_the_light_turns_green(nav, red_frames: int = 70) -> list[str]:
+    """Waiting at a red line, a green light lets the robot drive on."""
+    case = intersection({"drive_state": "stop"},
+                        after_frames=0) + [{"drive_state": "stop"}] * red_frames + [{}] * (AFTER_FRAMES - red_frames)
+    seen, after = _split(_run(nav, case))
+    problems = _braked_on_approach(seen)
+    if not any(cmd.brake for _, cmd in after[:red_frames]):
+        problems.append("never stopped at the red light")
+    if not any(forward(cmd) for _, cmd in after[red_frames:]):
+        problems.append("never drove on after the light turned green")
+    return problems
+
+
+INTERSECTION_CHECKS = (check_stops_at_a_red_line, check_crosses_a_green_line,
+                       check_ignores_a_red_light_without_a_line, check_stops_at_a_stop_sign_line_then_goes,
+                       check_goes_when_the_light_turns_green)
+
+
 def contract_problems(nav) -> list[str]:
     """Every check above on nav, with a mixed packet sequence for check_commands."""
     mixed = frames([{"lane_status": s, "lane_offset": o, "drive_state": d}
                     for s in ("vision", "hold", "stale") for o in (-1.0, -0.2, 0.0, 0.2, 1.0)
                     for d in ("go", "caution", "stop")])
-    return (check_commands(nav, mixed) + check_no_forward_on_stale(nav)
-            + check_no_forward_on_stop(nav) + check_steers_toward_center(nav))
+    return (check_commands(nav, mixed) + check_no_forward_on_stale(nav) + check_steers_toward_center(nav)
+            + [p for check in INTERSECTION_CHECKS for p in check(nav)])

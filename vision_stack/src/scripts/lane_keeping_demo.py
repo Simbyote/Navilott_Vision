@@ -1,11 +1,13 @@
-"""Lane keeping demo: scripted packets through LaneKeepingNavigator onto the real motors.
+"""Navigation demo: scripted packets through navigation.Navigation onto the real motors.
 
 Purpose:
-    A bench check of the navigator on the robot without the camera: a short
-    list of hand-built packets (centered, offset left / right, closing on a
-    stop line, a stop sign) is fed to LaneKeepingNavigator, and each Command
-    drives the motors through MotorController for a moment. Wheels off the
-    ground: it moves them.
+    A bench check of the navigation subsystem on the robot without the
+    camera: hand-built packets (lane keeping centered and off to either
+    side, then a stop-sign intersection: the line coming closer, passing
+    under the view, the stop and hold, the straight crossing, both
+    boundaries back) are fed to Navigation, and each Command drives the
+    motors through MotorController for STEP_S. Wheels off the ground: it
+    moves them. (The file keeps its name from when it drove lane keeping only.)
 
 Main package:
     mock_packet(): an EstimationPacket for one scripted frame.
@@ -20,8 +22,7 @@ import logging
 import time
 
 from src.estimation import EstimationPacket
-from src.lane_keeping import LaneKeepingNavigator
-from src.navigation import Command
+from src.navigation import Command, Navigation
 
 log = logging.getLogger("lane_keeping_demo")
 
@@ -33,8 +34,17 @@ STEP_S = 0.1                    # seconds each scripted frame drives for
 
 
 def mock_packet(frame_id: int, offset_cm: float | None = 0.0, stop_sign: bool = False,
-                stop_line_dist: float | None = None) -> EstimationPacket:
-    """A go, vision packet with the given lane offset, stop sign and stop-line distance."""
+                stop_line_rows: float | None = None, lane_mode: str = "two_boundary") -> EstimationPacket:
+    """
+    A go, vision packet frame_id x STEP_S into the demo.
+
+    Inputs:
+        offset_cm: The lane offset; + = robot right of center.
+        stop_sign: A voted stop sign this frame.
+        stop_line_rows: A voted stop line this many lane-ROI rows above the
+            view bottom; None for no line.
+        lane_mode: Phase 2's lane mode; "two_boundary" ends an intersection crossing.
+    """
     return EstimationPacket(
         lane_offset=0.0 if offset_cm is None else offset_cm / DEMO_HALF_LANE_CM,
         lane_offset_cm=offset_cm,
@@ -42,30 +52,33 @@ def mock_packet(frame_id: int, offset_cm: float | None = 0.0, stop_sign: bool = 
         heading_error=0.0,
         drive_state="go",
         stop_sign_detected=stop_sign,
-        stop_line_detected=stop_line_dist is not None,
-        stop_line_distance_px=None,
-        stop_line_distance_cm=stop_line_dist,
+        stop_line_detected=stop_line_rows is not None,
+        stop_line_distance_px=stop_line_rows,
+        stop_line_distance_cm=None,
         yaw_rate=0.0,
         lateral_accel=0.0,
         wheel_speed=0.0,
         frame_id=frame_id,
-        timestamp_ms=time.monotonic_ns() // 1_000_000,
+        timestamp_ms=int(frame_id * STEP_S * 1000),
         left_wheel_cps=0.0,
         right_wheel_cps=0.0,
+        lane_mode=lane_mode,
     )
 
 
-DEMO_FRAMES = [
-    ("centered", mock_packet(1, offset_cm=0.0), STEP_S),
-    ("offset left -6.0 cm", mock_packet(2, offset_cm=-6.0), STEP_S),
-    ("offset right +6.0 cm", mock_packet(3, offset_cm=6.0), STEP_S),
-    ("stop line 5.0 cm", mock_packet(4, offset_cm=0.0, stop_line_dist=5.0), STEP_S),
-    ("stop line 2.0 cm", mock_packet(5, offset_cm=0.0, stop_line_dist=2.0), STEP_S),
-    ("stop line 1.0 cm", mock_packet(6, offset_cm=0.0, stop_line_dist=1.0), STEP_S),
-    ("stop line 0.5 cm", mock_packet(7, offset_cm=0.0, stop_line_dist=0.5), STEP_S),
-    ("stop line 0.2 cm", mock_packet(8, offset_cm=0.0, stop_line_dist=0.2), STEP_S),
-    ("stop sign", mock_packet(9, offset_cm=0.0, stop_sign=True), STEP_S),
-]
+def _demo_frames() -> list[tuple[str, EstimationPacket, float]]:
+    """Lane keeping, then a stop-sign intersection: approach, the line passing under the view, the stop, the crossing."""
+    script = [("centered", {}), ("offset left -6.0 cm", {"offset_cm": -6.0}),
+              ("offset right +6.0 cm", {"offset_cm": 6.0})]
+    script += [(f"stop line at {rows} rows, sign", {"stop_line_rows": rows, "stop_sign": True})
+               for rows in (60.0, 40.0, 20.0, 5.0)]
+    # Line out of view: crossing straight, the stop after the delay, the hold, crossing on
+    script += [("past the line", {"lane_mode": "right_only"})] * 45
+    script += [("both boundaries again", {})] * 4
+    return [(desc, mock_packet(i + 1, **kw), STEP_S) for i, (desc, kw) in enumerate(script)]
+
+
+DEMO_FRAMES = _demo_frames()
 
 
 def run(frames, navigator, motor, sleep=time.sleep) -> list[Command]:
@@ -88,8 +101,9 @@ def run(frames, navigator, motor, sleep=time.sleep) -> list[Command]:
             cmd = navigator.update(packet)
             motor.brake() if cmd.brake else motor.drive(cmd.left, cmd.right)
             commands.append(cmd)
-            log.info("frame %02d | %-22s | left %.3f right %.3f brake %s | %.1fs",
-                     packet.frame_id, description, cmd.left, cmd.right, cmd.brake, seconds)
+            rule = getattr(navigator, "record", {}).get("rule", "")
+            log.info("frame %02d | %-26s | %-13s | left %.3f right %.3f brake %s | %.1fs",
+                     packet.frame_id, description, rule, cmd.left, cmd.right, cmd.brake, seconds)
             sleep(seconds)
     finally:
         motor.stop()
@@ -107,7 +121,7 @@ def main() -> int:
         log.error("pigpio daemon not reachable. Run: sudo pigpiod")
         return 1
     try:
-        run(DEMO_FRAMES, LaneKeepingNavigator(), MotorController(pi))
+        run(DEMO_FRAMES, Navigation(), MotorController(pi))
     finally:
         pi.stop()
     return 0

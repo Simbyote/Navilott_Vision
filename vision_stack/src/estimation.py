@@ -29,7 +29,7 @@ from collections import Counter, deque
 from dataclasses import dataclass
 
 from src.params import (
-    GREEN, MODE_LEFT_ONLY, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY, RED, STOP_SIGN,
+    GREEN, MODE_LEFT_ONLY, MODE_NONE, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY, RED, STOP_SIGN,
     TRAFFIC_LIGHT, YELLOW,
 )
 from src.utils import clamp
@@ -182,6 +182,16 @@ class EstimationPacket:
     # stopped or with no encoders (detecting the encoders is the drivers' job)
     left_wheel_cps: float
     right_wheel_cps: float
+    # Pass-through: this frame's Phase 2 lane offset mode (params MODE_*), before
+    # any filtering; MODE_TWO_BOUNDARY means both lane boundaries were seen.
+    # Navigation's intersection crossing ends on it
+    lane_mode: str = MODE_NONE
+
+
+def lane_mode_of(phase2: Phase2Output) -> str:
+    """The frame's raw Phase 2 lane mode; MODE_NONE when Phase 2 gave no lane offset result."""
+    results = phase2.lane_offset_results
+    return results[0].mode if results else MODE_NONE
 
 
 class _EMA:
@@ -480,7 +490,7 @@ class Phase3Processor:
         heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
-        stop_line, stop_line_px, f = self.stop_line.update(phase2.stop_line_results, log)
+        stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -499,6 +509,7 @@ class Phase3Processor:
             timestamp_ms = phase2.timestamp_ms,
             left_wheel_cps = sensors.left_wheel_cps or 0.0,
             right_wheel_cps = sensors.right_wheel_cps or 0.0,
+            lane_mode = lane_mode_of(phase2),
         )
         return packet, {
             "frame_id": phase2.frame_id,
