@@ -219,7 +219,7 @@ traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area +
 - **It's off without ranges.** With `ColorConfig.hsv_ranges = None` (the `PipelineConfig` default), the stage returns no candidates and never reads the ROI. `MEASURED` loads `calibration/hsv_ranges.json` at import, tuned or not, so the robot and both linkers run with the branch on; `--hsv` swaps in other ranges.
 - **Red uses two bands** because hue wraps around: 0–10 and 170–180 in OpenCV units (degrees / 2), combined with OR.
 - **The built-in ranges are a scaffold,** not a calibration. `HSVRanges.is_calibrated` is only true for ranges loaded from JSON, and the debug dict reports it.
-- **Blob gates** (area 50–5000 px², w/h aspect 0.3–3.0) are placeholders, not tuned.
+- **Blob gates** (area 30–5000 px², w/h aspect 0.3–3.0) are placeholders, not tuned. `max_area` went to 70 in 8b3944c and back to 5000 on 2026-10-01: 70 rejected the lamps too. Measure lamp areas on course frames before narrowing it again.
 - **Confidence is area only,** saturating at 800 px², the expected lamp size at detection range. Fusion keeps the highest confidence across all three colors, so the largest blob wins.
 
 The HSV ranges have to be tuned under course lighting. Ranges from a lab or office won't carry over.

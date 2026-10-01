@@ -2,7 +2,7 @@
 
 Purpose:
     Turns each frame's EstimationPacket into a motor Command under the
-    Navigation contract (src/navigation.py): drives at a base duty and steers
+    Navigation contract (src/navigation/navigation_contract.py): drives at a base duty and steers
     against the lane offset (on vision) or the heading turned since vision
     was lost (on hold / stale). Pure logic: it never imports pigpio or the
     motor driver, so it runs and tests anywhere; whoever runs the loop drives

@@ -140,7 +140,7 @@ class IMUReader:
         """
         One reading, now, in the driver's frame: (bias-corrected gyro Z in
         deg/s, + = left for a Z-up mount; accel Y in m/s^2). For a caller
-        that paces its own sampling (src/sensing.py's SensorHub) instead of
+        that paces its own sampling (src/peripherals/sensing.py's SensorHub) instead of
         start()'s thread.
 
         Raises:

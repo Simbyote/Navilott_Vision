@@ -1,5 +1,5 @@
 """
-test_stop_sign.py  --  src/stop_sign.py
+test_stop_sign.py  --  src/navigation/stop_sign.py
 
 The stop-sign rule against a real tracker: no sign, no stop; a sign seen
 within SIGN_MEMORY_MS before the line is reached brakes until the wheels

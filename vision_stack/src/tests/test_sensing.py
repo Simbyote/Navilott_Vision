@@ -1,5 +1,5 @@
 """
-test_sensing.py  --  src/sensing.py
+test_sensing.py  --  src/peripherals/sensing.py
 
 SensorHub runs over fake sensors and a fake clock, with tick() called by the
 test, so the grouping, the yaw flip and the wheel-speed math are exact. The

@@ -1,5 +1,5 @@
 """
-test_estimation_debug.py  --  src/estimation_debug.py
+test_estimation_debug.py  --  src/debugger/estimation_debug.py
 
 The debug twin is held to the production Phase3Processor first: identical
 packets and log over the synthetic drive and over a randomized Phase 2

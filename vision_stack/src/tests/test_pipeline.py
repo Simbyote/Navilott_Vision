@@ -210,7 +210,7 @@ def test_pipeline_imports_no_linker_or_debugger():
     out = subprocess.run([sys.executable, "-c", probe], cwd=PIPELINE_ROOT,
                          capture_output=True, text=True, check=True).stdout
     assert not [m for m in eval(out) if m.startswith(("src.debugger", "src.phase2_linker",
-                                                       "src.phase3_linker", "src.estimation_debug"))]
+                                                       "src.phase3_linker"))]
 
 
 # =============================================================================

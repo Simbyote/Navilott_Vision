@@ -55,7 +55,7 @@ IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 
 # robot with the IMU mounted Z-up would need its own measurement.
 IMU_YAW_SIGN = -1
 
-# --- Sensor collection (src/sensing.py) ---
+# --- Sensor collection (src/peripherals/sensing.py) ---
 # The hub reads the IMU and both encoders together at this rate. It samples
 # the IMU, so it runs at the rate the on-chip filter is set for
 SENSOR_RATE_HZ = IMU_RATE_HZ

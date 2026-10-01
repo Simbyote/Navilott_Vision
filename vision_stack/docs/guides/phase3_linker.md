@@ -2,7 +2,7 @@
 
 Runs frames through all three phases and reports what estimation decided, frame by frame, next to the Phase 2 input it came from. When a packet looks wrong, this shows whether the input was bad or the filtering was.
 
-It is the debug twin of the main pipeline (`src/pipeline.py`): Phase 2 through `run_chain()`, Phase 3 through `TracedPhase3Processor` (`src/estimation_debug.py`), which runs the production Phase 3 stages, records every decision and times every stage. The tests hold its packets to the pipeline's. It prints to the console, writes a CSV and summary, and records the Phase 3 video (`p3_debug.avi`), shown in a window like `phase2_linker`'s. It doesn't drive the motors.
+It is the debug twin of the main pipeline (`src/pipeline.py`): Phase 2 through `run_chain()`, Phase 3 through `TracedPhase3Processor` (`src/debugger/estimation_debug.py`), which runs the production Phase 3 stages, records every decision and times every stage. The tests hold its packets to the pipeline's. It prints to the console, writes a CSV and summary, and records the Phase 3 video (`p3_debug.avi`), shown in a window like `phase2_linker`'s. It doesn't drive the motors.
 
 ## Requirements
 
@@ -54,7 +54,7 @@ python3 -m src.phase3_linker --camera --print-every 0           # events only
 | `--limit N` | Stop after N frames |
 | `--fps N` | Capture rate for `--camera`; replay rate for `--frames`. Videos default to their own rate |
 | `--width`, `--height` | Capture size; defaults to `params.py` (480×270) |
-| `--imu` | Read the MPU-6050 through the sensing hub (`src/sensing.py`, 100 Hz, grouped per frame, yaw flipped to + = right) and feed it to Phase 3 |
+| `--imu` | Read the MPU-6050 through the sensing hub (`src/peripherals/sensing.py`, 100 Hz, grouped per frame, yaw flipped to + = right) and feed it to Phase 3 |
 | `--encoders` | Start the wheel encoders and pass each wheel's counts per second through to the packet |
 | `--gyro-bias DPS` | Gyro Z at standstill, subtracted before integrating, in the flipped + = right frame (about +1.0 on this robot). `--imu` doesn't calibrate, so pass it here. Applied on top of `MEASURED_ESTIMATION` (`src/config.py`), like `--cm-per-px` |
 | `--cm-per-px S` | Hand-measured ground scale; fills `lane_offset_cm` |

@@ -4,7 +4,7 @@
 
 Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the last few frames, given the sensors". It smooths the lane offset, bridges short dropouts, tracks heading while vision is lost, and votes on traffic light and stop sign state. The result is one `EstimationPacket` per frame, handed to navigation.
 
-**Code:** `src/estimation.py` · **Sensors:** `src/sensing.py` over `src/peripherals/imu.py` and `drive.py` · **Harness:** `src/phase3_linker.py`, with `src/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_sensing.py`, `test_imu.py`
+**Code:** `src/estimation/estimation.py` · **Sensors:** `src/peripherals/sensing.py` over `src/peripherals/imu.py` and `drive.py` · **Harness:** `src/phase3_linker.py`, with `src/debugger/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_sensing.py`, `test_imu.py`
 
 ---
 
@@ -118,7 +118,7 @@ The hold lasts only as long as the vote: with a window of 3, one missed frame ke
 
 ## Sensors
 
-The IMU and wheel encoders run faster than the camera (100 Hz against ~20 FPS), so `src/sensing.py` collects them between frames and hands each frame one group. `SensorHub` reads both together on one background thread at 100 Hz (`SENSOR_RATE_HZ`), stamps each `SensorReading` on `time.monotonic` (the camera's clock), and keeps up to 2 s of them (`SENSOR_HISTORY_S`; older ones are dropped and counted).
+The IMU and wheel encoders run faster than the camera (100 Hz against ~20 FPS), so `src/peripherals/sensing.py` collects them between frames and hands each frame one group. `SensorHub` reads both together on one background thread at 100 Hz (`SENSOR_RATE_HZ`), stamps each `SensorReading` on `time.monotonic` (the camera's clock), and keeps up to 2 s of them (`SENSOR_HISTORY_S`; older ones are dropped and counted).
 
 ```
 SensorHub.open(imu=, encoders=)   open only the drivers asked for
@@ -184,7 +184,7 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 
 The robot's Phase 3 tuning is `MEASURED_ESTIMATION` in `src/config.py`, beside the Phase 2 `MEASURED`; it holds `Phase3Config`'s defaults until course runs tune it. The main pipeline (`src/pipeline.py`) runs Phase 3 as one stage, `Pipeline.estimate()`, with one `Phase3Processor` built when the `Pipeline` is created. When `cm_per_px` is set, the pipeline takes the lane ROI width from the config's lane ROI at 480×270 and refuses frames of another size. `test_pipeline` holds its packets to `phase3_linker`'s over a drive sequence, frame by frame.
 
-`phase3_linker` is the debug pipeline: it runs capture, Phase 2 (`run_chain`) and Phase 3 through `TracedPhase3Processor` (`src/estimation_debug.py`) and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering. The traced processor subclasses each production stage and calls its `update()`, so the filter and vote math exist once; it records each decision (lane: raw, reason, EMA before and after, missed count; votes: each detection's confidence against its gate, the buffer and state; stop line: seen or held; heading: reset and step) and times each stage. `pipeline.py` never imports it, and `test_estimation_debug` holds its packets to `Phase3Processor`'s. The records drive the Phase 3 video (`src/debugger/debug_phase3.py`).
+`phase3_linker` is the debug pipeline: it runs capture, Phase 2 (`run_chain`) and Phase 3 through `TracedPhase3Processor` (`src/debugger/estimation_debug.py`) and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering. The traced processor subclasses each production stage and calls its `update()`, so the filter and vote math exist once; it records each decision (lane: raw, reason, EMA before and after, missed count; votes: each detection's confidence against its gate, the buffer and state; stop line: seen or held; heading: reset and step) and times each stage. `pipeline.py` never imports it, and `test_estimation_debug` holds its packets to `Phase3Processor`'s. The records drive the Phase 3 video (`src/debugger/debug_phase3.py`).
 
 ```
 python3 -m src.phase3_linker --video run.avi

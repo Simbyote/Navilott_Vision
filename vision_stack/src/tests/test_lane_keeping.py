@@ -1,5 +1,5 @@
 """
-test_lane_keeping.py  --  src/lane_keeping.py
+test_lane_keeping.py  --  src/navigation/lane_keeping.py
 
 LaneKeepingNavigator against the Navigation contract checks
 (navigation_checks.py), then its own behavior: stop triggers, which offset it

@@ -68,7 +68,7 @@ Sensors:
     --imu reads the MPU-6050 and feeds it to Phase 3 each frame.
     --encoders reads the wheel encoders (needs sudo pigpiod) and passes each
     wheel's counts per second through to the packet. Both are read together
-    at 100 Hz by src/sensing.py's SensorHub, as in production, and grouped
+    at 100 Hz by src/peripherals/sensing.py's SensorHub, as in production, and grouped
     per frame; yaw reads + = turning right. Without them, Phase 3
     runs with no sensors: heading holds at 0 and the pass-through fields read
     0.0. Each driver is imported only with its flag, so replays run off the Pi.
