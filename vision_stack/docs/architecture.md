@@ -118,15 +118,15 @@ python process
 ├── main thread, once per frame:
 │     capture → Phase 2 → Phase 3 → navigation → motor command
 │     display update (throttled to 1 Hz)
-├── sensor hub thread: MPU-6050 and encoder counts together at 100 Hz, drained once per frame (src/sensing.py)
+├── sensor hub thread: MPU-6050 and encoder counts together at 100 Hz, drained once per frame (src/peripherals/sensing.py)
 └── encoder counting: pigpio callbacks
 ```
 
 | Component | Owner | Code |
 | --- | --- | --- |
-| Capture, Phases 2–3 | Vision | `src/capture/`, `src/perception/`, `src/estimation.py` |
+| Capture, Phases 2–3 | Vision | `src/capture/`, `src/perception/`, `src/estimation/estimation.py` |
 | IMU reader | Vision | `src/peripherals/imu.py` |
-| Sensor collection (IMU + encoders per frame) | Vision | `src/sensing.py` |
+| Sensor collection (IMU + encoders per frame) | Vision | `src/peripherals/sensing.py` |
 | Start button, display | Vision | `src/system.py` |
 | Navigation, motor control, encoders | Navigation | **TBD** |
 | The main loop tying them together | **TBD**, to agree between vision and navigation | |

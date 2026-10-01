@@ -1,5 +1,5 @@
 """
-test_intersection.py  --  src/intersection.py
+test_intersection.py  --  src/navigation/intersection.py
 
 The intersection rule against a real tracker and lane keeper: it drives
 straight from the moment the line leaves the view, steers against the

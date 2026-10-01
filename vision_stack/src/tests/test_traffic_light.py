@@ -1,5 +1,5 @@
 """
-test_traffic_light.py  --  src/traffic_light.py
+test_traffic_light.py  --  src/navigation/traffic_light.py
 
 The traffic-light rule against a real tracker: red at the line waits until
 the light changes; green and caution drive on; red with no line, or a light

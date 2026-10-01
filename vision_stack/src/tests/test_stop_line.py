@@ -1,5 +1,5 @@
 """
-test_stop_line.py  --  src/stop_line.py
+test_stop_line.py  --  src/navigation/stop_line.py
 
 The stop-line tracker on hand-built packets: a line coming down the view and
 passing under it, reached exactly STOP_DELAY_MS later and only once; a line

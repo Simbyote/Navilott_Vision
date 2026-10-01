@@ -1,5 +1,5 @@
 """
-test_navigation.py  --  src/navigation.py, the navigation subsystem's orchestrator
+test_navigation.py  --  src/navigation/navigation.py, the navigation subsystem's orchestrator
 
 The rules in priority order over lane keeping: lane keeping when no rule
 speaks; the first rule that speaks wins, but every rule sees every frame and

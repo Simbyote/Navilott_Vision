@@ -7,7 +7,7 @@ Purpose:
     packet fields, their signs and units, the frame rate, and how the drive
     responds to a command. This module holds only the interface and the
     command type, so every navigation rule can import it without importing
-    the orchestrator (src/navigation.py, which re-exports all of it).
+    the orchestrator (src/navigation/navigation.py, which re-exports all of it).
     docs/vision_pipeline/navigation_contract.md is the full per-field contract.
 
 Main package:

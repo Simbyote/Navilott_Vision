@@ -4,7 +4,7 @@
 
 Navigation doesn't exist yet. This page fixes the handoff so the vision stack and Navigation build against the same thing. Everything in it was measured on the robot in the 2026-09-30 `maneuver_linker` trials, or is enforced by code. Anything not proven is listed under **Open items**, not stated as fact.
 
-**Code:** `src/navigation_contract.py` (`Command`, `BRAKE`, `Navigator`, `command_problems`; re-exported by `src/navigation.py`) · **Packet:** `src/estimation.py` (`EstimationPacket`) · **Checks:** `src/tests/navigation_checks.py` · **Tests:** `src/tests/test_navigation_contract.py`
+**Code:** `src/navigation/navigation_contract.py` (`Command`, `BRAKE`, `Navigator`, `command_problems`; re-exported by `src/navigation/navigation.py`) · **Packet:** `src/estimation/estimation.py` (`EstimationPacket`) · **Checks:** `src/tests/navigation_checks.py` · **Tests:** `src/tests/test_navigation_contract.py`
 
 ---
 
@@ -84,7 +84,7 @@ Gyro bias at rest is about −1.0 °/s raw, +1.0 °/s after the flip. It is meas
 
 ## Yaw sign
 
-This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the robot turns left**. The maneuver trial measures this with its spin pulses. Estimation's convention is + = right, so `src/sensing.py`'s `SensorHub` flips the raw value once, per robot, when the sensors are read (`IMU_YAW_SIGN = -1` in `params.py`). `yaw_rate` and `heading_error` in the packet read **+ = turning right**. Gyro bias is in the same flipped frame: about **+1.0 °/s** at rest on this robot.
+This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the robot turns left**. The maneuver trial measures this with its spin pulses. Estimation's convention is + = right, so `src/peripherals/sensing.py`'s `SensorHub` flips the raw value once, per robot, when the sensors are read (`IMU_YAW_SIGN = -1` in `params.py`). `yaw_rate` and `heading_error` in the packet read **+ = turning right**. Gyro bias is in the same flipped frame: about **+1.0 °/s** at rest on this robot.
 
 ---
 
@@ -125,7 +125,7 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 
 ## The navigation subsystem
 
-`src/navigation.py`'s `Navigation` is the Navigator the robot drives with. It orchestrates the subsystem, and each decision lives in its own file as a **rule** that returns a `Command` or `None` ("nothing to say"). Every frame:
+`src/navigation/navigation.py`'s `Navigation` is the Navigator the robot drives with. It orchestrates the subsystem, and each decision lives in its own file as a **rule** that returns a `Command` or `None` ("nothing to say"). Every frame:
 
 1. **`stop_line.py` `StopLineTracker`** advances, once, for every rule: line in view (APPROACH) → gone from the bottom of the view (CROSSING) → **reached** 1.5 s later (`STOP_DELAY_MS`), since the view ends about 10 cm ahead of the robot and braking at the moment it left stopped the robot short. A line lost while still above `NEAR_BOTTOM_ROWS` (25 rows) is flicker, not reached.
 2. **`stop_sign.py` `StopSignRule`:** at a reached line with a stop sign seen in the last 5 s, brake until the wheels read stopped (≤ 20 counts/s each, or after 1 s of braking), hold 2 s, go.

@@ -2,9 +2,9 @@
 
 > Drive the robot with the whole chain: camera → perception → estimation → navigation → motors, recorded and rendered afterwards.
 
-`navigation_linker` is the integration test of the Navigation step before it goes into `pipeline.py`. Every frame runs Phase 2 and the traced Phase 3, hands the packet to the navigation subsystem (`Navigation` in `src/navigation.py`: the stop sign, red light and intersection rules over lane keeping), checks the command against the contract, and drives the motors with it. Nothing is drawn while the robot moves. The frames are saved in the background and `nav.avi` is made after the run, so what you measure is the real control loop.
+`navigation_linker` is the integration test of the Navigation step before it goes into `pipeline.py`. Every frame runs Phase 2 and the traced Phase 3, hands the packet to the navigation subsystem (`Navigation` in `src/navigation/navigation.py`: the stop sign, red light and intersection rules over lane keeping), checks the command against the contract, and drives the motors with it. Nothing is drawn while the robot moves. The frames are saved in the background and `nav.avi` is made after the run, so what you measure is the real control loop.
 
-**Code:** `src/navigation_linker.py` · **Video:** `src/debugger/debug_navigation.py` · **Navigator:** `src/lane_keeping.py` · **Contract:** `vision_stack/navigation_contract.md` · **Tests:** `src/tests/test_navigation_linker.py`, `test_debug_navigation.py`
+**Code:** `src/navigation_linker.py` · **Video:** `src/debugger/debug_navigation.py` · **Navigator:** `src/navigation/lane_keeping.py` · **Contract:** `vision_stack/navigation_contract.md` · **Tests:** `src/tests/test_navigation_linker.py`, `test_debug_navigation.py`
 
 ---
 
@@ -102,7 +102,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **Stale lane:** the navigator keeps driving by heading on a stale lane, which the contract says it shouldn't. It's an open decision (`navigation_contract.md`).
-- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
+- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
 - **Turns:** the crossing goes straight only; left and right turns need a route.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
 - **Gains:** Ignacio's bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
