@@ -8,11 +8,11 @@ motor stops at the end even after an error.
 """
 import pytest
 
-from src.navigation import Navigation
-from src.navigation_contract import BRAKE
+from src.navigation.navigation import Navigation
+from src.navigation.navigation_contract import BRAKE
 from src.scripts.lane_keeping_demo import DEMO_FRAMES, STEP_S, mock_packet, run
-from src.stop_line import STOP_DELAY_MS
-from src.stop_sign import STOP_SIGN_HOLD_TIME_MS
+from src.navigation.stop_line import STOP_DELAY_MS
+from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
 
 
 class FakeMotor:

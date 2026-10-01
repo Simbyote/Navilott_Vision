@@ -19,7 +19,7 @@ import pytest
 import src.debugger.debug_video as dv
 from src.debugger.debug_lane import HEADER_H
 from src.debugger.debug_phase3 import Phase3View, TIMELINE_S
-from src.estimation_debug import NO_RESULT, TracedPhase3Processor
+from src.debugger.estimation_debug import NO_RESULT, TracedPhase3Processor
 from src.phase3_linker import Phase3Result, run_phase3_chain
 from src.tests.scenes import SCENE_CONFIG, SCENES
 

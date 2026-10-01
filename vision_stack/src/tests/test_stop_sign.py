@@ -8,9 +8,9 @@ encoders still start the hold; the sign is used up by one line; reset.
 """
 import pytest
 
-from src.navigation_contract import BRAKE
-from src.stop_line import STOP_DELAY_MS, StopLineTracker
-from src.stop_sign import (
+from src.navigation.navigation_contract import BRAKE
+from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
+from src.navigation.stop_sign import (
     REASON_HOLD, REASON_STOPPING, SIGN_MEMORY_MS, STOP_SETTLE_MAX_MS, STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS,
     StopSignRule,
 )

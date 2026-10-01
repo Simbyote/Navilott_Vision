@@ -7,10 +7,10 @@ that turns red after the line, says nothing; reset.
 """
 import pytest
 
-from src.navigation_contract import BRAKE
-from src.stop_line import STOP_DELAY_MS, StopLineTracker
+from src.navigation.navigation_contract import BRAKE
+from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
 from src.tests.navigation_checks import packet
-from src.traffic_light import RED_STATE, REASON_RED, TrafficLightRule
+from src.navigation.traffic_light import RED_STATE, REASON_RED, TrafficLightRule
 
 MS = 50
 LINE = [30.0, 15.0, 5.0]

@@ -40,7 +40,7 @@ import cv2
 import numpy as np
 
 from src.config import MEASURED, MEASURED_ESTIMATION
-from src.estimation import SensorSample
+from src.estimation.estimation import SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter

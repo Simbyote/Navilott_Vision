@@ -25,11 +25,11 @@ import src.perception.feature_fusion as ff
 import src.perception.geometry as geo
 import src.perception.lane_offset as lo
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
-from src.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, Phase3Processor
+from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, Phase3Processor
 from src.params import LANE_BOUNDARY, PIPELINE_ROOT, STOP_SIGN, TRAFFIC_LIGHT
 from src.perception.color_branch import ColorConfig
 from src.phase2_linker import run_chain
-from src.estimation_debug import TracedPhase3Processor
+from src.debugger.estimation_debug import TracedPhase3Processor
 from src.phase3_linker import run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (

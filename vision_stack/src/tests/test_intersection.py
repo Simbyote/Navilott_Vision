@@ -9,12 +9,12 @@ driving; held frames count toward neither; reset.
 """
 import pytest
 
-from src.intersection import (
+from src.navigation.intersection import (
     MAX_CROSS_MS, MAX_DT_MS, REASON_CROSSING, SOURCE_HEADING_HOLD, TWO_BOUNDARY_FRAMES, IntersectionRule,
 )
-from src.lane_keeping import BASE_SPEED, KP_HEADING, LaneKeepingNavigator
-from src.navigation_contract import Command
-from src.stop_line import STOP_DELAY_MS, StopLineTracker
+from src.navigation.lane_keeping import BASE_SPEED, KP_HEADING, LaneKeepingNavigator
+from src.navigation.navigation_contract import Command
+from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
 from src.tests.navigation_checks import packet
 
 MS = 50

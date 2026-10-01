@@ -25,7 +25,7 @@ Flow:
 import math
 from dataclasses import dataclass, field
 
-from src.navigation_contract import BRAKE, Command
+from src.navigation.navigation_contract import BRAKE, Command
 
 # Steps, in order. ABORTED can follow any of them
 SETTLE, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST = (

@@ -19,9 +19,9 @@ Flow:
     3. Brake; once the wheels read stopped (or STOP_SETTLE_MAX_MS has passed),
        hold STOP_SIGN_HOLD_TIME_MS more, then release.
 """
-from src.estimation import EstimationPacket
-from src.navigation_contract import BRAKE, Command
-from src.stop_line import StopLineTracker
+from src.estimation.estimation import EstimationPacket
+from src.navigation.navigation_contract import BRAKE, Command
+from src.navigation.stop_line import StopLineTracker
 
 # How long to stay stopped at a stop sign (Ignacio, 2026-09-30)
 STOP_SIGN_HOLD_TIME_MS = 2000

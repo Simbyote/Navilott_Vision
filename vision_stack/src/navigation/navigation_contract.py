@@ -22,7 +22,7 @@ Flow:
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from src.estimation import EstimationPacket
+from src.estimation.estimation import EstimationPacket
 
 # The lowest duty that turns the N20s under load; below it they stall
 # (drive.py's min_speed, held through the 2026-09-30 trials). A command that

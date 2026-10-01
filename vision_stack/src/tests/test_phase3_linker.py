@@ -20,7 +20,7 @@ import src.debugger.debug_video as dv
 import src.phase3_linker as p3
 from src.debugger.debug_phase3 import Phase3View
 from src.debugger.live_view import DirectoryFrameSource
-from src.estimation_debug import TracedPhase3Processor
+from src.debugger.estimation_debug import TracedPhase3Processor
 from src.tests.scenes import SCENE_CONFIG, SCENES
 
 NAMES = ("two_boundary", "blind", "stop_line_wide", "stop_line_wide", "two_boundary")

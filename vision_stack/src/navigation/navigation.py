@@ -26,13 +26,13 @@ Flow, every frame:
     Every rule sees every frame (held = a higher rule already decided it),
     so each keeps its own state current whether or not it's the one heard.
 """
-from src.estimation import EstimationPacket
-from src.intersection import IntersectionRule
-from src.lane_keeping import LaneKeepingNavigator
-from src.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
-from src.stop_line import StopLineTracker
-from src.stop_sign import StopSignRule
-from src.traffic_light import TrafficLightRule
+from src.estimation.estimation import EstimationPacket
+from src.navigation.intersection import IntersectionRule
+from src.navigation.lane_keeping import LaneKeepingNavigator
+from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation.stop_line import StopLineTracker
+from src.navigation.stop_sign import StopSignRule
+from src.navigation.traffic_light import TrafficLightRule
 
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "Navigation",
            "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_LANE_KEEPING"]

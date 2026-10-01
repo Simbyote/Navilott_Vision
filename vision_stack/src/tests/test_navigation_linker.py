@@ -21,11 +21,11 @@ import cv2
 import pytest
 
 import src.navigation_linker as nl
-from src.stop_line import STOP_DELAY_MS
-from src.stop_sign import STOP_SIGN_HOLD_TIME_MS
-from src.estimation import SensorSample
-from src.navigation import Navigation
-from src.navigation_contract import BRAKE, Command
+from src.navigation.stop_line import STOP_DELAY_MS
+from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
+from src.estimation.estimation import SensorSample
+from src.navigation.navigation import Navigation
+from src.navigation.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
 from src.tests.sim_robot import FakeClock
 

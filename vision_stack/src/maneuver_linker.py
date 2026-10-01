@@ -45,8 +45,8 @@ import cv2
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.debug_maneuver import FRAMES_DIR, RECORDS_FILE, frame_path, render_run
 from src.debugger.live_view import CameraFrameSource, Display
-from src.estimation import LANE_VISION, Phase3Config
-from src.estimation_debug import TracedPhase3Processor
+from src.estimation.estimation import LANE_VISION, Phase3Config
+from src.debugger.estimation_debug import TracedPhase3Processor
 from src.maneuver import FORWARD_2, Maneuver, ManeuverConfig, Tick
 from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges

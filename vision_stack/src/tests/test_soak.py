@@ -27,7 +27,7 @@ import pytest
 from src.analysis import soak
 from src.analysis.common import Table
 from src.debugger.system_monitor import FIELDS, SystemMonitor
-from src.estimation import Phase3Processor
+from src.estimation.estimation import Phase3Processor
 from src.config import MEASURED
 from src.phase3_linker import run_phase3_chain
 

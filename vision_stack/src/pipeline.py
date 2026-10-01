@@ -34,7 +34,7 @@ from dataclasses import replace
 
 from src.capture.camera import FrameData
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
-from src.estimation import EstimationPacket, Phase3Config, Phase3Processor, SensorSample
+from src.estimation.estimation import EstimationPacket, Phase3Config, Phase3Processor, SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import detect_color
 from src.perception.feature_fusion import fuse

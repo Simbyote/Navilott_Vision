@@ -25,8 +25,8 @@ Flow:
 """
 from dataclasses import replace
 
-from src.estimation import EstimationPacket
-from src.navigation_contract import Command, command_problems
+from src.estimation.estimation import EstimationPacket
+from src.navigation.navigation_contract import Command, command_problems
 
 # Frame spacing for built packets: the ~19.8 FPS measured by maneuver_linker (2026-09-30)
 FRAME_MS = 50

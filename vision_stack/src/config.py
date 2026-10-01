@@ -35,7 +35,7 @@ Flow:
 """
 from dataclasses import dataclass, field
 
-from src.estimation import Phase3Config
+from src.estimation.estimation import Phase3Config
 from src.maneuver import ManeuverConfig
 from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, STOP_LINE_TABLE_PATH,

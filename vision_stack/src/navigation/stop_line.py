@@ -26,7 +26,7 @@ Flow:
     -> reached on the frame STOP_DELAY_MS after it left -> IDLE.
     APPROACH -> IDLE when it's voted out far away.
 """
-from src.estimation import EstimationPacket
+from src.estimation.estimation import EstimationPacket
 
 IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
 

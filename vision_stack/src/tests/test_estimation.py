@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.estimation import (
+from src.estimation.estimation import (
     CAUTION, GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP,
     HeadingTracker, LaneFilter, Phase3Config, Phase3Processor, SensorSample,
     StopLineClassifier, StopSignClassifier, TrafficClassifier,
@@ -377,7 +377,7 @@ def test_wheel_counts_per_second_pass_through_to_the_packet_and_wheel_speed_stay
 @pytest.mark.software
 @pytest.mark.parametrize("mode", ["two_boundary", "right_only", "none"])
 def test_the_frames_lane_mode_passes_through_unfiltered(mode):
-    from src.estimation import lane_mode_of
+    from src.estimation.estimation import lane_mode_of
     p2_ = p2()
     p2_ = replace(p2_, lane_offset_results=[replace(r, mode=mode) for r in p2_.lane_offset_results])
     pkt, _ = Phase3Processor().process(p2_)

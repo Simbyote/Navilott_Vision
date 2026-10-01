@@ -21,8 +21,8 @@ Flow:
     2. Left = base - steering, right = base + steering, each kept at or above
        STALL_DUTY; anything the contract rejects becomes BRAKE.
 """
-from src.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
-from src.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
+from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
+from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
 
 # Gains and limits (Ignacio, 2026-09-30, commit ae34566: variable gain
 # scaling, set on the bench demo); not yet tuned on the course

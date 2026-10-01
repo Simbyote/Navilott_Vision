@@ -13,7 +13,7 @@ import types
 import pytest
 
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
-from src.sensing import SensorBatch, SensorHub, SensorReading
+from src.peripherals.sensing import SensorBatch, SensorHub, SensorReading
 
 
 class FakeIMU:

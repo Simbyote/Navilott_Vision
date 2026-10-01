@@ -14,10 +14,10 @@ from dataclasses import replace
 
 import pytest
 
-from src.estimation import (
+from src.estimation.estimation import (
     GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP, Phase3Config, Phase3Processor, SensorSample,
 )
-from src.estimation_debug import (
+from src.debugger.estimation_debug import (
     JUMP_GATE, NO_RESULT, UNUSABLE_MODE, TracedPhase3Processor,
 )
 from src.perception.phase2_out import Phase2Output

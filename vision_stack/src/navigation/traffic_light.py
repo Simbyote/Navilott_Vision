@@ -15,9 +15,9 @@ Flow:
     1. On the tracker's reached frame: red starts the wait.
     2. Each frame while waiting: still red -> BRAKE; anything else -> release.
 """
-from src.estimation import EstimationPacket
-from src.navigation_contract import BRAKE, Command
-from src.stop_line import StopLineTracker
+from src.estimation.estimation import EstimationPacket
+from src.navigation.navigation_contract import BRAKE, Command
+from src.navigation.stop_line import StopLineTracker
 
 RED_STATE = "stop"              # Phase 3's drive_state for a red light
 REASON_RED = "red_light"

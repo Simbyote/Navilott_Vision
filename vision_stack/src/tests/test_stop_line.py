@@ -8,7 +8,7 @@ restart the delay; reset.
 """
 import pytest
 
-from src.stop_line import APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, STOP_DELAY_MS, StopLineTracker
+from src.navigation.stop_line import APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, STOP_DELAY_MS, StopLineTracker
 from src.tests.navigation_checks import packet
 
 MS = 50

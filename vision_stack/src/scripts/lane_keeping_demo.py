@@ -21,8 +21,8 @@ Flow:
 import logging
 import time
 
-from src.estimation import EstimationPacket
-from src.navigation import Command, Navigation
+from src.estimation.estimation import EstimationPacket
+from src.navigation.navigation import Command, Navigation
 
 log = logging.getLogger("lane_keeping_demo")
 

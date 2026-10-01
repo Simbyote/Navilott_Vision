@@ -45,12 +45,12 @@ from src.debugger.debug_phase3 import Phase3View
 from src.debugger.live_view import (
     CameraFrameSource, VideoFrameSource, DirectoryFrameSource, Display, stage_timing_report,
 )
-from src.estimation import (
+from src.estimation.estimation import (
     LANE_VISION, LANE_HOLD, LANE_STALE,
     EstimationPacket, Phase3Config, Phase3Processor, SensorSample,
 )
-from src.estimation_debug import TracedPhase3Processor
-from src.sensing import SensorBatch, SensorHub
+from src.debugger.estimation_debug import TracedPhase3Processor
+from src.peripherals.sensing import SensorBatch, SensorHub
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\

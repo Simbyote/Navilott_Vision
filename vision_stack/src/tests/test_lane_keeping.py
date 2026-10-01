@@ -7,11 +7,11 @@ steers by, the steering clamp and the stall-duty floor.
 """
 import pytest
 
-from src.lane_keeping import (
+from src.navigation.lane_keeping import (
     BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, KP_NORM, NORM_TO_CM, MAX_STEERING_ADJ,
     LaneKeepingNavigator,
 )
-from src.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
 from src.tests.navigation_checks import (
     check_commands, check_no_forward_on_stale,
     check_steers_toward_center, frames, packet,

@@ -36,8 +36,8 @@ import numpy as np
 
 import src.debugger.debug_video as dv
 from src.debugger.debug_lane import C_LANE, HEADER_H, annotate, candidate_gates
-from src.estimation import CAUTION, GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP
-from src.estimation_debug import NO_RESULT, UNUSABLE_MODE
+from src.estimation.estimation import CAUTION, GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP
+from src.debugger.estimation_debug import NO_RESULT, UNUSABLE_MODE
 
 STATUS_BG = {LANE_VISION: (30, 70, 30), LANE_HOLD: (0, 70, 95), LANE_STALE: (40, 30, 100)}
 STATUS_FG = {LANE_VISION: dv.C_USABLE, LANE_HOLD: dv.C_AMBER, LANE_STALE: dv.C_RED}

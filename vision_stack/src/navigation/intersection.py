@@ -25,11 +25,11 @@ Flow:
        driving.
     4. End on TWO_BOUNDARY_FRAMES in a row or MAX_CROSS_MS.
 """
-from src.estimation import EstimationPacket
-from src.lane_keeping import KP_HEADING, LaneKeepingNavigator
-from src.navigation_contract import Command
+from src.estimation.estimation import EstimationPacket
+from src.navigation.lane_keeping import KP_HEADING, LaneKeepingNavigator
+from src.navigation.navigation_contract import Command
 from src.params import MODE_TWO_BOUNDARY
-from src.stop_line import CROSSING, StopLineTracker
+from src.navigation.stop_line import CROSSING, StopLineTracker
 
 # Both boundaries this many frames in a row ends the crossing (~0.15 s at
 # 20 FPS); one frame could be a stray mark

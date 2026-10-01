@@ -9,13 +9,13 @@ contract re-exported.
 """
 import pytest
 
-import src.navigation as navigation
-import src.navigation_contract as contract
-from src.navigation import (
+import src.navigation.navigation as navigation
+import src.navigation.navigation_contract as contract
+from src.navigation.navigation import (
     RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, Navigation,
 )
-from src.navigation_contract import BRAKE, Command, Navigator
-from src.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
+from src.navigation.navigation_contract import BRAKE, Command, Navigator
+from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
 from src.tests.navigation_checks import (
     APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_no_forward_on_stale, check_steers_toward_center,
     frames, intersection, packet,
@@ -104,8 +104,8 @@ def test_reset_resets_the_tracker_every_rule_and_lane_keeping(monkeypatch):
 
 @pytest.mark.software
 def test_a_given_lane_keeper_and_tracker_are_shared_with_the_rules():
-    from src.lane_keeping import LaneKeepingNavigator
-    from src.stop_line import StopLineTracker
+    from src.navigation.lane_keeping import LaneKeepingNavigator
+    from src.navigation.stop_line import StopLineTracker
     lane, tracker = LaneKeepingNavigator(base_speed=0.5), StopLineTracker()
     nav = Navigation(lane=lane, tracker=tracker, gyro_bias_dps=1.1)
     assert all(rule.tracker is tracker for _, rule in nav.rules)

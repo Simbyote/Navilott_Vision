@@ -9,8 +9,8 @@ something real to find. Readings go through sensing.SensorBatch, so the wheel
 speeds are the hub's own count-delta math.
 Time is a FakeClock the tests advance; nothing sleeps.
 """
-from src.estimation import SensorSample
-from src.sensing import SensorBatch, SensorReading
+from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorBatch, SensorReading
 
 
 class FakeClock:

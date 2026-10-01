@@ -23,7 +23,7 @@ Flow:
 """
 import time
 
-from src.estimation import (
+from src.estimation.estimation import (
     LANE_VISION, USABLE_LANE_MODES, EstimationPacket, HeadingTracker, LaneFilter, lane_mode_of,
     Phase3Config, Phase3Processor, SensorSample, StopLineClassifier,
     StopSignClassifier, TrafficClassifier,

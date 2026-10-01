@@ -47,9 +47,9 @@ from src.capture.camera import CaptureError
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
-from src.estimation import Phase3Config
+from src.estimation.estimation import Phase3Config
 from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
-from src.navigation import BRAKE, Navigation, command_problems
+from src.navigation.navigation import BRAKE, Navigation, command_problems
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain

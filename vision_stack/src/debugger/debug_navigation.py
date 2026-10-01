@@ -31,7 +31,7 @@ import numpy as np
 import src.debugger.debug_video as dv
 from src.debugger.debug_maneuver import as_result, frame_path, read_records
 from src.debugger.debug_phase3 import Phase3View
-from src.navigation_contract import STALL_DUTY
+from src.navigation.navigation_contract import STALL_DUTY
 
 VIDEO_FILE, VIDEO_CSV = "nav.avi", "nav_video.csv"
 STRIP_LINES = 4

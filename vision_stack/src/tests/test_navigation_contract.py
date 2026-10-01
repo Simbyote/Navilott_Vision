@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from src.navigation import Navigation
-from src.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation.navigation import Navigation
+from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
 from src.tests.navigation_checks import (
     APPROACH_ROWS, CASE_FRAMES, FRAME_MS, WARMUP_FRAMES, check_commands, check_crosses_a_green_line,
     check_goes_when_the_light_turns_green, check_ignores_a_red_light_without_a_line,
