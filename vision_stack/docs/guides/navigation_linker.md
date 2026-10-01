@@ -30,7 +30,8 @@ What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 
 | Ends it | Notes |
 | --- | --- |
-| **The end of the course** | The lane stays lost: the robot creeps at 0.30 for 1 s, then brakes (`ended by end of course`). The production run ends the same way |
+| **The end of the course** | With the route done (or a `stop_line` finish reached), the lane staying lost (creep at 0.30 for 1 s, then brake) or the finish line ends it: `ended by end of course at step N`. The production run ends the same way |
+| **Ended early** | The lane stays lost before the route is done: a safety stop, `ended by ended early (...) at step N` |
 | `--max-run-s` (default 30 s) | The linker's safety backstop |
 | Ctrl-C | Motors stop first, then everything is saved and the video rendered |
 | The source ending | Replays only |
@@ -40,6 +41,10 @@ What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 The motors stop first however the run ends.
 
 **When the motors run:** only with `--camera`, and not with `--no-motors`. `--video` and `--frames` replays never drive the motors or open the sensors. They show what the navigator would have commanded on recorded footage.
+
+---
+
+**The route:** the linker reads `route.json` (`config.ROUTE_PATH`; `navigation_contract.md`, "The route") at startup and prints the plan; `--route FILE` uses another. A bad file stops it before anything opens (exit 2). Every stop line passing under the view is the next intersection.
 
 ---
 
@@ -60,6 +65,7 @@ python3 -m src.navigation_linker --camera                   # start button, 30 s
 python3 -m src.navigation_linker --camera --max-run-s 10    # a short first run
 python3 -m src.navigation_linker --camera --no-button       # 3 s console countdown instead
 python3 -m src.navigation_linker --camera --cm-per-px 0.05  # with a measured ground scale
+python3 -m src.navigation_linker --camera --route my_route.json   # another route file
 ```
 
 Keep a hand near it for the first runs. Ctrl-C stops the motors.
@@ -74,7 +80,7 @@ Everything goes to `runs/nav_<timestamp>/`.
 
 | Line | What it says | Look for |
 | --- | --- | --- |
-| `ended by` | What ended the run; motors ON or OFF | `run time cap` is normal |
+| `ended by` | What ended the run, and the route step it ended on; motors ON or OFF | `run time cap` is normal; `ended early` means the lane was lost before the route was done |
 | `run` | Frames, time, FPS, camera and recorder drops | FPS about 20; recorder drops only mean video gaps |
 | `driving` | Frames driving, and what the steering came from (`offset_cm`, `offset`, `heading`) | Mostly `offset` or `offset_cm` on a visible lane. Lots of `heading` means vision kept dropping |
 | `decided by` | Frames each part decided: `lane_keeping`, `intersection`, `stop_sign`, `traffic_light`, `end_of_course` | `intersection` at every stop line; `stop_sign` / `traffic_light` only where you expect a stop |
@@ -86,10 +92,10 @@ Everything goes to `runs/nav_<timestamp>/`.
 **`nav.csv`**, one row per frame:
 - **Timings:** `capture_ms`, `phase2_ms`, `phase3_ms`, `nav_ms`, `latency_ms`.
 - **Packet fields the navigator used:** lane status, offset (and cm), heading, light, stop sign, stop line cm, wheel counts per second.
-- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `reason` and `source`, `steer`, the command sent, and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
+- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `reason` and `source`, `steer`, the command sent, and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
 
 **`nav.avi`**: the Phase 3 video with a strip under it:
-- **First line:** DRIVE (green) or BRAKE (red) with the reason, and `[rule / phase]`.
+- **First line:** DRIVE (green) or BRAKE (red) with the reason, and `[rule / phase / step]`, with `TBD` on a turn driven straight.
 - **Second line:** the command, the steering and what it came from, the lane and the heading.
 - **Duty bars:** one per wheel. The bar fills right of center for forward (green) and left for reverse (red); the amber ticks are the stall duty.
 - **Last line:** stop line, light, sign, wheel speeds and latency.
@@ -104,7 +110,8 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
 - **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
-- **Turns:** TBD; the crossing goes straight only.
+- **Turns:** TBD; the crossing goes straight only, whatever the route says (logged `TBD`).
+- **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
 - **Gains:** Ignacio's bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
 

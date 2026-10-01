@@ -13,7 +13,7 @@ Purpose:
 Main package:
     render_run(): run folder in, nav.avi and nav_video.csv out.
     draw_strip(): the strip for one frame: DRIVE or BRAKE and why, which
-    navigation rule decided it and the stop-line phase, both
+    navigation rule decided it, the stop-line phase and the route step, both
     wheel duties as bars (with the stall duty marked), the steering and what
     it came from, and the packet fields the navigator steered by.
 
@@ -32,6 +32,7 @@ import src.debugger.debug_video as dv
 from src.debugger.debug_maneuver import as_result, frame_path, read_records
 from src.debugger.debug_phase3 import Phase3View
 from src.navigation.navigation_contract import STALL_DUTY
+from src.navigation.route import TURNS_TBD
 
 VIDEO_FILE, VIDEO_CSV = "nav.avi", "nav_video.csv"
 STRIP_LINES = 4
@@ -71,7 +72,8 @@ def draw_strip(n: dict, width: int, scale: int = 1) -> np.ndarray:
     fs, th, lh = 0.38 * s, max(1, s // 2), 16 * s
     img = np.zeros((STRIP_LINES * lh, width, 3), np.uint8)
 
-    rule = f"  [{n['rule']}{' / ' + n['phase'] if n.get('phase') else ''}]" if n.get("rule") else ""
+    rule = (f"  [{n['rule']}{' / ' + n['phase'] if n.get('phase') else ''}"
+            f"{' / step ' + n['step'] if n.get('step') else ''}{' TBD' if n.get('maneuver') in TURNS_TBD else ''}]") if n.get("rule") else ""
     if n.get("brake"):
         head, color = f"BRAKE  {n.get('reason', '')}{rule}", dv.C_RED
     else:

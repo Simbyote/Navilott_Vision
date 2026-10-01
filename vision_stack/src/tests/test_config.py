@@ -190,3 +190,10 @@ def test_measured_loads_the_stop_line_table_against_its_own_preprocess(tmp_path)
     out = subprocess.run([sys.executable, "-W", "ignore", "-c", probe], cwd=PIPELINE_ROOT,
                          capture_output=True, text=True, check=True).stdout.split()
     assert out == ["True", "3.0", "True"]
+
+
+@pytest.mark.software
+def test_the_route_file_config_points_at_loads():
+    from src.config import ROUTE_PATH
+    from src.navigation.route import Route, load_route
+    assert ROUTE_PATH.name == "route.json" and isinstance(load_route(ROUTE_PATH), Route)

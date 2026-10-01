@@ -38,7 +38,8 @@ from dataclasses import dataclass, field
 from src.estimation.estimation import Phase3Config
 from src.maneuver import ManeuverConfig
 from src.params import (
-    CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, STOP_LINE_TABLE_PATH,
+    CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
+    STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig
@@ -114,3 +115,11 @@ MEASURED_ESTIMATION = Phase3Config()
 # runs set them. leg_counts in particular is a guess until counts per meter
 # are measured; maneuver_linker's flags override any field for one run.
 MANEUVER = ManeuverConfig()
+
+# The course plan: one maneuver per intersection and how the run finishes
+# (src/navigation/route.py). A file, not a constant, so it changes between
+# runs without touching code; the run reads and checks it at startup, before
+# the start button. Edit vision_stack/route.json, e.g.
+#     {"maneuvers": ["left", "straight", "right"], "finish": "edge"}
+# An empty list crosses every intersection straight and finishes where the lane ends
+ROUTE_PATH = PIPELINE_ROOT / "route.json"

@@ -122,9 +122,18 @@ python3 -m src.navigation_linker --camera --max-run-s 10    # short first run on
 python3 -m src.navigation_linker --camera                   # start button, 30 s cap
 python3 -m src.navigation_linker --video runs/<run>.avi     # what it would have commanded
 python3 -m src.navigation_linker --render runs/nav_<YYYYMMDD_HHMMSS>   # rebuild a run's video
+python3 -m src.navigation_linker --camera --route my_route.json   # another route (default: route.json)
 ```
 
 Output: `runs/nav_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `nav.csv`, `p3.csv`, `nav.avi`)
+
+The course plan is `route.json` in `vision_stack/`, read at startup; edit it between runs:
+
+```json
+{"maneuvers": ["left", "straight", "right"], "finish": "edge"}
+```
+
+`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right are driven straight until the turn logic lands.
 
 ---
 

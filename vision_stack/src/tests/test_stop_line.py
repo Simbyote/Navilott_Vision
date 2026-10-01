@@ -89,3 +89,25 @@ def test_reset_forgets_the_line():
     feed(t, [5.0, None])
     t.reset()
     assert (t.phase, t.reached, t.last_rows, t.lost_ms) == (IDLE, False, None, None)
+
+
+@pytest.mark.software
+def test_entered_marks_the_frame_the_line_leaves_the_view_once():
+    t, entered = StopLineTracker(), []
+    for i, rows in enumerate([60.0, 30.0, 5.0, None, None, None, 3.0, None]):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
+                        stop_line_distance_px=rows))
+        entered.append(t.entered)
+    assert entered == [False, False, False, True, False, False, False, False]
+
+
+@pytest.mark.software
+def test_a_line_lost_far_away_never_enters():
+    t, entered = StopLineTracker(), []
+    for i, rows in enumerate([60.0, 50.0, None, None]):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
+                        stop_line_distance_px=rows))
+        entered.append(t.entered)
+    assert not any(entered)
+    t.reset()
+    assert not t.entered

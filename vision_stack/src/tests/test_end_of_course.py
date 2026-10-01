@@ -9,8 +9,11 @@ count; held frames (a crossing, a stop) don't count; reset.
 import pytest
 
 from src.navigation.end_of_course import (
-    END_STALE_MS, MAX_DT_MS, REASON_FINISHED, REASON_SLOW, SLOW_DUTY, SLOW_MAX_STEERING_ADJ, EndOfCourseRule,
+    END_STALE_MS, MAX_DT_MS, OUTCOME_EARLY, OUTCOME_FINISHED, REASON_FINISHED, REASON_SLOW, SLOW_DUTY,
+    SLOW_MAX_STEERING_ADJ, EndOfCourseRule,
 )
+from src.navigation.route import FINISH_STOP_LINE, LEFT, Route, RouteProgress
+from src.navigation.stop_line import StopLineTracker
 from src.navigation.lane_keeping import KP_HEADING, LaneKeepingNavigator
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command
 from src.tests.navigation_checks import packet
@@ -52,7 +55,7 @@ def test_a_stale_lane_creeps_then_finishes():
     assert out[1][1]["reason"] == REASON_SLOW and out[1][1]["stale_ms"] == MS
     finished = [i for i, (cmd, _) in enumerate(out) if cmd == BRAKE]
     assert finished[0] == END and rule.finished
-    assert out[END][1] == {"reason": REASON_FINISHED}
+    assert out[END][1] == {"reason": REASON_FINISHED, "outcome": OUTCOME_FINISHED}
 
 
 @pytest.mark.software
@@ -106,5 +109,64 @@ def test_the_end_time_is_configurable():
 def test_reset_starts_over():
     rule, _ = drive([{}] + [STALE] * (END + 1))
     rule.reset()
-    assert (rule.finished, rule.record) == (False, {})
+    assert (rule.finished, rule.record, rule.outcome, rule.end_step) == (False, {}, None, None)
     assert rule.update(packet(lane_status="stale", timestamp_ms=99_000)).brake is False
+
+
+# =============================================================================
+# The route: finished or ended early
+# =============================================================================
+
+def progress(maneuvers=(), finish="edge", entered=0):
+    p = RouteProgress(Route(tuple(maneuvers), finish))
+    for _ in range(entered):
+        p.enter()
+    return p
+
+
+@pytest.mark.software
+def test_no_route_a_lost_lane_is_the_finish():
+    rule, _ = drive([{}] + [STALE] * END)
+    assert (rule.outcome, rule.end_step) == (OUTCOME_FINISHED, 0)
+
+
+@pytest.mark.software
+def test_a_lane_lost_before_the_route_is_done_ends_early_at_its_step():
+    rule = EndOfCourseRule(LaneKeepingNavigator(), progress((LEFT, LEFT), entered=1))
+    rule, out = drive([{}] + [STALE] * END, rule=rule)
+    assert (rule.outcome, rule.end_step) == (OUTCOME_EARLY, 1)
+    assert out[END][1] == {"reason": REASON_FINISHED, "outcome": OUTCOME_EARLY}
+
+
+@pytest.mark.software
+def test_a_lane_lost_after_the_last_maneuver_finishes_at_the_edge():
+    rule = EndOfCourseRule(LaneKeepingNavigator(), progress((LEFT, LEFT), entered=2))
+    rule, _ = drive([{}] + [STALE] * END, rule=rule)
+    assert (rule.outcome, rule.end_step) == (OUTCOME_FINISHED, 2)
+
+
+@pytest.mark.software
+def test_with_a_finish_line_a_lost_lane_before_it_ends_early():
+    rule = EndOfCourseRule(LaneKeepingNavigator(), progress((LEFT,), FINISH_STOP_LINE, entered=1))
+    rule, _ = drive([{}] + [STALE] * END, rule=rule)
+    assert rule.outcome == OUTCOME_EARLY
+
+
+@pytest.mark.software
+def test_the_finish_line_reached_finishes_the_run():
+    tracker = StopLineTracker()
+    p = progress((LEFT,), FINISH_STOP_LINE, entered=2)
+    rule = EndOfCourseRule(LaneKeepingNavigator(), p, tracker)
+    assert rule.update(packet(timestamp_ms=0)) is None
+    tracker.reached = True
+    assert rule.update(packet(timestamp_ms=MS)) == BRAKE
+    assert (rule.outcome, rule.end_step) == (OUTCOME_FINISHED, 2)
+
+
+@pytest.mark.software
+def test_reaching_a_line_that_is_not_the_finish_does_nothing():
+    tracker = StopLineTracker()
+    rule = EndOfCourseRule(LaneKeepingNavigator(), progress((LEFT, LEFT), FINISH_STOP_LINE, entered=1), tracker)
+    tracker.reached = True
+    assert rule.update(packet(timestamp_ms=0)) is None and not rule.finished
+

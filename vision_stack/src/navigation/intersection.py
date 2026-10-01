@@ -10,7 +10,10 @@ Purpose:
     reached the line, the crossing ends when Phase 2 sees both lane
     boundaries (lane_mode MODE_TWO_BOUNDARY) for TWO_BOUNDARY_FRAMES frames
     in a row, or after MAX_CROSS_MS of driving, and lane keeping takes over.
-    Only straight through for now: left and right turns need a route.
+    Which way to go comes from the route (route.py): the RouteProgress
+    navigation.Navigation advances as each intersection is entered. Only
+    straight is built: left and right (TURNS_TBD, Ignacio's turn logic) are
+    driven straight and recorded as TBD until they are.
 
 Main package:
     IntersectionRule: update(packet, held) -> a straight command while
@@ -29,6 +32,7 @@ from src.estimation.estimation import EstimationPacket
 from src.navigation.lane_keeping import KP_HEADING, LaneKeepingNavigator
 from src.navigation.navigation_contract import Command
 from src.params import MODE_TWO_BOUNDARY
+from src.navigation.route import TURNS_TBD, RouteProgress
 from src.navigation.stop_line import CROSSING, StopLineTracker
 
 # Both boundaries this many frames in a row ends the crossing (~0.15 s at
@@ -53,13 +57,18 @@ class IntersectionRule:
         kp_heading: Duty per degree turned; lane keeping's own by default.
         gyro_bias_dps: Subtracted from the packet's yaw_rate, which is raw
             (Phase 3 subtracts its bias only inside heading_error).
+        progress: The run's RouteProgress, for this intersection's maneuver;
+            RouteProgress() (no plan: straight) by default.
 
     record: {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD,
-        "steer", "heading_deg"} while crossing; {} otherwise.
+        "steer", "heading_deg", "step" (progress.label()), "maneuver",
+        "tbd" (a turn driven straight)} while crossing; {} otherwise.
     """
     def __init__(self, tracker: StopLineTracker, lane: LaneKeepingNavigator,
-                 kp_heading: float = KP_HEADING, gyro_bias_dps: float = 0.0) -> None:
+                 kp_heading: float = KP_HEADING, gyro_bias_dps: float = 0.0,
+                 progress: RouteProgress | None = None) -> None:
         self.tracker = tracker
+        self.progress = progress or RouteProgress()
         self.lane = lane
         self.kp_heading = kp_heading
         self.gyro_bias_dps = gyro_bias_dps
@@ -107,6 +116,9 @@ class IntersectionRule:
 
         # + heading = turned right, so steer left: + steering
         cmd = self.lane.steer(self.kp_heading * self._heading, SOURCE_HEADING_HOLD)
+        maneuver = self.progress.current[2] if self.progress.current else None
         self.record = {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD,
-                       "steer": self.lane.record.get("steer", 0.0), "heading_deg": round(self._heading, 2)}
+                       "steer": self.lane.record.get("steer", 0.0), "heading_deg": round(self._heading, 2),
+                       "step": self.progress.label(), "maneuver": maneuver,
+                       "tbd": maneuver in TURNS_TBD}
         return cmd
