@@ -1,58 +1,52 @@
-"""Stop line navigator using pixel distance threshold.
+"""Stop line navigator using vision state transitions.
 
 Purpose:
-    Monitors EstimationPacket for detected stop lines. Returns BRAKE when a
-    stop line is within 20 pixels of the bottom ROI; otherwise outputs a
-    neutral command (0.0 duty).
+    Monitors EstimationPacket for stop_line_detected. Latches when a stop line is 
+    detected and issues BRAKE once it goes out of sight (transitioning from True to False).
 """
 
 from src.estimation import EstimationPacket
 from src.navigation import BRAKE, Command
 
-STOP_LINE_THRESHOLD_PX = 20.0
 
-
-def check_stop_line_trigger(
-    packet: EstimationPacket, threshold_px: float = STOP_LINE_THRESHOLD_PX
-) -> bool:
-    """
-    True once the robot's stop line distance in pixels reaches or falls below threshold.
-
-    Inputs:
-        packet: Uses stop_line_detected and stop_line_distance_px.
-        threshold_px: Distance in pixels at or under which the robot must stop.
-    """
-    if packet.stop_line_detected and packet.stop_line_distance_px is not None:
-        return packet.stop_line_distance_px <= threshold_px
-    return False
+def check_stop_line_trigger(packet: EstimationPacket) -> bool:
+    """True if stop_line_detected is True in the packet."""
+    return bool(packet.stop_line_detected)
 
 
 class StopLineNavigator:
     """
-    Navigator to issue stop commands upon reaching a pixel distance threshold for a stop line.
-
-    Inputs:
-        stop_line_threshold_px: Pixel distance threshold to trigger BRAKE.
+    Navigator to issue stop commands after a stop line passes out of sight.
     """
 
-    def __init__(
-        self,
-        stop_line_threshold_px: float = STOP_LINE_THRESHOLD_PX,
-    ) -> None:
-        self.stop_line_threshold_px = stop_line_threshold_px
+    def __init__(self) -> None:
+        self._saw_stop_line: bool = False
+        self._line_lost: bool = False
 
     def reset(self) -> None:
-        """Stateless: every command is determined purely by the current packet."""
-        pass
+        """Resets stop line vision state tracking."""
+        self._saw_stop_line = False
+        self._line_lost = False
 
     def update(self, packet: EstimationPacket) -> Command:
         """
-        Evaluates the frame packet for stop line pixel proximity.
+        Evaluates the frame packet for stop line visibility transitions.
 
         Outputs:
-            BRAKE if the stop line pixel threshold is reached; otherwise zero duty.
+            BRAKE once stop_line_detected transitions from True to False;
+            otherwise neutral zero duty command.
         """
-        if check_stop_line_trigger(packet, self.stop_line_threshold_px):
+        currently_detected = check_stop_line_trigger(packet)
+
+        # Track transition: True -> False
+        if currently_detected:
+            self._saw_stop_line = True
+        elif self._saw_stop_line and not currently_detected:
+            # Transition occurred: stop line was seen and is now out of sight
+            self._line_lost = True
+
+        # Output BRAKE after line goes out of sight
+        if self._line_lost:
             return BRAKE
 
         return Command(left=0.0, right=0.0)
