@@ -40,7 +40,7 @@ from src.navigation.stop_line import CROSSING, StopLineTracker
 TWO_BOUNDARY_FRAMES = 3
 # Driving time after reaching the line before lane keeping takes over
 # anyway; a guess at crossing one intersection, to tune on the mat
-MAX_CROSS_MS = 4000
+MAX_CROSS_MS = 3000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
 REASON_CROSSING = "crossing"
