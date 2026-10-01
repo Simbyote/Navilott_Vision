@@ -111,3 +111,17 @@ def test_a_line_lost_far_away_never_enters():
     assert not any(entered)
     t.reset()
     assert not t.entered
+
+
+@pytest.mark.software
+def test_with_accept_new_off_a_new_line_is_ignored_but_one_already_tracked_carries_on():
+    t = StopLineTracker()
+    t.update(packet(stop_line_detected=True, stop_line_distance_px=40.0, timestamp_ms=0), accept_new=False)
+    assert t.phase == IDLE                                       # not taken up
+    t.update(packet(stop_line_detected=True, stop_line_distance_px=40.0, timestamp_ms=50))
+    assert t.phase == APPROACH
+    t.update(packet(stop_line_detected=True, stop_line_distance_px=10.0, timestamp_ms=100), accept_new=False)
+    t.update(packet(stop_line_detected=False, timestamp_ms=150), accept_new=False)
+    assert t.phase == CROSSING and t.entered                    # the tracked line still leaves the view
+    t.update(packet(timestamp_ms=150 + STOP_DELAY_MS), accept_new=False)
+    assert t.reached

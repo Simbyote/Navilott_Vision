@@ -22,7 +22,7 @@ Main package:
     IDLE, APPROACH, CROSSING: its phases.
 
 Flow:
-    IDLE -> APPROACH (line voted in) -> CROSSING (voted out near the bottom:
+    IDLE -> APPROACH (line voted in, when accept_new) -> CROSSING (voted out near the bottom:
     entered, one intersection) -> reached on the frame STOP_DELAY_MS after it
     left -> IDLE.
     APPROACH -> IDLE when it's voted out far away.
@@ -65,12 +65,19 @@ class StopLineTracker:
         self.last_rows: float | None = None
         self.lost_ms: int | None = None
 
-    def update(self, packet: EstimationPacket) -> None:
-        """Advance on this frame's packet (stop_line_detected, stop_line_distance_px, timestamp_ms)."""
+    def update(self, packet: EstimationPacket, accept_new: bool = True) -> None:
+        """
+        Advance on this frame's packet (stop_line_detected, stop_line_distance_px, timestamp_ms).
+
+        Inputs:
+            accept_new: False keeps a line seen while IDLE from starting a
+                new APPROACH (Navigation, while an intersection is being
+                crossed); a line already tracked carries on.
+        """
         self.entered = self.reached = False
         seen = bool(packet.stop_line_detected)
         if self.phase == IDLE:
-            if seen:
+            if seen and accept_new:
                 self.phase, self.last_rows = APPROACH, packet.stop_line_distance_px
         elif self.phase == APPROACH:
             if seen:

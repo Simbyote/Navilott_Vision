@@ -285,3 +285,24 @@ def test_reset_starts_the_route_over():
     nav.reset()
     assert nav.progress.step == 0 and nav.outcome is None and nav.end_step is None
 
+
+
+@pytest.mark.software
+def test_a_line_like_mark_while_crossing_neither_restarts_the_crossing_nor_counts():
+    # 2026-10-01 run: past an intersection the near end of a thick lane line
+    # passed for a stop line, again and again; each restarted the crossing
+    # and counted as an intersection, and lane keeping never got back
+    mark = [{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "none"} for r in APPROACH_ROWS]
+    after_reached = STOP_DELAY_MS // MS + 10                     # the tracker is idle again, the crossing isn't over
+    case = (intersection(after={"lane_mode": "none"}, after_frames=after_reached) + mark
+            + [{"lane_mode": "none"}] * 40 + [{"lane_mode": "two_boundary"}] * 5
+            + intersection(after={"lane_mode": "two_boundary"}, after_frames=40))
+    out = run(Navigation(), case)
+    n = len(APPROACH_ROWS)
+    during_mark = out[n + after_reached:n + after_reached + len(mark) + 1]
+    assert {rec["rule"] for _, _, rec in during_mark} == {RULE_INTERSECTION}
+    assert {rec["phase"] for _, _, rec in during_mark} == {IDLE}                     # the mark isn't taken up
+    steps = [rec["step"] for _, _, rec in out]
+    assert [s for i, s in enumerate(steps) if i == 0 or s != steps[i - 1]] == ["0/0", "1/0 extra", "2/0 extra"]
+    rules = [rec["rule"] for _, _, rec in out]
+    assert RULE_LANE_KEEPING in rules[n + after_reached + len(mark) + 40:]        # it hands back between

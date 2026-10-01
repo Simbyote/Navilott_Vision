@@ -45,12 +45,16 @@ class Clock:
         return self.now
 
 
-def hub(imu=True, encoders=True, **kw):
-    """A started-by-hand hub (no thread) on fakes; returns (hub, imu, encoders, clock)."""
+def hub(imu=True, encoders=True, yaw_sign=-1, **kw):
+    """
+    A started-by-hand hub (no thread) on fakes; returns (hub, imu, encoders, clock).
+    It flips yaw (yaw_sign -1) unless told otherwise, so the flip is tested
+    whatever this robot's IMU_YAW_SIGN is.
+    """
     i = FakeIMU() if imu else None
     e = FakeEncoders() if encoders else None
     clock = Clock()
-    h = SensorHub(i, e, clock=clock, **kw)
+    h = SensorHub(i, e, clock=clock, yaw_sign=yaw_sign, **kw)
     h._base = h._counts_reading()           # what start() does, without the thread
     return h, i, e, clock
 
@@ -64,9 +68,10 @@ def reading(t, yaw=None, accel=None, left=None, right=None):
 # =============================================================================
 
 @pytest.mark.software
-def test_this_robots_yaw_is_flipped_and_sampled_at_100_hz():
-    # Upside-down IMU: raw + is a left turn; Estimation wants + = right
-    assert IMU_YAW_SIGN == -1
+def test_this_robots_yaw_sign_and_100_hz_sampling():
+    # Upside-down IMU: the driver's + = left (Z-up) reads + = right here,
+    # Estimation's convention already (measured 2026-10-01, motors fixed)
+    assert IMU_YAW_SIGN == 1
     assert SENSOR_RATE_HZ == 100.0 and SENSOR_HISTORY_S == 2.0
 
 
@@ -131,7 +136,7 @@ def test_a_tick_reads_both_sensors_together_on_the_hub_clock_and_flips_yaw():
     h, imu, enc, clock = hub()
     imu.yaw, imu.accel, enc.left, enc.right = 30.0, -0.9, 7, 8
     r = h.tick()
-    assert r == SensorReading(clock.now, -30.0, -0.9, 7, 8)       # raw + (left) reads - (left) as + = right
+    assert r == SensorReading(clock.now, -30.0, -0.9, 7, 8)       # a flipping hub: raw + reads -
 
 
 @pytest.mark.software
@@ -244,7 +249,7 @@ def test_has_sensors_needs_at_least_one():
 
 @pytest.mark.software
 def test_the_thread_samples_at_about_the_rate_until_stopped():
-    h = SensorHub(FakeIMU(yaw=2.0), FakeEncoders(), rate_hz=200.0)
+    h = SensorHub(FakeIMU(yaw=2.0), FakeEncoders(), rate_hz=200.0, yaw_sign=-1)
     h.start()
     time.sleep(0.2)
     b = h.drain()
