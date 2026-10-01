@@ -1,9 +1,3 @@
-"""Multi-intersection sequence runner:
-    1. Vision drive -> Stop line 1 disappears -> Forward 1.3s -> Left turn sequence
-    2. Vision drive -> Stop line 2 disappears -> Forward 1.3s -> Right turn sequence
-    3. Vision drive -> Stop line 3 disappears -> Hand off to Navigation intersection algorithm
-"""
-
 import argparse
 import csv
 import json
@@ -18,50 +12,45 @@ import numpy as np
 
 from src.capture.camera import CaptureError
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
-from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
+from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
 from src.estimation.estimation import Phase3Config
-from src.maneuver_linker import _NoMotors
+from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
+from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
 
-MAX_RUN_S = 60.0
+MAX_RUN_S = 30.0
 
 END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
-    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit"
-)
-END_SEQUENCE_COMPLETE = "navigation sequence completed"
+    "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit")
+END_COURSE = "end of course"
+END_EARLY = "ended early (lane lost before the route was done)"
 REASON_CONTRACT = "contract"
 
-NAV_FIELDS = (
-    "frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-    "rule", "phase", "step", "maneuver", "lane_mode", "lane_status", "lane_offset", 
-    "lane_offset_cm", "heading_error", "drive_state", "stop_sign", "stop_line_cm", 
-    "reason", "source", "steer", "cmd_left", "cmd_right", "brake", "left_cps", 
-    "right_cps", "event"
-)
+NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
+              "rule", "phase", "step", "maneuver", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "stop_sign", "stop_line_cm", "reason", "source", "steer",
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "event")
 
-# =============================================================================
-# Helper for Manual Driving Sequences
-# =============================================================================
+_CLI_HELP = """\
+Drive the robot through a 3-stage route:
+Stage 1: Open-loop right turn, then lane keep until first stop line is detected and goes out of sight.
+Stage 2: Open-loop right turn, then lane keep until second stop line is detected and goes out of sight.
+Stage 3: Straight intersection maneuver, then 2.0s lane keeping, then full stop.
+"""
+
 
 def execute_drive(motor, left: float, right: float, duration: float) -> None:
-    """Command motor duties for a specified duration."""
-    if left == 0.0 and right == 0.0:
-        motor.brake()
-    else:
-        motor.drive(left, right)
+    """Helper to execute open-loop timed driving commands directly on the motor."""
+    motor.drive(left, right)
     time.sleep(duration)
 
 
-# =============================================================================
-# Findings
-# =============================================================================
-
 class NavStats:
-    """Per-frame navigation outcomes summarized for logging."""
+    """Per-frame navigation outcomes, summarized for summary.txt and report.json."""
     def __init__(self) -> None:
         self.frames = self.driving = self.rejected = 0
         self.brake_reasons: Counter = Counter()
@@ -86,21 +75,18 @@ class NavStats:
     def report(self) -> dict:
         lat = np.array(self.latency_ms) if self.latency_ms else np.zeros(1)
         steer = np.array(self.steer_abs) if self.steer_abs else np.zeros(1)
-        return {
-            "frames": self.frames, "driving": self.driving, "braked": self.frames - self.driving,
-            "brake_reasons": dict(self.brake_reasons), "steer_sources": dict(self.sources),
-            "decided_by": dict(self.rules),
-            "steer_abs_mean": round(float(steer.mean()), 4), "steer_abs_max": round(float(steer.max()), 4),
-            "latency_ms": {
-                "p50": round(float(np.percentile(lat, 50)), 2),
-                "p95": round(float(np.percentile(lat, 95)), 2),
-                "max": round(float(lat.max()), 2)
-            },
-            "rejected": self.rejected
-        }
+        return {"frames": self.frames, "driving": self.driving, "braked": self.frames - self.driving,
+                "brake_reasons": dict(self.brake_reasons), "steer_sources": dict(self.sources),
+                "decided_by": dict(self.rules),
+                "steer_abs_mean": round(float(steer.mean()), 4), "steer_abs_max": round(float(steer.max()), 4),
+                "latency_ms": {"p50": round(float(np.percentile(lat, 50)), 2),
+                               "p95": round(float(np.percentile(lat, 95)), 2),
+                               "max": round(float(lat.max()), 2)},
+                "rejected": self.rejected}
 
 
 def summary_lines(report: dict) -> list[str]:
+    """summary.txt's [NAVIGATION] section, from run()'s findings."""
     n, r = report["nav"], report["run"]
     pct = lambda k: 100.0 * k / n["frames"] if n["frames"] else 0.0
     reasons = ", ".join(f"{k} {v}" for k, v in sorted(n["brake_reasons"].items())) or "none"
@@ -108,38 +94,35 @@ def summary_lines(report: dict) -> list[str]:
     rules = ", ".join(f"{k} {v}" for k, v in sorted(n["decided_by"].items())) or "none"
     lat = n["latency_ms"]
     return [
-        f"[NAVIGATION] ended by {report['ended_by']} "
-        + f" motors {'ON' if report['motors'] else 'OFF (dry run)'}",
+        f"[NAVIGATION] ended by {report['ended_by']}"
+        + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
+        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
-        f"camera drops {r['camera_drops']}",
+        f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
         f" decided by            {rules}",
         f" driving               {n['driving']} frames ({pct(n['driving']):.0f}%), steering by: {sources}",
         f" braked                {n['braked']} frames ({pct(n['braked']):.0f}%): {reasons}",
         f" steering |duty|       mean {n['steer_abs_mean']:.3f}, max {n['steer_abs_max']:.3f}",
-        f" command latency       p50 {lat['p50']:.1f} ms, p95 {lat['p95']:.1f} ms, max {lat['max']:.1f} ms",
+        f" command latency       p50 {lat['p50']:.1f} ms, p95 {lat['p95']:.1f} ms, max {lat['max']:.1f} ms "
+        f"(frame in -> motors)",
         f" contract              {n['rejected']} commands rejected and braked",
     ]
 
-
-# =============================================================================
-# The Run Loop
-# =============================================================================
 
 def run(
         source,
         sensors,
         motor,
-        navigator: Navigation,
+        navigator,
         config: PipelineConfig = MEASURED,
         p3_config: Phase3Config = MEASURED_ESTIMATION,
-        out_dir: str = str(RUNS_DIR / "nav_sequence"),
+        out_dir: str = str(RUNS_DIR / "nav"),
         system=None,
         clock=time.perf_counter,
         max_run_s: float = MAX_RUN_S,
         limit: int | None = None,
         motors_on: bool = True,
     ) -> dict:
-
     os.makedirs(out_dir, exist_ok=True)
     navigator.reset()
     processor = None
@@ -149,15 +132,11 @@ def run(
     n_file = open(os.path.join(out_dir, "nav.csv"), "w", newline="")
     n_log = csv.DictWriter(n_file, NAV_FIELDS, extrasaction="ignore")
     n_log.writeheader()
-
+    recorder = FrameRecorder(out_dir)
     camera_drops = 0
     ended_by, error = END_SOURCE, None
     last_reason = None
     t0 = None
-
-    # Track sequence stage (1 = Left turn, 2 = Right turn, 3 = Navigation algorithm)
-    current_stage = 1
-    stop_line_seen = False
 
     try:
         if system is not None:
@@ -165,8 +144,21 @@ def run(
             system.run_countdown()
         if sensors is not None:
             sensors.read()
-
         t0 = clock()
+
+        # =====================================================================
+        # STAGE 1: Open-loop Right Turn -> Lane Keeping until Stop Line
+        # =====================================================================
+        # Step 1: Drive forward 1.3s before turn
+        execute_drive(motor, 0.40, 0.40, 1.3)
+        execute_drive(motor, 0.0, 0.0, 0.1)
+
+        # Step 2: Open-loop Right turn sequence (90° turn)
+        execute_drive(motor, 0.45, 0.0, 1.62)
+        execute_drive(motor, 0.0, 0.0, 0.1)
+
+        # Resume lane keeping until first stop line is detected and goes out of sight
+        stop_line_seen = False
         while True:
             if limit is not None and nav_stats.frames >= limit:
                 ended_by = END_LIMIT
@@ -192,33 +184,12 @@ def run(
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
             pkt = res.packet
 
-            # Check stop line state transition for open-loop maneuvers
+            # Track stop line state transitions
             if pkt.stop_line_detected:
                 stop_line_seen = True
             elif stop_line_seen and not pkt.stop_line_detected:
-                stop_line_seen = False  # Reset for next stage
-                
-                if current_stage == 1:
-                    print("\n[STAGE 1] Stop line 1 crossed -> Forward 1.3s -> Left Turn")
-                    execute_drive(motor, 0.40, 0.40, 1.3)
-                    execute_drive(motor, 0.0, 0.0, 0.1)
-                    execute_drive(motor, 0.36, 0.63, 2.75)
-                    execute_drive(motor, 0.0, 0.0, 0.1)
-                    current_stage = 2
-
-                elif current_stage == 2:
-                    print("\n[STAGE 2] Stop line 2 crossed -> Forward 1.3s -> Right Turn")
-                    execute_drive(motor, 0.40, 0.40, 1.3)
-                    execute_drive(motor, 0.0, 0.0, 0.1)
-                    execute_drive(motor, 0.45, 0.0, 1.62)
-                    execute_drive(motor, 0.0, 0.0, 0.1)
-                    current_stage = 3
-
-                elif current_stage == 3:
-                    print("\n[STAGE 3] Stop line 3 crossed -> Switching to Navigation Intersection Algorithm")
-                    # Force navigator to trigger intersection step/phase handling
-                    if hasattr(navigator, "trigger_intersection"):
-                        navigator.trigger_intersection()
+                # Stop line was seen and has now gone out of sight
+                break
 
             n0 = clock()
             cmd, problems = enforce(navigator.update(pkt))
@@ -226,7 +197,6 @@ def run(
             if problems:
                 rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
             nav_ms = (clock() - n0) * 1000.0
-
             if cmd.brake:
                 motor.brake()
             else:
@@ -236,30 +206,184 @@ def run(
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
             last_reason = reason
-            n = {
-                "frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
-                "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
-                "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
-                "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
-                "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
-                "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
-                "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
-                "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
-                "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
-                "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
-                "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
-                "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event
-            }
+            n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
+                 "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
+                 "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
+                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
+                 "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
+                 "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
+                 "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
+                 "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
+                 "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
+                 "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
+                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event}
             if event:
                 print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
-
             stats.update(res)
             nav_stats.update(n)
             p3_log.write(res)
             n_log.writerow(n)
-
+            recorder.put(fid, frame, {**chain_record(res), "nav": n})
             if system is not None:
                 system.update_display(arrived - t0)
+
+        # =====================================================================
+        # STAGE 2: Open-loop Right Turn -> Lane Keeping until Second Stop Line
+        # =====================================================================
+        # Step 1: Drive forward 1.3s before turn
+        execute_drive(motor, 0.40, 0.40, 1.3)
+        execute_drive(motor, 0.0, 0.0, 0.1)
+
+        # Step 2: Open-loop Right turn sequence (90° turn)
+        execute_drive(motor, 0.45, 0.0, 1.62)
+        execute_drive(motor, 0.0, 0.0, 0.1)
+
+        # Resume lane keeping until second stop line is detected and goes out of sight
+        stop_line_seen = False
+        while True:
+            if limit is not None and nav_stats.frames >= limit:
+                ended_by = END_LIMIT
+                break
+            c0 = clock()
+            if c0 - t0 >= max_run_s:
+                ended_by = END_CAP
+                break
+            item = source.read()
+            arrived = clock()
+            capture_ms = (arrived - c0) * 1000.0
+            if item is None:
+                ended_by = END_SOURCE
+                break
+            frame, fid, ts = item
+            if frame is None:
+                camera_drops += 1
+                continue
+
+            sample = None if sensors is None else sensors.read()[0]
+            if processor is None:
+                processor = make_processor(frame, fid, ts, config, p3_config)
+            res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
+            pkt = res.packet
+
+            # Track stop line state transitions
+            if pkt.stop_line_detected:
+                stop_line_seen = True
+            elif stop_line_seen and not pkt.stop_line_detected:
+                # Second stop line was seen and has now gone out of sight
+                break
+
+            n0 = clock()
+            cmd, problems = enforce(navigator.update(pkt))
+            rec = dict(getattr(navigator, "record", {}) or {})
+            if problems:
+                rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
+            nav_ms = (clock() - n0) * 1000.0
+            if cmd.brake:
+                motor.brake()
+            else:
+                motor.drive(cmd.left, cmd.right)
+            latency_ms = (clock() - arrived) * 1000.0
+
+            reason = rec.get("reason", "brake" if cmd.brake else "drive")
+            event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
+            last_reason = reason
+            n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
+                 "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
+                 "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
+                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
+                 "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
+                 "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
+                 "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
+                 "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
+                 "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
+                 "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
+                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event}
+            if event:
+                print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
+            stats.update(res)
+            nav_stats.update(n)
+            p3_log.write(res)
+            n_log.writerow(n)
+            recorder.put(fid, frame, {**chain_record(res), "nav": n})
+            if system is not None:
+                system.update_display(arrived - t0)
+
+        # =====================================================================
+        # STAGE 3: Straight Intersection Maneuver -> 2.0s Lane Keeping -> Stop
+        # =====================================================================
+        # Execute straight intersection maneuver
+        execute_drive(motor, 0.40, 0.40, 1.3)
+        execute_drive(motor, 0.0, 0.0, 0.1)
+
+        # Execute 2.0 seconds of lane keeping
+        stage3_start = clock()
+        while clock() - stage3_start < 2.0:
+            if limit is not None and nav_stats.frames >= limit:
+                ended_by = END_LIMIT
+                break
+            c0 = clock()
+            if c0 - t0 >= max_run_s:
+                ended_by = END_CAP
+                break
+            item = source.read()
+            arrived = clock()
+            capture_ms = (arrived - c0) * 1000.0
+            if item is None:
+                ended_by = END_SOURCE
+                break
+            frame, fid, ts = item
+            if frame is None:
+                camera_drops += 1
+                continue
+
+            sample = None if sensors is None else sensors.read()[0]
+            if processor is None:
+                processor = make_processor(frame, fid, ts, config, p3_config)
+            res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
+            pkt = res.packet
+
+            n0 = clock()
+            cmd, problems = enforce(navigator.update(pkt))
+            rec = dict(getattr(navigator, "record", {}) or {})
+            if problems:
+                rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
+            nav_ms = (clock() - n0) * 1000.0
+            if cmd.brake:
+                motor.brake()
+            else:
+                motor.drive(cmd.left, cmd.right)
+            latency_ms = (clock() - arrived) * 1000.0
+
+            reason = rec.get("reason", "brake" if cmd.brake else "drive")
+            event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
+            last_reason = reason
+            n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
+                 "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
+                 "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
+                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
+                 "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
+                 "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
+                 "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
+                 "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
+                 "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
+                 "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
+                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event}
+            if event:
+                print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
+            stats.update(res)
+            nav_stats.update(n)
+            p3_log.write(res)
+            n_log.writerow(n)
+            recorder.put(fid, frame, {**chain_record(res), "nav": n})
+            if system is not None:
+                system.update_display(arrived - t0)
+
+        # Full stop and end of run
+        motor.brake()
+        ended_by = END_COURSE
 
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT
@@ -269,61 +393,61 @@ def run(
             traceback.print_exc(file=f)
     finally:
         motor.stop()
-        p3_log.close()
-        n_file.close()
-        if sensors is not None:
-            sensors.stop()
-        source.close()
-        if system is not None:
-            system.show_final_time(0.0 if t0 is None else clock() - t0)
-            system.cleanup(blank=False)
+        try:
+            recorder.close()
+        finally:
+            p3_log.close()
+            n_file.close()
+            if sensors is not None:
+                sensors.stop()
+            source.close()
+            if system is not None:
+                system.show_final_time(0.0 if t0 is None else clock() - t0)
+                system.cleanup(blank=False)
 
     wall = 0.0 if t0 is None else clock() - t0
-    report = {
-        "ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", 
-        "motors": motors_on,
-        "nav": nav_stats.report(),
-        "run": {
-            "frames": nav_stats.frames, "wall_s": round(wall, 2),
-            "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
-            "camera_drops": camera_drops
-        }
-    }
+    report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
+              "nav": nav_stats.report(),
+              "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
+                      "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
+                      "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
+                      "recorder_written": recorder.written}}
     lines = summary_lines(report) + [""] + stats.report()
 
     with open(os.path.join(out_dir, "report.json"), "w") as f:
         json.dump(report, f, indent=2, default=str)
     with open(os.path.join(out_dir, "summary.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
-    
     print("\n" + "\n".join(lines))
     if error is not None:
         raise error
     return report
 
 
-# =============================================================================
-# Command Line Interface
-# =============================================================================
-
 def cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Multi-intersection driver: Left turn -> Right turn -> Navigation Intersection.")
+    ap = argparse.ArgumentParser(prog="navigation_linker", description=_CLI_HELP,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--camera", action="store_true", help="live mode with camera")
-    src.add_argument("--video", metavar="PATH", help="replay a video clip")
-    src.add_argument("--frames", metavar="DIR", help="replay image frames directory")
-    ap.add_argument("--no-motors", action="store_true", help="bench dry run")
-    ap.add_argument("--no-button", action="store_true", help="start after 3s countdown")
-    ap.add_argument("--max-run-s", type=float, default=MAX_RUN_S, help="maximum run duration")
+    src.add_argument("--camera", action="store_true", help="live: the motors drive")
+    src.add_argument("--video", metavar="PATH", help="replay a clip; motors always off")
+    src.add_argument("--frames", metavar="DIR", help="replay an image sequence; motors always off")
+    ap.add_argument("--no-motors", action="store_true", help="with --camera: everything but the motors")
+    ap.add_argument("--no-button", action="store_true", help="with --camera: start after a 3 s countdown")
+    ap.add_argument("--max-run-s", type=float, default=MAX_RUN_S,
+                    help=f"brake and end after this long (default {MAX_RUN_S:.0f})")
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
-    ap.add_argument("--route", default=str(ROUTE_PATH), help="path to route plan")
-    ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps)
-    ap.add_argument("--cm-per-px", type=float, default=None)
-    ap.add_argument("--hsv", default=None, help="custom HSV ranges file")
+    ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
+                    help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
+    ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right frame (default {MANEUVER.gyro_bias_dps}, config.MANEUVER)")
+    ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
+                    help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
+    ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
     ap.add_argument("--width", type=int, default=FRAME_W)
     ap.add_argument("--height", type=int, default=FRAME_H)
-    ap.add_argument("--fps", type=int, default=None)
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--fps", type=int, default=None, help="capture/replay rate (video files default to their own)")
+    ap.add_argument("--out", default=None, metavar="DIR")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
 
     config = MEASURED
@@ -335,12 +459,10 @@ def cli(argv: list[str] | None = None) -> int:
     except RouteError as exc:
         print(f"route error: {exc}")
         return 2
-
-    out_dir = args.out or str(RUNS_DIR / ("nav_seq_" + time.strftime("%Y%m%d_%H%M%S")))
+    out_dir = args.out or str(RUNS_DIR / ("nav_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
     source = sensors = motor = system = None
-
     try:
         if args.camera:
             source = CameraFrameSource(args.width, args.height, args.fps or FPS)
@@ -349,38 +471,36 @@ def cli(argv: list[str] | None = None) -> int:
             source = VideoFrameSource(args.video, args.fps)
         else:
             source = DirectoryFrameSource(args.frames, args.fps or FPS)
-
         if motors_on:
             import pigpio
             from src.peripherals.drive import MotorController
             motor = MotorController(pigpio.pi())
         else:
             motor = _NoMotors()
-
         if args.camera and not args.no_button:
             from src.peripherals.system import System
             system = System()
-
     except (CaptureError, OSError, RuntimeError, ImportError) as exc:
-        print(f"hardware setup error: {exc!r}")
+        print(f"source / hardware error: {exc!r}")
         for thing in (motor, sensors, source):
             if thing is not None:
                 (thing.stop if hasattr(thing, "stop") else thing.close)()
         return 2
 
+    print(f"source   {source.label} @ {source.fps:.0f} FPS")
+    print(f"output   {out_dir}")
+    print(f"motors   {'ON' if motors_on else 'OFF (dry run)'}   cap {args.max_run_s:.0f} s   "
+          f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}")
+    print("\n".join(route.describe()))
     if args.camera and system is None:
         for n in (3, 2, 1):
             print(f"  starting in {n}")
             time.sleep(1.0)
     elif system is not None:
         print("press the start button")
-
-    run(
-        source, sensors, motor, 
-        Navigation(gyro_bias_dps=args.gyro_bias, route=route), 
-        config, p3_config, out_dir, system,
-        max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on
-    )
+    run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
+        out_dir, system,
+        max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on)
     return 0
 
 
