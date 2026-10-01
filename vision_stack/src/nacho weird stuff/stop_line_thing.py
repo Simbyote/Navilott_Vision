@@ -1,9 +1,10 @@
-"""Stop line crossing driver.
+"""Stop line crossing driver with post-stop right turn sequence.
 
-Purpose:
-    Drives the robot using the vision + navigation chain until a stop line is 
-    detected and subsequently disappears (crossing the line). Does not record video 
-    or save frame records to disk.
+Flow:
+    1. Drive using vision/navigation chain until the stop line is crossed (goes out of sight).
+    2. Drive straight forward for 1.0 second.
+    3. Execute right turn sequence (0.45, 0.0 for 1.62s).
+    4. Stop motors and complete run.
 """
 
 import argparse
@@ -34,7 +35,7 @@ MAX_RUN_S = 30.0
 END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
     "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit"
 )
-END_STOP_LINE_CROSSED = "stop line crossed"
+END_STOP_LINE_TURN = "stop line crossed & right turn completed"
 REASON_CONTRACT = "contract"
 
 NAV_FIELDS = (
@@ -44,6 +45,19 @@ NAV_FIELDS = (
     "reason", "source", "steer", "cmd_left", "cmd_right", "brake", "left_cps", 
     "right_cps", "event"
 )
+
+# =============================================================================
+# Helper for Manual Driving Sequences
+# =============================================================================
+
+def execute_drive(motor, left: float, right: float, duration: float) -> None:
+    """Helper to command motor duties for a specified duration."""
+    if left == 0.0 and right == 0.0:
+        motor.brake()
+    else:
+        motor.drive(left, right)
+    time.sleep(duration)
+
 
 # =============================================================================
 # Findings
@@ -121,7 +135,7 @@ def run(
         navigator,
         config: PipelineConfig = MEASURED,
         p3_config: Phase3Config = MEASURED_ESTIMATION,
-        out_dir: str = str(RUNS_DIR / "nav_stop_line"),
+        out_dir: str = str(RUNS_DIR / "nav_stop_turn"),
         system=None,
         clock=time.perf_counter,
         max_run_s: float = MAX_RUN_S,
@@ -144,7 +158,6 @@ def run(
     last_reason = None
     t0 = None
 
-    # Track line crossing state
     stop_line_seen = False
 
     try:
@@ -180,13 +193,22 @@ def run(
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
             pkt = res.packet
 
-            # Check stop line visibility transition
+            # Check stop line state transition
             if pkt.stop_line_detected:
                 stop_line_seen = True
             elif stop_line_seen and not pkt.stop_line_detected:
-                # Line was previously visible and is now out of sight (crossed)
-                ended_by = END_STOP_LINE_CROSSED
-                motor.brake()
+                # Line went out of sight -> execute forward drive + right turn sequence
+                print("\n[MANEUVER] Stop line crossed! Driving forward 1s then turning right...")
+                
+                # Step 1: Drive forward 1.0 second
+                execute_drive(motor, 0.40, 0.40, 1.0)
+                execute_drive(motor, 0.0, 0.0, 0.1)  # brief stop
+                
+                # Step 2: Right turn sequence (90° turn)
+                execute_drive(motor, 0.45, 0.0, 1.62)
+                execute_drive(motor, 0.0, 0.0, 0.1)  # full brake
+                
+                ended_by = END_STOP_LINE_TURN
                 break
 
             n0 = clock()
@@ -276,7 +298,7 @@ def run(
 # =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Drive until stop line crossing without recording.")
+    ap = argparse.ArgumentParser(description="Drive until stop line crossing, then execute 1s straight + right turn.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--camera", action="store_true", help="live mode with camera")
     src.add_argument("--video", metavar="PATH", help="replay a video clip")
@@ -305,7 +327,7 @@ def cli(argv: list[str] | None = None) -> int:
         print(f"route error: {exc}")
         return 2
 
-    out_dir = args.out or str(RUNS_DIR / ("nav_stop_line_" + time.strftime("%Y%m%d_%H%M%S")))
+    out_dir = args.out or str(RUNS_DIR / ("nav_stop_turn_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
     source = sensors = motor = system = None
