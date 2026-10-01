@@ -1,10 +1,7 @@
-"""Stop line crossing driver with post-stop right turn sequence.
-
-Flow:
-    1. Drive using vision/navigation chain until the stop line is crossed (goes out of sight).
-    2. Drive straight forward for 1.0 second.
-    3. Execute right turn sequence (0.45, 0.0 for 1.62s).
-    4. Stop motors and complete run.
+"""Multi-intersection sequence runner:
+    1. Vision drive -> Stop line 1 disappears -> Forward 1.3s -> Left turn sequence
+    2. Vision drive -> Stop line 2 disappears -> Forward 1.3s -> Right turn sequence
+    3. Vision drive -> Stop line 3 disappears -> Hand off to Navigation intersection algorithm
 """
 
 import argparse
@@ -30,12 +27,12 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
 
-MAX_RUN_S = 30.0
+MAX_RUN_S = 60.0
 
 END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
     "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit"
 )
-END_STOP_LINE_TURN = "stop line crossed & right turn completed"
+END_SEQUENCE_COMPLETE = "navigation sequence completed"
 REASON_CONTRACT = "contract"
 
 NAV_FIELDS = (
@@ -51,7 +48,7 @@ NAV_FIELDS = (
 # =============================================================================
 
 def execute_drive(motor, left: float, right: float, duration: float) -> None:
-    """Helper to command motor duties for a specified duration."""
+    """Command motor duties for a specified duration."""
     if left == 0.0 and right == 0.0:
         motor.brake()
     else:
@@ -132,10 +129,10 @@ def run(
         source,
         sensors,
         motor,
-        navigator,
+        navigator: Navigation,
         config: PipelineConfig = MEASURED,
         p3_config: Phase3Config = MEASURED_ESTIMATION,
-        out_dir: str = str(RUNS_DIR / "nav_stop_turn"),
+        out_dir: str = str(RUNS_DIR / "nav_sequence"),
         system=None,
         clock=time.perf_counter,
         max_run_s: float = MAX_RUN_S,
@@ -158,6 +155,8 @@ def run(
     last_reason = None
     t0 = None
 
+    # Track sequence stage (1 = Left turn, 2 = Right turn, 3 = Navigation algorithm)
+    current_stage = 1
     stop_line_seen = False
 
     try:
@@ -193,23 +192,33 @@ def run(
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
             pkt = res.packet
 
-            # Check stop line state transition
+            # Check stop line state transition for open-loop maneuvers
             if pkt.stop_line_detected:
                 stop_line_seen = True
             elif stop_line_seen and not pkt.stop_line_detected:
-                # Line went out of sight -> execute forward drive + right turn sequence
-                print("\n[MANEUVER] Stop line crossed! Driving forward 1s then turning right...")
+                stop_line_seen = False  # Reset for next stage
                 
-                # Step 1: Drive forward 1.0 second
-                execute_drive(motor, 0.40, 0.40, 1.3)
-                execute_drive(motor, 0.0, 0.0, 0.1)  # brief stop
-                
-                # Step 2: Left turn sequence
-                execute_drive(motor, 0.36, 0.63, 2.75)
-                execute_drive(motor, 0.0, 0.0, 0.1)  # full brake
-                
-                ended_by = END_STOP_LINE_TURN
-                break
+                if current_stage == 1:
+                    print("\n[STAGE 1] Stop line 1 crossed -> Forward 1.3s -> Left Turn")
+                    execute_drive(motor, 0.40, 0.40, 1.3)
+                    execute_drive(motor, 0.0, 0.0, 0.1)
+                    execute_drive(motor, 0.36, 0.63, 2.75)
+                    execute_drive(motor, 0.0, 0.0, 0.1)
+                    current_stage = 2
+
+                elif current_stage == 2:
+                    print("\n[STAGE 2] Stop line 2 crossed -> Forward 1.3s -> Right Turn")
+                    execute_drive(motor, 0.40, 0.40, 1.3)
+                    execute_drive(motor, 0.0, 0.0, 0.1)
+                    execute_drive(motor, 0.45, 0.0, 1.62)
+                    execute_drive(motor, 0.0, 0.0, 0.1)
+                    current_stage = 3
+
+                elif current_stage == 3:
+                    print("\n[STAGE 3] Stop line 3 crossed -> Switching to Navigation Intersection Algorithm")
+                    # Force navigator to trigger intersection step/phase handling
+                    if hasattr(navigator, "trigger_intersection"):
+                        navigator.trigger_intersection()
 
             n0 = clock()
             cmd, problems = enforce(navigator.update(pkt))
@@ -298,7 +307,7 @@ def run(
 # =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Drive until stop line crossing, then execute 1s straight + right turn.")
+    ap = argparse.ArgumentParser(description="Multi-intersection driver: Left turn -> Right turn -> Navigation Intersection.")
     src = ap.add_mutually_exclusive_group(required=True)
     src.add_argument("--camera", action="store_true", help="live mode with camera")
     src.add_argument("--video", metavar="PATH", help="replay a video clip")
@@ -327,7 +336,7 @@ def cli(argv: list[str] | None = None) -> int:
         print(f"route error: {exc}")
         return 2
 
-    out_dir = args.out or str(RUNS_DIR / ("nav_stop_turn_" + time.strftime("%Y%m%d_%H%M%S")))
+    out_dir = args.out or str(RUNS_DIR / ("nav_seq_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
     source = sensors = motor = system = None
