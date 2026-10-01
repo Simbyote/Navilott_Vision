@@ -42,7 +42,7 @@ from src.params import (
     STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import ColorConfig, load_color_config
-from src.perception.geometry import GeometryConfig
+from src.perception.geometry import GeometryConfig, StopLineFilter
 from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
 from src.perception.preprocess import PreprocessParams
@@ -97,6 +97,10 @@ MEASURED = PipelineConfig(
     color = load_color_config(str(HSV_RANGES_PATH)),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
+    # Stop lines within 15 deg of horizontal (default 20): the near end of a
+    # thick diagonal lane line passed for a stop line past an intersection
+    # (2026-10-01 run) and restarted the crossing
+    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 15.0)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,

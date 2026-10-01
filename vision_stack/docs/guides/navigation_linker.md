@@ -20,7 +20,7 @@ Each frame, in order:
 
 What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 - **Lane keeping:** 0.40 duty, steering against the lane offset, or against the heading while vision is lost.
-- **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until both lane boundaries are back.
+- **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until the lane boundaries are back (both for 3 frames, or one for 6), or 3 s past the line. No new stop line is taken up while it crosses.
 - **1.5 s after the line leaves the view** the robot is at it:
   - with a **stop sign** seen in the last 5 s, it stops, holds 2 s, and goes;
   - with a **red light**, it waits for the light to change.

@@ -18,6 +18,7 @@ import pytest
 
 import src.debugger.debug_video as dv
 import src.phase3_linker as p3
+from src.params import IMU_YAW_SIGN
 from src.debugger.debug_phase3 import Phase3View
 from src.debugger.live_view import DirectoryFrameSource
 from src.debugger.estimation_debug import TracedPhase3Processor
@@ -156,12 +157,12 @@ def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_
 
 
 @pytest.mark.software
-def test_the_imu_is_read_through_the_sensing_hub_with_yaw_flipped(monkeypatch):
+def test_the_imu_is_read_through_the_sensing_hub_with_this_robots_yaw_sign(monkeypatch):
     class RawIMU:
         def __init__(self):
             pass
         def read(self):
-            return 25.0, -0.9                            # raw: + = left on this robot
+            return 25.0, -0.9                            # raw, before IMU_YAW_SIGN
     imu_mod = types.ModuleType("src.peripherals.imu")
     imu_mod.IMUReader = RawIMU
     monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
@@ -170,7 +171,7 @@ def test_the_imu_is_read_through_the_sensing_hub_with_yaw_flipped(monkeypatch):
     sample, batch = sensors.read()
     sensors.stop()
     assert batch.imu_count > 0
-    assert (sample.yaw_rate_dps, sample.lateral_accel_mps2) == (-25.0, -0.9)
+    assert (sample.yaw_rate_dps, sample.lateral_accel_mps2) == (IMU_YAW_SIGN * 25.0, -0.9)
     assert sample.left_wheel_cps is None                 # no encoders asked for
 
 

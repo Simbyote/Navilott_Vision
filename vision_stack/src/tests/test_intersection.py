@@ -3,14 +3,16 @@ test_intersection.py  --  src/navigation/intersection.py
 
 The intersection rule against a real tracker and lane keeper: it drives
 straight from the moment the line leaves the view, steers against the
-heading turned (net of the gyro bias), ends on both boundaries for
-TWO_BOUNDARY_FRAMES after the line is reached or after MAX_CROSS_MS of
-driving; held frames count toward neither; reset.
+heading turned (net of the gyro bias), ends after the line is reached on
+both boundaries for TWO_BOUNDARY_FRAMES, at least one for
+ONE_BOUNDARY_FRAMES, or MAX_CROSS_MS of driving; held frames count toward
+none of them; active; reset.
 """
 import pytest
 
 from src.navigation.intersection import (
-    MAX_CROSS_MS, MAX_DT_MS, REASON_CROSSING, SOURCE_HEADING_HOLD, TWO_BOUNDARY_FRAMES, IntersectionRule,
+    MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING, SOURCE_HEADING_HOLD, TWO_BOUNDARY_FRAMES,
+    IntersectionRule,
 )
 from src.navigation.lane_keeping import BASE_SPEED, KP_HEADING, LaneKeepingNavigator
 from src.navigation.navigation_contract import Command
@@ -42,7 +44,7 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (3, 4000, 500)
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (3, 6, 3000, 500)
 
 
 @pytest.mark.software
@@ -89,8 +91,8 @@ def test_both_boundaries_before_the_line_is_reached_do_not_end_it():
 
 @pytest.mark.software
 def test_both_boundaries_for_three_frames_after_the_line_end_it():
-    after = [{"lane_mode": "right_only"}] * (REACHED - LOST + 5)
-    after += [{"lane_mode": "two_boundary"}, {"lane_mode": "right_only"}]           # one stray frame
+    after = [{"lane_mode": "none"}] * (REACHED - LOST + 5)
+    after += [{"lane_mode": "two_boundary"}, {"lane_mode": "none"}]                 # one stray frame
     after += [{"lane_mode": "two_boundary"}] * TWO_BOUNDARY_FRAMES + [{"lane_mode": "two_boundary"}] * 3
     _, out = drive(after)
     end = LOST + (REACHED - LOST + 5) + 2 + TWO_BOUNDARY_FRAMES - 1
@@ -98,8 +100,51 @@ def test_both_boundaries_for_three_frames_after_the_line_end_it():
 
 
 @pytest.mark.software
+@pytest.mark.parametrize("mode", ["right_only", "left_only"])
+def test_one_boundary_for_one_boundary_frames_after_the_line_ends_it(mode):
+    after = [{"lane_mode": "none"}] * (REACHED - LOST + 5)
+    after += [{"lane_mode": mode}] * (ONE_BOUNDARY_FRAMES - 1) + [{"lane_mode": "none"}]   # one short of it
+    after += [{"lane_mode": mode}] * (ONE_BOUNDARY_FRAMES + 3)
+    _, out = drive(after)
+    end = LOST + (REACHED - LOST + 5) + ONE_BOUNDARY_FRAMES + ONE_BOUNDARY_FRAMES - 1
+    assert active(out)[-1] == end - 1 and out[end] == (None, {})
+
+
+@pytest.mark.software
+def test_one_and_two_boundary_frames_count_together_toward_one_boundary_frames():
+    mixed = [{"lane_mode": m} for m in ("right_only", "two_boundary", "left_only")] * 2
+    after = [{"lane_mode": "none"}] * (REACHED - LOST + 5) + mixed + [{"lane_mode": "none"}] * 5
+    _, out = drive(after)
+    end = LOST + (REACHED - LOST + 5) + ONE_BOUNDARY_FRAMES - 1
+    assert active(out)[-1] == end - 1 and out[end] == (None, {})
+
+
+@pytest.mark.software
+def test_one_boundary_before_the_line_is_reached_does_not_end_it():
+    _, out = drive([{"lane_mode": "right_only"}] * (REACHED - LOST + 10))
+    assert active(out)[:REACHED - LOST + 1] == list(range(LOST, REACHED + 1))
+
+
+@pytest.mark.software
+def test_active_is_true_from_the_line_leaving_until_the_crossing_ends():
+    tracker = StopLineTracker()
+    rule = IntersectionRule(tracker, LaneKeepingNavigator())
+    seen = []
+    seq = ([{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "none"} for r in LINE]
+           + [{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "two_boundary"}] * 5)
+    for i, fields in enumerate(seq):
+        p = packet(frame_id=i, timestamp_ms=i * MS, **fields)
+        tracker.update(p)
+        rule.update(p)
+        seen.append(rule.active)
+    assert seen[:LOST] == [False] * LOST and all(seen[LOST:REACHED + 1]) and not seen[-1]
+    rule.reset()
+    assert not rule.active
+
+
+@pytest.mark.software
 def test_it_gives_up_after_max_cross_ms_of_driving():
-    after = [{"lane_mode": "right_only"}] * (REACHED - LOST + MAX_CROSS_MS // MS + 10)
+    after = [{"lane_mode": "none"}] * (REACHED - LOST + MAX_CROSS_MS // MS + 10)
     _, out = drive(after)
     end = REACHED + MAX_CROSS_MS // MS - 1          # the frame MAX_CROSS_MS of driving adds up on
     assert active(out)[-1] == end - 1 and out[end] == (None, {})
@@ -108,7 +153,7 @@ def test_it_gives_up_after_max_cross_ms_of_driving():
 @pytest.mark.software
 def test_held_frames_count_toward_neither_ending():
     hold = set(range(REACHED, REACHED + 60))                         # 3 s held at the line
-    after = [{"lane_mode": "two_boundary"}] * (REACHED - LOST + 60) + [{"lane_mode": "right_only"}] * 100
+    after = [{"lane_mode": "two_boundary"}] * (REACHED - LOST + 60) + [{"lane_mode": "none"}] * 100
     _, out = drive(after, held=hold)
     assert active(out)[-1] == REACHED + 60 + MAX_CROSS_MS // MS - 2      # the timeout, not the boundaries
 
