@@ -161,7 +161,9 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 
 **Contract checks:** `Navigation` passes every check. Lane keeping on its own doesn't pass the stale one; slowing and ending are the end-of-course rule's job.
 
-`src/scripts/lane_keeping_demo.py` drives the motors from scripted packets through `Navigation`: lane keeping, then a stop-sign intersection (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and `Navigation`, and is the step's harness before it goes into `pipeline.py`.
+`src/scripts/lane_keeping_demo.py` drives the motors from scripted packets through `Navigation`: lane keeping, then a stop-sign intersection (wheels off the ground): `python3 -m src.scripts.lane_keeping_demo`. `navigation_linker` (`guides/navigation_linker.md`) drives the robot with the whole chain and `Navigation`; it is the debug twin of the Navigation step.
+
+**In the pipeline:** `src/pipeline.py` runs Navigation as its last stage, `Pipeline.navigate(packet)`: `Navigation.update()`, then `enforce()` (`navigation_contract.py`), which returns `BRAKE` (and the reasons, on `Pipeline.last_problems`) for a command that breaks the contract. `navigation_linker` drives through the same `enforce()`. `Pipeline.step()` is frame in, `Command` out; driving the motors with it is the run loop's job. The route comes in as `Pipeline(route=...)`, and the intersection's gyro bias is Phase 3's (`Phase3Config.gyro_bias_dps`). `test_pipeline` holds the pipeline's commands to `navigation_linker`'s motor calls frame by frame over `course_sequence()`, a synthetic course in which every rule decides some frame.
 
 ---
 

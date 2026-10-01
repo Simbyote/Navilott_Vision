@@ -12,7 +12,9 @@ from pathlib import Path
 import pytest
 
 from src.navigation.navigation import Navigation
-from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation.navigation_contract import (
+    BRAKE, STALL_DUTY, Command, Navigator, command_problems, enforce,
+)
 from src.tests.navigation_checks import (
     APPROACH_ROWS, CASE_FRAMES, FRAME_MS, WARMUP_FRAMES, check_commands, check_crosses_a_green_line,
     check_goes_when_the_light_turns_green, check_ignores_a_red_light_without_a_line,
@@ -361,3 +363,16 @@ def test_an_intersection_is_the_line_coming_down_the_image_then_the_time_after()
     assert all(c["stop_line_detected"] and c["stop_sign_detected"] for c in case[:len(APPROACH_ROWS)])
     assert case[-1] == {"drive_state": "stop"} and case[-1] is not case[-2]
     assert APPROACH_ROWS[-1] < APPROACH_ROWS[0]           # coming nearer
+
+
+
+@pytest.mark.software
+def test_enforce_passes_a_valid_command_through():
+    for cmd in (Command(0.4, 0.4), Command(-0.5, 0.5), Command(0.0, 0.3), BRAKE):
+        assert enforce(cmd) == (cmd, [])
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("cmd", [Command(0.1, 0.4), Command(1.5, 0.4), Command(0.4, 0.4, brake=True), "go"])
+def test_enforce_brakes_a_command_that_breaks_the_contract_with_its_problems(cmd):
+    assert enforce(cmd) == (BRAKE, command_problems(cmd)) and command_problems(cmd)

@@ -14,6 +14,9 @@ Main package:
     Command: one frame's motor instruction, per-wheel duty or a short brake.
     Navigator: the interface a Navigation implementation provides:
     update(EstimationPacket) -> Command once per frame, and reset().
+    command_problems(): every way a Command breaks the rules.
+    enforce(): the command to drive: the navigator's, or BRAKE if it breaks
+        them. The pipeline and navigation_linker both drive through it.
 
 Flow:
     Once per camera frame (~20 FPS on the Pi): the pipeline hands the frame's
@@ -86,3 +89,17 @@ def command_problems(cmd: Command) -> list[str]:
     if cmd.brake and (cmd.left, cmd.right) != (0.0, 0.0):
         problems.append(f"brake with duty ({cmd.left}, {cmd.right}); a brake carries none")
     return problems
+
+
+def enforce(cmd: Command) -> tuple[Command, list[str]]:
+    """
+    The command to drive, whatever the navigator returned.
+
+    Inputs:
+        cmd: The navigator's answer for this frame.
+    Outputs:
+        (cmd, []) when it's valid; (BRAKE, its problems) when it breaks the
+        contract, so a navigator bug stops the robot instead of driving it.
+    """
+    problems = command_problems(cmd)
+    return (BRAKE, problems) if problems else (cmd, [])

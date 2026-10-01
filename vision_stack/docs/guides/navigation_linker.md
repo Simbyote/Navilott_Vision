@@ -2,7 +2,7 @@
 
 > Drive the robot with the whole chain: camera → perception → estimation → navigation → motors, recorded and rendered afterwards.
 
-`navigation_linker` is the integration test of the Navigation step before it goes into `pipeline.py`. Every frame runs Phase 2 and the traced Phase 3, hands the packet to the navigation subsystem (`Navigation` in `src/navigation/navigation.py`: the stop sign, red light and intersection rules over lane keeping), checks the command against the contract, and drives the motors with it. Nothing is drawn while the robot moves. The frames are saved in the background and `nav.avi` is made after the run, so what you measure is the real control loop.
+`navigation_linker` is the debug twin of the main pipeline's Navigation step (`Pipeline.navigate()` in `src/pipeline.py`); `test_pipeline` holds the two to the same commands frame by frame. Every frame runs Phase 2 and the traced Phase 3, hands the packet to the navigation subsystem (`Navigation` in `src/navigation/navigation.py`: the stop sign, red light and intersection rules over lane keeping), checks the command against the contract (`enforce()`, as the pipeline does), and drives the motors with it. Nothing is drawn while the robot moves. The frames are saved in the background and `nav.avi` is made after the run, so what you measure is the real control loop.
 
 **Code:** `src/navigation_linker.py` · **Video:** `src/debugger/debug_navigation.py` · **Navigator:** `src/navigation/lane_keeping.py` · **Contract:** `vision_stack/navigation_contract.md` · **Tests:** `src/tests/test_navigation_linker.py`, `test_debug_navigation.py`
 

@@ -376,6 +376,51 @@ def drive_sequence() -> list[SequenceFrame]:
     return out
 
 
+def course_sequence() -> list[SequenceFrame]:
+    """
+    A short course that moves every navigation rule: lane keeping, a stop
+    line coming down the view with a stop sign and a red light, leaving the
+    view near the bottom so the robot reaches it; the crossing to it; the
+    stop there (the sign's stop and hold, then the light's wait while it's
+    red); the light turning green; the lane running out at the mat's edge,
+    which ends the run. The wheels read stopped once the line is reached, so
+    the stop sign settles. SCENE_CONFIG doesn't see the synthetic sign (its
+    gates are the robot's) and ALT_CONFIG does, so between them every rule
+    decides some frame.
+
+    Outputs:
+        SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart.
+        Same content on every call.
+    """
+    moving = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=300.0, right_wheel_cps=300.0)
+    turning = SensorSample(yaw_rate_dps=20.0, lateral_accel_mps2=0.1, left_wheel_cps=300.0, right_wheel_cps=250.0)
+    stopped = SensorSample(yaw_rate_dps=0.0, lateral_accel_mps2=0.0, left_wheel_cps=0.0, right_wheel_cps=0.0)
+    red, green = dict(lights=(RED_LAMP,), lamp_radius=16), dict(lights=(GREEN_LAMP,), lamp_radius=16)
+    segments = [
+        # (segment, frame, count, sensors)
+        ("cruise", scene(), 6, moving),
+        ("drift", scene(marks=(170, 310)), 4, moving),
+        # The line coming down the view, leaving it near the bottom
+        ("line_far", scene(stop_line=(120, 320, 10), sign=True, **red), 3, moving),
+        ("line_mid", scene(stop_line=(120, 320, 30), sign=True, **red), 3, moving),
+        ("line_near", scene(stop_line=(120, 320, 60), sign=True, **red), 3, moving),
+        ("line_bottom", scene(stop_line=(120, 320, 70), sign=True, **red), 3, moving),
+        # Crossing to the line (STOP_DELAY_MS), then stopped there: the
+        # sign's hold, then waiting on the red light
+        ("crossing", scene(**red), 30, turning),
+        ("red", scene(**red), 60, stopped),
+        ("green", scene(**green), 20, moving),
+        # The mat's edge: the lane runs out and stays out
+        ("edge", scene(marks=()), 50, moving),
+    ]
+    out, fid, ts = [], 100, 10_000
+    for segment, frame, count, sensors in segments:
+        for _ in range(count):
+            out.append(SequenceFrame(frame, fid, ts, sensors, segment))
+            fid, ts = fid + 1, ts + FRAME_MS
+    return out
+
+
 # =============================================================================
 # Gate sweep
 # =============================================================================

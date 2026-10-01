@@ -51,7 +51,7 @@ from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Disp
 from src.estimation.estimation import Phase3Config
 from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
 from src.navigation.end_of_course import OUTCOME_EARLY
-from src.navigation.navigation import BRAKE, Navigation, command_problems
+from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
@@ -265,11 +265,9 @@ def run(
             pkt = res.packet
 
             n0 = clock()
-            cmd = navigator.update(pkt)
+            cmd, problems = enforce(navigator.update(pkt))     # as the pipeline: a bad command brakes
             rec = dict(getattr(navigator, "record", {}) or {})
-            problems = command_problems(cmd)
-            if problems:                            # the harness enforces the contract, whatever the navigator
-                cmd = BRAKE
+            if problems:
                 rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
             nav_ms = (clock() - n0) * 1000.0
             if cmd.brake:

@@ -118,7 +118,7 @@ def test_a_given_lane_keeper_and_tracker_are_shared_with_the_rules():
 @pytest.mark.software
 def test_it_is_a_navigator_and_re_exports_the_contract():
     assert isinstance(Navigation(), Navigator)
-    for name in ("BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems"):
+    for name in ("BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce"):
         assert getattr(navigation, name) is getattr(contract, name)
 
 

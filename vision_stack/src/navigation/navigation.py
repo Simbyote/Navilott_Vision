@@ -36,13 +36,13 @@ from src.estimation.estimation import EstimationPacket
 from src.navigation.end_of_course import EndOfCourseRule
 from src.navigation.intersection import IntersectionRule
 from src.navigation.lane_keeping import LaneKeepingNavigator
-from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
+from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems, enforce
 from src.navigation.route import Route, RouteProgress
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 
-__all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "Navigation",
+__all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
            "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
            "RULE_LANE_KEEPING"]
 
