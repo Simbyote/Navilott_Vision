@@ -71,11 +71,7 @@ flowchart LR
 **What each handoff carries:**
 
 | Handoff | Type | Defined in | Key fields |
-<<<<<<< HEAD
-|---|---|---|---|
-=======
 | --- | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | Camera → Phase 2 | `FrameData` | `capture/camera.py` | BGR frame, `frame_id`, `timestamp_ms` (monotonic) |
 | Phase 2 → Phase 3 | `Phase2Output` | `perception/phase2_out.py` | `detections`, `lane_offset_results`, `stop_line_results`, frame stamp |
 | Sensors → Phase 3 | `SensorSample` | `estimation/estimation.py` | `yaw_rate_dps`, `lateral_accel_mps2`, `left/right_wheel_cps` |
@@ -109,11 +105,7 @@ flowchart LR
 ```
 
 | Linker | Runs | Motors | What a good run proves | Output |
-<<<<<<< HEAD
-|---|---|---|---|---|
-=======
 | --- | --- | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | `phase2_linker` | Camera or replay → Phase 2 | No | The ROIs sit right; lane boundaries, stop lines, signs and lights are detected; the lane offset and stop-line distance make sense | Live view, per-stage overlays |
 | `phase3_linker` | → Phase 3 (`TracedPhase3Processor`) | No | Smoothing, the dropout hold, the votes and the heading integrator behave over time; sensors arrive (`--imu`, `--encoders`) | `p3.csv`, `summary.txt`, Phase 3 video |
 | `maneuver_linker` | Scripted drive (`maneuver.py`); vision only records | Yes | The gyro bias at rest, the IMU's yaw sign, straight legs on the encoders, a 180° turn on the gyro: the hardware the navigation relies on | `maneuver.csv`, `report.json`, `maneuver.avi` |
@@ -245,11 +237,7 @@ Lane offset and stop-line distance read the geometry result directly, not fusion
 Fractions of the frame (`roi_crop.py`), in pixels at 480×270:
 
 | ROI | From | x | y | Why there |
-<<<<<<< HEAD
-|---|---|---|---|---|
-=======
 | --- | --- | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | Lane | gray | 0.05–0.95 → 24–456 | 0.70–1.00 → 189–270 | The floor just ahead: lane lines and stop lines |
 | Traffic | BGR | 0.25–0.65 → 120–312 | 0.00–0.40 → 0–108 | Top center, where a light sits when the robot is square to an intersection |
 | Sign | gray + BGR | 0.55–1.00 → 264–480 | 0.20–0.75 → 54–202 | Upper right: signs are posted right of the lane |
@@ -461,11 +449,7 @@ The stop sign, traffic light and intersection rules all read this one tracker: `
 ### The rules
 
 | Rule | Speaks when | Says |
-<<<<<<< HEAD
-|---|---|---|
-=======
 | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | `StopSignRule` | At `reached`, if a stop sign was seen in the last 5 s | BRAKE until the wheels read stopped (< 20 cps), hold 2 s, release |
 | `TrafficLightRule` | At `reached`, if the voted state is `stop` (red) | BRAKE until the light isn't red. Green and yellow drive on |
 | `IntersectionRule` | From `CROSSING` until the lane is back | Heading hold, the route's turn, then heading hold (below) |
@@ -486,11 +470,7 @@ stateDiagram-v2
 ```
 
 | Stage | Command | Ends |
-<<<<<<< HEAD
-|---|---|---|
-=======
 | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | `to_line` | Base duty, steering only against the heading turned (gyro) | At the line, 1.5 s after it left the view |
 | `turn` | Left `(0.36, 0.63)`, a wide arc; right `(0.45, 0.0)`, a pivot on the right wheel | 85° on the gyro, or the time limit |
 | `exit` | Heading hold on the heading the turn ended on | The lane is back; lane keeping takes over |
@@ -533,11 +513,7 @@ flowchart TB
 Wrapping a second decision-maker around the first raised problems that weren't about the turns themselves:
 
 | Problem | Why it mattered |
-<<<<<<< HEAD
-|---|---|
-=======
 | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | Two controllers deciding the same frames | While the sequence drove, `Navigation` wasn't called, so its stop-line tracker, stop-sign timers and route didn't advance with the robot |
 | It started on any stop line seen | It checked `stop_line_detected`, so it fired when a line came into view, not when the robot reached it |
 | It read packet fields that don't exist | `pkt.stop_line_tracker` and `pkt.reached_line` aren't in `EstimationPacket`; the defaults made "at the line" true immediately |
@@ -608,11 +584,7 @@ flowchart TB
 The rules this follows, and what each one buys:
 
 | Rule | What it buys |
-<<<<<<< HEAD
-|---|---|
-=======
 | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | One file per decision | A stop-sign bug is in `stop_sign.py`; a turn bug in `intersection.py` |
 | One place for the order (`navigation.py`, `pipeline.py`, `Phase3Processor.process`) | Priority is readable in one screen, and can't drift between copies |
 | Logic never imports hardware | Rules run on a laptop and in CI; `test_navigation_contract` fails if one imports `pigpio` |
@@ -691,11 +663,7 @@ flowchart TB
 ### Test tiers (`testing_procedure.md`)
 
 | Tier | When | Command |
-<<<<<<< HEAD
-|---|---|---|
-=======
 | --- | --- | --- |
->>>>>>> 1de5b8b (Add comprehensive documentation for system maps and pipeline architecture)
 | 0. Software | After every code change | `pytest` (on the Pi: `--ignore=src/tests/test_calibration.py`) |
 | 1. Health | Start of every Pi session | `pytest --hardware src/tests/test_system_monitor.py src/tests/test_capture.py` |
 | 2. Characterization | After changing tuning or a stage | `pytest --hardware --replay=src/tests/data/frames`, then the analysis tools |
