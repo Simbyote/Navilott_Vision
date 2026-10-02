@@ -121,7 +121,7 @@ flowchart LR
 | `intersection_linker` | `navigation_linker` with a one-step route | Yes (`--camera`) | Each maneuver (straight, left, right) crosses one intersection and gets the lane back: judged PASS or CHECK | Per-maneuver folders, `summary.txt`, `report.json` |
 | `main` | `Pipeline.step()` | Yes | The course | The time on the display |
 
-How they're built on each other. No linker copies another's stage order: each calls the one below it.
+How they're built on each other. No linker copies another's stage order: each calls the one below it. Each linker's own code, line by line, is in `linker_code_maps.md`.
 
 ```mermaid
 flowchart TB
