@@ -244,6 +244,21 @@ def test_a_navigator_without_a_record_is_logged_as_drive_or_brake(tmp_path):
     assert [r["reason"] for r in rows(out / "nav.csv")][:4] == ["brake", "drive", "brake", "drive"]
 
 
+@pytest.mark.software
+def test_the_intersection_stage_and_maneuver_are_logged(tmp_path):
+    class Turning:
+        record = {"rule": "intersection", "reason": "turning", "stage": "turn", "maneuver": "left", "step": "1/1 left",
+                  "heading_deg": -42.5, "turn_end": "gyro target"}
+        def update(self, packet):
+            return Command(0.36, 0.63)
+        def reset(self):
+            pass
+    _, out, *_ = go(tmp_path, nav=Turning())
+    row = rows(out / "nav.csv")[0]
+    assert (row["stage"], row["maneuver"], row["step"], row["reason"]) == ("turn", "left", "1/1 left", "turning")
+    assert (row["heading_deg"], row["turn_end"]) == ("-42.5", "gyro target")
+
+
 # =============================================================================
 # How a run ends
 # =============================================================================

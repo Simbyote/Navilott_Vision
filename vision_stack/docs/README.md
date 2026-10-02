@@ -20,6 +20,8 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Check what estimation decides | `guides/phase3_linker.md` |
 | Run a drive trial: motors, encoders and IMU with vision recording | `guides/maneuver_linker.md` |
 | Drive the robot with the whole chain and the navigator | `guides/navigation_linker.md` |
+| Prove the intersection sequences (straight, left, right) | `guides/intersection_linker.md` |
+| Understand how navigation fits together (where a turn lives) | `guides/navigation_walkthrough.md` |
 | Run the course (start button, timed, nothing recorded) | `guides/production_run.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
 | Give the stop line a distance in cm (tape marks, no checkerboard) | `guides/calibrate_stop_line.md` |
@@ -45,6 +47,8 @@ docs/
         phase3_linker.md        checking estimation, with video
         maneuver_linker.md      drive trial: straight legs and a 180° turn on encoders and IMU
         navigation_linker.md    the whole chain driving: camera to navigator to motors
+        intersection_linker.md  one intersection per run, straight, left or right, judged
+        navigation_walkthrough.md  how a frame becomes a motor command; where to change things
         production_run.md       the course run: python3 -m src.main
         pytest.md               running the test suite
         test_calibration.md     verifying a calibration

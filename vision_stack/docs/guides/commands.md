@@ -126,6 +126,20 @@ Navigation bench demo (wheels off the ground; scripted packets, no camera; lane 
 
 ---
 
+## Intersections — [intersection_linker.md](intersection_linker.md)
+
+One intersection per run with the whole chain driving; each judged PASS or CHECK.
+
+```
+python3 -m src.intersection_linker left --camera       # one left turn at a real stop line
+python3 -m src.intersection_linker all --camera        # straight, left, right in turn
+python3 -m src.intersection_linker straight --camera --no-motors   # bench: nothing moves
+```
+
+Output: `runs/intersection_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, one run folder per maneuver)
+
+---
+
 ## Navigation — [navigation_linker.md](navigation_linker.md)
 
 The whole chain drives the robot with `--camera`; replays never move it. `sudo pigpiod` once per boot.
@@ -147,7 +161,7 @@ The course plan is `route.json` in `vision_stack/`, read at startup; edit it bet
 {"maneuvers": ["left", "straight", "right"], "finish": "edge"}
 ```
 
-`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right are driven straight until the turn logic lands.
+`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right turns run inside the intersection rule; prove each with `intersection_linker` below.
 
 ---
 

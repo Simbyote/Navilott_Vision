@@ -28,7 +28,7 @@ Flow:
     2. Per frame: read the camera and sensors, run the vision chain, ask the
        navigator, check the command, drive the motors, log, queue the frame.
     3. On the navigator finishing (end of course), the run-time cap, the
-       source ending, Ctrl-C or an error: stop the motors first, flush the
+       source ending, the caller's stop_when, Ctrl-C or an error: stop the motors first, flush the
        recorder, write the summary.
     4. Render nav.avi from the recording, and play it if there's a display.
 """
@@ -69,9 +69,9 @@ END_EARLY = "ended early (lane lost before the route was done)"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "step", "maneuver", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
-              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "event")
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -188,6 +188,7 @@ def run(
         render: bool = True,
         display: bool = False,
         scale: int = 1,
+        stop_when=None,
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
@@ -209,6 +210,9 @@ def run(
         motors_on: Reported in the summary; False for a dry run.
         render: Render nav.avi after the run.
         display: Play the rendered video in a window afterwards.
+        stop_when: Called with each frame's nav.csv row once the motors have
+            its command; a non-empty string it returns ends the run, as
+            ended_by (intersection_linker ends a sequence this way).
 
     Outputs:
         The findings, also written to report.json.
@@ -283,14 +287,16 @@ def run(
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
                  "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
-                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
+                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "",
+                 "turn_end": rec.get("turn_end") or "", "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
                  "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
-                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event}
+                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "event": event}
             if event:
                 print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
             stats.update(res)
@@ -300,6 +306,10 @@ def run(
             recorder.put(fid, frame, {**chain_record(res), "nav": n})
             if system is not None:
                 system.update_display(arrived - t0)
+            why = stop_when(n) if stop_when is not None else None
+            if why:
+                ended_by = why
+                break
             if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
                 ended_by = END_EARLY if getattr(navigator, "outcome", None) == OUTCOME_EARLY else END_COURSE
                 break
