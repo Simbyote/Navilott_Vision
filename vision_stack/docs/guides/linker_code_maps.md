@@ -27,7 +27,7 @@ Line numbers are as of 2026-10-02 (`main` after PR #21). If they drift, search f
 ## The roles every linker uses
 
 | Role | Must provide | Robot (`--camera`) | Replay (`--video` / `--frames`) | Tests |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `source` | `.read()` → `(frame, frame_id, timestamp_ms)`, `(None, None, None)` on a dropped frame, `None` at the end; `.close()`; `.fps` | `live_view.CameraFrameSource` over `capture.camera.CameraSource` | `VideoFrameSource` / `DirectoryFrameSource` | a class over synthetic scenes |
 | `sensors` | `.read()` → `(SensorSample, SensorBatch)`; `.sample()`; `.stop()` | `sensing.Sensors(imu=True, encoders=True)` | `None` | a fake returning set samples |
 | `motor` | `.drive(left, right)`, `.brake()`, `.stop()` | `drive.MotorController(pigpio.pi())` | `linker_io.NoMotors` | a fake that logs calls |
@@ -148,7 +148,7 @@ sequenceDiagram
 ```
 
 | Variable | What it is |
-|---|---|
+| --- | --- |
 | `process` | A closure: `config` and `trace` baked in, so `live_view.run()` only passes `(frame, id, ts)` |
 | `chain` | `ChainResult`: `.pre`, `.roi`, `.geometry`, `.offset`, `.stop_line`, `.fusion`, `.phase2`, plus each stage's debug dict and `timings_ms` |
 | `views` | `debug_lane.LaneView` always, plus `--views stop,traffic,stopline,...`: each turns a `ChainResult` into a picture and a CSV row |
@@ -200,7 +200,7 @@ sequenceDiagram
 ```
 
 | Variable | What it is |
-|---|---|
+| --- | --- |
 | `processor` | `TracedPhase3Processor`, built on the first frame (the cm scale needs the lane ROI width from the frame size). Kept for the run: it holds the EMA, votes and hold counters |
 | `res` | `Phase3Result`: `.chain` (Phase 2), `.packet` (`EstimationPacket`), `.p3_debug` (Phase 3's log), `.timings_ms` |
 | `events` | `EventTracker`: prints only *changes* (lane status, drive state, stop sign, stop line) |
@@ -255,7 +255,7 @@ sequenceDiagram
 ```
 
 | Variable | What it is |
-|---|---|
+| --- | --- |
 | `machine` | `Maneuver`: the trial's state machine (SETTLE, PULSE_LEFT / RIGHT, FORWARD, TURN, ...). `.step(tick)` → `Command`; `.record` is this frame's row; `.done` ends the loop |
 | `tick` | `Tick` (`maneuver.py:91`): one frame's sensors in the trial's terms; `left_count` / `right_count` come from `batch` (cumulative), cps and yaw from `sample` |
 | `resume` | `Resume`: `--hold`'s "continue" (button or Enter), polled without blocking |
@@ -316,7 +316,7 @@ sequenceDiagram
 ```
 
 | Variable | What it is |
-|---|---|
+| --- | --- |
 | `processor` | As in `phase3_linker`: `TracedPhase3Processor`, built on frame 1 |
 | `res`, `pkt` | `Phase3Result`, and its `EstimationPacket` |
 | `cmd`, `problems` | `enforce()`'s result: the command to drive, and why it was braked if it broke the contract |
@@ -380,7 +380,7 @@ flowchart TB
 ## Side by side
 
 | | phase2_linker | phase3_linker | maneuver_linker | navigation_linker | intersection_linker |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | Loop lives in | `live_view.run()` | `run()` | `run()` | `run()` | `navigation_linker.run()` |
 | Opens hardware with | `live_view.cli()` | its own `cli()` | `open_rig()` | `open_rig()` | `open_rig()` per sequence |
 | Sensors | none | `Sensors(--imu, --encoders)` | `Sensors(imu, encoders)` | `Sensors(imu, encoders)` with `--camera` | same |
