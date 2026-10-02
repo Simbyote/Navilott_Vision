@@ -4,7 +4,7 @@
 
 `intersection_linker` proves the intersection sequences on the mat before a full course. Each sequence is a `navigation_linker` run with a one-step route. The robot drives exactly as it would in a course run: camera → Phase 2 → Phase 3 → `Navigation` → motors. It approaches a real stop line, crosses or turns, and the run ends once lane keeping has held the lane for 1 s afterwards. Everything is recorded, and the video is rendered after each run.
 
-**Code:** `src/intersection_linker.py` · **The sequences:** `src/navigation/intersection.py` · **Tests:** `src/tests/test_intersection_linker.py`, `test_intersection.py`
+**Code:** `src/intersection_linker.py` · **Rig:** `src/linker_io.py` · **The sequences:** `src/navigation/intersection.py` · **Tests:** `src/tests/test_intersection_linker.py`, `test_intersection.py`
 
 ---
 

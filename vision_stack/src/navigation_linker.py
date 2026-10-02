@@ -44,18 +44,16 @@ from dataclasses import replace
 
 import numpy as np
 
-from src.capture.camera import CaptureError
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
-from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
+from src.debugger.live_view import Display
 from src.estimation.estimation import Phase3Config
-from src.linker_io import FrameRecorder, NoMotors, chain_record
+from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.peripherals.sensing import Sensors
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 
 # The run's backstop: brake and end after this long, whatever the navigator
@@ -432,29 +430,12 @@ def cli(argv: list[str] | None = None) -> int:
     out_dir = args.out or str(RUNS_DIR / ("nav_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
-    source = sensors = motor = system = None
     try:
-        if args.camera:
-            source = CameraFrameSource(args.width, args.height, args.fps or FPS)
-            sensors = Sensors(imu=True, encoders=True)
-        elif args.video:
-            source = VideoFrameSource(args.video, args.fps)
-        else:
-            source = DirectoryFrameSource(args.frames, args.fps or FPS)
-        if motors_on:
-            import pigpio
-            from src.peripherals.drive import MotorController
-            motor = MotorController(pigpio.pi())
-        else:
-            motor = NoMotors()
-        if args.camera and not args.no_button:
-            from src.peripherals.system import System
-            system = System()
-    except (CaptureError, OSError, RuntimeError, ImportError) as exc:
+        source, sensors, motor, system = open_rig(args.camera, args.video, args.frames, args.fps,
+                                                  (args.width, args.height), motors=not args.no_motors,
+                                                  button=not args.no_button)
+    except OPEN_ERRORS as exc:
         print(f"source / hardware error: {exc!r}")
-        for thing in (motor, sensors, source):
-            if thing is not None:
-                (thing.stop if hasattr(thing, "stop") else thing.close)()
         return 2
 
     print(f"source   {source.label} @ {source.fps:.0f} FPS")
@@ -463,9 +444,7 @@ def cli(argv: list[str] | None = None) -> int:
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}")
     print("\n".join(route.describe()))
     if args.camera and system is None:
-        for n in (3, 2, 1):
-            print(f"  starting in {n}")
-            time.sleep(1.0)
+        countdown()
     elif system is not None:
         print("press the start button")
     run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,

@@ -37,17 +37,14 @@ import sys
 import time
 from dataclasses import replace
 
-from src.capture.camera import CaptureError
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
-from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
 from src.estimation.estimation import LANE_VISION, Phase3Config
-from src.linker_io import NoMotors
+from src.linker_io import OPEN_ERRORS, open_rig
 from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO
 from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navigation
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
 from src.navigation_linker import run as navigation_run
-from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
-from src.peripherals.sensing import Sensors
+from src.params import RUNS_DIR
 
 # Lane keeping on vision this long after the crossing ends the sequence:
 # the robot found its lane again and kept it
@@ -189,34 +186,6 @@ def run_sequence(maneuver: str, source, sensors, motor, config: PipelineConfig =
     return findings
 
 
-def _open(args):
-    """The source, sensors, motor and start button for one sequence, as navigation_linker opens them."""
-    source = sensors = motor = system = None
-    try:
-        if args.camera:
-            source = CameraFrameSource(FRAME_W, FRAME_H, args.fps or FPS)
-            sensors = Sensors(imu=True, encoders=True)
-        elif args.video:
-            source = VideoFrameSource(args.video, args.fps)
-        else:
-            source = DirectoryFrameSource(args.frames, args.fps or FPS)
-        if args.camera and not args.no_motors:
-            import pigpio
-            from src.peripherals.drive import MotorController
-            motor = MotorController(pigpio.pi())
-        else:
-            motor = NoMotors()
-        if args.camera and not args.no_button:
-            from src.peripherals.system import System
-            system = System()
-    except (CaptureError, OSError, RuntimeError, ImportError):
-        for thing in (motor, sensors, source):
-            if thing is not None:
-                (thing.stop if hasattr(thing, "stop") else thing.close)()
-        raise
-    return source, sensors, motor, system
-
-
 def cli(argv: list[str] | None = None) -> int:
     """
     Command line: python3 -m src.intersection_linker straight|left|right|all --camera
@@ -261,8 +230,9 @@ def cli(argv: list[str] | None = None) -> int:
         for m in maneuvers:
             print(f"\n{m.upper()}: robot in its lane, pointing along it, the stop line ahead in view.")
             try:
-                source, sensors, motor, system = _open(args)
-            except (CaptureError, OSError, RuntimeError, ImportError) as exc:
+                source, sensors, motor, system = open_rig(args.camera, args.video, args.frames, args.fps,
+                                                          motors=not args.no_motors, button=not args.no_button)
+            except OPEN_ERRORS as exc:
                 print(f"source / hardware error: {exc!r}")
                 return 2
             if args.camera and system is None:

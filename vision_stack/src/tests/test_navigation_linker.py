@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import cv2
 import pytest
 
+import src.linker_io as lio
 import src.navigation_linker as nl
 from src.navigation.stop_line import STOP_DELAY_MS
 from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
@@ -382,8 +383,8 @@ def cli_env(monkeypatch, tmp_path):
     got = {}
     fake_source = lambda *a, **k: SimpleNamespace(label="fake", fps=20, close=lambda: None)
     for name in ("CameraFrameSource", "VideoFrameSource", "DirectoryFrameSource"):
-        monkeypatch.setattr(nl, name, fake_source)
-    monkeypatch.setattr(nl, "Sensors", lambda **k: SimpleNamespace(kind="sensors", stop=lambda: None))
+        monkeypatch.setattr(lio, name, fake_source)
+    monkeypatch.setattr(lio, "Sensors", lambda **k: SimpleNamespace(kind="sensors", stop=lambda: None))
     drive = types.ModuleType("src.peripherals.drive")
     drive.MotorController = lambda pi: SimpleNamespace(kind="motor", stop=lambda: None)
     pigpio = types.ModuleType("pigpio")
@@ -416,7 +417,7 @@ def test_the_camera_drives_the_motors_with_sensors_and_the_button(cli_env):
 def test_no_motors_and_no_button_on_the_camera(cli_env):
     got, tmp = cli_env
     assert nl.cli(["--camera", "--no-motors", "--no-button", "--max-run-s", "7"]) == 0
-    assert isinstance(got["motor"], nl.NoMotors) and got["motors_on"] is False
+    assert isinstance(got["motor"], lio.NoMotors) and got["motors_on"] is False
     assert got["system"] is None and got["max_run_s"] == 7.0
 
 
@@ -425,7 +426,7 @@ def test_no_motors_and_no_button_on_the_camera(cli_env):
 def test_replays_never_drive_the_motors_or_open_sensors(cli_env, flag):
     got, tmp = cli_env
     assert nl.cli([flag, str(tmp), "--limit", "3"]) == 0
-    assert isinstance(got["motor"], nl.NoMotors) and got["motors_on"] is False
+    assert isinstance(got["motor"], lio.NoMotors) and got["motors_on"] is False
     assert got["sensors"] is None and got["system"] is None and got["limit"] == 3
 
 
@@ -443,7 +444,7 @@ def test_estimation_flags_reach_phase_3(cli_env):
 def test_a_source_that_wont_open_is_exit_2(monkeypatch, capsys):
     def broken(*a, **k):
         raise OSError("no such file")
-    monkeypatch.setattr(nl, "VideoFrameSource", broken)
+    monkeypatch.setattr(lio, "VideoFrameSource", broken)
     assert nl.cli(["--video", "missing.avi"]) == 2
     assert "no such file" in capsys.readouterr().out
 
@@ -512,7 +513,7 @@ def test_the_route_file_reaches_the_navigator(cli_env, tmp_path):
 @pytest.mark.software
 def test_a_bad_route_file_stops_before_anything_opens(monkeypatch, tmp_path, capsys):
     opened = []
-    monkeypatch.setattr(nl, "DirectoryFrameSource", lambda *a, **k: opened.append(1))
+    monkeypatch.setattr(lio, "DirectoryFrameSource", lambda *a, **k: opened.append(1))
     route = tmp_path / "r.json"
     route.write_text('{"maneuvers": ["lfet"]}')
     assert nl.cli(["--frames", str(tmp_path), "--route", str(route)]) == 2

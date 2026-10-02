@@ -1,14 +1,20 @@
 """
 test_linker_io.py  --  src/linker_io.py
 
-The background recorder's drop policy, its copy of the frame and the error
-it reports; the stand-in motors; and that a chain record carries no image,
-pickles, and redraws through debug_maneuver.as_result().
+open_rig() over faked hardware: what each source opens, the motors and the
+button only with the camera, everything released when one part won't
+open; the countdown; the background recorder's drop policy, its copy of
+the frame and the error it reports; the stand-in motors; and that a chain
+record carries no image, pickles, and redraws through
+debug_maneuver.as_result().
 
---software  Synthetic scenes and a temp folder. No camera, motors or GPIO.
+--software  Fakes, synthetic scenes and a temp folder. No camera, motors or GPIO.
 """
+import sys
 import threading
 import time
+import types
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -17,8 +23,104 @@ import pytest
 import src.linker_io as io
 from src.debugger.debug_maneuver import as_result, read_records
 from src.debugger.estimation_debug import TracedPhase3Processor
+from src.params import FPS, FRAME_H, FRAME_W
 from src.phase3_linker import run_phase3_chain
 from src.tests.scenes import SCENE_CONFIG, SCENES
+
+
+# =============================================================================
+# open_rig and countdown
+# =============================================================================
+
+def _part(log, kind, release):
+    """A fake device constructor: logs what it was opened with, and its stop() / close()."""
+    def make(*a):
+        log.append((kind, a))
+        return SimpleNamespace(kind=kind, args=a, **{release: lambda: log.append((kind, release))})
+    return make
+
+
+@pytest.fixture
+def rig(monkeypatch):
+    """Fake sources, sensors, pigpio, motors and button; returns the log of what opened and was released."""
+    log = []
+    for name, kind in (("CameraFrameSource", "camera"), ("VideoFrameSource", "video"),
+                       ("DirectoryFrameSource", "frames")):
+        monkeypatch.setattr(io, name, _part(log, kind, "close"))
+    sensors = _part(log, "sensors", "stop")
+    monkeypatch.setattr(io, "Sensors", lambda **k: sensors(k))
+    pigpio = types.ModuleType("pigpio")
+    pigpio.pi = lambda: "pi"
+    drive = types.ModuleType("src.peripherals.drive")
+    drive.MotorController = _part(log, "motor", "stop")
+    system = types.ModuleType("src.peripherals.system")
+    system.System = _part(log, "system", "stop")
+    for name, mod in (("pigpio", pigpio), ("src.peripherals.drive", drive), ("src.peripherals.system", system)):
+        monkeypatch.setitem(sys.modules, name, mod)
+    return log
+
+
+@pytest.mark.software
+def test_the_camera_opens_the_sensors_motors_and_button(rig):
+    r = io.open_rig(camera=True)
+    assert (r.source.kind, r.sensors.kind, r.motor.kind, r.system.kind) == ("camera", "sensors", "motor", "system")
+    assert r.source.args == (FRAME_W, FRAME_H, FPS) and r.sensors.args == ({"imu": True, "encoders": True},)
+
+
+@pytest.mark.software
+def test_the_camera_without_motors_or_button(rig):
+    r = io.open_rig(camera=True, fps=15, size=(320, 240), motors=False, button=False)
+    assert r.source.args == (320, 240, 15) and r.sensors.kind == "sensors"
+    assert isinstance(r.motor, io.NoMotors) and r.system is None
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("kw, kind, rate", [({"video": "a.avi"}, "video", None), ({"frames": "dir"}, "frames", FPS),
+                                            ({"video": "a.avi", "fps": 12}, "video", 12)])
+def test_a_replay_never_opens_sensors_motors_or_button(rig, kw, kind, rate):
+    r = io.open_rig(motors=True, button=True, **kw)
+    assert r.source.kind == kind and r.source.args[-1] == rate
+    assert r.sensors is None and isinstance(r.motor, io.NoMotors) and r.system is None
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("fails_at, released", [
+    ("motor", [("sensors", "stop"), ("camera", "close")]),
+    ("system", [("motor", "stop"), ("sensors", "stop"), ("camera", "close")]),
+])
+def test_a_part_that_wont_open_releases_the_rest_and_raises(rig, monkeypatch, fails_at, released):
+    log = rig
+    real = sys.modules["src.peripherals.drive" if fails_at == "motor" else "src.peripherals.system"]
+    attr = "MotorController" if fails_at == "motor" else "System"
+    def broken(*a):
+        raise RuntimeError(f"{fails_at} won't open")
+    monkeypatch.setattr(real, attr, broken)
+    with pytest.raises(io.OPEN_ERRORS, match="won't open"):
+        io.open_rig(camera=True)
+    assert [e for e in log if e[1] in ("stop", "close")] == released
+
+
+@pytest.mark.software
+def test_a_bug_is_not_a_hardware_error(rig, monkeypatch):
+    monkeypatch.setattr(io, "Sensors", lambda **k: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        io.open_rig(camera=True)
+
+
+@pytest.mark.software
+def test_release_stops_or_closes_each_and_skips_none():
+    log = []
+    io.release(SimpleNamespace(stop=lambda: log.append("stop")), None, SimpleNamespace(close=lambda: log.append("close")))
+    assert log == ["stop", "close"]
+
+
+@pytest.mark.software
+def test_the_countdown_is_three_seconds_out_loud(monkeypatch, capsys):
+    slept = []
+    monkeypatch.setattr(io.time, "sleep", slept.append)
+    io.countdown()
+    assert capsys.readouterr().out.split() == "starting in 3 starting in 2 starting in 1".split()
+    assert slept == [1.0] * io.COUNTDOWN_S
 
 
 # =============================================================================

@@ -1,17 +1,27 @@
-"""What the driving linkers share: the frame recorder, the stand-in motors, and each frame's chain record.
+"""What the driving linkers share: opening the rig, the frame recorder, the stand-in motors, and each frame's chain record.
 
 Purpose:
-    maneuver_linker, navigation_linker and intersection_linker all drive the
-    robot while recording every frame for a video rendered afterwards, and
-    all offer a dry run with the motors off. Those pieces live here, so no
-    linker imports another one for them.
+    maneuver_linker, navigation_linker and intersection_linker all open the
+    same rig (a camera or a replay, the sensors, the motors, the start
+    button), drive the robot while recording every frame for a video
+    rendered afterwards, and offer a dry run with the motors off. Those
+    pieces live here, so no linker repeats them or imports another one for
+    them. phase3_linker opens its own: no motors or button, sensors by flag.
 
 Main package:
+    open_rig(...) -> Rig(source, sensors, motor, system); raises one of
+        OPEN_ERRORS after releasing whatever had opened.
+    release(*things): stop() or close() each that opened.
+    countdown(): the console "starting in 3, 2, 1" when there's no button.
     FrameRecorder: put(frame_id, frame, record) on a background thread;
         close() flushes. dropped, written.
     NoMotors: drive() / brake() / stop() that do nothing (--no-motors).
     chain_record(res): one frame's Phase 1-3 result without its images,
         what debug_maneuver.as_result() redraws the Phase 3 view from.
+
+Flow (opening the rig): the camera with the sensors, or a video / frame
+    folder without; the motors and the start button only with the camera
+    and when asked for, NoMotors otherwise.
 
 Flow (a recording):
     1. FrameRecorder(out_dir) makes frames/ and opens records.pkl.
@@ -23,13 +33,99 @@ import os
 import pickle
 import queue
 import threading
+import time
+from typing import NamedTuple
 
 import cv2
 
+from src.capture.camera import CaptureError
 from src.debugger.debug_maneuver import FRAMES_DIR, RECORDS_FILE, frame_path
+from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
+from src.params import FPS, FRAME_H, FRAME_W
+from src.peripherals.sensing import Sensors
 
 JPEG_QUALITY = 90       # frames are only a video background; decisions come from the records
 QUEUE_FRAMES = 64       # ~2.5 s at 25 FPS of slack before the recorder drops frames
+COUNTDOWN_S = 3         # seconds to step back from the robot when there's no start button
+# What a rig that won't open raises: a camera or file that won't open, no
+# pigpiod, a missing module off the Pi. Anything else is a bug, not hardware
+OPEN_ERRORS = (CaptureError, OSError, RuntimeError, ImportError)
+
+
+# =============================================================================
+# The rig
+# =============================================================================
+
+class Rig(NamedTuple):
+    """What a driving linker runs on. sensors and system are None when not opened."""
+    source: object
+    sensors: object
+    motor: object
+    system: object
+
+
+def release(*things) -> None:
+    """Stop (sensors, motors) or close (sources) each thing that opened; None is skipped."""
+    for thing in things:
+        if thing is not None:
+            (thing.stop if hasattr(thing, "stop") else thing.close)()
+
+
+def open_rig(camera: bool = False, video: str | None = None, frames: str | None = None,
+             fps: int | None = None, size: tuple[int, int] = (FRAME_W, FRAME_H),
+             motors: bool = True, button: bool = True) -> Rig:
+    """
+    Open a driving linker's source, sensors, motors and start button.
+
+    Inputs:
+        camera: The robot's camera, with the IMU and encoders on the sensor
+            hub. Else video (a recording) or frames (a folder) is replayed,
+            with no sensors.
+        fps: Capture or replay rate; None is FPS, or a video's own rate.
+        size: Capture (width, height).
+        motors: The real motors (pigpio, needs sudo pigpiod); only with the
+            camera. NoMotors otherwise.
+        button: The start button (peripherals.system.System); only with the
+            camera. None otherwise.
+    Outputs:
+        Rig(source, sensors, motor, system).
+    Raises:
+        One of OPEN_ERRORS, once whatever had opened is released.
+    """
+    source = sensors = motor = system = None
+    try:
+        if camera:
+            source = CameraFrameSource(size[0], size[1], fps or FPS)
+            sensors = Sensors(imu=True, encoders=True)
+        elif video:
+            source = VideoFrameSource(video, fps)
+        else:
+            source = DirectoryFrameSource(frames, fps or FPS)
+        if camera and motors:
+            import pigpio
+            from src.peripherals.drive import MotorController
+            motor = MotorController(pigpio.pi())
+        else:
+            motor = NoMotors()
+        if camera and button:
+            from src.peripherals.system import System
+            system = System()
+    except OPEN_ERRORS:
+        release(motor, sensors, source)
+        raise
+    return Rig(source, sensors, motor, system)
+
+
+def countdown(seconds: int = COUNTDOWN_S) -> None:
+    """With no start button: "starting in 3", "2", "1", a second apart."""
+    for n in range(seconds, 0, -1):
+        print(f"  starting in {n}")
+        time.sleep(1.0)
+
+
+# =============================================================================
+# Recording
+# =============================================================================
 
 
 class FrameRecorder:

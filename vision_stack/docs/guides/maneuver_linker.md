@@ -198,10 +198,10 @@ The `frames/` folder is the bulk (about 30 KB a frame). If the archive is too bi
 
 | Symptom | Fix |
 | --- | --- |
-| `hardware error: ... pigpio daemon not reachable` | `sudo pigpiod` |
-| `hardware error` naming the camera | Something else has the camera; close it (`phase2_linker`, `rpicam-hello`, pytest) |
-| `hardware error` naming `board` / `adafruit_mpu6050` / I²C | IMU libraries or I²C: `i2cdetect -y 1` must show 68 |
-| `hardware error` naming `tm1637` | Display library missing; run with `--no-button` meanwhile |
+| `source / hardware error: ... pigpio daemon not reachable` | `sudo pigpiod` |
+| `source / hardware error` naming the camera | Something else has the camera; close it (`phase2_linker`, `rpicam-hello`, pytest) |
+| `source / hardware error` naming `board` / `adafruit_mpu6050` / I²C | IMU libraries or I²C: `i2cdetect -y 1` must show 68 |
+| `source / hardware error` naming `tm1637` | Display library missing; run with `--no-button` meanwhile |
 | Nothing happens after starting | It's waiting for the start button (display shows `rdy`) |
 | It stopped mid-trial and waits (`--hold`) | That's a hold: measure, then press the start button or Enter. A button still held from the start press is ignored until released |
 | `STOPPED: yaw sign unclear ...` on the mat | The spins didn't turn the robot enough for the gyro. Check the battery; try `--set pulse_s=0.4` or `--set pulse_speed=0.5` |

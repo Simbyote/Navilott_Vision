@@ -39,14 +39,13 @@ from dataclasses import asdict, fields, replace
 
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.debug_maneuver import render_run
-from src.debugger.live_view import CameraFrameSource, Display
+from src.debugger.live_view import Display
 from src.estimation.estimation import LANE_VISION, Phase3Config
 from src.debugger.estimation_debug import TracedPhase3Processor
-from src.linker_io import FrameRecorder, NoMotors, chain_record
+from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.maneuver import FORWARD_2, Maneuver, ManeuverConfig, Tick
 from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.peripherals.sensing import Sensors
 from src.phase3_linker import CsvLog, Phase3Stats, run_phase3_chain
 
 # --help text. Kept apart from the module docstring, which documents the code.
@@ -427,24 +426,11 @@ def cli(argv: list[str] | None = None) -> int:
 
     out_dir = args.out or str(RUNS_DIR / ("maneuver_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=cfg.gyro_bias_dps)
-    source = sensors = motor = system = None
     try:
-        source = CameraFrameSource(args.width, args.height, args.fps)
-        sensors = Sensors(imu=True, encoders=True)
-        if args.no_motors:
-            motor = NoMotors()
-        else:
-            import pigpio
-            from src.peripherals.drive import MotorController
-            motor = MotorController(pigpio.pi())
-        if not args.no_button:
-            from src.peripherals.system import System
-            system = System()
-    except Exception as exc:
-        print(f"hardware error: {exc!r}")
-        for thing in (motor, sensors, source):
-            if thing is not None:
-                (thing.stop if hasattr(thing, "stop") else thing.close)()
+        source, sensors, motor, system = open_rig(camera=True, fps=args.fps, size=(args.width, args.height),
+                                                  motors=not args.no_motors, button=not args.no_button)
+    except OPEN_ERRORS as exc:
+        print(f"source / hardware error: {exc!r}")
         return 2
 
     print(f"output   {out_dir}")
@@ -452,9 +438,7 @@ def cli(argv: list[str] | None = None) -> int:
           f"turn {cfg.turn_target_deg:.0f} +/- {cfg.turn_tolerance_deg:.0f} deg in {cfg.turn_timeout_s:.0f} s"
           + ("   MOTORS OFF" if args.no_motors else ""))
     if system is None:
-        for n in (3, 2, 1):
-            print(f"  starting in {n}")
-            time.sleep(1.0)
+        countdown()
     else:
         print("press the start button")
     report = run(source, sensors, motor, cfg, config, p3_config, out_dir, system,

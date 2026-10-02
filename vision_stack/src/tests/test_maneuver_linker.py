@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import cv2
 import pytest
 
+import src.linker_io as lio
 import src.maneuver_linker as ml
 from src.maneuver import ManeuverConfig
 from src.tests.scenes import SCENE_CONFIG, SCENES
@@ -276,11 +277,39 @@ def test_resume_reads_the_button_and_enter_in_a_terminal():
 @pytest.mark.software
 def test_cli_hold_flag_reaches_run(monkeypatch, tmp_path):
     got = {}
-    monkeypatch.setattr(ml, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
-    monkeypatch.setattr(ml, "Sensors", lambda **k: SimpleNamespace(stop=lambda: None))
+    monkeypatch.setattr(lio, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(lio, "Sensors", lambda **k: SimpleNamespace(stop=lambda: None))
     monkeypatch.setattr(ml.time, "sleep", lambda s: None)
     monkeypatch.setattr(ml, "run", lambda *a, **k: got.update(k) or {"completed": True})
     assert ml.cli(["--hold", "--no-motors", "--no-button", "--out", str(tmp_path)]) == 0
     assert got["hold"] is True
     ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path)])
     assert got["hold"] is False
+
+
+@pytest.mark.software
+def test_cli_hardware_that_wont_open_is_exit_2_before_any_run(monkeypatch, tmp_path, capsys):
+    def no_camera(*a, **k):
+        raise OSError("no camera")
+    monkeypatch.setattr(lio, "CameraFrameSource", no_camera)
+    monkeypatch.setattr(ml, "run", lambda *a, **k: pytest.fail("ran without hardware"))
+    assert ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path)]) == 2
+    assert "source / hardware error" in capsys.readouterr().out
+
+
+@pytest.mark.software
+def test_cli_without_the_button_counts_down_then_runs(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(lio, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(lio, "Sensors", lambda **k: SimpleNamespace(stop=lambda: None))
+    monkeypatch.setattr(ml.time, "sleep", lambda s: None)
+    monkeypatch.setattr(ml, "run", lambda *a, **k: {"completed": True})
+    assert ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path)]) == 0
+    assert "starting in 1" in capsys.readouterr().out
+
+
+@pytest.mark.software
+def test_cli_a_bug_while_opening_is_raised_not_called_a_hardware_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(lio, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(lio, "Sensors", lambda **k: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path)])

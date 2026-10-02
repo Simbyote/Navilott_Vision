@@ -15,6 +15,7 @@ import cv2
 import pytest
 
 import src.intersection_linker as il
+import src.linker_io as lio
 from src.config import GYRO_BIAS_DPS
 from src.estimation.estimation import SensorSample
 from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO, TURN_END_TIME
@@ -211,3 +212,38 @@ def test_a_replay_of_one_straight_intersection_passes(tmp_path, capsys):
 def test_all_on_a_replay_is_refused(tmp_path, capsys):
     assert il.cli(["all", "--frames", str(tmp_path)]) == 2
     assert "one intersection" in capsys.readouterr().out
+
+
+@pytest.mark.software
+def test_a_source_that_wont_open_is_exit_2(tmp_path, monkeypatch, capsys):
+    def missing(*a, **k):
+        raise OSError("no such file")
+    monkeypatch.setattr(lio, "VideoFrameSource", missing)
+    assert il.cli(["left", "--video", "missing.avi", "--out", str(tmp_path)]) == 2
+    assert "source / hardware error" in capsys.readouterr().out
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("flags, motor_kind, button", [([], "motor", True), (["--no-motors", "--no-button"], None, False)])
+def test_the_camera_opens_the_motors_and_button_unless_told_not_to(tmp_path, monkeypatch, flags, motor_kind, button):
+    import sys
+    import types
+    from types import SimpleNamespace
+    monkeypatch.setattr(lio, "CameraFrameSource", lambda *a: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(lio, "Sensors", lambda **k: SimpleNamespace(stop=lambda: None))
+    pigpio, drive, system = (types.ModuleType(n) for n in ("pigpio", "src.peripherals.drive", "src.peripherals.system"))
+    pigpio.pi = lambda: "pi"
+    drive.MotorController = lambda pi: SimpleNamespace(kind="motor", stop=lambda: None)
+    system.System = lambda: SimpleNamespace(kind="system")
+    for mod in (pigpio, drive, system):
+        monkeypatch.setitem(sys.modules, mod.__name__, mod)
+    monkeypatch.setattr("builtins.input", lambda *a: "")
+    got = {}
+
+    def run_sequence(maneuver, source, sensors, motor, config, p3_config, out_dir, system, **kw):
+        got.update(motor=motor, system=system, **kw)
+        return {**GOOD, "verdict": "PASS"}
+    monkeypatch.setattr(il, "run_sequence", run_sequence)
+    assert il.cli(["left", "--camera", "--out", str(tmp_path), *flags]) == 0
+    assert getattr(got["motor"], "kind", None) == motor_kind and got["motors_on"] is (motor_kind is not None)
+    assert (got["system"] is not None) is button
