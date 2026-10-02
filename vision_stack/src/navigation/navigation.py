@@ -20,6 +20,7 @@ Main package:
 Flow, every frame:
     1. StopLineTracker.update(packet): has the robot reached a stop line?
        A line leaving the view is the next intersection: RouteProgress.enter().
+       While an intersection is being crossed, no new line is taken up.
     2. StopSignRule      stop sign at the line: stop, hold, go
     3. TrafficLightRule  red light at the line: wait for it
     4. IntersectionRule  past the line: straight on the gyro until both lane
@@ -78,6 +79,7 @@ class Navigation:
                                                  progress=self.progress)),
             (RULE_END_OF_COURSE, EndOfCourseRule(self.lane, self.progress, self.tracker)),
         ]
+        self._crossing = self.rules[2][1]
         self._end = self.rules[-1][1]
         self.record: dict = {}
 
@@ -110,7 +112,9 @@ class Navigation:
         if self.finished:
             self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, **self._end.record}
             return BRAKE
-        self.tracker.update(packet)
+        # No new stop line while crossing: marks inside an intersection (the
+        # far side's lines) restarted the crossing and counted as intersections
+        self.tracker.update(packet, accept_new=not self._crossing.active)
         if self.tracker.entered:
             self.progress.enter()
         decided = None

@@ -50,9 +50,10 @@ GPIO_START_BUTTON = 17      # active-high, pull-down, header pin 11
 IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
 IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 44 Hz to match
 # Multiplies raw gyro Z so yaw reads + = turning right, Estimation's convention.
-# This robot's IMU is mounted upside down: its raw gyro Z reads + for a LEFT
-# turn (measured 2026-09-30 by maneuver_linker's spin pulses). Per robot: a
-# robot with the IMU mounted Z-up would need its own measurement.
+# The driver reads + = left for a Z-up IMU; this robot's is mounted upside
+# down, so its raw gyro Z already reads + for a RIGHT turn (checked on the
+# robot 2026-10-01, after the motor sides were fixed: the 2026-09-30 -1 was
+# measured with them swapped). Per robot: measure a new mount.
 IMU_YAW_SIGN = 1
 
 # --- Sensor collection (src/peripherals/sensing.py) ---

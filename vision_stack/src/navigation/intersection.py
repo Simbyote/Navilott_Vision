@@ -1,4 +1,4 @@
-"""Intersection rule: cross an intersection straight, on the gyro, until both lane boundaries are back.
+"""Intersection rule: cross an intersection straight, on the gyro, until the lane boundaries are back.
 
 Purpose:
     Lane keeping goes wrong entering an intersection: a boundary on the
@@ -9,7 +9,10 @@ Purpose:
     since then (yaw_rate integrated over packet time). Once the robot has
     reached the line, the crossing ends when Phase 2 sees both lane
     boundaries (lane_mode MODE_TWO_BOUNDARY) for TWO_BOUNDARY_FRAMES frames
-    in a row, or after MAX_CROSS_MS of driving, and lane keeping takes over.
+    in a row, or at least one boundary for ONE_BOUNDARY_FRAMES in a row, or
+    after MAX_CROSS_MS of driving, and lane keeping takes over. While it is
+    active, navigation.Navigation keeps the tracker from taking up a new
+    stop line, so a line-like mark inside the intersection can't restart it.
     Which way to go comes from the route (route.py): the RouteProgress
     navigation.Navigation advances as each intersection is entered. Only
     straight is built: left and right (TURNS_TBD, Ignacio's turn logic) are
@@ -26,18 +29,25 @@ Flow:
     3. After reached, on frames no higher-priority rule holds the robot
        (stop sign, red light): count frames with both boundaries, and time
        driving.
-    4. End on TWO_BOUNDARY_FRAMES in a row or MAX_CROSS_MS.
+    4. End on TWO_BOUNDARY_FRAMES or ONE_BOUNDARY_FRAMES in a row, or MAX_CROSS_MS.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.lane_keeping import KP_HEADING, LaneKeepingNavigator
 from src.navigation.navigation_contract import Command
-from src.params import MODE_TWO_BOUNDARY
+from src.params import MODE_LEFT_ONLY, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY
 from src.navigation.route import TURNS_TBD, RouteProgress
 from src.navigation.stop_line import CROSSING, StopLineTracker
 
 # Both boundaries this many frames in a row ends the crossing (~0.15 s at
 # 20 FPS); one frame could be a stray mark
 TWO_BOUNDARY_FRAMES = 3
+# At least one boundary (two, or left_only / right_only) this many frames in
+# a row also ends it: past some intersections the camera sees only one lane
+# line, and the crossing never ended (2026-10-01 run: right_only for 5 s,
+# the robot pressed against the right line). Longer than TWO_BOUNDARY_FRAMES,
+# since one line is weaker evidence than two (~0.3 s at 20 FPS)
+ONE_BOUNDARY_FRAMES = 6
+BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # Driving time after reaching the line before lane keeping takes over
 # anyway; a guess at crossing one intersection, to tune on the mat
 MAX_CROSS_MS = 3000
@@ -60,6 +70,7 @@ class IntersectionRule:
         progress: The run's RouteProgress, for this intersection's maneuver;
             RouteProgress() (no plan: straight) by default.
 
+    active: True while crossing.
     record: {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD,
         "steer", "heading_deg", "step" (progress.label()), "maneuver",
         "tbd" (a turn driven straight)} while crossing; {} otherwise.
@@ -79,9 +90,14 @@ class IntersectionRule:
         self._active = self._at_line = False
         self._heading = 0.0
         self._driving_ms = 0
-        self._two_boundary = 0
+        self._two_boundary = self._any_boundary = 0
         self._last_ms: int | None = None
         self.record: dict = {}
+
+    @property
+    def active(self) -> bool:
+        """Crossing: from the line leaving the view until the crossing ends."""
+        return self._active
 
     def update(self, packet: EstimationPacket, held: bool = False) -> Command | None:
         """
@@ -110,7 +126,9 @@ class IntersectionRule:
         if self._at_line and not held:          # held: braked at the line, not crossing yet
             self._driving_ms += dt_ms
             self._two_boundary = self._two_boundary + 1 if packet.lane_mode == MODE_TWO_BOUNDARY else 0
-            if self._two_boundary >= TWO_BOUNDARY_FRAMES or self._driving_ms >= MAX_CROSS_MS:
+            self._any_boundary = self._any_boundary + 1 if packet.lane_mode in BOUNDARY_MODES else 0
+            if (self._two_boundary >= TWO_BOUNDARY_FRAMES or self._any_boundary >= ONE_BOUNDARY_FRAMES
+                    or self._driving_ms >= MAX_CROSS_MS):
                 self.reset()
                 return None
 

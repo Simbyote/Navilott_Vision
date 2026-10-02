@@ -79,8 +79,10 @@ def test_bare_pipeline_config_is_each_stages_defaults():
 @pytest.mark.software
 def test_scene_config_is_measured_without_undistortion():
     assert SCENE_CONFIG.preprocess.calibration_path is None
-    # Everything else, the color branch included, is MEASURED's
-    assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess) == MEASURED
+    # Everything else, the color branch included, is MEASURED's; the cm
+    # calibrations (ground plane, stop-line table) are left out on purpose
+    assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess, ground=MEASURED.ground,
+                   stop_line_table=MEASURED.stop_line_table) == MEASURED
     assert replace(SCENE_CONFIG.preprocess, calibration_path=MEASURED.preprocess.calibration_path) \
         == MEASURED.preprocess
 
@@ -197,3 +199,9 @@ def test_the_route_file_config_points_at_loads():
     from src.config import ROUTE_PATH
     from src.navigation.route import Route, load_route
     assert ROUTE_PATH.name == "route.json" and isinstance(load_route(ROUTE_PATH), Route)
+
+
+@pytest.mark.software
+def test_measured_takes_stop_lines_within_15_degrees_and_keeps_the_rest_of_the_geometry():
+    from src.perception.geometry import GeometryConfig, StopLineFilter
+    assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=15.0))
