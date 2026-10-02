@@ -8,13 +8,13 @@ Purpose:
     on pigpio interrupt callbacks, so counting never blocks the main loop.
     Deciding how to drive belongs to navigation (src/navigation/) and the
     drive trial (src/maneuver.py); reading the encoders once per frame
-    belongs to the sensor hub (src/peripherals/sensing.py).
+    belongs to the sensor hub (src/peripherals/sensing.py), which turns
+    counts() into counts per second per frame.
 
 Main package:
-    EncoderFrame: one frame window's cumulative encoder counts and calculated
-        instantaneous wheel speeds (counts per second).
     EncoderReader: non-blocking quadrature decoder registering state transitions
-        on left (GPIO 21/20) and right (GPIO 16/19) channel interrupts via pigpio.
+        on left (GPIO 21/20) and right (GPIO 16/19) channel interrupts via pigpio;
+        counts() -> (left, right) live totals, + = forward.
     MotorController: drive(left, right) in [-1, 1] per wheel, brake(), stop().
 
 Flow:
@@ -25,21 +25,7 @@ Flow:
        hardware PWM and callbacks safely.
 """
 
-import time
-from dataclasses import dataclass
 import pigpio
-
-
-# =============================================================================
-# Telemetry Data Containers
-# =============================================================================
-@dataclass
-class EncoderFrame:
-    """Encoder pulse counts and calculated speeds for one frame window."""
-    left_count: int = 0
-    right_count: int = 0
-    left_cps: float = 0.0   # Counts per second
-    right_cps: float = 0.0  # Counts per second
 
 
 # =============================================================================
@@ -63,9 +49,6 @@ class EncoderReader:
 
         self._left_pos = 0
         self._right_pos = 0
-        self._last_time = time.perf_counter()
-        self._last_left = 0         # counts at the previous snapshot, for the per-window speed
-        self._last_right = 0
 
         self._left_c1_state = 0
         self._left_c2_state = 0
@@ -113,33 +96,10 @@ class EncoderReader:
         """(left, right) counts since reset(), + = forward. Changes no state, so any thread may call it."""
         return self._left_pos, self._right_pos
 
-    def snapshot(self) -> EncoderFrame:
-        """Current counts since reset(), and counts per second over the window since the previous snapshot."""
-        now = time.perf_counter()
-        dt = now - self._last_time
-        self._last_time = now
-
-        l_count = self._left_pos
-        r_count = self._right_pos
-
-        # Speed is the change over this window, not the total since reset()
-        l_cps = ((l_count - self._last_left) / dt) if dt > 0 else 0.0
-        r_cps = ((r_count - self._last_right) / dt) if dt > 0 else 0.0
-        self._last_left, self._last_right = l_count, r_count
-
-        return EncoderFrame(
-            left_count=l_count,
-            right_count=r_count,
-            left_cps=l_cps,
-            right_cps=r_cps,
-        )
-
     def reset(self) -> None:
-        """Reset internal encoder count offsets to zero."""
+        """Zero both counts."""
         self._left_pos = 0
         self._right_pos = 0
-        self._last_left = 0
-        self._last_right = 0
 
     def cancel(self) -> None:
         """Clean up pigpio callbacks."""

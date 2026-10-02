@@ -2,8 +2,8 @@
 test_drive.py  --  src/peripherals/drive.py
 
 drive.py imports pigpio at module load, so software tests swap in a fake
-before importing it and patch time, so a drive runs instantly and wheel
-motion can be injected as encoder edges.
+before importing it; a fake clock steps a simple wheel model that injects
+the motion as encoder edges, so nothing waits.
 
 --software  Quadrature decoding, cps, TB6612 direction/PWM commands, brake
             and stop, against a fake pigpio and a simple wheel model. No GPIO.
@@ -99,7 +99,7 @@ class FakeClock:
 
 @pytest.fixture
 def env(monkeypatch):
-    """Imports drive.py against fake pigpio / time; returns (module, pi, clock)."""
+    """Imports drive.py against a fake pigpio; returns (module, pi, clock), the clock driving the wheel model."""
     pi = FakePi()
     pigpio = types.ModuleType("pigpio")
     pigpio.INPUT, pigpio.OUTPUT = "INPUT", "OUTPUT"
@@ -109,7 +109,6 @@ def env(monkeypatch):
     monkeypatch.delitem(sys.modules, DRIVE_MODULE, raising=False)
     mod = importlib.import_module(DRIVE_MODULE)
     clock = FakeClock()
-    monkeypatch.setattr(mod, "time", clock)
     yield mod, pi, clock
     sys.modules.pop(DRIVE_MODULE, None)         # the next import gets the real (or fresh fake) pigpio
 
@@ -117,6 +116,12 @@ def env(monkeypatch):
 def _pins(mod):
     e = mod.EncoderReader
     return e.LEFT_C1, e.LEFT_C2, e.RIGHT_C1, e.RIGHT_C2
+
+
+def _counted(enc):
+    """enc.counts() as named fields: left_count, right_count."""
+    left, right = enc.counts()
+    return types.SimpleNamespace(left_count=left, right_count=right)
 
 
 def _assert_stopped(pi, m):
@@ -177,9 +182,9 @@ def test_left_counts_up_when_c1_leads_and_down_when_c2_leads(env):
     enc = mod.EncoderReader(pi)
     l1, l2, _, _ = _pins(mod)
     pi.quad(l1, l2, 10, c1_leads=True)
-    assert enc.snapshot().left_count == 10
+    assert enc.counts()[0] == 10
     pi.quad(l1, l2, 4, c1_leads=False)
-    assert enc.snapshot().left_count == 6
+    assert enc.counts()[0] == 6
 
 
 @pytest.mark.software
@@ -189,9 +194,9 @@ def test_right_count_is_mirrored(env):
     enc = mod.EncoderReader(pi)
     _, _, r1, r2 = _pins(mod)
     pi.quad(r1, r2, 7, c1_leads=False)
-    assert enc.snapshot().right_count == 7
+    assert enc.counts()[1] == 7
     pi.quad(r1, r2, 7, c1_leads=True)
-    assert enc.snapshot().right_count == 0
+    assert enc.counts()[1] == 0
 
 
 @pytest.mark.software
@@ -201,19 +206,17 @@ def test_only_c1_rising_edges_count(env):
     l1, l2, _, _ = _pins(mod)
     pi.edge(l2, 1); pi.edge(l2, 0)              # C2 alone: nothing
     pi.edge(l1, 1); pi.edge(l1, 0)              # C1 rise with C2 low: +1 (left is C1-leads-forward); the fall: nothing
-    assert enc.snapshot().left_count == 1
+    assert enc.counts()[0] == 1
 
 
 @pytest.mark.software
-def test_counts_are_the_live_totals_and_leave_the_speed_window_alone(env):
-    mod, pi, clock = env
+def test_counts_are_the_live_totals(env):
+    mod, pi, _ = env
     enc = mod.EncoderReader(pi)
     l1, l2, r1, r2 = _pins(mod)
     pi.quad(l1, l2, 12, c1_leads=True); pi.quad(r1, r2, 5, c1_leads=False)
     assert enc.counts() == (12, 5)
     assert enc.counts() == (12, 5)                  # reading changes nothing
-    clock.now += 0.5
-    assert enc.snapshot().left_cps == pytest.approx(24.0)    # the window still starts at construction
 
 
 @pytest.mark.software
@@ -223,78 +226,14 @@ def test_reset_zeroes_and_cancel_stops_counting(env):
     l1, l2, r1, r2 = _pins(mod)
     pi.quad(l1, l2, 4); pi.quad(r1, r2, 4)
     enc.reset()
-    f = enc.snapshot()
+    f = _counted(enc)
     assert (f.left_count, f.right_count) == (0, 0)
     enc.cancel()
     assert all(cb.cancelled for cb in pi.callbacks)
     pi.quad(l1, l2, 5)
-    assert enc.snapshot().left_count == 0
+    assert enc.counts()[0] == 0
 
 
-@pytest.mark.software
-def test_cps_over_the_first_window(env):
-    mod, pi, clock = env
-    enc = mod.EncoderReader(pi)
-    l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 10, c1_leads=True)
-    clock.now += 0.5
-    assert enc.snapshot().left_cps == pytest.approx(20.0)
-
-
-@pytest.mark.software
-def test_cps_holds_steady_at_constant_speed(env):
-    mod, pi, clock = env
-    enc = mod.EncoderReader(pi)
-    l1, l2, _, _ = _pins(mod)
-    speeds = []
-    for _ in range(3):
-        pi.quad(l1, l2, 10, c1_leads=True)
-        clock.now += 0.5
-        speeds.append(enc.snapshot().left_cps)
-    assert speeds == pytest.approx([20.0] * 3)
-
-
-@pytest.mark.software
-def test_cps_after_a_reset_counts_only_the_new_window(env):
-    mod, pi, clock = env
-    enc = mod.EncoderReader(pi)
-    l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 30, c1_leads=True)
-    clock.now += 0.5
-    enc.snapshot()
-    enc.reset()
-    pi.quad(l1, l2, 5, c1_leads=True)
-    clock.now += 0.5
-    # 5 counts in 0.5 s; without resetting the previous count too it reads (5 - 30) / 0.5
-    assert enc.snapshot().left_cps == pytest.approx(10.0)
-
-
-@pytest.mark.software
-def test_a_stopped_wheel_reads_zero_cps_after_moving(env):
-    mod, pi, clock = env
-    enc = mod.EncoderReader(pi)
-    l1, l2, _, _ = _pins(mod)
-    pi.quad(l1, l2, 10, c1_leads=True)
-    clock.now += 0.5
-    enc.snapshot()
-    clock.now += 0.5
-    f = enc.snapshot()
-    assert (f.left_count, f.left_cps) == (10, 0.0)
-
-
-@pytest.mark.software
-def test_cps_is_zero_rather_than_a_crash_when_no_time_passed(env):
-    mod, pi, _ = env
-    enc = mod.EncoderReader(pi)
-    l1, l2, _, _ = _pins(mod)
-    enc.snapshot()
-    pi.quad(l1, l2, 3)
-    assert enc.snapshot().left_cps == 0.0
-
-
-# -----------------------------------------------------------------------------
-# MotorController: raw commands
-# -----------------------------------------------------------------------------
 @pytest.mark.software
 def test_motor_missing_pigpio_daemon_raises_with_the_fix(env):
     mod, pi, _ = env
@@ -361,10 +300,10 @@ def test_brake_stops_the_wheels_turning_in_the_wheel_model(env):
     clock.on_sleep = _wheel_model(mod, pi, m)
     m.drive(0.5, 0.5)
     clock.sleep(0.5)
-    moving = enc.snapshot().left_count
+    moving = enc.counts()[0]
     m.brake()
     clock.sleep(0.5)
-    assert moving > 0 and enc.snapshot().left_count == moving
+    assert moving > 0 and enc.counts()[0] == moving
 
 
 @pytest.mark.software
@@ -398,7 +337,7 @@ def test_encoder_signs_follow_the_commanded_direction(env, left, right, sign):
     m.drive(left, right)
     clock.sleep(1.0)
     m.stop()
-    f = enc.snapshot()
+    f = _counted(enc)
     assert (f.left_count * sign[0] > 150) and (f.right_count * sign[1] > 150)
 
 
@@ -413,7 +352,7 @@ def _motors_respond(enc, motor, sleep, duty=0.4, seconds=0.3):
     motor.drive(duty, duty)
     sleep(seconds)
     motor.stop()
-    f = enc.snapshot()
+    f = _counted(enc)
     sleep(seconds)                              # spin down before the real legs
     return f.left_count != 0 or f.right_count != 0
 
@@ -462,7 +401,7 @@ def test_drive_characterization(artifacts):
         m.drive(left, right)
         time.sleep(seconds)
         m.stop()
-        f = enc.snapshot()
+        f = _counted(enc)
         time.sleep(0.5)                         # let the wheels spin down before the next leg
         return {"cmd": [left, right], "s": seconds, "left": f.left_count, "right": f.right_count}
 
@@ -477,12 +416,12 @@ def test_drive_characterization(artifacts):
         spin = leg(0.5, -0.5)
         enc.reset()
         time.sleep(0.5)
-        coast = enc.snapshot()                  # motors stopped: counts should stay put
+        coast = _counted(enc)                  # motors stopped: counts should stay put
         enc.reset()
         m.drive(0.5, 0.5)                       # 3 s straight, open loop: the motors' natural mismatch
         time.sleep(3.0)
         m.stop()
-        straight = enc.snapshot()
+        straight = _counted(enc)
     finally:
         m.stop()
         enc.cancel()

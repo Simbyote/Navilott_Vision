@@ -201,19 +201,6 @@ def test_sign_below_gate_is_ignored():
 
 
 @pytest.mark.software
-def test_from_imu_reads_a_valid_frame():
-    frame = SimpleNamespace(valid=True, mean_yaw_rate_dps=3.0, peak_lateral_accel=-0.5)
-    s = SensorSample.from_imu(frame, wheel_speed_mps=0.2)
-    assert (s.yaw_rate_dps, s.lateral_accel_mps2, s.wheel_speed_mps) == (3.0, -0.5, 0.2)
-
-
-@pytest.mark.software
-def test_from_imu_invalid_frame_gives_no_readings():
-    frame = SimpleNamespace(valid=False, mean_yaw_rate_dps=None, peak_lateral_accel=None)
-    assert SensorSample.from_imu(frame) == SensorSample()
-
-
-@pytest.mark.software
 def test_packet_carries_the_phase2_stamp():
     pkt, dbg = Phase3Processor().process(p2(frame_id=7, ts=350))
     assert (pkt.frame_id, pkt.timestamp_ms) == (7, 350)
@@ -331,28 +318,6 @@ def test_packet_carries_the_stop_line_vote_and_distances():
     assert [(p.stop_line_detected, p.stop_line_distance_px, p.stop_line_distance_cm) for p in packets] == \
         [(False, None, None), (True, 45.0, 22.5), (True, 45.0, 22.5)]
 
-
-
-@pytest.mark.software
-def test_from_frames_takes_each_wheels_counts_per_second_and_keeps_a_stop_as_zero():
-    enc = SimpleNamespace(left_count=120, right_count=110, left_cps=240.0, right_cps=-15.5)
-    s = SensorSample.from_frames(None, enc)
-    assert (s.left_wheel_cps, s.right_wheel_cps) == (240.0, -15.5)
-    assert s.yaw_rate_dps is None and s.wheel_speed_mps is None
-    stopped = SensorSample.from_frames(None, SimpleNamespace(left_cps=0, right_cps=0))
-    assert (stopped.left_wheel_cps, stopped.right_wheel_cps) == (0.0, 0.0)
-    assert SensorSample.from_frames(None, None).left_wheel_cps is None
-
-
-@pytest.mark.software
-def test_from_frames_combines_the_imu_and_the_encoders():
-    imu = SimpleNamespace(valid=True, mean_yaw_rate_dps=12.5, peak_lateral_accel=-0.8)
-    s = SensorSample.from_frames(imu, SimpleNamespace(left_cps=100.0, right_cps=90.0))
-    assert (s.yaw_rate_dps, s.lateral_accel_mps2, s.left_wheel_cps, s.right_wheel_cps) == (12.5, -0.8, 100.0, 90.0)
-    bad_imu = SimpleNamespace(valid=False, mean_yaw_rate_dps=99.0, peak_lateral_accel=9.0)
-    s = SensorSample.from_frames(bad_imu, SimpleNamespace(left_cps=100.0, right_cps=90.0))
-    assert s.yaw_rate_dps is None and s.left_wheel_cps == 100.0
-    assert SensorSample.from_imu(imu) == SensorSample.from_frames(imu)
 
 
 @pytest.mark.software

@@ -129,11 +129,11 @@ drain()     once per frame: close the window with a fresh encoder reading
 stop()      end the thread; release the encoders and pigpio
 ```
 
-Each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (−1 on this robot, whose IMU is upside down), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
+Each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (+1 on this robot: its IMU is upside down, so the driver's + = left already reads + = right; set 2026-10-01 once the motor sides were fixed), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
 
 A `SensorBatch` gives Phase 3 what it needs: the mean yaw rate over its IMU readings, the signed lateral acceleration with the largest magnitude, and each wheel's counts per second from the previous batch's last reading to this one's (0.0 stopped). It also carries the cumulative counts, which the packet leaves out. `SensorSample.from_batch()` reads those by name, so `estimation.py` never imports `sensing.py` or the drivers, and it still runs on a laptop from replays with no sensors.
 
-The MPU-6050 is at 0x68, with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit of 100 Hz sampling. The hub doesn't calibrate it, so `Phase3Config.gyro_bias_dps` (`phase3_linker --gyro-bias`) carries the bias, **in the flipped frame**: the raw −1.0 °/s measured at rest is +1.0 here. `IMUReader` keeps its own accumulator thread (`start()` / `snapshot()`) for `test_imu`'s bench characterization; the pipeline and the linkers read through the hub.
+The MPU-6050 is at 0x68, with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit of 100 Hz sampling. The hub doesn't calibrate it, so `Phase3Config.gyro_bias_dps` (`phase3_linker --gyro-bias`) carries the bias, **in the hub's frame** (after `IMU_YAW_SIGN`; with +1 that's the raw reading at rest). The hub is the only way the IMU and encoders are read: the pipeline, the linkers and `test_imu`'s bench characterization all go through it, and the drivers only answer `read()` / `counts()`.
 
 Using the encoder readings (checking that a steering correction actually turned the wheels, speed control, distance travelled) is Navigation's job, since only Navigation knows what was commanded.
 
@@ -156,7 +156,7 @@ Using the encoder readings (checking that a steering correction actually turned 
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `wheel_speed` | `float` | m/s; always 0.0 for now. **To fill in:** needs the encoder counts per wheel revolution and the wheel diameter to convert counts to meters |
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
-| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from `peripherals/drive.py`'s `EncoderReader.snapshot()`; + = forward. Raw counts, not converted to distance. 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
+| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts, not converted to distance. 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
 | `lane_mode` | `str` | Pass-through: this frame's Phase 2 lane offset mode (`two_boundary`, `left_only`, `right_only`, `single_uncalibrated`, `none`), unfiltered; `none` when Phase 2 gave no lane result. Navigation ends an intersection crossing on `two_boundary` |
 
 What Navigation must do with each field, and what it returns, is `navigation_contract.md`.

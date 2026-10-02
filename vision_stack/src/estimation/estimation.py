@@ -106,45 +106,6 @@ class SensorSample:
     right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
 
     @classmethod
-    def from_frames(
-            cls,
-            imu_frame=None,
-            encoder_frame=None,
-            wheel_speed_mps: float | None = None,
-        ) -> "SensorSample":
-        """
-        Build a SensorSample from this frame window's driver snapshots.
-
-        Inputs:
-            imu_frame: A peripherals.imu.IMUFrame, duck-typed on valid,
-                mean_yaw_rate_dps and peak_lateral_accel, so this module never
-                imports the IMU driver. None or an invalid frame (no samples)
-                gives None IMU readings.
-            encoder_frame: A peripherals.drive.EncoderFrame, duck-typed on
-                left_cps and right_cps (counts per second over the window since
-                the previous snapshot), so this module never imports pigpio.
-                None gives None wheel readings; a stopped wheel reads 0.0.
-            wheel_speed_mps: Carried through as-is.
-        """
-        imu_ok = imu_frame is not None and imu_frame.valid
-        return cls(
-            yaw_rate_dps = imu_frame.mean_yaw_rate_dps if imu_ok else None,
-            lateral_accel_mps2 = imu_frame.peak_lateral_accel if imu_ok else None,
-            wheel_speed_mps = wheel_speed_mps,
-            left_wheel_cps = None if encoder_frame is None else float(encoder_frame.left_cps),
-            right_wheel_cps = None if encoder_frame is None else float(encoder_frame.right_cps),
-        )
-
-    @classmethod
-    def from_imu(
-            cls,
-            imu_frame,
-            wheel_speed_mps: float | None = None,
-        ) -> "SensorSample":
-        """from_frames() with the IMU only."""
-        return cls.from_frames(imu_frame, None, wheel_speed_mps)
-
-    @classmethod
     def from_batch(
             cls,
             batch,
