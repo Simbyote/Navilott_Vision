@@ -142,10 +142,10 @@ def test_the_first_line_names_the_deciding_rule_and_phase(n):
 
 
 @pytest.mark.software
-def test_the_first_line_names_the_route_step_and_marks_a_turn_tbd():
+def test_the_first_line_names_the_route_step_and_the_intersection_stage():
     first = slice(0, LH)
     base = {**DRIVE, "rule": "intersection", "phase": "crossing"}
-    with_step = draw_strip({**base, "step": "1/3 left", "maneuver": "straight"}, W)[first]
+    with_step = draw_strip({**base, "step": "1/3 left", "maneuver": "left"}, W)[first]
     assert not np.array_equal(with_step, draw_strip(base, W)[first])
-    tbd = draw_strip({**base, "step": "1/3 left", "maneuver": "left"}, W)[first]
-    assert not np.array_equal(tbd, with_step)
+    turning = draw_strip({**base, "step": "1/3 left", "maneuver": "left", "stage": "turn"}, W)[first]
+    assert not np.array_equal(turning, with_step)

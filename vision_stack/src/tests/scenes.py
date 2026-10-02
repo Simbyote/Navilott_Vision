@@ -382,8 +382,9 @@ def course_sequence() -> list[SequenceFrame]:
     line coming down the view with a stop sign and a red light, leaving the
     view near the bottom so the robot reaches it; the crossing to it; the
     stop there (the sign's stop and hold, then the light's wait while it's
-    red); the light turning green; the lane running out at the mat's edge,
-    which ends the run. The wheels read stopped once the line is reached, so
+    red); the light turning green and the robot turning left on the gyro
+    (a route of one left turn finishes it in about 1.5 s; straight drives
+    out instead); the lane running out at the mat's edge, which ends the run. The wheels read stopped once the line is reached, so
     the stop sign settles. SCENE_CONFIG doesn't see the synthetic sign (its
     gates are the robot's) and ALT_CONFIG does, so between them every rule
     decides some frame.
@@ -393,8 +394,8 @@ def course_sequence() -> list[SequenceFrame]:
         Same content on every call.
     """
     moving = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=300.0, right_wheel_cps=300.0)
-    turning = SensorSample(yaw_rate_dps=20.0, lateral_accel_mps2=0.1, left_wheel_cps=300.0, right_wheel_cps=250.0)
     stopped = SensorSample(yaw_rate_dps=0.0, lateral_accel_mps2=0.0, left_wheel_cps=0.0, right_wheel_cps=0.0)
+    turning_left = SensorSample(yaw_rate_dps=-60.0, lateral_accel_mps2=0.3, left_wheel_cps=700.0, right_wheel_cps=1300.0)
     red, green = dict(lights=(RED_LAMP,), lamp_radius=16), dict(lights=(GREEN_LAMP,), lamp_radius=16)
     segments = [
         # (segment, frame, count, sensors)
@@ -407,9 +408,10 @@ def course_sequence() -> list[SequenceFrame]:
         ("line_bottom", scene(stop_line=(120, 320, 70), sign=True, **red), 3, moving),
         # Crossing to the line (STOP_DELAY_MS), then stopped there: the
         # sign's hold, then waiting on the red light
-        ("crossing", scene(**red), 30, turning),
+        ("crossing", scene(**red), 30, moving),
         ("red", scene(**red), 60, stopped),
-        ("green", scene(**green), 20, moving),
+        ("green_turn", scene(**green), 35, turning_left),
+        ("after_turn", scene(), 10, moving),
         # The mat's edge: the lane runs out and stays out
         ("edge", scene(marks=()), 50, moving),
     ]

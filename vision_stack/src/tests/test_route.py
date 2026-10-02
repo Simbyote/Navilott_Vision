@@ -12,7 +12,7 @@ import pytest
 
 from src.navigation.route import (
     FINISH_EDGE, FINISH_STOP_LINE, KIND_EXTRA, KIND_FINISH, KIND_MANEUVER, LEFT, MANEUVERS, RIGHT, STRAIGHT,
-    TURNS_TBD, Route, RouteError, RouteProgress, load_route,
+    Route, RouteError, RouteProgress, load_route,
 )
 
 
@@ -28,7 +28,7 @@ def write(tmp_path, data, raw=None):
 
 @pytest.mark.software
 def test_the_names():
-    assert MANEUVERS == ("straight", "left", "right") and TURNS_TBD == ("left", "right")
+    assert MANEUVERS == ("straight", "left", "right")
     assert (FINISH_EDGE, FINISH_STOP_LINE) == ("edge", "stop_line")
 
 
@@ -85,7 +85,7 @@ def test_a_route_built_in_code_is_checked_too():
 def test_the_startup_description_lists_every_step_and_the_finish():
     lines = Route((LEFT, STRAIGHT), FINISH_STOP_LINE).describe()
     assert lines[0] == "Route: 2 maneuvers"
-    assert lines[1].startswith("  1. left") and "TBD" in lines[1]
+    assert lines[1] == "  1. left"
     assert lines[2] == "  2. straight"
     assert "stop line 3" in lines[3]
     one = Route((RIGHT,)).describe()
