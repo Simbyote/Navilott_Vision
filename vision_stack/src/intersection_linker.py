@@ -41,7 +41,7 @@ from src.capture.camera import CaptureError
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
 from src.estimation.estimation import LANE_VISION, Phase3Config
-from src.maneuver_linker import _NoMotors
+from src.linker_io import NoMotors
 from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO
 from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navigation
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
@@ -205,7 +205,7 @@ def _open(args):
             from src.peripherals.drive import MotorController
             motor = MotorController(pigpio.pi())
         else:
-            motor = _NoMotors()
+            motor = NoMotors()
         if args.camera and not args.no_button:
             from src.peripherals.system import System
             system = System()

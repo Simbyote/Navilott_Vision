@@ -4,16 +4,14 @@ test_maneuver_linker.py  --  src/maneuver_linker.py
 The linker end to end on a simulated robot (sim_robot) and synthetic camera
 frames: the run folder it writes, that the motors stop however the run ends
 (finished, Ctrl-C, an error, the camera ending), that vision records but
-never steers, the background recorder's drop policy, the start-button
-hooks, the per-run overrides and the render-only command.
+never steers, the start-button hooks, the per-run overrides and the
+render-only command. The recorder is test_linker_io's.
 
 --software  run() / cli() with fakes. No camera, motors or GPIO.
 """
 import csv
 import json
 import os
-import threading
-import time
 from types import SimpleNamespace
 
 import cv2
@@ -176,35 +174,6 @@ def test_the_camera_ending_stops_the_trial(tmp_path):
 def test_dropped_camera_frames_are_counted_and_skipped(tmp_path):
     rep, out, *_ = trial(tmp_path, cam={"drop_at": (10, 11)})
     assert rep["run"]["camera_drops"] == 2 and rep["completed"]
-
-
-# =============================================================================
-# Recorder
-# =============================================================================
-
-@pytest.mark.software
-def test_a_full_recorder_queue_drops_frames_instead_of_blocking(tmp_path, monkeypatch):
-    gate = threading.Event()
-    real = cv2.imwrite
-    monkeypatch.setattr(ml.cv2, "imwrite", lambda *a, **k: gate.wait() and real(*a, **k))
-    rec = ml.FrameRecorder(str(tmp_path), maxsize=2)
-    t0 = time.perf_counter()
-    for i in range(6):
-        rec.put(i, SCENES["two_boundary"], {"frame_id": i})
-    assert time.perf_counter() - t0 < 0.5                   # never waited on the disk
-    gate.set()
-    rec.close()
-    assert rec.dropped >= 3 and rec.written + rec.dropped == 6
-
-
-@pytest.mark.software
-def test_the_recorder_copies_the_frame_before_queueing(tmp_path):
-    frame = SCENES["two_boundary"].copy()
-    rec = ml.FrameRecorder(str(tmp_path))
-    rec.put(1, frame, {"frame_id": 1})
-    frame[:] = 0                                            # the camera reusing its buffer
-    rec.close()
-    assert cv2.imread(str(tmp_path / "frames" / "000001.jpg")).mean() > 10
 
 
 # =============================================================================

@@ -7,7 +7,7 @@ Purpose:
     Navigation subsystem (navigation.Navigation: the stop sign, traffic light
     and intersection rules over lane keeping, which is everything behind it),
     checks the Command against the contract, and drives the motors with it. Nothing is drawn while the robot
-    drives: frames and per-frame records go to disk on maneuver_linker's
+    drives: frames and per-frame records go to disk on linker_io's
     background recorder, and nav.avi is rendered once the run ends, so the
     run measures the real control loop.
 
@@ -49,7 +49,7 @@ from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
 from src.estimation.estimation import Phase3Config
-from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
+from src.linker_io import FrameRecorder, NoMotors, chain_record
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
@@ -199,7 +199,7 @@ def run(
         sensors: sensing.Sensors (anything with read() -> (SensorSample,
             batch) and stop()); None runs Phase 3 without sensors.
         motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); _NoMotors for a dry run.
+            brake() and stop(); NoMotors for a dry run.
         navigator: A Navigator; navigation.Navigation. Its record, if it has
             one, says which rule decided each command and why.
         config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
@@ -446,7 +446,7 @@ def cli(argv: list[str] | None = None) -> int:
             from src.peripherals.drive import MotorController
             motor = MotorController(pigpio.pi())
         else:
-            motor = _NoMotors()
+            motor = NoMotors()
         if args.camera and not args.no_button:
             from src.peripherals.system import System
             system = System()

@@ -416,7 +416,7 @@ def test_the_camera_drives_the_motors_with_sensors_and_the_button(cli_env):
 def test_no_motors_and_no_button_on_the_camera(cli_env):
     got, tmp = cli_env
     assert nl.cli(["--camera", "--no-motors", "--no-button", "--max-run-s", "7"]) == 0
-    assert isinstance(got["motor"], nl._NoMotors) and got["motors_on"] is False
+    assert isinstance(got["motor"], nl.NoMotors) and got["motors_on"] is False
     assert got["system"] is None and got["max_run_s"] == 7.0
 
 
@@ -425,7 +425,7 @@ def test_no_motors_and_no_button_on_the_camera(cli_env):
 def test_replays_never_drive_the_motors_or_open_sensors(cli_env, flag):
     got, tmp = cli_env
     assert nl.cli([flag, str(tmp), "--limit", "3"]) == 0
-    assert isinstance(got["motor"], nl._NoMotors) and got["motors_on"] is False
+    assert isinstance(got["motor"], nl.NoMotors) and got["motors_on"] is False
     assert got["sensors"] is None and got["system"] is None and got["limit"] == 3
 
 
