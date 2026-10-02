@@ -436,7 +436,7 @@ def test_estimation_flags_reach_phase_3(cli_env):
     assert (got["p3_config"].gyro_bias_dps, got["p3_config"].cm_per_px) == (0.7, 0.05)
     assert dict(got["navigator"].rules)["intersection"].gyro_bias_dps == 0.7      # the heading hold too
     nl.cli(["--frames", str(tmp)])
-    assert got["p3_config"].gyro_bias_dps == nl.MANEUVER.gyro_bias_dps
+    assert got["p3_config"].gyro_bias_dps == nl.MEASURED_ESTIMATION.gyro_bias_dps
 
 
 @pytest.mark.software

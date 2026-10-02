@@ -15,6 +15,7 @@ import cv2
 import pytest
 
 import src.intersection_linker as il
+from src.config import GYRO_BIAS_DPS
 from src.estimation.estimation import SensorSample
 from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO, TURN_END_TIME
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
@@ -201,6 +202,7 @@ def test_a_replay_of_one_straight_intersection_passes(tmp_path, capsys):
     code = il.cli(["straight", "--frames", str(frames), "--out", str(out), "--no-render"])
     report = json.loads((out / "report.json").read_text())
     assert [s["maneuver"] for s in report["sequences"]] == [STRAIGHT] and not report["motors"]
+    assert report["gyro_bias_dps"] == GYRO_BIAS_DPS                    # config's, with no --gyro-bias
     assert (out / "straight" / "nav.csv").exists() and "[STRAIGHT]" in (out / "summary.txt").read_text()
     assert code == (0 if report["sequences"][0]["verdict"] == "PASS" else 1)
 

@@ -470,7 +470,7 @@ def _pipeline_course(config, sequence=COURSE):
 def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
     """Frame by frame: the packet the navigator saw, its record, and the command the motors got; then how the run ended."""
     config = COURSE_CONFIGS[case]
-    source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE)
+    source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE, gyro_bias_dps=MEASURED_ESTIMATION.gyro_bias_dps)
     report = nl.run(source, _CourseSensors(source), motor, nav, config, MEASURED_ESTIMATION,
                     out_dir=str(tmp_path / "run"), max_run_s=1e9, render=False)
     pipeline, cmds, packets, records = _pipeline_course(config)

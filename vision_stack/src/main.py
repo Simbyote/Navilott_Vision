@@ -39,10 +39,10 @@ import argparse
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from src.capture.camera import CameraSource, CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
+from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W
@@ -244,9 +244,7 @@ def cli(argv: list[str] | None = None) -> int:
         return 2
     print("\n".join(route.describe()))
 
-    # The gyro bias navigation_linker defaults to, so the two drive alike
-    estimation = replace(MEASURED_ESTIMATION, gyro_bias_dps=MANEUVER.gyro_bias_dps)
-    pipeline = Pipeline(MEASURED, estimation, route=route)
+    pipeline = Pipeline(MEASURED, MEASURED_ESTIMATION, route=route)      # its gyro bias: config.GYRO_BIAS_DPS
     camera = sensors = motor = system = None
     try:
         import pigpio

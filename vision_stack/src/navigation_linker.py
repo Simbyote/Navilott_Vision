@@ -45,7 +45,7 @@ from dataclasses import replace
 import numpy as np
 
 from src.capture.camera import CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
+from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
 from src.estimation.estimation import Phase3Config
@@ -395,8 +395,8 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
     ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
                     help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
-    ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps, metavar="DPS",
-                    help=f"gyro Z at rest, + = right frame (default {MANEUVER.gyro_bias_dps}, config.MANEUVER)")
+    ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right frame (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
                     help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")

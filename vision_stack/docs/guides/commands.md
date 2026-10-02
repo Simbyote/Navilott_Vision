@@ -99,7 +99,7 @@ python3 -m src.phase3_linker --frames src/tests/data/frames   # repeatable repla
 python3 -m src.phase3_linker --camera --print-every 1         # every frame
 python3 -m src.phase3_linker --camera --print-every 0         # events only
 python3 -m src.phase3_linker --camera --cm-per-px S           # fill lane_offset_cm
-python3 -m src.phase3_linker --camera --gyro-bias DPS         # apply bench gyro bias
+python3 -m src.phase3_linker --camera --gyro-bias DPS         # override config.GYRO_BIAS_DPS
 python3 -m src.phase3_linker --camera --no-display --no-video # text and timing only
 ```
 

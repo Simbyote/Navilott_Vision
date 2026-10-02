@@ -332,14 +332,16 @@ def test_cli_hardware_that_wont_open_exits_2_and_releases_the_rest(hardware, cap
 
 
 @pytest.mark.software
-def test_cli_defaults_to_config_route_and_cap(hardware, monkeypatch):
+def test_cli_defaults_to_config_route_cap_and_gyro_bias(hardware, monkeypatch):
     seen = {}
-    monkeypatch.setattr(main, "run", lambda *a, **kw: seen.update(route=a[5], **kw) or main.RunResult(
+    monkeypatch.setattr(main, "run", lambda *a, **kw: seen.update(pipeline=a[3], route=a[5], **kw) or main.RunResult(
         main.END_FINISHED, 1.0, 20, 0))
     assert main.cli([]) == 0
-    from src.config import ROUTE_PATH
+    from src.config import GYRO_BIAS_DPS, ROUTE_PATH
     from src.navigation.route import load_route
     assert seen["route"] == load_route(ROUTE_PATH) and seen["max_run_s"] == main.MAX_RUN_S
+    pipeline = seen["pipeline"]                                        # the gyro bias the linkers default to
+    assert pipeline.estimation.gyro_bias_dps == pipeline.navigation._crossing.gyro_bias_dps == GYRO_BIAS_DPS
 
 
 @pytest.mark.software

@@ -42,7 +42,7 @@ The last screen stays up after the program exits (the display isn't blanked).
 
 ## 3. What it uses
 
-- **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, with the gyro bias `navigation_linker` defaults to (`MANEUVER.gyro_bias_dps`), so a production run and a default `navigation_linker --camera` run drive alike.
+- **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, whose gyro bias is `config.GYRO_BIAS_DPS`, the one every linker defaults to, so a production run and a default `navigation_linker --camera` run drive alike.
 - **Route:** `config.ROUTE_PATH` (`vision_stack/route.json`) unless `--route` is given.
 - **Sensors:** IMU and both encoders, on `SensorHub`'s 100 Hz thread, one sample per frame.
 

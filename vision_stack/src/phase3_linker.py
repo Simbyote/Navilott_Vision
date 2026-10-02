@@ -518,8 +518,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--imu", action="store_true", help="feed the MPU-6050 to Phase 3")
     ap.add_argument("--encoders", action="store_true",
                     help="feed the wheel encoders to Phase 3 (needs sudo pigpiod)")
-    ap.add_argument("--gyro-bias", type=float, default=0.0, metavar="DPS",
-                    help="gyro Z reading at standstill, subtracted before integrating")
+    ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right, subtracted before integrating "
+                         f"(default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
                     help="hand-measured ground scale; fills lane_offset_cm")
     ap.add_argument("--print-every", type=int, default=None, metavar="N",

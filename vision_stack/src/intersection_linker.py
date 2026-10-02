@@ -38,7 +38,7 @@ import time
 from dataclasses import replace
 
 from src.capture.camera import CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
+from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
 from src.estimation.estimation import LANE_VISION, Phase3Config
 from src.maneuver_linker import _NoMotors
@@ -237,8 +237,8 @@ def cli(argv: list[str] | None = None) -> int:
                     help=f"each sequence's backstop (default {SEQUENCE_MAX_S:.0f})")
     ap.add_argument("--settle-s", type=float, default=SETTLE_S,
                     help=f"lane kept on vision this long after the crossing ends a sequence (default {SETTLE_S})")
-    ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps, metavar="DPS",
-                    help=f"gyro Z at rest, + = right (default {MANEUVER.gyro_bias_dps}, config.MANEUVER)")
+    ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S")
     ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--no-render", action="store_true", help="skip each sequence's video")

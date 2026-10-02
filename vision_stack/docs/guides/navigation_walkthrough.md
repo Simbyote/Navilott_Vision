@@ -111,7 +111,7 @@ Why it moved:
 | Lane-keeping speed and steering | `src/navigation/lane_keeping.py` | `BASE_SPEED`, `KP_*` |
 | Stop sign hold | `src/navigation/stop_sign.py` | `STOP_SIGN_HOLD_TIME_MS` |
 | Gyro direction | `src/params.py` | `IMU_YAW_SIGN` (+ = turning right) |
-| Gyro bias | `src/config.py` | `MANEUVER.gyro_bias_dps` |
+| Gyro bias (the main run, every linker, the drive trial) | `src/config.py` | `GYRO_BIAS_DPS` |
 | Motor pins | `src/peripherals/drive.py` | `MotorController.__init__` defaults |
 | What the camera accepts as a stop line | `src/config.py` | `MEASURED` → `StopLineFilter(max_tilt_deg=15)` |
 

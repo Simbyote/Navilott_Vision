@@ -144,7 +144,7 @@ runs/maneuver_<YYYYMMDD_HHMMSS>/
 | Line | What it means | What to look for |
 | --- | --- | --- |
 | `[MANEUVER] completed` / `STOPPED: ...` | Whether every step ran, or why it stopped | Any `STOPPED` reason |
-| `gyro bias at rest` | The gyro's drift while still, measured this run, next to the configured value (+1.1; yaw is flipped to + = right, so the raw −1.1 reads +1.1) | Should be stable run to run. Noise sd above ~1 means the robot moved while settling |
+| `gyro bias at rest` | The gyro's drift while still, measured this run, next to the configured value (`config.GYRO_BIAS_DPS`, −1.1: the raw reading at rest, since `IMU_YAW_SIGN` is +1). If they differ by more than ~0.3, put the measured value in `GYRO_BIAS_DPS` | Should be stable run to run. Noise sd above ~1 means the robot moved while settling |
 | `lateral accel at rest` | Sideways acceleration while still | Not zero: the IMU mount's tilt. Note it; later work subtracts it |
 | `yaw sign` | Which way a positive gyro reading turns, found by the two spins | Should say **right**: the sensing hub flips this robot's upside-down IMU. `left` means `IMU_YAW_SIGN` in `params.py` is wrong for this robot |
 | `forward_1`, `forward_2` | Encoder counts per wheel, imbalance, time, whether it ended on counts or the time cap, gyro heading at the end, largest correction from each source | Heading at end near 0 means it drove straight. `time cap` means the leg was cut short (motors slow or `--leg-counts` too big) |
@@ -165,7 +165,7 @@ Every setting has a factory default in `MANEUVER` in `src/config.py`. For one ru
 | `--leg-max-s S` | 8 | Backstop: a leg stops after this long, even short of its counts |
 | `--speed D` | 0.40 | Forward motor duty, 0–1 |
 | `--turn-speed D` | 0.45 | Turning duty (it slows to 0.30 for the last 20°) |
-| `--gyro-bias DPS` | +1.1 | Starting gyro bias; the settle step measures and replaces it |
+| `--gyro-bias DPS` | −1.1 (`config.GYRO_BIAS_DPS`) | Starting gyro bias; the settle step measures and replaces it |
 | `--kp-counts K` | 0.0015 | How hard the encoders pull it straight |
 | `--kp-heading K` | 0.01 | How hard the gyro pulls it straight |
 | `--turn-tolerance DEG` | 5 | PASS band around the turn target (171°) |
