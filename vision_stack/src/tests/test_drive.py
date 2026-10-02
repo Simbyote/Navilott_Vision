@@ -2,22 +2,21 @@
 test_drive.py  --  src/peripherals/drive.py
 
 drive.py imports pigpio at module load, so software tests swap in a fake
-before importing it and patch time, so the closed-loop and differential
-routines run instantly and wheel motion can be injected as encoder edges.
+before importing it and patch time, so a drive runs instantly and wheel
+motion can be injected as encoder edges.
 
---software  Quadrature decoding, cps, TB6612 direction/PWM commands, stop,
-            and the closed-loop / differential routines, against a fake
-            pigpio and a simple wheel model. No GPIO.
+--software  Quadrature decoding, cps, TB6612 direction/PWM commands, brake
+            and stop, against a fake pigpio and a simple wheel model. No GPIO.
 --hardware  Skips unless pigpio is up and a short nudge makes an encoder
             count, so the motorless chassis skips here. Then spins each
             wheel alone, both forward, reverse and in place, checks the
-            counts hold when stopped, and runs the closed loop, recording
-            counts per leg. WHEELS OFF THE GROUND: about 10 s of motor time.
+            counts hold when stopped, and drives 3 s straight open loop,
+            recording counts per leg and the motors' natural mismatch.
+            WHEELS OFF THE GROUND: about 10 s of motor time.
 """
 import importlib
 import subprocess
 import sys
-import time
 import types
 from pathlib import Path
 
@@ -98,23 +97,6 @@ class FakeClock:
             self.on_sleep(self)
 
 
-class ScriptedEncoders:
-    """EncoderReader stand-in: snapshot() returns fixed counts, or raises on a chosen call."""
-    def __init__(self, mod, left=0, right=0, raise_on=None):
-        self.frame = mod.EncoderFrame(left_count=left, right_count=right)
-        self.raise_on = raise_on
-        self.calls = self.resets = 0
-
-    def reset(self):
-        self.resets += 1
-
-    def snapshot(self):
-        if self.calls == self.raise_on:
-            raise OSError("simulated encoder read error")
-        self.calls += 1
-        return self.frame
-
-
 @pytest.fixture
 def env(monkeypatch):
     """Imports drive.py against fake pigpio / time; returns (module, pi, clock)."""
@@ -135,13 +117,6 @@ def env(monkeypatch):
 def _pins(mod):
     e = mod.EncoderReader
     return e.LEFT_C1, e.LEFT_C2, e.RIGHT_C1, e.RIGHT_C2
-
-
-def _record_drive(motor):
-    """Wraps motor.drive so each (left, right) command is kept; returns the list."""
-    cmds, real = [], motor.drive
-    motor.drive = lambda l, r: (cmds.append((l, r)), real(l, r))
-    return cmds
 
 
 def _assert_stopped(pi, m):
@@ -393,40 +368,9 @@ def test_brake_stops_the_wheels_turning_in_the_wheel_model(env):
 
 
 @pytest.mark.software
-def test_run_step_waits_for_the_button_counts_down_drives_and_records_timing(env, monkeypatch):
-    mod, pi, clock = env
-    monkeypatch.setattr(clock, "strftime", time.strftime, raising=False)
-    monkeypatch.setattr(clock, "localtime", time.localtime, raising=False)
-    m = mod.MotorController(pi)
-    order = []
-
-    class FakeSystem:
-        def wait_for_start(self):
-            order.append("button"); clock.now += 2.0
-
-        def run_countdown(self):
-            order.append("countdown"); clock.now += 3.0
-
-    def leg(encoders, speed):
-        order.append(("drive", encoders, speed)); clock.now += 1.5
-
-    m.start_sequence()
-    m.run_step("leg 1", leg, FakeSystem(), "enc", speed=0.4)
-    m.run_step("leg 2", leg, FakeSystem(), "enc", speed=0.5)
-    assert order == ["button", "countdown", ("drive", "enc", 0.4), "button", "countdown", ("drive", "enc", 0.5)]
-    first, second = m.timing_records
-    assert (first["step"], second["step"]) == ("leg 1", "leg 2")
-    assert first["btn_press_rel"] == pytest.approx(2.0) and second["btn_press_rel"] == pytest.approx(8.5)
-    assert first["execution_duration"] == pytest.approx(1.5)
-    m.print_timing_summary()
-    m.start_sequence()
-    assert m.timing_records == []
-
-
-@pytest.mark.software
 def test_drive_loads_without_the_display_driver():
-    # System is a type hint only: importing the motor driver mustn't pull in the
-    # start button / display module (tm1637) or anything outside src/
+    # importing the motor driver mustn't pull in the start button / display
+    # module (tm1637) or anything outside src/
     code = ("import sys, types; sys.modules['tm1637'] = None; "
             "p = types.ModuleType('pigpio'); p.pi = object; sys.modules['pigpio'] = p; import " + DRIVE_MODULE)
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
@@ -443,94 +387,6 @@ def test_stop_zeroes_pwm_and_drops_every_control_pin(env):
     _assert_stopped(pi, m)
 
 
-# -----------------------------------------------------------------------------
-# MotorController: movements
-# -----------------------------------------------------------------------------
-@pytest.mark.software
-def test_closed_loop_holds_base_speed_when_wheels_match(env):
-    mod, pi, clock = env
-    m = mod.MotorController(pi)
-    cmds = _record_drive(m)
-    enc = ScriptedEncoders(mod, 100, 100)
-    m.drive_straight_closed_loop(enc, 0.5, 1.0)
-    assert enc.resets == 1
-    assert cmds and all(c == pytest.approx((0.5, 0.5)) for c in cmds)
-    assert set(clock.sleeps) == {0.02} and len(cmds) == pytest.approx(50, abs=1)   # 50 Hz for 1 s
-    _assert_stopped(pi, m)
-
-
-@pytest.mark.software
-def test_closed_loop_correction_is_proportional_then_clamped(env):
-    mod, pi, _ = env
-    m = mod.MotorController(pi)
-    cmds = _record_drive(m)
-    m.drive_straight_closed_loop(ScriptedEncoders(mod, 40, 0), 0.5, 0.02, kp=0.001)
-    l1, r1 = cmds[0]
-    cmds.clear()
-    m.drive_straight_closed_loop(ScriptedEncoders(mod, 10_000, 0), 0.5, 0.02, max_corr=0.15)
-    l2, r2 = cmds[0]
-    assert abs(l1 - r1) == pytest.approx(2 * 40 * 0.001)
-    assert abs(l2 - r2) == pytest.approx(2 * 0.15)
-
-
-@pytest.mark.software
-def test_closed_loop_never_commands_below_min_speed(env):
-    # base 0.3 less a clamped 0.15 correction would be 0.15; the floor holds it at 0.25
-    mod, pi, _ = env
-    m = mod.MotorController(pi)
-    cmds = _record_drive(m)
-    m.drive_straight_closed_loop(ScriptedEncoders(mod, 10_000, 0), 0.3, 0.1, min_speed=0.25)
-    assert all(min(c) >= 0.25 for c in cmds)
-
-
-@pytest.mark.software
-def test_closed_loop_slows_the_wheel_that_is_ahead(env):
-    mod, pi, _ = env
-    m = mod.MotorController(pi)
-    cmds = _record_drive(m)
-    m.drive_straight_closed_loop(ScriptedEncoders(mod, 60, 40), 0.5, 0.02)
-    left, right = cmds[0]
-    assert left < right
-
-
-@pytest.mark.software
-def test_closed_loop_keeps_a_weak_right_motor_in_step(env):
-    mod, pi, clock = env
-    enc, m = mod.EncoderReader(pi), mod.MotorController(pi)
-    clock.on_sleep = _wheel_model(mod, pi, m, right_gain=0.85)
-    m.drive_straight_closed_loop(enc, 0.5, 3.0)
-    f = enc.snapshot()
-    assert abs(f.left_count - f.right_count) <= 0.05 * max(f.left_count, f.right_count)
-
-
-@pytest.mark.software
-def test_differential_commands_once_logs_at_20hz_and_stops(env):
-    mod, pi, clock = env
-    m = mod.MotorController(pi)
-    cmds = _record_drive(m)
-    enc = ScriptedEncoders(mod)
-    m.drive_differential_for_duration(enc, 0.3, 0.6, 1.0)
-    assert cmds == [(0.3, 0.6)] and enc.resets == 1
-    assert set(clock.sleeps) == {0.05} and enc.calls == pytest.approx(20, abs=1)
-    _assert_stopped(pi, m)
-
-
-@pytest.mark.software
-@pytest.mark.parametrize("routine", ["straight", "differential"])
-def test_motors_stop_even_if_the_encoder_read_fails(env, routine):
-    # both routines stop in a finally; a dead encoder must not leave the wheels running
-    mod, pi, _ = env
-    m = mod.MotorController(pi)
-    m.drive(0.5, 0.5)
-    enc = ScriptedEncoders(mod, raise_on=3)
-    with pytest.raises(OSError):
-        if routine == "straight":
-            m.drive_straight_closed_loop(enc, 0.5, 1.0)
-        else:
-            m.drive_differential_for_duration(enc, 0.5, -0.5, 1.0)
-    _assert_stopped(pi, m)
-
-
 @pytest.mark.software
 @pytest.mark.parametrize("left, right, sign", [(0.5, 0.5, (1, 1)), (-0.5, -0.5, (-1, -1)),
                                                (0.5, -0.5, (1, -1))])
@@ -539,7 +395,9 @@ def test_encoder_signs_follow_the_commanded_direction(env, left, right, sign):
     mod, pi, clock = env
     enc, m = mod.EncoderReader(pi), mod.MotorController(pi)
     clock.on_sleep = _wheel_model(mod, pi, m)
-    m.drive_differential_for_duration(enc, left, right, 1.0)
+    m.drive(left, right)
+    clock.sleep(1.0)
+    m.stop()
     f = enc.snapshot()
     assert (f.left_count * sign[0] > 150) and (f.right_count * sign[1] > 150)
 
@@ -620,7 +478,10 @@ def test_drive_characterization(artifacts):
         enc.reset()
         time.sleep(0.5)
         coast = enc.snapshot()                  # motors stopped: counts should stay put
-        m.drive_straight_closed_loop(enc, 0.5, 3.0)
+        enc.reset()
+        m.drive(0.5, 0.5)                       # 3 s straight, open loop: the motors' natural mismatch
+        time.sleep(3.0)
+        m.stop()
         straight = enc.snapshot()
     finally:
         m.stop()
@@ -635,8 +496,8 @@ def test_drive_characterization(artifacts):
         "left_only": left_only, "right_only": right_only,
         "forward": forward, "reverse": reverse, "spin": spin,
         "stopped_0.5s": {"left": coast.left_count, "right": coast.right_count},
-        "closed_loop_3s": {"left": straight.left_count, "right": straight.right_count,
-                           "mismatch_pct": 100 * abs(straight.left_count - straight.right_count) / total},
+        "straight_3s": {"left": straight.left_count, "right": straight.right_count,
+                        "mismatch_pct": 100 * abs(straight.left_count - straight.right_count) / total},
         "cps_at_half_duty": {"left": forward["left"] / forward["s"], "right": forward["right"] / forward["s"]},
     })
     # wiring and sign convention first: every later number depends on them
@@ -646,5 +507,6 @@ def test_drive_characterization(artifacts):
     assert reverse["left"] < -20 and reverse["right"] < -20, "reverse: a wheel has no counts or counts forward"
     assert spin["left"] > 20 and spin["right"] < -20, "spin: sides don't turn opposite ways"
     assert abs(coast.left_count) <= 1 and abs(coast.right_count) <= 1, "counts while stopped: noisy encoder line"
-    assert abs(straight.left_count - straight.right_count) <= 0.05 * total, \
-        "closed loop let the wheels drift apart by more than 5%"
+    # straight_3s's mismatch is recorded, not asserted: open loop, the motors
+    # never match exactly; lane keeping and the gyro heading hold correct for it
+    assert straight.left_count > 20 and straight.right_count > 20, "straight: a wheel stopped counting"

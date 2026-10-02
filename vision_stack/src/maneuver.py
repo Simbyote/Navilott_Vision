@@ -56,7 +56,7 @@ class ManeuverConfig:
     so + steers right.
     """
     speed: float = 0.40                 # forward duty on the legs
-    min_speed: float = 0.25             # drive_straight_closed_loop's floor: slower and the N20s stall
+    min_speed: float = 0.25             # the drive floor: slower and the N20s stall (navigation's STALL_DUTY)
     # Leg length in encoder counts, the mean of both wheels. Placeholder:
     # set it on the mat, since counts per meter aren't measured yet
     leg_counts: int = 1500
