@@ -178,7 +178,7 @@ class NeverDrives(GoodNavigator):
 @pytest.mark.parametrize("module", ["src.navigation.navigation_contract", "src.navigation.navigation", "src.config",
                                     "src.maneuver", "src.navigation.lane_keeping", "src.navigation.stop_line",
                                     "src.navigation.stop_sign", "src.navigation.traffic_light",
-                                    "src.navigation.intersection", "src.scripts.lane_keeping_demo"])
+                                    "src.navigation.intersection"])
 def test_the_contract_and_its_users_load_without_motor_hardware(module):
     # pigpio blocked, as on a laptop: nothing above the drivers may import it at load
     code = f"import sys; sys.modules['pigpio'] = None; import {module}"

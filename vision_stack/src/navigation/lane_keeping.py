@@ -6,7 +6,7 @@ Purpose:
     against the lane offset (on vision) or the heading turned since vision
     was lost (on hold / stale). Pure logic: it never imports pigpio or the
     motor driver, so it runs and tests anywhere; whoever runs the loop drives
-    the Command it returns (scripts/lane_keeping_demo.py on the robot).
+    the Command it returns (main.py and navigation_linker on the robot).
 
 Main package:
     LaneKeepingNavigator: the navigator. update(packet) -> Command, reset().
