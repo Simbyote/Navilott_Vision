@@ -39,11 +39,10 @@ import argparse
 import sys
 import time
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from src.capture.camera import CameraSource, CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
-from src.estimation.estimation import SensorSample
+from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W
@@ -98,27 +97,6 @@ def mm_ss(seconds: float) -> str:
     return f"{min(int(seconds) // 60, 99):02d}:{int(seconds) % 60:02d}"
 
 
-class HubSensors:
-    """
-    Production sensing: the IMU and encoders on sensing.SensorHub's thread,
-    one SensorSample per frame window.
-
-    Inputs:
-        hub: A SensorHub; started here when it has sensors.
-    """
-    def __init__(self, hub) -> None:
-        self._hub = hub
-        if hub.has_sensors:
-            hub.start()
-
-    def read(self) -> SensorSample | None:
-        """This frame window's readings; None with no sensors."""
-        return SensorSample.from_batch(self._hub.drain()) if self._hub.has_sensors else None
-
-    def stop(self) -> None:
-        self._hub.stop()
-
-
 def halt(motor, sleep=time.sleep) -> None:
     """
     Stop the robot: short brake for HALT_BRAKE_S, then standby.
@@ -141,7 +119,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
     Inputs:
         camera: capture.CameraSource, opened: read() -> FrameData, or None
             for a dropped frame; release().
-        sensors: HubSensors (read() -> SensorSample | None, stop()).
+        sensors: sensing.Sensors (sample() -> SensorSample | None, stop()).
         motor: drive.MotorController: drive(left, right), brake(), stop().
         pipeline: A fresh Pipeline built with route.
         system: peripherals.system.System: the button and display.
@@ -160,7 +138,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
     try:
         system.wait_for_start(step_text(route))
         system.run_countdown()
-        sensors.read()                                  # start the first window at GO
+        sensors.sample()                                # start the first window at GO
         t0 = clock()
         while True:
             if clock() - t0 >= max_run_s:
@@ -169,7 +147,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
             fd = camera.read()
             if fd is None:                              # a dropped frame: no id spent, carry on
                 continue
-            cmd = pipeline.step(fd.frame, fd.frame_id, fd.timestamp_ms, sensors.read())
+            cmd = pipeline.step(fd.frame, fd.frame_id, fd.timestamp_ms, sensors.sample())
             if cmd.brake:
                 motor.brake()
             else:
@@ -266,19 +244,17 @@ def cli(argv: list[str] | None = None) -> int:
         return 2
     print("\n".join(route.describe()))
 
-    # The gyro bias navigation_linker defaults to, so the two drive alike
-    estimation = replace(MEASURED_ESTIMATION, gyro_bias_dps=MANEUVER.gyro_bias_dps)
-    pipeline = Pipeline(MEASURED, estimation, route=route)
+    pipeline = Pipeline(MEASURED, MEASURED_ESTIMATION, route=route)      # its gyro bias: config.GYRO_BIAS_DPS
     camera = sensors = motor = system = None
     try:
         import pigpio
         from src.peripherals.drive import MotorController
-        from src.peripherals.sensing import SensorHub
+        from src.peripherals.sensing import Sensors
         from src.peripherals.system import System
         motor = MotorController(pigpio.pi())
         motor.stop()
         system = System()
-        sensors = HubSensors(SensorHub.open(imu=True, encoders=True))
+        sensors = Sensors(imu=True, encoders=True)
         camera = CameraSource(FRAME_W, FRAME_H, FPS).open()
     except (CaptureError, OSError, RuntimeError, ImportError) as exc:
         print(f"hardware error: {exc!r}")

@@ -55,11 +55,11 @@ class Camera:
 
 
 class Sensors:
-    """HubSensors stand-in: the current frame's readings."""
+    """sensing.Sensors stand-in: the current frame's readings."""
     def __init__(self, camera, log):
         self.camera, self.log, self.reads = camera, log, 0
 
-    def read(self):
+    def sample(self):
         self.reads += 1
         sf = getattr(self.camera, "current", None)
         return None if sf is None else sf.sensors
@@ -263,37 +263,6 @@ def test_mm_ss_and_the_summary():
     assert main.summary(main.RunResult(main.END_EARLY, 65.0, 1300, 2)) == "ended early at step 2 after 01:05 (1300 frames)"
 
 
-@pytest.mark.software
-def test_hub_sensors_start_and_sample_only_with_sensors():
-    class Hub:
-        def __init__(self, has):
-            self.has_sensors, self.started, self.stopped = has, False, False
-
-        def start(self):
-            self.started = True
-
-        def drain(self):
-            return "batch"
-
-        def stop(self):
-            self.stopped = True
-
-    empty = Hub(False)
-    s = main.HubSensors(empty)
-    assert not empty.started and s.read() is None
-    s.stop()
-    assert empty.stopped
-    full = Hub(True)
-    seen = []
-    orig = main.SensorSample.from_batch
-    main.SensorSample.from_batch = classmethod(lambda cls, b: seen.append(b) or "sample")
-    try:
-        assert full.started is False and main.HubSensors(full).read() == "sample" and full.started
-    finally:
-        main.SensorSample.from_batch = orig
-    assert seen == ["batch"]
-
-
 # =============================================================================
 # The command line
 # =============================================================================
@@ -307,8 +276,8 @@ def hardware(monkeypatch):
     drive = types.ModuleType("src.peripherals.drive")
     drive.MotorController = lambda pi: made.setdefault("motor", Motor(log))
     sensing = types.ModuleType("src.peripherals.sensing")
-    sensing.SensorHub = types.SimpleNamespace(open=lambda **kw: made.setdefault("hub", types.SimpleNamespace(
-        has_sensors=False, stop=lambda: log.append("hub stopped"), kw=kw)))
+    sensing.Sensors = lambda **kw: made.setdefault("sensors", types.SimpleNamespace(
+        stop=lambda: log.append("sensors stopped"), kw=kw))
     system = types.ModuleType("src.peripherals.system")
     system.System = lambda: made.setdefault("system", System(log, interrupt_wait=True))
     for name, mod in (("pigpio", pigpio), ("src.peripherals.drive", drive),
@@ -340,7 +309,7 @@ def test_cli_prints_the_route_and_runs_it_leaving_the_last_screen_up(hardware, t
     out = capsys.readouterr().out
     assert "Route: 2 maneuvers" in out and "press the start button" in out and "interrupted" in out
     assert made["system"].screens == ["St 2", 0.0]                    # Ctrl-C at the start screen: time 00:00
-    assert made["hub"].kw == {"imu": True, "encoders": True}
+    assert made["sensors"].kw == {"imu": True, "encoders": True}
     assert log[0] == "motor stop" and log[-1] == "display released (blank=False)"
 
 
@@ -359,18 +328,20 @@ def test_cli_hardware_that_wont_open_exits_2_and_releases_the_rest(hardware, cap
     made["camera_fails"] = True
     assert main.cli([]) == 2
     assert "hardware error" in capsys.readouterr().out
-    assert log[-3:] == ["hub stopped", "motor stop", "display released (blank=True)"]
+    assert log[-3:] == ["sensors stopped", "motor stop", "display released (blank=True)"]
 
 
 @pytest.mark.software
-def test_cli_defaults_to_config_route_and_cap(hardware, monkeypatch):
+def test_cli_defaults_to_config_route_cap_and_gyro_bias(hardware, monkeypatch):
     seen = {}
-    monkeypatch.setattr(main, "run", lambda *a, **kw: seen.update(route=a[5], **kw) or main.RunResult(
+    monkeypatch.setattr(main, "run", lambda *a, **kw: seen.update(pipeline=a[3], route=a[5], **kw) or main.RunResult(
         main.END_FINISHED, 1.0, 20, 0))
     assert main.cli([]) == 0
-    from src.config import ROUTE_PATH
+    from src.config import GYRO_BIAS_DPS, ROUTE_PATH
     from src.navigation.route import load_route
     assert seen["route"] == load_route(ROUTE_PATH) and seen["max_run_s"] == main.MAX_RUN_S
+    pipeline = seen["pipeline"]                                        # the gyro bias the linkers default to
+    assert pipeline.estimation.gyro_bias_dps == pipeline.navigation._crossing.gyro_bias_dps == GYRO_BIAS_DPS
 
 
 @pytest.mark.software

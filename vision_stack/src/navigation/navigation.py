@@ -23,8 +23,9 @@ Flow, every frame:
        While an intersection is being crossed, no new line is taken up.
     2. StopSignRule      stop sign at the line: stop, hold, go
     3. TrafficLightRule  red light at the line: wait for it
-    4. IntersectionRule  past the line: straight on the gyro until both lane
-                         boundaries are back (turns: TBD, Ignacio's)
+    4. IntersectionRule  from the line leaving the view: straight to the line,
+                         the route's turn there (left / right), then out on
+                         the new heading until the lane is back
     5. EndOfCourseRule   lane stale: creep; stale too long: brake, finished
                          (or ended early, before the route is done); the
                          route's finish line: brake, finished

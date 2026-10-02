@@ -13,7 +13,7 @@ import types
 import pytest
 
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
-from src.peripherals.sensing import SensorBatch, SensorHub, SensorReading
+from src.peripherals.sensing import SensorBatch, SensorHub, SensorReading, Sensors
 
 
 class FakeIMU:
@@ -330,3 +330,89 @@ def test_open_uses_the_real_drivers_and_stop_releases_the_encoders(monkeypatch):
         assert all(cb.cancelled for cb in pi.callbacks) and not pi.connected
     finally:
         sys.modules.pop(DRIVE_MODULE, None)
+
+
+# =============================================================================
+# Sensors: what a frame loop uses
+# =============================================================================
+
+@pytest.mark.software
+def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_encoders):
+    drive, pi = fake_encoders
+    enc = drive.EncoderReader
+    sensors = Sensors(encoders=True)
+    # Forward on each side, per drive.py's decode: left C1 leads, right C2 leads
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
+    pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 10, c1_leads=False)
+    moving = sensors.sample()
+    assert moving.left_wheel_cps > moving.right_wheel_cps > 0.0
+    stopped = sensors.sample()
+    assert (stopped.left_wheel_cps, stopped.right_wheel_cps) == (0.0, 0.0)
+    assert stopped.yaw_rate_dps is None                  # no IMU asked for
+    sensors.stop()
+    assert all(cb.cancelled for cb in pi.callbacks) and not pi.connected
+
+
+@pytest.mark.software
+def test_the_imu_is_read_through_the_sensing_hub_with_this_robots_yaw_sign(monkeypatch):
+    class RawIMU:
+        def __init__(self):
+            pass
+        def read(self):
+            return 25.0, -0.9                            # raw, before IMU_YAW_SIGN
+    imu_mod = types.ModuleType("src.peripherals.imu")
+    imu_mod.IMUReader = RawIMU
+    monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
+    sensors = Sensors(imu=True)
+    time.sleep(0.05)
+    sample, batch = sensors.read()
+    sensors.stop()
+    assert batch.imu_count > 0
+    assert (sample.yaw_rate_dps, sample.lateral_accel_mps2) == (IMU_YAW_SIGN * 25.0, -0.9)
+    assert sample.left_wheel_cps is None                 # no encoders asked for
+
+
+@pytest.mark.software
+def test_encoder_reads_carry_the_cumulative_counts(fake_encoders):
+    drive, pi = fake_encoders
+    enc = drive.EncoderReader
+    sensors = Sensors(encoders=True)
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
+    _, batch = sensors.read()
+    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 5, c1_leads=True)
+    _, batch = sensors.read()
+    sensors.stop()
+    assert batch.left_count == 25 and batch.right_count == 0
+
+
+@pytest.mark.software
+def test_no_sensors_gives_no_sample():
+    assert Sensors().sample() is None
+    assert Sensors().read() == (None, None)
+
+
+@pytest.mark.software
+def test_a_given_hub_is_used_and_started_only_with_sensors():
+    class Hub:
+        def __init__(self, has):
+            self.has_sensors, self.started, self.stopped, self.drains = has, False, False, 0
+
+        def start(self):
+            self.started = True
+
+        def drain(self):
+            self.drains += 1
+            return SensorBatch((SensorReading(1.0, 4.0, 0.2, 10, 8),), SensorReading(0.5, None, None, 0, 0))
+
+        def stop(self):
+            self.stopped = True
+
+    empty = Hub(False)
+    s = Sensors(hub=empty)
+    assert not empty.started and s.sample() is None and empty.drains == 0
+    s.stop()
+    assert empty.stopped
+    full = Hub(True)
+    sample = Sensors(hub=full).sample()
+    assert full.started and full.drains == 1
+    assert (sample.yaw_rate_dps, sample.left_wheel_cps, sample.right_wheel_cps) == (4.0, 20.0, 16.0)

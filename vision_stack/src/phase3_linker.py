@@ -50,7 +50,7 @@ from src.estimation.estimation import (
     EstimationPacket, Phase3Config, Phase3Processor, SensorSample, with_lane_roi_width,
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
-from src.peripherals.sensing import SensorBatch, SensorHub
+from src.peripherals.sensing import Sensors           # re-exported: older imports read it from here
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -232,7 +232,7 @@ CSV_COLUMNS = (
     "lane_offset", "lane_offset_cm", "lane_status", "heading_error",
     "drive_state", "stop_sign_detected", "stop_line_detected", "stop_line_distance_px",
     "yaw_rate", "lateral_accel",
-    "wheel_speed", "p3_log",
+    "p3_log",
     # Appended, so no earlier column moves
     "p2_stop_line_cm", "stop_line_distance_cm",
     "left_wheel_cps", "right_wheel_cps",
@@ -261,7 +261,7 @@ class CsvLog:
             pk.lane_offset, pk.lane_offset_cm, pk.lane_status,
             pk.heading_error, pk.drive_state, int(pk.stop_sign_detected),
             int(pk.stop_line_detected), pk.stop_line_distance_px,
-            pk.yaw_rate, pk.lateral_accel, pk.wheel_speed,
+            pk.yaw_rate, pk.lateral_accel,
             " | ".join(res.p3_debug.get("log", [])),
             res.chain.stop_line.distance_cm, pk.stop_line_distance_cm,     # blank without a ground homography
             pk.left_wheel_cps, pk.right_wheel_cps,
@@ -372,44 +372,6 @@ def make_processor(frame, fid: int, ts: int, config: PipelineConfig,
     (with_lane_roi_width); fid and ts aren't used.
     """
     return TracedPhase3Processor(with_lane_roi_width(p3_config, config.roi, frame.shape[:2]))
-
-
-class Sensors:
-    """
-    The linkers' view of production sensing: a sensing.SensorHub over the
-    IMU and wheel encoders, each opened only when asked for, so replays
-    never load the board drivers or pigpio. With neither, every frame runs
-    without sensors.
-
-    The IMU uses IMU_I2C_ADDRESS from params and isn't calibrated here, so
-    any gyro bias correction comes from --gyro-bias, in the hub's frame
-    (+ = turning right). The encoders need the pigpio daemon (sudo pigpiod).
-    """
-    def __init__(self, imu: bool = False, encoders: bool = False) -> None:
-        self._hub = SensorHub.open(imu=imu, encoders=encoders)
-        if self._hub.has_sensors:
-            self._hub.start()
-
-    def read(self) -> tuple[SensorSample | None, SensorBatch | None]:
-        """
-        This frame window's readings.
-
-        Outputs:
-            (sample, batch): Phase 3's SensorSample and the SensorBatch it came
-            from, which also carries the cumulative counts the sample leaves
-            out. (None, None) with no sensors.
-        """
-        if not self._hub.has_sensors:
-            return None, None
-        batch = self._hub.drain()
-        return SensorSample.from_batch(batch), batch
-
-    def sample(self) -> SensorSample | None:
-        """This frame window's readings; None with no sensors."""
-        return self.read()[0]
-
-    def stop(self) -> None:
-        self._hub.stop()
 
 
 def run(
@@ -556,8 +518,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--imu", action="store_true", help="feed the MPU-6050 to Phase 3")
     ap.add_argument("--encoders", action="store_true",
                     help="feed the wheel encoders to Phase 3 (needs sudo pigpiod)")
-    ap.add_argument("--gyro-bias", type=float, default=0.0, metavar="DPS",
-                    help="gyro Z reading at standstill, subtracted before integrating")
+    ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right, subtracted before integrating "
+                         f"(default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
                     help="hand-measured ground scale; fills lane_offset_cm")
     ap.add_argument("--print-every", type=int, default=None, metavar="N",

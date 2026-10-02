@@ -109,16 +109,24 @@ MEASURED = PipelineConfig(
     ),
 )
 
-# Phase 3: estimation.Phase3Config's defaults until course runs tune them.
-# lane_roi_width_px stays None: Pipeline derives it from MEASURED's lane ROI
-# when cm_per_px is set. gyro_bias_dps stays 0 until a bench measurement
-# (or phase3_linker's --gyro-bias) sets it.
-MEASURED_ESTIMATION = Phase3Config()
+# Gyro Z at rest, deg/s, in the sensor hub's frame (+ = turning right, after
+# IMU_YAW_SIGN): the one bias every yaw reading is corrected by before it's
+# integrated, in Phase 3's heading, the intersection's heading hold and the
+# drive trial. The 2026-09-29 phase3_linker run read -1.1 raw at rest; it was
+# +1.1 while IMU_YAW_SIGN was -1, and with IMU_YAW_SIGN = 1 (2026-10-01) the
+# hub frame is the raw one. Re-measure, robot still: maneuver_linker prints
+# it ("gyro bias at rest ... measured"), as does test_imu --hardware (bias_dps)
+GYRO_BIAS_DPS = -1.1
+
+# Phase 3: estimation.Phase3Config's defaults until course runs tune them,
+# with this robot's gyro bias. lane_roi_width_px stays None: Pipeline
+# derives it from MEASURED's lane ROI when cm_per_px is set.
+MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS)
 
 # maneuver_linker's drive trial: ManeuverConfig's placeholders until course
 # runs set them. leg_counts in particular is a guess until counts per meter
 # are measured; maneuver_linker's flags override any field for one run.
-MANEUVER = ManeuverConfig()
+MANEUVER = ManeuverConfig(gyro_bias_dps=GYRO_BIAS_DPS)
 
 # The course plan: one maneuver per intersection and how the run finishes
 # (src/navigation/route.py). A file, not a constant, so it changes between

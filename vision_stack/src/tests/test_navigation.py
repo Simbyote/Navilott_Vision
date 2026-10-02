@@ -16,6 +16,7 @@ from src.navigation.navigation import (
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
+from src.navigation.intersection import LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES
 from src.tests.navigation_checks import (
     APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
     contract_problems, frames, intersection, packet,
@@ -231,11 +232,16 @@ def test_once_finished_no_rule_is_asked_again():
 # The route
 # =============================================================================
 
+# Frames after each line: to the line, a turn's time limit (no yaw in these
+# packets, so a turn runs to it) and the exit
+COURSE_AFTER = (STOP_DELAY_MS + LEFT_TURN_MAX_MS) // MS + 2 * ONE_BOUNDARY_FRAMES
+
+
 def course(n_lines, tail):
     """n_lines intersections (green, no sign), then tail."""
     case = []
     for _ in range(n_lines):
-        case += intersection(after={"lane_mode": "right_only"}, after_frames=40) + [{}] * 5
+        case += intersection(after={"lane_mode": "right_only"}, after_frames=COURSE_AFTER) + [{}] * 5
     return case + tail
 
 

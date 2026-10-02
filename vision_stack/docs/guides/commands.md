@@ -99,7 +99,7 @@ python3 -m src.phase3_linker --frames src/tests/data/frames   # repeatable repla
 python3 -m src.phase3_linker --camera --print-every 1         # every frame
 python3 -m src.phase3_linker --camera --print-every 0         # events only
 python3 -m src.phase3_linker --camera --cm-per-px S           # fill lane_offset_cm
-python3 -m src.phase3_linker --camera --gyro-bias DPS         # apply bench gyro bias
+python3 -m src.phase3_linker --camera --gyro-bias DPS         # override config.GYRO_BIAS_DPS
 python3 -m src.phase3_linker --camera --no-display --no-video # text and timing only
 ```
 
@@ -122,7 +122,19 @@ python3 -m src.maneuver_linker --render runs/maneuver_<YYYYMMDD_HHMMSS>   # rebu
 
 Output: `runs/maneuver_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, `maneuver.csv`, `p3.csv`, `maneuver.avi`)
 
-Navigation bench demo (wheels off the ground; scripted packets, no camera; lane keeping, then a stop-sign intersection): `python3 -m src.scripts.lane_keeping_demo`
+---
+
+## Intersections — [intersection_linker.md](intersection_linker.md)
+
+One intersection per run with the whole chain driving; each judged PASS or CHECK.
+
+```
+python3 -m src.intersection_linker left --camera       # one left turn at a real stop line
+python3 -m src.intersection_linker all --camera        # straight, left, right in turn
+python3 -m src.intersection_linker straight --camera --no-motors   # bench: nothing moves
+```
+
+Output: `runs/intersection_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `report.json`, one run folder per maneuver)
 
 ---
 
@@ -147,7 +159,7 @@ The course plan is `route.json` in `vision_stack/`, read at startup; edit it bet
 {"maneuvers": ["left", "straight", "right"], "finish": "edge"}
 ```
 
-`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right are driven straight until the turn logic lands.
+`finish` is `edge` (the lane running out after the last maneuver) or `stop_line` (stop at the first stop line after it). Left and right turns run inside the intersection rule; prove each with `intersection_linker` below.
 
 ---
 

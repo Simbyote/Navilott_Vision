@@ -8,17 +8,12 @@ budget and the total, and Ctrl-C still leaves a playable video.
 
 --software  cli() / run() on a frame directory. No camera.
 """
-import importlib
-import sys
-import time
-import types
 
 import cv2
 import pytest
 
 import src.debugger.debug_video as dv
 import src.phase3_linker as p3
-from src.params import IMU_YAW_SIGN
 from src.debugger.debug_phase3 import Phase3View
 from src.debugger.live_view import DirectoryFrameSource
 from src.debugger.estimation_debug import TracedPhase3Processor
@@ -123,76 +118,6 @@ def test_the_linker_runs_the_traced_processor(frames, tmp_path, monkeypatch):
 # =============================================================================
 # Encoders
 # =============================================================================
-
-@pytest.fixture
-def fake_encoders(monkeypatch):
-    """drive.py imported against test_drive's fake pigpio; returns (drive module, fake pi)."""
-    from src.tests.test_drive import DRIVE_MODULE, FakePi
-    pi = FakePi()
-    pigpio = types.ModuleType("pigpio")
-    pigpio.INPUT, pigpio.OUTPUT = "INPUT", "OUTPUT"
-    pigpio.PUD_UP, pigpio.EITHER_EDGE = "PUD_UP", "EITHER_EDGE"
-    pigpio.pi = lambda: pi
-    monkeypatch.setitem(sys.modules, "pigpio", pigpio)
-    monkeypatch.delitem(sys.modules, DRIVE_MODULE, raising=False)
-    yield importlib.import_module(DRIVE_MODULE), pi
-    sys.modules.pop(DRIVE_MODULE, None)
-
-
-@pytest.mark.software
-def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_encoders):
-    drive, pi = fake_encoders
-    enc = drive.EncoderReader
-    sensors = p3.Sensors(encoders=True)
-    # Forward on each side, per drive.py's decode: left C1 leads, right C2 leads
-    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
-    pi.quad(enc.RIGHT_C1, enc.RIGHT_C2, 10, c1_leads=False)
-    moving = sensors.sample()
-    assert moving.left_wheel_cps > moving.right_wheel_cps > 0.0
-    stopped = sensors.sample()
-    assert (stopped.left_wheel_cps, stopped.right_wheel_cps) == (0.0, 0.0)
-    assert stopped.yaw_rate_dps is None                  # no IMU asked for
-    sensors.stop()
-    assert all(cb.cancelled for cb in pi.callbacks) and not pi.connected
-
-
-@pytest.mark.software
-def test_the_imu_is_read_through_the_sensing_hub_with_this_robots_yaw_sign(monkeypatch):
-    class RawIMU:
-        def __init__(self):
-            pass
-        def read(self):
-            return 25.0, -0.9                            # raw, before IMU_YAW_SIGN
-    imu_mod = types.ModuleType("src.peripherals.imu")
-    imu_mod.IMUReader = RawIMU
-    monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
-    sensors = p3.Sensors(imu=True)
-    time.sleep(0.05)
-    sample, batch = sensors.read()
-    sensors.stop()
-    assert batch.imu_count > 0
-    assert (sample.yaw_rate_dps, sample.lateral_accel_mps2) == (IMU_YAW_SIGN * 25.0, -0.9)
-    assert sample.left_wheel_cps is None                 # no encoders asked for
-
-
-@pytest.mark.software
-def test_encoder_reads_carry_the_cumulative_counts(fake_encoders):
-    drive, pi = fake_encoders
-    enc = drive.EncoderReader
-    sensors = p3.Sensors(encoders=True)
-    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 20, c1_leads=True)
-    _, batch = sensors.read()
-    pi.quad(enc.LEFT_C1, enc.LEFT_C2, 5, c1_leads=True)
-    _, batch = sensors.read()
-    sensors.stop()
-    assert batch.left_count == 25 and batch.right_count == 0
-
-
-@pytest.mark.software
-def test_no_sensors_gives_no_sample():
-    assert p3.Sensors().sample() is None
-    assert p3.Sensors().read() == (None, None)
-
 
 @pytest.mark.software
 def test_encoders_flag_writes_the_wheel_columns(frames, tmp_path, fake_encoders, monkeypatch):

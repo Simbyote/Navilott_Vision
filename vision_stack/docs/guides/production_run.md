@@ -17,7 +17,7 @@ python3 -m src.main --route my_route.json
 python3 -m src.main --max-run-s 120
 ```
 
-1. The terminal prints the route: the maneuver count, each maneuver (turns marked `TBD: driven straight`), and the finish. A bad route file stops it here with `route error: ...` (exit 2), before anything opens.
+1. The terminal prints the route: the maneuver count, each maneuver, and the finish. A bad route file stops it here with `route error: ...` (exit 2), before anything opens.
 2. It opens the motors (stopped), the display, the IMU and encoders, and the camera. Anything missing stops it with `hardware error: ...` (exit 2) and releases what did open.
 3. The display shows **`St N`**, the route's maneuver count, until the start button is pressed.
 4. Countdown 5–4–3–2–1, then GO: the clock starts and the robot drives. The display shows the elapsed **MM:SS**.
@@ -42,7 +42,7 @@ The last screen stays up after the program exits (the display isn't blanked).
 
 ## 3. What it uses
 
-- **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, with the gyro bias `navigation_linker` defaults to (`MANEUVER.gyro_bias_dps`), so a production run and a default `navigation_linker --camera` run drive alike.
+- **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, whose gyro bias is `config.GYRO_BIAS_DPS`, the one every linker defaults to, so a production run and a default `navigation_linker --camera` run drive alike.
 - **Route:** `config.ROUTE_PATH` (`vision_stack/route.json`) unless `--route` is given.
 - **Sensors:** IMU and both encoders, on `SensorHub`'s 100 Hz thread, one sample per frame.
 
@@ -50,7 +50,7 @@ The last screen stays up after the program exits (the display isn't blanked).
 
 ## 4. Known limits
 
-- **Turns** are TBD: every intersection is crossed straight, whatever the route says.
+- **Turns** run on the gyro with mat-measured duties; check each with `intersection_linker` before a course run.
 - **Intersection count:** every stop line passing under the view is the next step. A missed or false line shifts the route; replay the course with `navigation_linker` and check `step` in `nav.csv`.
 - **End of course:** the lane lost for ~1.35 s ends the run (`END_STALE_MS`). Glare that long ends it early, shown as `E  N`.
 - Stop sign and traffic light gates: see `navigation_linker.md`, "Known limits".

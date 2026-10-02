@@ -31,29 +31,22 @@ import argparse
 import csv
 import json
 import os
-import pickle
-import queue
 import select
 import sys
-import threading
 import time
 import traceback
 from dataclasses import asdict, fields, replace
 
-import cv2
-
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
-from src.debugger.debug_maneuver import FRAMES_DIR, RECORDS_FILE, frame_path, render_run
-from src.debugger.live_view import CameraFrameSource, Display
+from src.debugger.debug_maneuver import render_run
+from src.debugger.live_view import Display
 from src.estimation.estimation import LANE_VISION, Phase3Config
 from src.debugger.estimation_debug import TracedPhase3Processor
+from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.maneuver import FORWARD_2, Maneuver, ManeuverConfig, Tick
 from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.phase3_linker import CsvLog, Phase3Stats, Sensors, run_phase3_chain
-
-JPEG_QUALITY = 90       # frames are only a video background; decisions come from the records
-QUEUE_FRAMES = 64       # ~2.5 s at 25 FPS of slack before the recorder drops frames
+from src.phase3_linker import CsvLog, Phase3Stats, run_phase3_chain
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -89,65 +82,8 @@ Output (--out DIR, default <root>/runs/maneuver_<timestamp>):
 
 
 # =============================================================================
-# Recording
+# The per-frame record (the recorder is linker_io's)
 # =============================================================================
-
-class FrameRecorder:
-    """
-    Writes each frame's JPEG and pickled record on a background thread, so the
-    control loop never waits on the disk.
-
-    A full queue drops the frame (counted in dropped) rather than blocking:
-    the video loses a frame, the robot doesn't lose a control step. The CSVs
-    are written in the loop and are always complete.
-    """
-    def __init__(self, out_dir: str, maxsize: int = QUEUE_FRAMES) -> None:
-        self.out_dir = out_dir
-        os.makedirs(os.path.join(out_dir, FRAMES_DIR), exist_ok=True)
-        self.dropped = self.written = 0
-        self._q: queue.Queue = queue.Queue(maxsize=maxsize)
-        self._records = open(os.path.join(out_dir, RECORDS_FILE), "wb")
-        self._error: BaseException | None = None
-        self._thread = threading.Thread(target=self._work, name="frame-recorder", daemon=True)
-        self._thread.start()
-
-    def put(self, frame_id: int, frame, record: dict) -> None:
-        """Queue one frame and its record; copies the frame, since the camera may reuse its buffer."""
-        try:
-            self._q.put_nowait((frame_id, frame.copy(), record))
-        except queue.Full:
-            self.dropped += 1
-
-    def _work(self) -> None:
-        try:
-            while (item := self._q.get()) is not None:
-                fid, frame, record = item
-                cv2.imwrite(frame_path(self.out_dir, fid), frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
-                pickle.dump(record, self._records, protocol=pickle.HIGHEST_PROTOCOL)
-                self.written += 1
-        except BaseException as exc:            # reported by close(); the loop must not die with it
-            self._error = exc
-
-    def close(self) -> None:
-        """Flush everything queued, then close. Raises what the thread hit, if anything."""
-        self._q.put(None)
-        self._thread.join()
-        self._records.close()
-        if self._error is not None:
-            raise RuntimeError(f"frame recorder failed: {self._error!r}") from self._error
-
-
-def chain_record(res) -> dict:
-    """
-    What debug_maneuver.as_result() needs to redraw a frame's Phase 3 view,
-    without the images the chain carries. Shared with navigation_linker.
-    """
-    chain = res.chain
-    return {"frame_id": res.packet.frame_id, "timestamp_ms": res.packet.timestamp_ms,
-            "geometry": chain.geometry, "offset": chain.offset, "offset_debug": chain.offset_debug,
-            "lane_rect": chain.roi.lane_rect, "packet": res.packet, "p3_debug": res.p3_debug,
-            "timings": dict(res.timings_ms)}
-
 
 def _record(res, machine: Maneuver) -> dict:
     """What render_run() needs to redraw this frame: the chain plus the maneuver's record."""
@@ -178,18 +114,6 @@ class Resume:
         return False
 
 
-class _NoMotors:
-    """--no-motors: commands are logged in maneuver.csv but never sent."""
-    def drive(self, left: float, right: float) -> None:
-        pass
-
-    def brake(self) -> None:
-        pass
-
-    def stop(self) -> None:
-        pass
-
-
 def run(
         source,
         sensors,
@@ -211,11 +135,11 @@ def run(
 
     Inputs:
         source: A live_view FrameSource; the camera on the robot.
-        sensors: phase3_linker.Sensors with the IMU and encoders started
+        sensors: sensing.Sensors with the IMU and encoders started
             (anything with read() -> (SensorSample, imu_frame, encoder_frame)
             and stop()).
         motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); _NoMotors for a bench run.
+            brake() and stop(); NoMotors for a bench run.
         cfg: The trial's tuning; MANEUVER from config.py plus any flags.
         config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
         system: peripherals.system.System for the start button, countdown
@@ -502,24 +426,11 @@ def cli(argv: list[str] | None = None) -> int:
 
     out_dir = args.out or str(RUNS_DIR / ("maneuver_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=cfg.gyro_bias_dps)
-    source = sensors = motor = system = None
     try:
-        source = CameraFrameSource(args.width, args.height, args.fps)
-        sensors = Sensors(imu=True, encoders=True)
-        if args.no_motors:
-            motor = _NoMotors()
-        else:
-            import pigpio
-            from src.peripherals.drive import MotorController
-            motor = MotorController(pigpio.pi())
-        if not args.no_button:
-            from src.peripherals.system import System
-            system = System()
-    except Exception as exc:
-        print(f"hardware error: {exc!r}")
-        for thing in (motor, sensors, source):
-            if thing is not None:
-                (thing.stop if hasattr(thing, "stop") else thing.close)()
+        source, sensors, motor, system = open_rig(camera=True, fps=args.fps, size=(args.width, args.height),
+                                                  motors=not args.no_motors, button=not args.no_button)
+    except OPEN_ERRORS as exc:
+        print(f"source / hardware error: {exc!r}")
         return 2
 
     print(f"output   {out_dir}")
@@ -527,9 +438,7 @@ def cli(argv: list[str] | None = None) -> int:
           f"turn {cfg.turn_target_deg:.0f} +/- {cfg.turn_tolerance_deg:.0f} deg in {cfg.turn_timeout_s:.0f} s"
           + ("   MOTORS OFF" if args.no_motors else ""))
     if system is None:
-        for n in (3, 2, 1):
-            print(f"  starting in {n}")
-            time.sleep(1.0)
+        countdown()
     else:
         print("press the start button")
     report = run(source, sensors, motor, cfg, config, p3_config, out_dir, system,

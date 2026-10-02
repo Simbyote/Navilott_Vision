@@ -470,7 +470,7 @@ def _pipeline_course(config, sequence=COURSE):
 def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
     """Frame by frame: the packet the navigator saw, its record, and the command the motors got; then how the run ended."""
     config = COURSE_CONFIGS[case]
-    source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE)
+    source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE, gyro_bias_dps=MEASURED_ESTIMATION.gyro_bias_dps)
     report = nl.run(source, _CourseSensors(source), motor, nav, config, MEASURED_ESTIMATION,
                     out_dir=str(tmp_path / "run"), max_run_s=1e9, render=False)
     pipeline, cmds, packets, records = _pipeline_course(config)
@@ -486,15 +486,17 @@ def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
 
 @pytest.mark.software
 def test_the_course_moves_every_navigation_rule_and_finishes():
-    """Guards the command parity test: every rule decides some frame, the route is counted, the run finishes."""
-    seen = set()
+    """Guards the command parity test: every rule and intersection stage decides some frame, the route is counted, the run finishes."""
+    seen, stages = set(), set()
     for config in COURSE_CONFIGS.values():
         pipeline, cmds, _, records = _pipeline_course(config)
         seen |= {r["rule"] for r in records}
+        stages |= {r.get("stage") for r in records if r["rule"] == RULE_INTERSECTION}
         assert BRAKE in cmds and any(not c.brake for c in cmds)
         assert pipeline.finished and (pipeline.navigation.outcome, pipeline.navigation.end_step) == ("finished", 1)
         assert len(cmds) < len(COURSE)                       # it ended on the course, not at the sequence's end
     assert seen == ALL_RULES
+    assert stages == {"to_line", "turn", "exit"}                    # the route's left turn is driven on the gyro
 
 
 @pytest.mark.software

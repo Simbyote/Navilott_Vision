@@ -7,7 +7,7 @@ Purpose:
     Navigation subsystem (navigation.Navigation: the stop sign, traffic light
     and intersection rules over lane keeping, which is everything behind it),
     checks the Command against the contract, and drives the motors with it. Nothing is drawn while the robot
-    drives: frames and per-frame records go to disk on maneuver_linker's
+    drives: frames and per-frame records go to disk on linker_io's
     background recorder, and nav.avi is rendered once the run ends, so the
     run measures the real control loop.
 
@@ -28,7 +28,7 @@ Flow:
     2. Per frame: read the camera and sensors, run the vision chain, ask the
        navigator, check the command, drive the motors, log, queue the frame.
     3. On the navigator finishing (end of course), the run-time cap, the
-       source ending, Ctrl-C or an error: stop the motors first, flush the
+       source ending, the caller's stop_when, Ctrl-C or an error: stop the motors first, flush the
        recorder, write the summary.
     4. Render nav.avi from the recording, and play it if there's a display.
 """
@@ -44,18 +44,17 @@ from dataclasses import replace
 
 import numpy as np
 
-from src.capture.camera import CaptureError
-from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
+from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
-from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, Display, VideoFrameSource
+from src.debugger.live_view import Display
 from src.estimation.estimation import Phase3Config
-from src.maneuver_linker import FrameRecorder, _NoMotors, chain_record
+from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
+from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 
 # The run's backstop: brake and end after this long, whatever the navigator
 # does. The only linker-level safety stop (decided 2026-09-30); a run that
@@ -69,9 +68,9 @@ END_EARLY = "ended early (lane lost before the route was done)"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "step", "maneuver", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
-              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "event")
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -188,16 +187,17 @@ def run(
         render: bool = True,
         display: bool = False,
         scale: int = 1,
+        stop_when=None,
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
 
     Inputs:
         source: A live_view FrameSource: the camera, or a replay.
-        sensors: phase3_linker.Sensors (anything with read() -> (SensorSample,
+        sensors: sensing.Sensors (anything with read() -> (SensorSample,
             batch) and stop()); None runs Phase 3 without sensors.
         motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); _NoMotors for a dry run.
+            brake() and stop(); NoMotors for a dry run.
         navigator: A Navigator; navigation.Navigation. Its record, if it has
             one, says which rule decided each command and why.
         config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
@@ -209,6 +209,9 @@ def run(
         motors_on: Reported in the summary; False for a dry run.
         render: Render nav.avi after the run.
         display: Play the rendered video in a window afterwards.
+        stop_when: Called with each frame's nav.csv row once the motors have
+            its command; a non-empty string it returns ends the run, as
+            ended_by (intersection_linker ends a sequence this way).
 
     Outputs:
         The findings, also written to report.json.
@@ -283,14 +286,16 @@ def run(
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
                  "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
-                 "maneuver": rec.get("maneuver") or "", "lane_mode": pkt.lane_mode,
+                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "",
+                 "turn_end": rec.get("turn_end") or "", "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
                  "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
-                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "event": event}
+                 "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "event": event}
             if event:
                 print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
             stats.update(res)
@@ -300,6 +305,10 @@ def run(
             recorder.put(fid, frame, {**chain_record(res), "nav": n})
             if system is not None:
                 system.update_display(arrived - t0)
+            why = stop_when(n) if stop_when is not None else None
+            if why:
+                ended_by = why
+                break
             if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
                 ended_by = END_EARLY if getattr(navigator, "outcome", None) == OUTCOME_EARLY else END_COURSE
                 break
@@ -384,8 +393,8 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--limit", type=int, default=None, help="stop after N frames")
     ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
                     help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
-    ap.add_argument("--gyro-bias", type=float, default=MANEUVER.gyro_bias_dps, metavar="DPS",
-                    help=f"gyro Z at rest, + = right frame (default {MANEUVER.gyro_bias_dps}, config.MANEUVER)")
+    ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
+                    help=f"gyro Z at rest, + = right frame (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
                     help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
@@ -421,29 +430,12 @@ def cli(argv: list[str] | None = None) -> int:
     out_dir = args.out or str(RUNS_DIR / ("nav_" + time.strftime("%Y%m%d_%H%M%S")))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
     motors_on = bool(args.camera and not args.no_motors)
-    source = sensors = motor = system = None
     try:
-        if args.camera:
-            source = CameraFrameSource(args.width, args.height, args.fps or FPS)
-            sensors = Sensors(imu=True, encoders=True)
-        elif args.video:
-            source = VideoFrameSource(args.video, args.fps)
-        else:
-            source = DirectoryFrameSource(args.frames, args.fps or FPS)
-        if motors_on:
-            import pigpio
-            from src.peripherals.drive import MotorController
-            motor = MotorController(pigpio.pi())
-        else:
-            motor = _NoMotors()
-        if args.camera and not args.no_button:
-            from src.peripherals.system import System
-            system = System()
-    except (CaptureError, OSError, RuntimeError, ImportError) as exc:
+        source, sensors, motor, system = open_rig(args.camera, args.video, args.frames, args.fps,
+                                                  (args.width, args.height), motors=not args.no_motors,
+                                                  button=not args.no_button)
+    except OPEN_ERRORS as exc:
         print(f"source / hardware error: {exc!r}")
-        for thing in (motor, sensors, source):
-            if thing is not None:
-                (thing.stop if hasattr(thing, "stop") else thing.close)()
         return 2
 
     print(f"source   {source.label} @ {source.fps:.0f} FPS")
@@ -452,9 +444,7 @@ def cli(argv: list[str] | None = None) -> int:
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}")
     print("\n".join(route.describe()))
     if args.camera and system is None:
-        for n in (3, 2, 1):
-            print(f"  starting in {n}")
-            time.sleep(1.0)
+        countdown()
     elif system is not None:
         print("press the start button")
     run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,

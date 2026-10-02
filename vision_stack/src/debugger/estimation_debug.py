@@ -243,7 +243,6 @@ class TracedPhase3Processor(Phase3Processor):
             stop_line_distance_cm = stop_line_cm,
             yaw_rate = sensors.yaw_rate_dps or 0.0,
             lateral_accel = sensors.lateral_accel_mps2 or 0.0,
-            wheel_speed = sensors.wheel_speed_mps or 0.0,
             frame_id = phase2.frame_id,
             timestamp_ms = phase2.timestamp_ms,
             left_wheel_cps = sensors.left_wheel_cps or 0.0,

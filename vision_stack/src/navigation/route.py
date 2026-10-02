@@ -22,8 +22,7 @@ Purpose:
 Main package:
     Route: the plan; load_route() reads and checks the file; RouteError.
     RouteProgress: where the run is in the plan, advanced once per intersection.
-    MANEUVERS: STRAIGHT, LEFT, RIGHT. TURNS_TBD: maneuvers not built yet
-        (Ignacio's turn logic), driven straight until they are.
+    MANEUVERS: STRAIGHT, LEFT, RIGHT (intersection.py drives each).
 
 Flow:
     1. load_route(path) at startup; describe() for the startup screen.
@@ -36,8 +35,6 @@ from pathlib import Path
 
 STRAIGHT, LEFT, RIGHT = "straight", "left", "right"
 MANEUVERS = (STRAIGHT, LEFT, RIGHT)
-# Left and right turns are Ignacio's to build; until then they're driven straight and logged
-TURNS_TBD = (LEFT, RIGHT)
 FINISH_EDGE, FINISH_STOP_LINE = "edge", "stop_line"
 FINISHES = (FINISH_EDGE, FINISH_STOP_LINE)
 # RouteProgress.enter()'s kinds of intersection
@@ -70,8 +67,7 @@ class Route:
         """The startup screen's lines: the step count, each maneuver, and the finish."""
         n = len(self.maneuvers)
         lines = [f"Route: {n} maneuver{'s' if n != 1 else ''}"]
-        lines += [f"  {i}. {m}{'  (TBD: driven straight)' if m in TURNS_TBD else ''}"
-                  for i, m in enumerate(self.maneuvers, 1)]
+        lines += [f"  {i}. {m}" for i, m in enumerate(self.maneuvers, 1)]
         lines.append("  finish: " + ("the mat's edge after the last maneuver (the lane runs out)"
                                      if self.finish == FINISH_EDGE else
                                      f"stop at stop line {n + 1}, after the last maneuver"))

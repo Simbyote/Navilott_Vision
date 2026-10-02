@@ -18,13 +18,16 @@ Main package:
     SensorReading: one reading: time, yaw rate, lateral accel, both counts.
     SensorBatch: one frame window's readings, and what Phase 3 needs from them.
     SensorHub: the sampling thread, its buffer, and drain().
+    Sensors: what a frame loop uses (src/main.py and every linker): opens and
+        starts a hub, then one read() / sample() per frame.
 
 Flow:
-    1. SensorHub.open(imu=..., encoders=...) (or SensorHub(imu, encoders)).
-    2. start(): take the first window's starting reading and begin sampling.
-    3. drain(), once per frame: close the window with a fresh encoder reading
-       and hand over every reading since the previous drain.
-    4. stop(): end the thread and release whatever open() opened.
+    1. Sensors(imu=..., encoders=...): SensorHub.open() and start().
+       (Or by hand: SensorHub.open() / SensorHub(imu, encoders), start().)
+    2. Once per frame, sample() (or read() for the batch too): the hub's
+       drain() closes the window with a fresh encoder reading and hands over
+       every reading since the previous one, as a SensorSample.
+    3. stop(): end the thread and release whatever open() opened.
 """
 import logging
 import threading
@@ -32,6 +35,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from src.estimation.estimation import SensorSample
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
 
 log = logging.getLogger(__name__)
@@ -284,3 +288,47 @@ class SensorHub:
                 self._stop_evt.wait(sleep_t)
             else:
                 next_t = time.perf_counter()          # fell behind; resync
+
+
+class Sensors:
+    """
+    A frame loop's sensors: a started SensorHub over the IMU and wheel
+    encoders, each opened only when asked for, so replays never load the
+    board drivers or pigpio. With neither, every frame runs without sensors.
+
+    The IMU uses IMU_I2C_ADDRESS from params and isn't calibrated here, so
+    any gyro bias correction comes from Phase3Config.gyro_bias_dps, in the
+    hub's frame (+ = turning right). The encoders need the pigpio daemon
+    (sudo pigpiod).
+
+    Inputs:
+        imu, encoders: Which sensors SensorHub.open() opens.
+        hub: A hub to use instead (tests, or one built by hand); imu and
+            encoders are then ignored. Started here if it has sensors.
+    """
+    def __init__(self, imu: bool = False, encoders: bool = False, hub: SensorHub | None = None) -> None:
+        self._hub = hub if hub is not None else SensorHub.open(imu=imu, encoders=encoders)
+        if self._hub.has_sensors:
+            self._hub.start()
+
+    def read(self) -> tuple[SensorSample | None, SensorBatch | None]:
+        """
+        This frame window's readings.
+
+        Outputs:
+            (sample, batch): Phase 3's SensorSample and the SensorBatch it came
+            from, which also carries the cumulative counts the sample leaves
+            out. (None, None) with no sensors.
+        """
+        if not self._hub.has_sensors:
+            return None, None
+        batch = self._hub.drain()
+        return SensorSample.from_batch(batch), batch
+
+    def sample(self) -> SensorSample | None:
+        """This frame window's readings; None with no sensors."""
+        return self.read()[0]
+
+    def stop(self) -> None:
+        """Stop the hub and release its sensors."""
+        self._hub.stop()

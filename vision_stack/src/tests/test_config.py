@@ -120,8 +120,9 @@ def test_phase3_linker_flags_apply_on_top_of_measured_estimation(tmp_path, monke
     frames = tmp_path / "f"
     frames.mkdir()
     cv2.imwrite(str(frames / "000000.png"), synthetic_frame([150, 290]))
-    # MEASURED_ESTIMATION still equals Phase3Config()'s defaults, so a CLI that
-    # built a bare Phase3Config would pass unnoticed; swap in one that differs
+    # Only the gyro bias sets MEASURED_ESTIMATION apart from Phase3Config()'s
+    # defaults, and --gyro-bias overrides it, so a CLI that built a bare
+    # Phase3Config would pass unnoticed; swap in one that differs
     tuned = replace(config.MEASURED_ESTIMATION, ema_alpha=0.6, vote_window=5)
     monkeypatch.setattr(p3, "MEASURED_ESTIMATION", tuned)
     got = {}
@@ -129,6 +130,17 @@ def test_phase3_linker_flags_apply_on_top_of_measured_estimation(tmp_path, monke
     p3.cli(["--frames", str(frames), "--gyro-bias", "1.25", "--cm-per-px", "0.07",
             "--out", str(tmp_path / "out")])
     assert got["p3"] == replace(tuned, gyro_bias_dps=1.25, cm_per_px=0.07)
+
+
+@pytest.mark.software
+def test_phase3_linker_defaults_to_the_configured_gyro_bias(tmp_path, monkeypatch):
+    frames = tmp_path / "f"
+    frames.mkdir()
+    cv2.imwrite(str(frames / "000000.png"), synthetic_frame([150, 290]))
+    got = {}
+    monkeypatch.setattr(p3, "run", lambda source, cfg, p3_config, *a, **k: got.update(p3=p3_config))
+    p3.cli(["--frames", str(frames), "--out", str(tmp_path / "out")])
+    assert got["p3"].gyro_bias_dps == config.GYRO_BIAS_DPS
 
 
 @pytest.mark.software
@@ -205,3 +217,9 @@ def test_the_route_file_config_points_at_loads():
 def test_measured_takes_stop_lines_within_15_degrees_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, StopLineFilter
     assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=15.0))
+
+
+@pytest.mark.software
+def test_one_gyro_bias_for_phase_3_navigation_and_the_drive_trial():
+    assert config.MEASURED_ESTIMATION.gyro_bias_dps == config.MANEUVER.gyro_bias_dps == config.GYRO_BIAS_DPS
+    assert config.GYRO_BIAS_DPS == -1.1          # the raw reading at rest; IMU_YAW_SIGN is 1
