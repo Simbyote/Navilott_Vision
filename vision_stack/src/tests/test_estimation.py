@@ -217,14 +217,14 @@ def test_packet_is_frozen():
 @pytest.mark.software
 def test_missing_sensors_pass_through_as_zero():
     pkt, _ = Phase3Processor().process(p2(), None)
-    assert (pkt.yaw_rate, pkt.lateral_accel, pkt.wheel_speed) == (0.0, 0.0, 0.0)
+    assert (pkt.yaw_rate, pkt.lateral_accel, pkt.left_wheel_cps, pkt.right_wheel_cps) == (0.0, 0.0, 0.0, 0.0)
 
 
 @pytest.mark.software
 def test_sensors_pass_through():
-    s = SensorSample(yaw_rate_dps=2.0, lateral_accel_mps2=0.3, wheel_speed_mps=0.1)
+    s = SensorSample(yaw_rate_dps=2.0, lateral_accel_mps2=0.3)
     pkt, _ = Phase3Processor().process(p2(), s)
-    assert (pkt.yaw_rate, pkt.lateral_accel, pkt.wheel_speed) == (2.0, 0.3, 0.1)
+    assert (pkt.yaw_rate, pkt.lateral_accel) == (2.0, 0.3)
 
 
 @pytest.mark.software
@@ -323,18 +323,17 @@ def test_packet_carries_the_stop_line_vote_and_distances():
 @pytest.mark.software
 def test_from_batch_reads_each_field_off_the_batch():
     batch = SimpleNamespace(mean_yaw_dps=-12.5, peak_lateral_accel=0.8, left_cps=100.0, right_cps=0.0)
-    s = SensorSample.from_batch(batch, wheel_speed_mps=0.2)
-    assert s == SensorSample(yaw_rate_dps=-12.5, lateral_accel_mps2=0.8, wheel_speed_mps=0.2,
+    s = SensorSample.from_batch(batch)
+    assert s == SensorSample(yaw_rate_dps=-12.5, lateral_accel_mps2=0.8,
                              left_wheel_cps=100.0, right_wheel_cps=0.0)
     none = SimpleNamespace(mean_yaw_dps=None, peak_lateral_accel=None, left_cps=None, right_cps=None)
     assert SensorSample.from_batch(none) == SensorSample()
 
 
 @pytest.mark.software
-def test_wheel_counts_per_second_pass_through_to_the_packet_and_wheel_speed_stays_zero():
+def test_wheel_counts_per_second_pass_through_to_the_packet():
     pkt, _ = Phase3Processor().process(p2(), SensorSample(left_wheel_cps=240.0, right_wheel_cps=-15.5))
     assert (pkt.left_wheel_cps, pkt.right_wheel_cps) == (240.0, -15.5)
-    assert pkt.wheel_speed == 0.0                        # not converted to m/s yet
     pkt, _ = Phase3Processor().process(p2())
     assert (pkt.left_wheel_cps, pkt.right_wheel_cps) == (0.0, 0.0)
 

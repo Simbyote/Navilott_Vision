@@ -99,18 +99,11 @@ class SensorSample:
     """Sensor readings for one frame window. None means not available."""
     yaw_rate_dps: float | None = None          # mean gyro Z over the window, deg/s; + = turning right
     lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
-    # @TODO fill from the encoders once counts per wheel revolution and the
-    # wheel diameter are measured; nothing sets it until then
-    wheel_speed_mps: float | None = None
     left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
     right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
 
     @classmethod
-    def from_batch(
-            cls,
-            batch,
-            wheel_speed_mps: float | None = None,
-        ) -> "SensorSample":
+    def from_batch(cls, batch) -> "SensorSample":
         """
         Build a SensorSample from one frame window's sensing.SensorBatch.
 
@@ -119,12 +112,10 @@ class SensorSample:
                 peak_lateral_accel, left_cps and right_cps, so this module
                 never imports sensing. Each is None when its sensor isn't
                 there or gave nothing this window.
-            wheel_speed_mps: Carried through as-is.
         """
         return cls(
             yaw_rate_dps = batch.mean_yaw_dps,
             lateral_accel_mps2 = batch.peak_lateral_accel,
-            wheel_speed_mps = wheel_speed_mps,
             left_wheel_cps = batch.left_cps,
             right_wheel_cps = batch.right_cps,
         )
@@ -156,9 +147,6 @@ class EstimationPacket:
     stop_line_distance_cm: float | None
     yaw_rate: float                 # pass-through, deg/s; 0.0 if unavailable
     lateral_accel: float            # pass-through, m/s^2; 0.0 if unavailable
-    # pass-through, m/s; always 0.0 until the encoders are converted to m/s
-    # (@TODO: needs counts per wheel revolution and the wheel diameter)
-    wheel_speed: float
     frame_id: int
     timestamp_ms: int
     # Encoder counts per second over the frame window, + = forward; 0.0 when
@@ -487,7 +475,6 @@ class Phase3Processor:
             stop_line_distance_cm = stop_line_cm,
             yaw_rate = sensors.yaw_rate_dps or 0.0,
             lateral_accel = sensors.lateral_accel_mps2 or 0.0,
-            wheel_speed = sensors.wheel_speed_mps or 0.0,
             frame_id = phase2.frame_id,
             timestamp_ms = phase2.timestamp_ms,
             left_wheel_cps = sensors.left_wheel_cps or 0.0,

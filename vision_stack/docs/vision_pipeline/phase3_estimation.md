@@ -154,9 +154,8 @@ Using the encoder readings (checking that a steering correction actually turned 
 | `stop_line_distance_cm` | `float \| None` | Floor cm forward of the reference point (the bottom of the camera's view) to where the line crosses the robot's centerline, held with the px value from the same frame; from the stop-line table (cm ahead of where its marks were measured from) when there's no ground homography; also `None` with neither |
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
-| `wheel_speed` | `float` | m/s; always 0.0 for now. **To fill in:** needs the encoder counts per wheel revolution and the wheel diameter to convert counts to meters |
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
-| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts, not converted to distance. 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
+| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts, not converted to distance (the packet has no m/s speed: it needs the counts per wheel revolution and the wheel diameter). 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
 | `lane_mode` | `str` | Pass-through: this frame's Phase 2 lane offset mode (`two_boundary`, `left_only`, `right_only`, `single_uncalibrated`, `none`), unfiltered; `none` when Phase 2 gave no lane result. Navigation ends an intersection crossing on `two_boundary` |
 
 What Navigation must do with each field, and what it returns, is `navigation_contract.md`.

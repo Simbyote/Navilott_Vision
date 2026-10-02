@@ -47,8 +47,7 @@ class Navigator(Protocol):
 | `stop_line_detected`, `stop_line_distance_px` | A stop line says an intersection is coming. It stops the robot only with a stop sign or a red light, once the robot reaches it: 1.5 s after it leaves the bottom of the view |
 | `lane_mode` | Phase 2's mode this frame; `two_boundary` = both lane boundaries seen |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
-| `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders |
-| `wheel_speed` | Always 0.0 for now (`@TODO`: counts per revolution and wheel diameter). Don't use it |
+| `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders. The packet's only wheel speed: there is no m/s field (see "Open questions") |
 | `stop_sign_detected` | The sign gate is untuned (see `phase3_estimation.md`, "Open items"). Don't rely on it yet |
 | `timestamp_ms` | Capture time on `time.monotonic_ns() // 1_000_000`. Differences between packets give dt |
 
@@ -183,4 +182,4 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).
 - **Old packets.** What Navigation does with a packet much older than the last isn't decided (time steps are capped at 0.5 s).
 - **`caution`** has no defined behavior.
-- **`wheel_speed`** in m/s needs counts per wheel revolution and the wheel diameter.
+- **Wheel speed in m/s.** The packet's `wheel_speed` was removed (2026-10-02): nothing set it, so it was always 0.0. Speed is `left_wheel_cps` / `right_wheel_cps`. If m/s is needed, measure the encoder counts per wheel revolution and the wheel diameter, and compute it from the counts in one place.

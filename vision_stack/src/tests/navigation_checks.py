@@ -39,7 +39,7 @@ _BASE = EstimationPacket(
     lane_offset=0.0, lane_offset_cm=None, lane_status="vision", heading_error=0.0,
     drive_state="go", stop_sign_detected=False, stop_line_detected=False,
     stop_line_distance_px=None, stop_line_distance_cm=None,
-    yaw_rate=0.0, lateral_accel=0.0, wheel_speed=0.0,
+    yaw_rate=0.0, lateral_accel=0.0,
     frame_id=0, timestamp_ms=0, left_wheel_cps=0.0, right_wheel_cps=0.0, lane_mode="two_boundary",
 )
 

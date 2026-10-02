@@ -333,9 +333,9 @@ def drive_sequence() -> list[SequenceFrame]:
         SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart
         (plus one 900 ms gap). Same content on every call.
     """
-    steady = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, wheel_speed_mps=0.3)
-    turning = SensorSample(yaw_rate_dps=60.0, lateral_accel_mps2=-0.8, wheel_speed_mps=0.25)
-    no_yaw = SensorSample(yaw_rate_dps=None, lateral_accel_mps2=0.2, wheel_speed_mps=0.3)
+    steady = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=600.0, right_wheel_cps=600.0)
+    turning = SensorSample(yaw_rate_dps=60.0, lateral_accel_mps2=-0.8, left_wheel_cps=700.0, right_wheel_cps=300.0)
+    no_yaw = SensorSample(yaw_rate_dps=None, lateral_accel_mps2=0.2, left_wheel_cps=600.0, right_wheel_cps=600.0)
     strong, dim = dict(lamp_radius=16), dict(lamp_radius=8)
     segments = [
         # (segment, frame, count, sensors)
