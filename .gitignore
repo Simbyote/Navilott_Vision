@@ -47,10 +47,10 @@ navilott_vision.egg-info/
 /navilott_vision.egg-info
 
 # Videos, Frames, and Data
-/frame/
-**/frame/
-frame/
-/frame
+/frames/
+**/frames/
+frames/
+/frames
 
 /logs/
 **/logs/
@@ -81,7 +81,6 @@ video/
 *.avi
 *.csv
 *.jpg
-*.png
 *.txt
 *.zip
 # Editor swap files (vim)
