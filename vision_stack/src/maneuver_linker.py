@@ -50,7 +50,8 @@ from src.debugger.estimation_debug import TracedPhase3Processor
 from src.maneuver import FORWARD_2, Maneuver, ManeuverConfig, Tick
 from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.phase3_linker import CsvLog, Phase3Stats, Sensors, run_phase3_chain
+from src.peripherals.sensing import Sensors
+from src.phase3_linker import CsvLog, Phase3Stats, run_phase3_chain
 
 JPEG_QUALITY = 90       # frames are only a video background; decisions come from the records
 QUEUE_FRAMES = 64       # ~2.5 s at 25 FPS of slack before the recorder drops frames
@@ -211,7 +212,7 @@ def run(
 
     Inputs:
         source: A live_view FrameSource; the camera on the robot.
-        sensors: phase3_linker.Sensors with the IMU and encoders started
+        sensors: sensing.Sensors with the IMU and encoders started
             (anything with read() -> (SensorSample, imu_frame, encoder_frame)
             and stop()).
         motor: drive.MotorController, or anything with drive(left, right),

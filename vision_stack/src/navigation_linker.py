@@ -55,7 +55,8 @@ from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 from src.perception.color_branch import ColorConfig, load_hsv_ranges
-from src.phase3_linker import CsvLog, Phase3Stats, Sensors, make_processor, run_phase3_chain
+from src.peripherals.sensing import Sensors
+from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 
 # The run's backstop: brake and end after this long, whatever the navigator
 # does. The only linker-level safety stop (decided 2026-09-30); a run that
@@ -195,7 +196,7 @@ def run(
 
     Inputs:
         source: A live_view FrameSource: the camera, or a replay.
-        sensors: phase3_linker.Sensors (anything with read() -> (SensorSample,
+        sensors: sensing.Sensors (anything with read() -> (SensorSample,
             batch) and stop()); None runs Phase 3 without sensors.
         motor: drive.MotorController, or anything with drive(left, right),
             brake() and stop(); _NoMotors for a dry run.

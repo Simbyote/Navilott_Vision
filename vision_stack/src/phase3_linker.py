@@ -50,7 +50,7 @@ from src.estimation.estimation import (
     EstimationPacket, Phase3Config, Phase3Processor, SensorSample, with_lane_roi_width,
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
-from src.peripherals.sensing import SensorBatch, SensorHub
+from src.peripherals.sensing import Sensors           # re-exported: older imports read it from here
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -372,44 +372,6 @@ def make_processor(frame, fid: int, ts: int, config: PipelineConfig,
     (with_lane_roi_width); fid and ts aren't used.
     """
     return TracedPhase3Processor(with_lane_roi_width(p3_config, config.roi, frame.shape[:2]))
-
-
-class Sensors:
-    """
-    The linkers' view of production sensing: a sensing.SensorHub over the
-    IMU and wheel encoders, each opened only when asked for, so replays
-    never load the board drivers or pigpio. With neither, every frame runs
-    without sensors.
-
-    The IMU uses IMU_I2C_ADDRESS from params and isn't calibrated here, so
-    any gyro bias correction comes from --gyro-bias, in the hub's frame
-    (+ = turning right). The encoders need the pigpio daemon (sudo pigpiod).
-    """
-    def __init__(self, imu: bool = False, encoders: bool = False) -> None:
-        self._hub = SensorHub.open(imu=imu, encoders=encoders)
-        if self._hub.has_sensors:
-            self._hub.start()
-
-    def read(self) -> tuple[SensorSample | None, SensorBatch | None]:
-        """
-        This frame window's readings.
-
-        Outputs:
-            (sample, batch): Phase 3's SensorSample and the SensorBatch it came
-            from, which also carries the cumulative counts the sample leaves
-            out. (None, None) with no sensors.
-        """
-        if not self._hub.has_sensors:
-            return None, None
-        batch = self._hub.drain()
-        return SensorSample.from_batch(batch), batch
-
-    def sample(self) -> SensorSample | None:
-        """This frame window's readings; None with no sensors."""
-        return self.read()[0]
-
-    def stop(self) -> None:
-        self._hub.stop()
 
 
 def run(

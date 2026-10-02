@@ -192,3 +192,25 @@ def run_root(request):
 def artifacts(run_root, request):
     """Artifacts writer for this test's own subdirectory of the session run."""
     return Artifacts(run_root / request.node.name)
+
+
+@pytest.fixture
+def fake_encoders(monkeypatch):
+    """drive.py imported against test_drive's fake pigpio; returns (drive module, fake pi).
+
+    Shared by test_sensing (Sensors over the real EncoderReader) and
+    test_phase3_linker (--encoders through the CLI).
+    """
+    import importlib
+    import sys
+    import types
+    from src.tests.test_drive import DRIVE_MODULE, FakePi
+    pi = FakePi()
+    pigpio = types.ModuleType("pigpio")
+    pigpio.INPUT, pigpio.OUTPUT = "INPUT", "OUTPUT"
+    pigpio.PUD_UP, pigpio.EITHER_EDGE = "PUD_UP", "EITHER_EDGE"
+    pigpio.pi = lambda: pi
+    monkeypatch.setitem(sys.modules, "pigpio", pigpio)
+    monkeypatch.delitem(sys.modules, DRIVE_MODULE, raising=False)
+    yield importlib.import_module(DRIVE_MODULE), pi
+    sys.modules.pop(DRIVE_MODULE, None)

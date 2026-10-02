@@ -47,7 +47,7 @@ from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navi
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
 from src.navigation_linker import run as navigation_run
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
-from src.phase3_linker import Sensors
+from src.peripherals.sensing import Sensors
 
 # Lane keeping on vision this long after the crossing ends the sequence:
 # the robot found its lane again and kept it
