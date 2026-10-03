@@ -254,7 +254,9 @@ def run(
             source.close()
             if system is not None:
                 system.show_final_time(0.0 if t0 is None else clock() - t0)
-                system.cleanup(blank=False)          # the final time stays up
+                time.sleep(5.0)                      # let the final time be seen for 5 seconds
+                system.cleanup(blank=False)          # the final time stays up for 5 seconds, then the display is cleared
+                
 
     wall = 0.0 if t0 is None else clock() - t0
     report = machine.report()
