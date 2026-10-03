@@ -23,17 +23,19 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 
 | Tool | Reads | Writes | Look at |
 | --- | --- | --- | --- |
-| `stage_timing` | `stage_timing.csv`, `stages.csv`, `p3.csv` | `timing_budget.png`, `timing_per_frame.png` | Which stage dominates, and how much of the loop is outside the pipeline |
-| `jitter` | `frames.csv`, `stage_timing.csv`, `p3.csv`, `stages.csv` | `jitter.png`, `jitter.json` | p99 and max interval, over-budget streaks, whether spikes are periodic |
+| `stage_timing` | `stage_timing.csv`, `stages.csv`, `nav.csv`, `p3.csv` | `timing_budget.png`, `timing_per_frame.png` | Which stage dominates, and how much of the loop is outside the pipeline |
+| `jitter` | `frames.csv`, `stage_timing.csv`, `nav.csv`, `p3.csv`, `stages.csv` | `jitter.png`, `jitter.json` | p99 and max interval, over-budget streaks, whether spikes are periodic |
 | `stability` | `p3.csv`, `lane_offset_timing.csv`, `stages.csv` | `stability.png`, `stability.json` | Offset std (noise floor), transitions and flickers per 100 frames |
 | `offset_accuracy` | one `p3.csv` per measured position | `offset_accuracy.png`, `offset_accuracy.json` | Bias per position, fit slope and intercept, the PASS/FAIL verdict |
 | `gate_rejections` | `geometry_timing.csv`, `color_timing.csv` | `gate_rejections.png`, `gate_rejections.json` | The gate with the largest share, per detector |
-| `state_timeline` | `p3.csv` | `state_timeline.png`, `state_timeline.json` | Hold and stale dwell times, stop latching, frequent transitions |
-| `soak` | `system.csv`, `soak_frames.csv` from `test_soak` | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
+| `state_timeline` | `nav.csv` (rule, stage, lane, light) or `p3.csv` | `state_timeline.png`, `state_timeline.json` | Hold and stale dwell times, stop latching, frequent transitions; on a `nav.csv`, how long each rule and stage lasts |
+| `soak` | `system.csv` (from `test_soak` or a diagnostics recording), `soak_frames.csv` if there is one | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
 | `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock; what slow frames coincided with |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
+
+**Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
 
 ## Recording for each tool
 

@@ -28,7 +28,8 @@ from src.analysis import common
 from src.analysis.common import BUDGET_MS, Table, fmt, interval_ms, stats
 from src.params import FPS
 
-CSV_NAMES = ("frames.csv", "stage_timing.csv", "p3.csv", "stages.csv")
+# nav.csv before p3.csv: in a navigation run folder its t is the loop interval (p3.csv's dt_s is clamped)
+CSV_NAMES = ("frames.csv", "stage_timing.csv", "nav.csv", "p3.csv", "stages.csv")
 # A spike sits this many robust standard deviations (1.4826 x MAD) above the
 # median, and at least SPIKE_MIN_MS above it so a perfectly steady series
 # doesn't call 0.1 ms of noise a spike
@@ -121,7 +122,9 @@ def figure(intervals, result: dict, title: str, out_path) -> Path | None:
     ax.spines[["top", "right"]].set_visible(False)
 
     v = iv[~np.isnan(iv)]
-    hx.hist(v, bins=40, orientation="horizontal", color="#1f77b4")
+    # Identical intervals (a fixed-rate replay or a fake clock) have no range to split into 40 bins;
+    # rounding leaves them differing by ~1e-14 ms, so anything under a microsecond is one bin
+    hx.hist(v, bins=40 if np.ptp(v) > 1e-3 else 1, orientation="horizontal", color="#1f77b4")
     hx.axhline(budget, color="black", linewidth=1.2)
     hx.set_ylim(ax.get_ylim())
     hx.set_xlabel("frames")

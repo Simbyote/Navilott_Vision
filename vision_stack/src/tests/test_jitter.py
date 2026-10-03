@@ -96,3 +96,26 @@ def test_small_spikes_on_a_noisy_baseline_are_caught():
     iv[30::60] = 89.0
     r = jitter.analyze(iv, budget_ms=50)
     assert r["spikes"]["count"] == 7 and r["spikes"]["periodic"]
+
+
+def write_nav(path, n=20, step_s=0.05, stage_from=8, stage_to=14):
+    """A small nav.csv: timings, t, and rule / stage / lane / light columns, stage blank outside 8-13."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
+                    "rule", "stage", "lane_status", "drive_state"])
+        for i in range(n):
+            inside = stage_from <= i < stage_to
+            w.writerow([i, round(i * step_s, 3), 2.0, 20.0, 0.5, 0.2, 23.0,
+                        "intersection" if inside else "lane_keeping", "to_line" if inside else "",
+                        "stale" if inside else "vision", "go"])
+    return path
+
+
+@pytest.mark.software
+def test_a_navigation_run_folders_intervals_come_from_nav_csvs_t(tmp_path, capsys):
+    write_nav(tmp_path / "nav.csv", step_s=0.06)
+    (tmp_path / "p3.csv").write_text("frame_id,dt_s\n0,0.05\n1,0.05\n")
+    assert jitter.main([str(tmp_path)]) == 0
+    assert "nav.csv" in capsys.readouterr().out

@@ -349,3 +349,41 @@ def test_stage_timing_characterization(request, frames, artifacts):
     if loop_med and loop_med > BUDGET:
         warnings.warn(f"loop median {loop_med:.1f} ms is over the {BUDGET:.0f} ms budget "
                       f"({1000 / loop_med:.1f} FPS, target {FPS})")
+
+
+def write_nav(path, n=20, step_s=0.05, stage_from=8, stage_to=14):
+    """A small nav.csv: timings, t, and rule / stage / lane / light columns, stage blank outside 8-13."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
+                    "rule", "stage", "lane_status", "drive_state"])
+        for i in range(n):
+            inside = stage_from <= i < stage_to
+            w.writerow([i, round(i * step_s, 3), 2.0, 20.0, 0.5, 0.2, 23.0,
+                        "intersection" if inside else "lane_keeping", "to_line" if inside else "",
+                        "stale" if inside else "vision", "go"])
+    return path
+
+
+@pytest.mark.software
+def test_a_nav_csv_times_navigation_and_leaves_latency_out(tmp_path):
+    path = write_nav(tmp_path / "nav.csv")
+    b = st.breakdown(st.read_timing_csv(path, skip=0), 50.0)
+    assert list(b["stages"]) == ["capture", "phase2", "phase3", "nav"]
+    assert b["stages"]["nav"]["median"] == pytest.approx(0.2) and b["interval"]["median"] == pytest.approx(50.0)
+
+
+@pytest.mark.software
+def test_a_navigation_run_folder_is_read_from_its_nav_csv(tmp_path):
+    write_nav(tmp_path / "nav.csv")
+    (tmp_path / "p3.csv").write_text("frame_id,capture_ms,phase2_ms,phase3_ms,total_ms\n0,1,2,3,6\n")
+    from src.analysis import common
+    assert common.find_csv(str(tmp_path), st.CSV_NAMES).name == "nav.csv"
+
+
+@pytest.mark.software
+def test_navigation_takes_its_place_after_phase_3_whatever_the_column_order(tmp_path):
+    path = tmp_path / "x.csv"
+    path.write_text("frame_id,nav_ms,record_ms,phase3_ms,phase2_ms\n0,0.2,1.0,0.5,20\n1,0.2,1.0,0.5,20\n")
+    assert st.stage_names(st.read_timing_csv(path, skip=0)) == ["phase2", "phase3", "nav", "record"]

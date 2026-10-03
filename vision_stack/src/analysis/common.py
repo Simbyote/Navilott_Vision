@@ -92,7 +92,8 @@ def interval_ms(table: Table):
     """
     Per-frame loop or frame interval in ms, from the best column available:
     interval_ms (measured loop), dt_ms (capture), dt_s (Phase 3), then
-    successive timestamp_ms. None when there's nothing to derive it from.
+    successive timestamp_ms, then successive t (seconds since the run's
+    start: nav.csv). None when there's nothing to derive it from.
     """
     if table.has_values("interval_ms"):
         return table.numeric("interval_ms")
@@ -103,6 +104,8 @@ def interval_ms(table: Table):
     if table.has_values("timestamp_ms"):
         ts = table.numeric("timestamp_ms")
         return np.concatenate(([np.nan], np.diff(ts)))
+    if table.has_values("t"):
+        return np.concatenate(([np.nan], np.diff(table.numeric("t")) * 1000.0))
     return None
 
 

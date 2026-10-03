@@ -78,3 +78,31 @@ def test_figure(tmp_path):
     path = write_p3(tmp_path / "p3.csv", ["vision", "hold", "vision"], ["GO", "GO", "STOP"])
     t = Table(path)
     assert stl.figure(t, stl.analyze(t, stl.DEFAULT_FIELDS), "t", tmp_path / "s.png").stat().st_size > 0
+
+
+def write_nav(path, n=20, step_s=0.05, stage_from=8, stage_to=14):
+    """A small nav.csv: timings, t, and rule / stage / lane / light columns, stage blank outside 8-13."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
+                    "rule", "stage", "lane_status", "drive_state"])
+        for i in range(n):
+            inside = stage_from <= i < stage_to
+            w.writerow([i, round(i * step_s, 3), 2.0, 20.0, 0.5, 0.2, 23.0,
+                        "intersection" if inside else "lane_keeping", "to_line" if inside else "",
+                        "stale" if inside else "vision", "go"])
+    return path
+
+
+@pytest.mark.software
+def test_a_nav_csv_follows_rule_and_stage_with_blank_stages_labeled(tmp_path, capsys):
+    path = write_nav(tmp_path / "nav.csv")
+    (tmp_path / "p3.csv").write_text("frame_id,lane_status\n0,vision\n")
+    assert stl.main([str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "nav.csv" in out and "rule:" in out and "stage:" in out
+    res = stl.analyze(Table(path), stl.NAV_DEFAULT_FIELDS)
+    assert set(res["stage"]["values"]) == {stl.NONE, "to_line"}
+    assert res["stage"]["values"]["to_line"]["dwell_ms"]["max"] == pytest.approx(300.0)
+    assert res["rule"]["transitions"]["pairs"] == {"lane_keeping -> intersection": 1, "intersection -> lane_keeping": 1}

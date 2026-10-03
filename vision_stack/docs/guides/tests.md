@@ -93,8 +93,8 @@ Not tied to one module: these run the whole chain.
 
 | Test | Covers | Software checks | Hardware records |
 | --- | --- | --- | --- |
-| `test_stage_timing` | Phases 1–2 against the frame budget; `analysis/stage_timing.py` | The timing breakdown math on tables with known answers; that it knows every stage `run_chain` times | Every stage's time, the capture wait and the loop time per frame; `timing_budget.png`, `timing_per_frame.png` |
-| `test_soak` | Phases 2–3 over a long run; `analysis/soak.py` | Heat, throttling, memory growth and slowdown found in synthetic logs where they were planted | Temperature, CPU clock, throttle flags and memory each second beside every frame's timing. Runs only with `--soak-minutes=N` |
+| `test_stage_timing` | Phases 1–2 against the frame budget; `analysis/stage_timing.py` | The timing breakdown math on tables with known answers; that it knows every stage `run_chain` times; a `nav.csv` times navigation and leaves latency out, after Phase 3 whatever the column order, read before a folder's `p3.csv` | Every stage's time, the capture wait and the loop time per frame; `timing_budget.png`, `timing_per_frame.png` |
+| `test_soak` | Phases 2–3 over a long run; `analysis/soak.py` | Heat, throttling, memory growth and slowdown found in synthetic logs where they were planted; a diagnostics recording read as a soak without frames | Temperature, CPU clock, throttle flags and memory each second beside every frame's timing. Runs only with `--soak-minutes=N` |
 
 ## 5. Interpreter tests
 
@@ -102,16 +102,16 @@ These test the tools in `src/analysis/`, not the robot. The tools are run on rec
 
 | Test | Checks the tool that... |
 | --- | --- |
-| `test_jitter` | finds frame-interval tails, over-budget streaks and periodic spikes |
+| `test_jitter` | finds frame-interval tails, over-budget streaks and periodic spikes and reads a navigation run's intervals from `nav.csv`'s `t`, with one histogram bin when every interval is the same |
 | `test_stability` | measures offset noise and lane-mode flicker on a still scene |
 | `test_offset_accuracy` | judges measured offsets against true positions and the ±2 cm spec |
 | `test_detection_range` | finds how far away stop signs and traffic lights are reliably detected |
 | `test_gate_rejections` | ranks which detector gate discards the most candidates |
-| `test_state_timeline` | measures how long Phase 3 states last and what they change into |
+| `test_state_timeline` | measures how long Phase 3 states last and what they change into, and on a `nav.csv` follows rule and stage with blank stages labeled |
 | `test_nav_run` | reads a navigation run: time per rule, braking, lane keeping's offset, weaving and steering at its limit, each intersection grouped across a stop (stages, turn end, heading by the rule and by the gyro), the window after it and a veer judged against normal lane keeping only, wheel balance at equal duty, late frames, every finding alone, and intersection_linker's left turn end to end |
 | `test_pi_load` | interprets a diagnostics recording, written by the recorder's own `write()`: the process's total CPU, `main`'s p95 (a single spike isn't CPU-bound) and the busiest thread's share, same-name threads summed, core loads, flags latched since boot, every finding alone and none on a clean recording, a short run's memory caveat as a note; a run's slow frames lined up on the monotonic clock and put down to a clock drop, a busy `main` or neither; frames outside the recording left out; the command line with and without the run's start time |
 | `test_compare_runs` | lists every value that changed between two runs |
-| `test_common` | covers the shared CSV reading, run finding and statistics helpers |
+| `test_common` | covers the shared CSV reading, run finding and statistics helpers, including intervals from `nav.csv`'s `t` |
 
 The software halves of `test_stage_timing` and `test_soak` (group 4) belong here too.
 

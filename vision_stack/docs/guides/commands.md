@@ -223,15 +223,15 @@ python3 -m src.analysis.<tool> --help
 
 | Tool | Input | Answers |
 | --- | --- | --- |
-| `stage_timing` | `artifacts/<run>` | where the frame time goes |
-| `jitter` | `artifacts/<run>` | frame-to-frame timing spread |
+| `stage_timing` | `artifacts/<run>` or `runs/nav_<run>` | where the frame time goes |
+| `jitter` | `artifacts/<run>` or `runs/nav_<run>` | frame-to-frame timing spread |
 | `gate_rejections` | `artifacts/<run>` | which gates reject candidates |
 | `compare_runs` | `artifacts/<a> artifacts/<b>` | what changed between two runs |
 | `stability` | `runs/<run>` | lane offset noise while still |
-| `state_timeline` | `runs/<run>` | lane and drive state over time |
+| `state_timeline` | `runs/<run>` | lane and drive state over time; rule and stage on a navigation run |
 | `offset_accuracy` | `positions.csv` (`true_cm,run`) | P3 ±2 cm check |
 | `detection_range` | `distances.csv` (`distance_cm,run`) | how far out detection holds |
-| `soak` | `artifacts/<run>` | drift over a long run |
+| `soak` | `artifacts/<run>` or `runs/diag_<run>` | drift over a long run |
 | `pi_load` | `runs/diag_<run>` (`--run runs/nav_<run>` to line it up) | how the run used the Pi; what slow frames coincided with |
 | `nav_run` | `runs/nav_<run>` or `runs/intersection_<run>/left` | what decided each frame, lane keeping, each intersection and the 2 s after, wheel balance, latency |
 

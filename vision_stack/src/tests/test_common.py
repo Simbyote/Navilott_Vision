@@ -149,3 +149,10 @@ def test_read_manifest_names_the_columns_it_needs(tmp_path):
     (tmp_path / "m.csv").write_text("x,run\n1,a\n")
     with pytest.raises(ValueError, match="true_cm,run"):
         common.read_manifest(tmp_path / "m.csv", "true_cm")
+
+
+@pytest.mark.software
+def test_interval_from_nav_csvs_t_in_seconds(tmp_path):
+    t = Table(write_csv(tmp_path / "nav.csv", ["frame_id", "t"], [[0, 0.0], [1, 0.05], [2, 0.12]]))
+    iv = common.interval_ms(t)
+    assert math.isnan(iv[0]) and iv[1:].tolist() == pytest.approx([50.0, 70.0])
