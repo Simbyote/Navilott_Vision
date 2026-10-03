@@ -198,6 +198,21 @@ Or the full floor homography, from a checkerboard: `python3 -m src.scripts.calib
 
 ---
 
+## Pi diagnostics — [diagnostics.md](diagnostics.md)
+
+Record a run's threads, cores, throttling and memory from a separate process (the run is unchanged):
+
+```
+python3 -m src.diagnostics.monitor -- python3 -m src.main
+python3 -m src.diagnostics.monitor -- python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 60
+python3 -m src.diagnostics.monitor --match src.main          # attach to a run started elsewhere
+top -H -p $(pgrep -f src.main)                               # live, per thread (names show)
+```
+
+Output: `runs/diag_<YYYYMMDD_HHMMSS>/` (`summary.txt`, `threads.csv`, `cores.csv`, `system.csv`, `meta.json`)
+
+---
+
 ## Analyze runs — [analysis.md](analysis.md)
 
 ```
