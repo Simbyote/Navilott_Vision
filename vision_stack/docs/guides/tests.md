@@ -108,6 +108,7 @@ These test the tools in `src/analysis/`, not the robot. The tools are run on rec
 | `test_detection_range` | finds how far away stop signs and traffic lights are reliably detected |
 | `test_gate_rejections` | ranks which detector gate discards the most candidates |
 | `test_state_timeline` | measures how long Phase 3 states last and what they change into |
+| `test_nav_run` | reads a navigation run: time per rule, braking, lane keeping's offset, weaving and steering at its limit, each intersection grouped across a stop (stages, turn end, heading by the rule and by the gyro), the window after it and a veer judged against normal lane keeping only, wheel balance at equal duty, late frames, every finding alone, and intersection_linker's left turn end to end |
 | `test_compare_runs` | lists every value that changed between two runs |
 | `test_common` | covers the shared CSV reading, run finding and statistics helpers |
 

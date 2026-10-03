@@ -32,6 +32,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `soak` | `system.csv`, `soak_frames.csv` from `test_soak` | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
+| `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 ## Recording for each tool
 
@@ -71,6 +72,22 @@ python3 -m src.analysis.soak artifacts/<YYYYMMDD_HHMMSS>
 ```
 
 The test runs Phases 2–3 with no display or video and samples temperature, CPU clock, throttle flags and memory once a second on the same clock as the frames. It's skipped unless `--soak-minutes` is given, so a normal `pytest --hardware` run isn't held up. Ctrl-C ends it early and still writes everything. Leave the case closed the way it will be on demo day; an open case runs cooler. A memory verdict needs at least 5 minutes after the first minute of warm-up; shorter runs report the trend but don't call it a leak. Under `--replay` the frames loop until time is up: heat and memory are real, camera timing isn't.
+
+**Navigation runs:** any `navigation_linker` run, or one maneuver's folder of an `intersection_linker` run:
+
+```
+python3 -m src.analysis.nav_run runs/nav_20261003_101500
+python3 -m src.analysis.nav_run runs/intersection_20261003_101500/left
+```
+
+It reports, from `nav.csv`:
+- **Rules:** time and episodes per deciding rule, the commonest changes between rules, braking and why.
+- **Lane keeping:** time on vision / hold / stale; the offset's mean (a bias), spread and p95; **weaving**, steering sign changes per second (past a 0.02 deadband, only within unbroken lane keeping); time at full steering.
+- **Each intersection** (one unbroken run of intersection, stop-sign or traffic-light frames): its route step, stage times, time held, how the turn ended, the turn angle by the rule and by the gyro (net of `--gyro-bias`, default `config.GYRO_BIAS_DPS`), and **the 2 s after it**: offset, weaving, how long until both lane lines are back on vision, and a **veer** flag when the offset passes 1.5x the p95 of normal lane keeping (vision frames outside these windows).
+- **Wheel balance:** at equal commanded duty, how much faster one wheel turns. + = left faster, which drifts the robot right.
+- **Latency:** frame to motor command, and frames that came more than 1.5 budgets after the last.
+
+The findings list says, in words, what passed a threshold (`nav_run.py`'s constants). The thresholds are starting values: after a few good runs, set them to what normal looks like.
 
 **Detection range:** robot still, target placed straight ahead at measured distances, one short run per distance (about 10 s each). Measure from the same point on the robot every time, such as the lens. List the runs in a manifest:
 

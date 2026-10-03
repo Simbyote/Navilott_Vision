@@ -232,6 +232,7 @@ python3 -m src.analysis.<tool> --help
 | `offset_accuracy` | `positions.csv` (`true_cm,run`) | P3 ±2 cm check |
 | `detection_range` | `distances.csv` (`distance_cm,run`) | how far out detection holds |
 | `soak` | `artifacts/<run>` | drift over a long run |
+| `nav_run` | `runs/nav_<run>` or `runs/intersection_<run>/left` | what decided each frame, lane keeping, each intersection and the 2 s after, wheel balance, latency |
 
 ---
 
