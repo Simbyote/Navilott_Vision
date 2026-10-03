@@ -35,14 +35,23 @@ from src.diagnostics.threads import name_pigpio_threads
 # =============================================================================
 class EncoderReader:
     """
-    Reads quadrature encoders on Left (GPIO 21/20) and Right (GPIO 16/19) motors.
+    Reads quadrature encoders on Left (GPIO 19/16) and Right (GPIO 20/21) motors.
     """
-    # Measured 2026-09-29: the encoder on 21/20 turns with motor A (left).
-    # Each side's decode direction moved with its pins.
-    LEFT_C1  = 21
-    LEFT_C2  = 20
-    RIGHT_C1 = 16
-    RIGHT_C2 = 19
+    # Pairing: each encoder goes with the wheel the same-named motor command
+    # turns. 2026-09-29 the encoder on 21/20 turned with the left command; the
+    # 2026-10-01 motor pin fix moved the left command to the other driver
+    # channel, so 21/20 is now the right wheel's and 16/19 the left's
+    # (test_drive_characterization, 2026-10-03: "left motor moved the right
+    # encoder"; maneuver_linker's straight legs curved, the count correction
+    # steering the wrong wheel).
+    # Signs: + = forward was measured per encoder (2026-09-29, turning each
+    # wheel by hand) and stays with it. Each pair also swaps which pin is C1,
+    # so the decode below keeps giving + forward: forward, 19 leads 16 and 21
+    # leads 20.
+    LEFT_C1  = 19
+    LEFT_C2  = 16
+    RIGHT_C1 = 20
+    RIGHT_C2 = 21
 
     def __init__(self, pi: pigpio.pi) -> None:
         self._pi = pi
