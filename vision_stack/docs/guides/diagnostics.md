@@ -138,6 +138,8 @@ A repeatable set that shows how the Pi holds up:
 3. **The course:** `python3 -m src.diagnostics.monitor -- python3 -m src.main`. The real load, with nothing recorded by the robot itself.
 4. **Long run:** the soak test (`testing_procedure.md`, tier 4) for heat and memory over 15 minutes, with `system.csv` from `SystemMonitor`.
 
+Then interpret each recording over time with `python3 -m src.analysis.pi_load runs/diag_<time>`. Add `--run runs/nav_<time>` for a `navigation_linker` run, which lines the run's frames up with the recording and says what its slow frames coincided with (`analysis.md`, "Pi load").
+
 Keep each run's `summary.txt`. The per-thread table, the core loads and the throttle lines are the evidence.
 
 ---

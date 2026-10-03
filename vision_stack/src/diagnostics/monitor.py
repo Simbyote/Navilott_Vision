@@ -45,6 +45,8 @@ INTERVAL_S = 0.5            # thread and core sampling; short enough to see a fr
 SYSTEM_EVERY_S = 1.0        # vcgencmd is a subprocess: once a second is plenty for heat and clock
 MATCH_WAIT_S = 30.0         # --match waits this long for the process to appear
 CHILD_EXIT_WAIT_S = 15.0    # after Ctrl-C, how long a launched run gets to halt and exit
+# system.csv: SystemMonitor's columns plus each throttle flag latched since boot
+SYSTEM_COLUMNS = (*SYSTEM_FIELDS, *(f"{k}_occurred" for k in THROTTLE_BITS))
 
 _CLI_HELP = """\
 Record how a run uses the Pi: every thread's CPU, core and context switches,
@@ -110,13 +112,17 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
             with this pid's memory.
     Outputs:
         {"threads": [...], "cores": [...], "system": [...], "interrupted": bool,
-        "elapsed_s": float}; rows in THREAD_FIELDS / CORE_FIELDS / SYSTEM_FIELDS order.
+        "elapsed_s": float, "t0_monotonic": float}; rows in THREAD_FIELDS /
+        CORE_FIELDS / SYSTEM_COLUMNS order. t0_monotonic is the clock at the
+        start (time.perf_counter, the monotonic clock on Linux), which every
+        elapsed_s counts from: a run that saves its own t0 lines up with it.
     """
     status = proc / str(pid) / "status"
     system_reader = system_reader or (lambda: system_sample(status_path=status))
     sampler = ThreadSampler(pid, proc=proc)
     out = {"threads": [], "cores": [], "system": [], "interrupted": False}
     t0 = prev = clock()
+    out["t0_monotonic"] = round(t0, 4)
     next_system = t0
     try:
         while True:
@@ -133,7 +139,7 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
             out["cores"] += cores
             if now >= next_system:
                 row = {"elapsed_s": elapsed, **system_reader()}
-                out["system"].append({k: row.get(k) for k in SYSTEM_FIELDS})
+                out["system"].append({k: row.get(k) for k in SYSTEM_COLUMNS})
                 next_system += SYSTEM_EVERY_S
             if duration_s is not None and now - t0 >= duration_s:
                 break
@@ -235,13 +241,14 @@ def write(out_dir: str, meta: dict, rec: dict) -> list[str]:
     os.makedirs(out_dir, exist_ok=True)
     for name, fields, rows in (("threads.csv", THREAD_FIELDS, rec["threads"]),
                                ("cores.csv", CORE_FIELDS, rec["cores"]),
-                               ("system.csv", SYSTEM_FIELDS, rec["system"])):
+                               ("system.csv", SYSTEM_COLUMNS, rec["system"])):
         with open(os.path.join(out_dir, name), "w", newline="") as f:
             w = csv.DictWriter(f, fields)
             w.writeheader()
             w.writerows(rows)
     with open(os.path.join(out_dir, "meta.json"), "w") as f:
-        json.dump({**meta, "elapsed_s": rec["elapsed_s"], "interrupted": rec["interrupted"]}, f, indent=2)
+        json.dump({**meta, "elapsed_s": rec["elapsed_s"], "interrupted": rec["interrupted"],
+                   "t0_monotonic": rec.get("t0_monotonic")}, f, indent=2)
     lines = summary_lines(meta, rec)
     with open(os.path.join(out_dir, "summary.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")

@@ -32,6 +32,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `soak` | `system.csv`, `soak_frames.csv` from `test_soak` | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
+| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock; what slow frames coincided with |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 ## Recording for each tool
@@ -88,6 +89,24 @@ It reports, from `nav.csv`:
 - **Latency:** frame to motor command, and frames that came more than 1.5 budgets after the last.
 
 The findings list says, in words, what passed a threshold (`nav_run.py`'s constants). The thresholds are starting values: after a few good runs, set them to what normal looks like.
+
+**Pi load:** a diagnostics recording (`diagnostics.md`), ideally of a `navigation_linker` run so the two line up:
+
+```
+python3 -m src.diagnostics.monitor -- python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 120
+python3 -m src.analysis.pi_load runs/diag_20261003_101500 --run runs/nav_20261003_101502
+```
+
+It reports:
+- **The process:** total CPU (% of one core), and how much of it was the busiest thread. Over 70% in one thread means the work is mostly serial: one thread, or Python threads taking turns on the GIL, which look the same from outside. Either way the other cores mostly wait.
+- **The frame loop:** `main`'s p95 CPU. At 90% or more it's CPU-bound, and frames stretch whenever one needs more. A single spike doesn't count.
+- **`sensor-hub`:** how often it wakes against its 100 Hz. Fewer than 80 a second means its ticks slip.
+- **Preemption and migration:** `main`'s involuntary switches (its core is contended) and how often it changes core (pinning it with `taskset -c` may help).
+- **Cores:** each core's load, and how uneven they are.
+- **Heat, clock, throttling, memory:** `soak`'s analysis of the same `system.csv`, plus a warning at 75 °C (the Pi throttles at 80), clock drops, and flags latched since boot but not active during the run.
+- **With `--run`:** each frame of the run placed in the recording's sample covering it, using the start times both keep on the monotonic clock (`t0_monotonic` in `meta.json` and the run's `report.json`). Slow frames (over 1.5 budgets) are compared with the rest: if they coincide with a clock drop, it says so; else with `main` busy; else neither, which points at the camera, I/O or another process.
+
+A memory verdict needs a run of about 6 minutes; shorter ones get a note, not a finding.
 
 **Detection range:** robot still, target placed straight ahead at measured distances, one short run per distance (about 10 s each). Measure from the same point on the robot every time, such as the lens. List the runs in a manifest:
 

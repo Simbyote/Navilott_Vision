@@ -16,7 +16,7 @@ import sys
 import pytest
 
 import src.diagnostics.monitor as mon
-from src.diagnostics.system_monitor import FIELDS as SYSTEM_FIELDS, read_throttled
+from src.diagnostics.system_monitor import read_throttled
 from src.diagnostics.threads import CORE_FIELDS, THREAD_FIELDS
 from src.tests.test_threads import write_proc
 
@@ -58,7 +58,18 @@ def test_rows_every_interval_and_system_rows_once_a_second(tmp_path):
     assert len(rec["threads"]) == 12                                  # 2 threads per interval
     assert rec["cores"] == []                       # the fake /proc/stat never advances: no core time to rate
     assert [r["elapsed_s"] for r in rec["system"]] == [0.0, 1.0, 2.0, 3.0]
-    assert list(rec["system"][0]) == list(SYSTEM_FIELDS) and rec["system"][0]["temp_c"] == 50.0
+    assert list(rec["system"][0]) == list(mon.SYSTEM_COLUMNS) and rec["system"][0]["temp_c"] == 50.0
+    assert rec["t0_monotonic"] == 0.0
+
+
+@pytest.mark.software
+def test_flags_latched_since_boot_survive_into_the_rows_and_the_summary(tmp_path):
+    write_proc(tmp_path, 100, {100: ("python3", 0, 0, 0, 0, 0)}, {0: (0, 0)})
+    clock = Clock()
+    rec = mon.record(100, 0.5, duration_s=1.0, clock=clock, sleep=clock.sleep, proc=tmp_path,
+                     system_reader=lambda: system_row(under_voltage=0, under_voltage_occurred=1))
+    assert all(r["under_voltage_occurred"] == 1 for r in rec["system"])
+    assert mon.system_summary(rec["system"])["throttled_since_boot"] == ["under_voltage"]
 
 
 @pytest.mark.software
@@ -133,7 +144,7 @@ def test_system_summary_throttling_during_the_run_and_since_boot():
 def test_the_run_folder_holds_every_file_and_the_summary_names_each_thread(tmp_path):
     rec = {"threads": [trow(0.5, 1, "main", 0, 60.0), trow(0.5, 2, "sensor-hub", 3, 2.0)],
            "cores": [{"elapsed_s": 0.5, "core": 0, "busy_pct": 61.0}],
-           "system": [{k: system_row(under_voltage=1).get(k) for k in SYSTEM_FIELDS}],
+           "system": [{k: system_row(under_voltage=1).get(k) for k in mon.SYSTEM_COLUMNS}],
            "interrupted": False, "elapsed_s": 0.5}
     meta = {"pid": 1, "command": "python3 -m src.main", "interval_s": 0.5, "cores": 4}
     lines = mon.write(str(tmp_path), meta, rec)
@@ -141,7 +152,7 @@ def test_the_run_folder_holds_every_file_and_the_summary_names_each_thread(tmp_p
     assert "main" in text and "sensor-hub" in text and "core 0" in text and "under_voltage" in text
     assert (tmp_path / "summary.txt").read_text().splitlines() == lines
     assert json.loads((tmp_path / "meta.json").read_text())["command"] == "python3 -m src.main"
-    for name, fields in (("threads.csv", THREAD_FIELDS), ("cores.csv", CORE_FIELDS), ("system.csv", SYSTEM_FIELDS)):
+    for name, fields in (("threads.csv", THREAD_FIELDS), ("cores.csv", CORE_FIELDS), ("system.csv", mon.SYSTEM_COLUMNS)):
         assert next(csv.reader(open(tmp_path / name))) == list(fields)
 
 
