@@ -27,6 +27,8 @@ Flow:
 
 import pigpio
 
+from src.diagnostics.threads import name_pigpio_threads
+
 
 # =============================================================================
 # N20 Encoder Reader Class (pigpio Hardware Interrupts)
@@ -65,6 +67,7 @@ class EncoderReader:
         self._cb_l2 = self._pi.callback(self.LEFT_C2, pigpio.EITHER_EDGE, self._left_cb)
         self._cb_r1 = self._pi.callback(self.RIGHT_C1, pigpio.EITHER_EDGE, self._right_cb)
         self._cb_r2 = self._pi.callback(self.RIGHT_C2, pigpio.EITHER_EDGE, self._right_cb)
+        name_pigpio_threads()           # the counting runs in pigpio's callback thread: show it by name
 
     def _left_cb(self, gpio: int, level: int, tick: int) -> None:
         if gpio == self.LEFT_C1:
@@ -144,6 +147,7 @@ class MotorController:
         self.pwm_freq = pwm_freq
 
         self._init_gpio()
+        name_pigpio_threads()
 
     def _init_gpio(self) -> None:
         """Configure TB6612 pin modes on startup."""

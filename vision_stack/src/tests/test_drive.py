@@ -449,3 +449,12 @@ def test_drive_characterization(artifacts):
     # straight_3s's mismatch is recorded, not asserted: open loop, the motors
     # never match exactly; lane keeping and the gyro heading hold correct for it
     assert straight.left_count > 20 and straight.right_count > 20, "straight: a wheel stopped counting"
+
+@pytest.mark.software
+def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monkeypatch):
+    mod, pi, _ = env
+    calls = []
+    monkeypatch.setattr(mod, "name_pigpio_threads", lambda: calls.append(1) or 0)
+    mod.EncoderReader(pi)
+    mod.MotorController(pi)
+    assert len(calls) == 2

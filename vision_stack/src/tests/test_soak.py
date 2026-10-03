@@ -26,7 +26,7 @@ import pytest
 
 from src.analysis import soak
 from src.analysis.common import Table
-from src.debugger.system_monitor import FIELDS, SystemMonitor
+from src.diagnostics.system_monitor import FIELDS, SystemMonitor
 from src.estimation.estimation import Phase3Processor
 from src.config import MEASURED
 from src.phase3_linker import run_phase3_chain
@@ -216,3 +216,20 @@ def test_soak(request, frames, artifacts):
     for line in result["findings"]:
         if line.startswith(("throttling", "memory grows", "loop p95")):
             warnings.warn(line)
+
+
+@pytest.mark.software
+def test_a_diagnostics_recording_is_read_as_a_soak_without_frames(tmp_path):
+    import src.diagnostics.monitor as mon
+    rows = []
+    for s in range(400):
+        r = {k: None for k in mon.SYSTEM_COLUMNS}
+        r.update(elapsed_s=float(s), temp_c=50.0 + s / 40.0, cpu_mhz=1000.0, throttled_raw="0x0", rss_mb=150.0,
+                 mem_available_mb=250.0, under_voltage=1 if s >= 300 else 0)
+        rows.append(r)
+    rec = {"threads": [], "cores": [], "system": rows, "interrupted": False, "elapsed_s": 399.0}
+    mon.write(str(tmp_path), {"pid": 1, "command": "x", "interval_s": 0.5, "cores": 4}, rec)
+    system, frames, folder = soak.load(str(tmp_path))
+    res = soak.analyze(system, frames)
+    assert frames is None and res["loop"] is None and res["temp_c"]["max"] == pytest.approx(59.975)
+    assert res["throttle"]["under_voltage"]["first_s"] == 300.0

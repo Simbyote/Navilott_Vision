@@ -25,6 +25,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | See the whole system as diagrams: the pipeline, the linkers, each phase, the tests | `guides/system_maps.md` |
 | Read a linker's code as diagrams: who builds what, one frame's calls, line by line | `guides/linker_code_maps.md` |
 | Run the course (start button, timed, nothing recorded) | `guides/production_run.md` |
+| Record how a run uses the Pi: threads, cores, throttling, memory | `guides/diagnostics.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
 | Give the stop line a distance in cm (tape marks, no checkerboard) | `guides/calibrate_stop_line.md` |
 | Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
@@ -54,6 +55,7 @@ docs/
         system_maps.md          the system as diagrams: pipeline, linkers, phases, tests
         linker_code_maps.md     each linker's code as diagrams, with line numbers
         production_run.md       the course run: python3 -m src.main
+        diagnostics.md          recording threads, cores, throttling and memory during a run
         pytest.md               running the test suite
         test_calibration.md     verifying a calibration
     architecture.md             hardware, wiring, power, software layout, risks

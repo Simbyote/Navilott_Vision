@@ -13,6 +13,8 @@ package's. Each module runs on its own:
     gate_rejections   which detector gate discards the most candidates
     state_timeline    Phase 3 state dwell times and transitions
     soak              heat, throttling, memory growth and slowdown over a long run
+    nav_run           a navigation run: rules, lane keeping, each intersection and after, wheels, latency
+    pi_load           a diagnostics recording: threads, cores, serial work, heat, clock, memory, slow frames
     detection_range   stop sign and traffic light detection rate by distance
     compare_runs      every number that changed between two runs
 

@@ -15,8 +15,10 @@ Main package:
 
 Input:
     p3.csv by default (fields lane_status, drive_state, stop_sign_detected,
-    p2_mode); --fields picks others from any CSV with one row per frame.
-    Durations come from timestamp_ms when present, else frames at --fps.
+    p2_mode), or navigation_linker's nav.csv (rule, stage, lane_status,
+    drive_state; a blank stage is labeled "-"); --fields picks others from
+    any CSV with one row per frame. Durations come from the frame intervals
+    (common.interval_ms: timestamp_ms, or nav.csv's t), else frames at --fps.
 """
 
 import argparse
@@ -30,8 +32,11 @@ from src.analysis import common
 from src.analysis.common import Table, runs_of
 from src.params import FPS
 
-CSV_NAMES = ("p3.csv",)
+CSV_NAMES = ("nav.csv", "p3.csv")       # nav.csv first: in a navigation run folder it holds p3.csv's states too
 DEFAULT_FIELDS = ("lane_status", "drive_state", "stop_sign_detected", "p2_mode")
+# nav.csv: which rule decided, the intersection stage, and the lane and light states it acted on
+NAV_DEFAULT_FIELDS = ("rule", "stage", "lane_status", "drive_state")
+NONE = "-"          # a blank cell's label: a frame with no stage is outside an intersection
 PALETTE = ("#2ca02c", "#ff7f0e", "#d62728", "#1f77b4", "#9467bd", "#8c564b",
            "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
 
@@ -42,6 +47,7 @@ state_timeline.png and state_timeline.json next to the input CSV.
 Run from vision_stack/, venv active:
     python3 -m src.analysis.state_timeline                  newest p3.csv
     python3 -m src.analysis.state_timeline <folder or csv>
+    python3 -m src.analysis.state_timeline runs/nav_<run>/nav.csv   rule, stage, lane, light
     python3 -m src.analysis.state_timeline run.csv --fields mode
 """
 
@@ -90,7 +96,12 @@ def analyze(table: Table, fields, fps: float = FPS) -> dict:
     if not present:
         raise ValueError(f"{table.path.name}: none of {', '.join(fields)}")
     durations = frame_ms(table, fps)
-    return {f: analyze_field(table.text(f), durations) for f in present}
+    return {f: analyze_field(labels(table, f), durations) for f in present}
+
+
+def labels(table: Table, field: str) -> list:
+    """A field's per-frame values, blanks labeled NONE."""
+    return [v or NONE for v in table.text(field)]
 
 
 def figure(table: Table, results: dict, title: str, out_path) -> Path | None:
@@ -102,7 +113,7 @@ def figure(table: Table, results: dict, title: str, out_path) -> Path | None:
                              sharex=True, squeeze=False)
     for ax, f in zip(axes[:, 0], fields):
         colors = {v: PALETTE[i % len(PALETTE)] for i, v in enumerate(results[f]["values"])}
-        for v, start, length in runs_of(table.text(f)):
+        for v, start, length in runs_of(labels(table, f)):
             ax.axvspan(start - 0.5, start + length - 0.5, color=colors[v], linewidth=0)
         ax.set_yticks([])
         ax.set_ylabel(f, rotation=0, ha="right", va="center", fontsize=8)
@@ -125,8 +136,9 @@ def main(argv=None) -> int:
                                 description=_CLI_HELP,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("run", nargs="?", help="run folder or CSV (default: newest p3.csv)")
-    p.add_argument("--fields", nargs="+", default=list(DEFAULT_FIELDS),
-                   help=f"columns to follow (default: {' '.join(DEFAULT_FIELDS)})")
+    p.add_argument("--fields", nargs="+", default=None,
+                   help=f"columns to follow (default: {' '.join(DEFAULT_FIELDS)}; "
+                        f"for a nav.csv {' '.join(NAV_DEFAULT_FIELDS)})")
     p.add_argument("--fps", type=float, default=FPS, help="frame rate when there are no timestamps")
     p.add_argument("--out", help="output folder (default: next to the CSV)")
     args = p.parse_args(argv)
@@ -134,7 +146,8 @@ def main(argv=None) -> int:
     try:
         path = common.find_csv(args.run, CSV_NAMES)       # a file argument is used as given
         table = Table(path)
-        res = analyze(table, args.fields, args.fps)
+        fields = args.fields or (NAV_DEFAULT_FIELDS if table.has("rule") else DEFAULT_FIELDS)
+        res = analyze(table, fields, args.fps)
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

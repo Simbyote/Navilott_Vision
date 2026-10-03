@@ -32,6 +32,8 @@ import threading
 import time
 from pathlib import Path
 
+from src.diagnostics.threads import name_os_thread
+
 THERMAL_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 CPUFREQ_PATH = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
 STATUS_PATH = Path("/proc/self/status")
@@ -175,6 +177,7 @@ class SystemMonitor:
         self._rows.append({k: row.get(k) for k in FIELDS})
 
     def _loop(self) -> None:
+        name_os_thread("system-monitor")
         while not self._stop.is_set():
             self._take()
             self._stop.wait(self.interval_s)
@@ -186,8 +189,14 @@ class SystemMonitor:
         self.stop()
 
 
-def sample() -> dict:
-    """One reading of everything; see FIELDS."""
+def sample(status_path: Path = STATUS_PATH) -> dict:
+    """
+    One reading of everything; see FIELDS.
+
+    Inputs:
+        status_path: Whose memory rss_mb is: this process's by default, or
+            /proc/<pid>/status for another (diagnostics.monitor).
+    """
     raw = read_throttled()
     flags = decode_throttled(raw)
     return {
@@ -195,7 +204,7 @@ def sample() -> dict:
         "cpu_mhz": read_cpu_mhz(),
         "throttled_raw": None if raw is None else hex(raw),
         **{k: flags[k] for k in THROTTLE_BITS},
-        "rss_mb": read_rss_mb(),
+        "rss_mb": read_rss_mb(status_path),
         "mem_available_mb": read_mem_available_mb(),
         "load_1m": read_load_1m(),
     }

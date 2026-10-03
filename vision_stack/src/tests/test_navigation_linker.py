@@ -528,3 +528,10 @@ def test_the_default_route_is_config_s(cli_env):
     nl.cli(["--frames", str(tmp)])
     assert got["navigator"].progress.route == load_route(ROUTE_PATH)
 
+
+
+@pytest.mark.software
+def test_the_report_keeps_the_clock_at_the_start_for_lining_up_other_records(tmp_path):
+    rep, *_ = go(tmp_path)
+    t = [float(r["t"]) for r in rows(tmp_path / "run" / "nav.csv")]
+    assert rep["run"]["t0_monotonic"] == 100.0 and t[0] >= 0.0          # FakeClock starts at 100 s

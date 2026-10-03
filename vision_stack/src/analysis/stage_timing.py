@@ -21,8 +21,9 @@ Main package:
 
 Input:
     Any CSV with a *_ms column per stage: live_view's stages.csv, the
-    stage_timing.csv test_stage_timing writes, or phase3_linker's p3.csv
-    (capture, phase2, phase3). Stage columns are found by name, so a new
+    stage_timing.csv test_stage_timing writes, phase3_linker's p3.csv
+    (capture, phase2, phase3), or navigation_linker's nav.csv (those plus
+    nav; its loop interval comes from t). Stage columns are found by name, so a new
     timer shows up with no change here. Blank cells (a stage a run didn't
     time) are ignored, not read as zero. Whether total_ms already includes
     the external stages differs by writer (p3.csv's does, the others' don't)
@@ -45,16 +46,17 @@ from src.params import FPS
 # Pipeline order for the stages run_chain times, then anything timed around
 # it. Unknown *_ms columns are appended after these in file order
 STAGE_ORDER = ("capture", "preprocess", "roi", "geometry", "color",
-               "lane_offset", "stop_line", "fusion", "package", "phase2", "phase3", "hud", "record")
+               "lane_offset", "stop_line", "fusion", "package", "phase2", "phase3", "nav", "hud", "record")
 
 # Timed outside run_chain, so not part of total_ms
 EXTERNAL_STAGES = frozenset({"capture", "hud", "record"})
 
-# *_ms columns that are not stage durations
-NOT_STAGES = frozenset({"timestamp_ms", "total_ms", "interval_ms"})
+# *_ms columns that are not stage durations (nav.csv's latency_ms spans frame arrival to the motor command)
+NOT_STAGES = frozenset({"timestamp_ms", "total_ms", "interval_ms", "latency_ms"})
 
 # File names searched for, in order, when given a run folder
-CSV_NAMES = ("stage_timing.csv", "stages.csv", "p3.csv")
+# nav.csv before p3.csv: a navigation run folder has both, and nav.csv adds nav time and the loop interval
+CSV_NAMES = ("stage_timing.csv", "stages.csv", "nav.csv", "p3.csv")
 
 UNACCOUNTED = "unaccounted"
 OUTSIDE = "outside pipeline"

@@ -1,5 +1,5 @@
 """
-test_system_monitor.py  --  src/debugger/system_monitor.py
+test_system_monitor.py  --  src/diagnostics/system_monitor.py
 
 --software  Each reading against fake /sys and /proc files, the throttle
             bit decoding, vcgencmd absent or failing, and the monitor's
@@ -8,12 +8,13 @@ test_system_monitor.py  --  src/debugger/system_monitor.py
             read (throttle flags need vcgencmd, which a desktop lacks).
 """
 import subprocess
+import sys
 import time
 from types import SimpleNamespace
 
 import pytest
 
-from src.debugger import system_monitor as sm
+from src.diagnostics import system_monitor as sm
 
 
 @pytest.mark.software
@@ -117,3 +118,21 @@ def test_a_real_sample_reads_on_the_pi():
     if missing and s["throttled_raw"] is None:
         pytest.skip(f"not a Raspberry Pi (no {', '.join(missing)} and no vcgencmd)")
     assert not missing, f"unreadable on this Pi: {missing}"
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
+@pytest.mark.software
+def test_the_monitor_thread_carries_its_name_into_the_kernel():
+    from src.tests.test_threads import comm_of
+    mon = sm.SystemMonitor(interval_s=10, reader=dict).start()
+    try:
+        assert comm_of(mon._thread) == "system-monitor"
+    finally:
+        mon.stop()
+
+
+@pytest.mark.software
+def test_sample_reads_another_process_memory_when_given_its_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(sm, "read_throttled", lambda: None)
+    (tmp_path / "status").write_text("VmRSS:\t  51200 kB\n")
+    assert sm.sample(tmp_path / "status")["rss_mb"] == 50.0

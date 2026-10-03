@@ -339,7 +339,10 @@ def run(
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
                       "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
-                      "recorder_written": recorder.written}}
+                      "recorder_written": recorder.written,
+                      # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
+                      # Linux) a diagnostics recording lines up with it (analysis.pi_load --run)
+                      "t0_monotonic": None if t0 is None else round(t0, 4)}}
     lines = summary_lines(report) + [""] + stats.report()
 
     if render and recorder.written:

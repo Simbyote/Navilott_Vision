@@ -416,3 +416,15 @@ def test_a_given_hub_is_used_and_started_only_with_sensors():
     sample = Sensors(hub=full).sample()
     assert full.started and full.drains == 1
     assert (sample.yaw_rate_dps, sample.left_wheel_cps, sample.right_wheel_cps) == (4.0, 20.0, 16.0)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
+@pytest.mark.software
+def test_the_hub_thread_carries_its_name_into_the_kernel():
+    from src.tests.test_threads import comm_of
+    h, *_ = hub()
+    h.start()
+    try:
+        assert comm_of(h._thread) == "sensor-hub"
+    finally:
+        h.stop()

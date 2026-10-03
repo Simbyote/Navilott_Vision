@@ -35,6 +35,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
+from src.diagnostics.threads import name_os_thread
 from src.estimation.estimation import SensorSample
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
 
@@ -278,6 +279,7 @@ class SensorHub:
 
     def _worker(self) -> None:
         """tick() every period until stop(), on deadline pacing like the IMU's own thread."""
+        name_os_thread("sensor-hub")            # top, ps and diagnostics.monitor show it by name
         interval = 1.0 / self._rate_hz
         next_t = time.perf_counter()
         while not self._stop_evt.is_set():

@@ -23,15 +23,19 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 
 | Tool | Reads | Writes | Look at |
 | --- | --- | --- | --- |
-| `stage_timing` | `stage_timing.csv`, `stages.csv`, `p3.csv` | `timing_budget.png`, `timing_per_frame.png` | Which stage dominates, and how much of the loop is outside the pipeline |
-| `jitter` | `frames.csv`, `stage_timing.csv`, `p3.csv`, `stages.csv` | `jitter.png`, `jitter.json` | p99 and max interval, over-budget streaks, whether spikes are periodic |
+| `stage_timing` | `stage_timing.csv`, `stages.csv`, `nav.csv`, `p3.csv` | `timing_budget.png`, `timing_per_frame.png` | Which stage dominates, and how much of the loop is outside the pipeline |
+| `jitter` | `frames.csv`, `stage_timing.csv`, `nav.csv`, `p3.csv`, `stages.csv` | `jitter.png`, `jitter.json` | p99 and max interval, over-budget streaks, whether spikes are periodic |
 | `stability` | `p3.csv`, `lane_offset_timing.csv`, `stages.csv` | `stability.png`, `stability.json` | Offset std (noise floor), transitions and flickers per 100 frames |
 | `offset_accuracy` | one `p3.csv` per measured position | `offset_accuracy.png`, `offset_accuracy.json` | Bias per position, fit slope and intercept, the PASS/FAIL verdict |
 | `gate_rejections` | `geometry_timing.csv`, `color_timing.csv` | `gate_rejections.png`, `gate_rejections.json` | The gate with the largest share, per detector |
-| `state_timeline` | `p3.csv` | `state_timeline.png`, `state_timeline.json` | Hold and stale dwell times, stop latching, frequent transitions |
-| `soak` | `system.csv`, `soak_frames.csv` from `test_soak` | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
+| `state_timeline` | `nav.csv` (rule, stage, lane, light) or `p3.csv` | `state_timeline.png`, `state_timeline.json` | Hold and stale dwell times, stop latching, frequent transitions; on a `nav.csv`, how long each rule and stage lasts |
+| `soak` | `system.csv` (from `test_soak` or a diagnostics recording), `soak_frames.csv` if there is one | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
+| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock; what slow frames coincided with |
+| `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
+
+**Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
 
 ## Recording for each tool
 
@@ -71,6 +75,40 @@ python3 -m src.analysis.soak artifacts/<YYYYMMDD_HHMMSS>
 ```
 
 The test runs Phases 2–3 with no display or video and samples temperature, CPU clock, throttle flags and memory once a second on the same clock as the frames. It's skipped unless `--soak-minutes` is given, so a normal `pytest --hardware` run isn't held up. Ctrl-C ends it early and still writes everything. Leave the case closed the way it will be on demo day; an open case runs cooler. A memory verdict needs at least 5 minutes after the first minute of warm-up; shorter runs report the trend but don't call it a leak. Under `--replay` the frames loop until time is up: heat and memory are real, camera timing isn't.
+
+**Navigation runs:** any `navigation_linker` run, or one maneuver's folder of an `intersection_linker` run:
+
+```
+python3 -m src.analysis.nav_run runs/nav_20261003_101500
+python3 -m src.analysis.nav_run runs/intersection_20261003_101500/left
+```
+
+It reports, from `nav.csv`:
+- **Rules:** time and episodes per deciding rule, the commonest changes between rules, braking and why.
+- **Lane keeping:** time on vision / hold / stale; the offset's mean (a bias), spread and p95; **weaving**, steering sign changes per second (past a 0.02 deadband, only within unbroken lane keeping); time at full steering.
+- **Each intersection** (one unbroken run of intersection, stop-sign or traffic-light frames): its route step, stage times, time held, how the turn ended, the turn angle by the rule and by the gyro (net of `--gyro-bias`, default `config.GYRO_BIAS_DPS`), and **the 2 s after it**: offset, weaving, how long until both lane lines are back on vision, and a **veer** flag when the offset passes 1.5x the p95 of normal lane keeping (vision frames outside these windows).
+- **Wheel balance:** at equal commanded duty, how much faster one wheel turns. + = left faster, which drifts the robot right.
+- **Latency:** frame to motor command, and frames that came more than 1.5 budgets after the last.
+
+The findings list says, in words, what passed a threshold (`nav_run.py`'s constants). The thresholds are starting values: after a few good runs, set them to what normal looks like.
+
+**Pi load:** a diagnostics recording (`diagnostics.md`), ideally of a `navigation_linker` run so the two line up:
+
+```
+python3 -m src.diagnostics.monitor -- python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 120
+python3 -m src.analysis.pi_load runs/diag_20261003_101500 --run runs/nav_20261003_101502
+```
+
+It reports:
+- **The process:** total CPU (% of one core), and how much of it was the busiest thread. Over 70% in one thread means the work is mostly serial: one thread, or Python threads taking turns on the GIL, which look the same from outside. Either way the other cores mostly wait.
+- **The frame loop:** `main`'s p95 CPU. At 90% or more it's CPU-bound, and frames stretch whenever one needs more. A single spike doesn't count.
+- **`sensor-hub`:** how often it wakes against its 100 Hz. Fewer than 80 a second means its ticks slip.
+- **Preemption and migration:** `main`'s involuntary switches (its core is contended) and how often it changes core (pinning it with `taskset -c` may help).
+- **Cores:** each core's load, and how uneven they are.
+- **Heat, clock, throttling, memory:** `soak`'s analysis of the same `system.csv`, plus a warning at 75 °C (the Pi throttles at 80), clock drops, and flags latched since boot but not active during the run.
+- **With `--run`:** each frame of the run placed in the recording's sample covering it, using the start times both keep on the monotonic clock (`t0_monotonic` in `meta.json` and the run's `report.json`). Slow frames (over 1.5 budgets) are compared with the rest: if they coincide with a clock drop, it says so; else with `main` busy; else neither, which points at the camera, I/O or another process.
+
+A memory verdict needs a run of about 6 minutes; shorter ones get a note, not a finding.
 
 **Detection range:** robot still, target placed straight ahead at measured distances, one short run per distance (about 10 s each). Measure from the same point on the robot every time, such as the lens. List the runs in a manifest:
 
