@@ -458,3 +458,19 @@ def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monk
     mod.EncoderReader(pi)
     mod.MotorController(pi)
     assert len(calls) == 2
+
+
+@pytest.mark.software
+def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
+    """
+    The physical wiring, by raw pin (test_drive_characterization proves it on the robot):
+    the left command's wheel carries the encoder on 19/16, the right's the one on 21/20,
+    and driving forward 19 leads 16 and 21 leads 20 (signs measured by hand 2026-09-29).
+    """
+    mod, pi, _ = env
+    enc = mod.EncoderReader(pi)
+    pi.quad(19, 16, 25, c1_leads=True)          # the left wheel forward
+    pi.quad(21, 20, 10, c1_leads=True)          # the right wheel forward
+    assert enc.counts() == (25, 10)
+    pi.quad(19, 16, 5, c1_leads=False)          # the left wheel backward
+    assert enc.counts() == (20, 10)

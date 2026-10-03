@@ -202,6 +202,7 @@ The `frames/` folder is the bulk (about 30 KB a frame). If the archive is too bi
 | `source / hardware error` naming the camera | Something else has the camera; close it (`phase2_linker`, `rpicam-hello`, pytest) |
 | `source / hardware error` naming `board` / `adafruit_mpu6050` / I²C | IMU libraries or I²C: `i2cdetect -y 1` must show 68 |
 | `source / hardware error` naming `tm1637` | Display library missing; run with `--no-button` meanwhile |
+| A leg curves harder the longer it runs; `max_c_counts` sits at the 0.15 limit | The encoders are paired with the wrong motors, so the count correction speeds up the wheel that's already ahead. `pytest --hardware src/tests/test_drive.py` says "pairing crossed". Fix the encoder pins in `EncoderReader`, never the motor pins (2026-10-03) |
 | Nothing happens after starting | It's waiting for the start button (display shows `rdy`) |
 | It stopped mid-trial and waits (`--hold`) | That's a hold: measure, then press the start button or Enter. A button still held from the start press is ignored until released |
 | `STOPPED: yaw sign unclear ...` on the mat | The spins didn't turn the robot enough for the gyro. Check the battery; try `--set pulse_s=0.4` or `--set pulse_speed=0.5` |
