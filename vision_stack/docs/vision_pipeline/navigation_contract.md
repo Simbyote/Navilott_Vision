@@ -131,7 +131,7 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 3. **`traffic_light.py` `TrafficLightRule`:** at a reached line with the light red, brake until it isn't. Caution drives on.
 4. **`intersection.py` `IntersectionRule`:** everything the robot does inside an intersection, in three stages, from the moment the line leaves the view (lane keeping would be pulled off by the crossing street's lines):
    - **`to_line`:** straight to the line on a gyro heading hold.
-   - **`turn`** (the route's `left` / `right` only), from the line: Ignacio's wheel duties, measured on the mat (left `(0.36, 0.63)`, a wide arc into the far lane; right `(0.45, 0.0)`, a pivot on the right wheel), until the gyro reads 85° turned that way (`TURN_TARGET_DEG`), or the turn's time limit if it never does (`LEFT_TURN_MAX_MS` 4.1 s, `RIGHT_TURN_MAX_MS` 2.4 s: his open-loop times plus half). A stop sign or red light at the line holds the robot first; held frames don't use the turn's time.
+   - **`turn`** (the route's `left` / `right` only), from the line: wheel duties, measured on the mat (left `(0.36, 0.63)`, a wide arc into the far lane; right `(0.45, 0.0)`, a pivot on the right wheel), until the gyro reads 85° turned that way (`TURN_TARGET_DEG`), or the turn's time limit if it never does (`LEFT_TURN_MAX_MS` 4.1 s, `RIGHT_TURN_MAX_MS` 2.4 s: his open-loop times plus half). A stop sign or red light at the line holds the robot first; held frames don't use the turn's time.
    - **`exit`:** straight on the heading the turn ended on, until both boundaries are back for 3 frames (`TWO_BOUNDARY_FRAMES`), at least one for 6 (`ONE_BOUNDARY_FRAMES`), or 3 s of driving (`MAX_CROSS_MS`). Then lane keeping takes over.
 
    Straight skips the turn. Its record carries the route step and maneuver, the `stage`, the heading turned, and `turn_end` (`gyro target` or `time limit`).
@@ -161,7 +161,7 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 
 `Navigation.record` names the deciding part (`rule`), the tracker's phase and that part's own reason, for the linkers' logs and video; it's debug output, not part of the contract.
 
-**Lane keeping** (Ignacio, 2026-09-30) steers by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. The offset gain grows with the offset (`kp × (1 + 0.05 × |offset cm|)`, his ae34566). Steering is clamped to ±0.40 around a base duty of 0.40, and a slow wheel is lifted to the stall duty. `steer()` is shared with the intersection and end-of-course rules (with their own base speed and clamp). The gains are bench values; the normalized-offset path assumes 30 cm per unit of `lane_offset` (`NORM_TO_CM`), unmeasured.
+**Lane keeping** (2026-09-30) steers by `lane_offset_cm` (`lane_offset` until `cm_per_px` is set) on `vision`, and by `heading_error` on `hold` and `stale`. The offset gain grows with the offset (`kp × (1 + 0.05 × |offset cm|)`, his ae34566). Steering is clamped to ±0.40 around a base duty of 0.40, and a slow wheel is lifted to the stall duty. `steer()` is shared with the intersection and end-of-course rules (with their own base speed and clamp). The gains are bench values; the normalized-offset path assumes 30 cm per unit of `lane_offset` (`NORM_TO_CM`), unmeasured.
 
 **Contract checks:** `Navigation` passes every check. Lane keeping on its own doesn't pass the stale one; slowing and ending are the end-of-course rule's job.
 

@@ -24,7 +24,7 @@ Flow:
 from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
 
-# Gains and limits (Ignacio, 2026-09-30, commit ae34566: variable gain
+# Gains and limits (2026-09-30, commit ae34566: variable gain
 # scaling, set on the bench demo); not yet tuned on the course
 BASE_SPEED = 0.40               # forward duty: maneuver_linker's leg duty, ~1166 counts/s per wheel
 KP_CM = 0.015                   # duty per cm of lane_offset_cm, at zero offset

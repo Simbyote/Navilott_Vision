@@ -23,7 +23,7 @@ from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import BRAKE, Command
 from src.navigation.stop_line import StopLineTracker
 
-# How long to stay stopped at a stop sign (Ignacio, 2026-09-30)
+# How long to stay stopped at a stop sign (2026-09-30)
 STOP_SIGN_HOLD_TIME_MS = 2000
 # Wheels at or under this many counts/s each are stopped. Cruising at 0.40
 # duty is ~1166 counts/s (2026-09-30 trials); encoder jitter at rest must

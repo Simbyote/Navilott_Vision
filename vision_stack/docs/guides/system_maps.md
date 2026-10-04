@@ -497,7 +497,7 @@ flowchart TB
 
 ### What `turning_sequences.py` was
 
-Ignacio's file held the turns measured on the mat: a left at `(0.36, 0.63)` for 2.75 s and a right at `(0.45, 0.0)` for 1.62 s. Those duties and times are the real data behind the turns, and they're still in the code: the duties are `LEFT_TURN` / `RIGHT_TURN`, and the times (plus half) are the turns' time limits.
+File held the turns measured on the mat: a left at `(0.36, 0.63)` for 2.75 s and a right at `(0.45, 0.0)` for 1.62 s. Those duties and times are the real data behind the turns, and they're still in the code: the duties are `LEFT_TURN` / `RIGHT_TURN`, and the times (plus half) are the turns' time limits.
 
 It was built as a `CustomSequenceNavigator` *wrapped around* `Navigation`:
 
@@ -544,7 +544,7 @@ flowchart LR
 
 - **The same tracker.** The turn starts at `reached`, the same moment a stop sign would stop the robot, so "stop, then turn" works without the two rules knowing about each other.
 - **The route decides the maneuver.** `RouteProgress` advances once per intersection, and the rule reads that step's maneuver.
-- **The gyro ends the turn** at 85°, with Ignacio's times kept as the backstop if the gyro never gets there. `turn_end` in the record says which one ended it.
+- **The gyro ends the turn** at 85°, with the times kept as the backstop if the gyro never gets there. `turn_end` in the record says which one ended it.
 - **Held frames pause it**, so a stop sign at a turning intersection holds the robot first and the turn starts after.
 - **Everything is recorded**: stage, heading, how the turn ended. `intersection_linker` judges each maneuver from that record.
 

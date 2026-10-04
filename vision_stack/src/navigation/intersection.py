@@ -13,7 +13,7 @@ Purpose:
                        duty, steering only against the heading turned).
         STAGE_TURN     left or right only, from the line (the tracker's
                        reached, STOP_DELAY_MS later): fixed wheel duties
-                       (Ignacio's, measured on the mat 2026-10-01) until the
+                       (measured on the mat 2026-10-01) until the
                        gyro has turned TURN_TARGET_DEG that way, or the
                        turn's time limit if it never does.
         STAGE_EXIT     straight on the new heading until the lane is back:
@@ -67,7 +67,7 @@ MAX_CROSS_MS = 3000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
 
-# Turn duties (left, right), Ignacio's open-loop sequence measured on the
+# Turn duties (left, right), measured on the
 # mat (2026-10-01): left is a wide arc into the far lane, right pivots on
 # the right wheel
 LEFT_TURN = Command(0.36, 0.63)
@@ -77,7 +77,7 @@ RIGHT_TURN = Command(0.45, 0.0)
 # at 171). Tune on the mat: overshoot -> lower, short -> raise
 TURN_TARGET_DEG = 85.0
 # ... or after this long if the gyro never gets there (no IMU, a wrong
-# sign): Ignacio's open-loop times (left 2.75 s, right 1.62 s) plus half
+# sign): open-loop times (left 2.75 s, right 1.62 s) plus half
 LEFT_TURN_MAX_MS = 4100
 RIGHT_TURN_MAX_MS = 2400
 TURNS = {LEFT: (LEFT_TURN, -1, LEFT_TURN_MAX_MS),        # (duties, heading sign, time limit); + heading = right

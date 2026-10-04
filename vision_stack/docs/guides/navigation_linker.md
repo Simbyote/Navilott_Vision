@@ -19,6 +19,7 @@ Each frame, in order:
 5. the frame and a record of every decision go to the recorder.
 
 What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
+
 - **Lane keeping:** 0.40 duty, steering against the lane offset, or against the heading while vision is lost.
 - **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until the lane boundaries are back (both for 3 frames, or one for 6), or 3 s past the line. No new stop line is taken up while it crosses.
 - **1.5 s after the line leaves the view** the robot is at it:
@@ -91,11 +92,13 @@ Everything goes to `runs/nav_<timestamp>/`.
 | `contract` | Commands the linker had to brake | Should be 0: anything else is a navigator bug |
 
 **`nav.csv`**, one row per frame:
+
 - **Timings:** `capture_ms`, `phase2_ms`, `phase3_ms`, `nav_ms`, `latency_ms`.
 - **Packet fields the navigator used:** lane status, offset (and cm), heading, light, stop sign, stop line cm, wheel counts per second.
 - **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
 
 **`nav.avi`**: the Phase 3 video with a strip under it:
+
 - **First line:** DRIVE (green) or BRAKE (red) with the reason, and `[rule / phase / step / stage]`.
 - **Second line:** the command, the steering and what it came from, the lane and the heading.
 - **Duty bars:** one per wheel. The bar fills right of center for forward (green) and left for reverse (red); the amber ticks are the stall duty.
@@ -114,7 +117,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
-- **Gains:** Ignacio's bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
+- **Gains:** Bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
 
 | Symptom | Likely cause |
 | --- | --- |
