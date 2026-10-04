@@ -66,13 +66,19 @@ class HSVRanges:
 class BlobFilter:
     """Blob gates for traffic-light candidates. Defaults are placeholders, not tuned."""
     min_area: float = 30.0      # px^2; rejects mask speckle
-    # px^2; rejects large background regions caught by a band. Set to 300 to on
-    # 2026-10-04: the 5000 from the old code was too big for the lamps themselves, and
-    # would pick up larger background regions.
-    max_area: float = 300.0
+    # px^2; rejects large background regions caught by a band. The lamps measured
+    # 262-370 px^2 under their calibrated bands (calibrate_lamps, 2026-10-04, the
+    # robot where it stops at the light); 600 leaves headroom for stopping closer.
+    # 5000 before 2026-10-04 passed background patches; 300 then rejected the red
+    # and green lamps themselves
+    max_area: float = 600.0
     min_aspect: float = 0.3     # w/h; together with max_aspect, rejects elongated streaks
     max_aspect: float = 3.0
-    ref_area: float = 800.0     # px^2 scoring confidence 1.0: the expected lamp size at detection range
+    # px^2 scoring confidence 1.0: a typical lamp at the stop (262-370 measured).
+    # Confidence is (area - min_area) / (ref_area - min_area), so with ref_area
+    # above max_area no lamp could reach Phase 3's 0.40 gate (800 with max 300
+    # topped out at 0.35); at 300 a 262 px^2 lamp scores 0.86, 150 px^2 still 0.44
+    ref_area: float = 300.0
 
 @dataclass(frozen=True)
 class ColorConfig:
