@@ -33,6 +33,7 @@ Flow:
     None, which only turns the cm outputs off. The lens calibration is stored
     as a path and read by preprocess on first use.
 """
+import warnings
 from dataclasses import dataclass, field
 
 from src.estimation.estimation import Phase3Config
@@ -90,7 +91,9 @@ class PipelineConfig:
 # The ground homography was fit on frames from exactly this preprocess, so it
 # is loaded against it; any other lens calibration, alpha or size refuses it.
 # The stop-line table (tape marks, scripts/calibrate_stop_line.py) is the
-# same, and gives the stop line's cm when there's no homography.
+# same, and gives the stop line's cm when there's no homography. The
+# homography is optional: the stop line's cm are all that reads it. Only
+# having neither warns (below), since then the stop line has no cm.
 _MEASURED_PREPROCESS = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH))
 MEASURED = PipelineConfig(
     preprocess = _MEASURED_PREPROCESS,
@@ -108,6 +111,10 @@ MEASURED = PipelineConfig(
         min_intensity = 130.0,
     ),
 )
+
+if MEASURED.ground is None and MEASURED.stop_line_table is None:
+    warnings.warn("stop line: no ground homography or stop-line table loaded, so its distance has no cm "
+                  "this run. Measure the table: python3 -m src.scripts.calibrate_stop_line", stacklevel=2)
 
 # Gyro Z at rest, deg/s, in the sensor hub's frame (+ = turning right, after
 # IMU_YAW_SIGN): the one bias every yaw reading is corrected by before it's

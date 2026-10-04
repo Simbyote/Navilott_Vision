@@ -186,6 +186,24 @@ def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_pat
 
 
 @pytest.mark.software
+@pytest.mark.parametrize("ground, table, warns", [
+    (False, True, False),           # the table alone: the stop line has its cm, nothing to say
+    (False, False, True),           # neither: the stop line has no cm this run
+])
+def test_only_a_stop_line_without_any_cm_source_warns(tmp_path, ground, table, warns):
+    gone = tmp_path / "nothing_here.json"
+    probe = ("import warnings; warnings.simplefilter('always'); "
+             "import src.params as p, pathlib; "
+             f"p.GROUND_HOMOGRAPHY_PATH = pathlib.Path({str(gone)!r}); "
+             + ("" if table else f"p.STOP_LINE_TABLE_PATH = pathlib.Path({str(gone)!r}); ")
+             + "import src.config as c; print(c.MEASURED.ground is None, c.MEASURED.stop_line_table is None)")
+    r = subprocess.run([sys.executable, "-c", probe], cwd=PIPELINE_ROOT, capture_output=True, text=True, check=True)
+    assert r.stdout.split() == ["True", str(not table)]
+    assert ("no ground homography or stop-line table" in r.stderr) is warns, r.stderr
+    assert "ground_homography" not in r.stderr, "a missing homography alone says nothing"
+
+
+@pytest.mark.software
 def test_measured_loads_the_stop_line_table_against_its_own_preprocess(tmp_path):
     """A matching table at STOP_LINE_TABLE_PATH ends up in MEASURED.stop_line_table; SCENE_CONFIG never has one."""
     import json

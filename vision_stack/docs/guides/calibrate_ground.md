@@ -2,7 +2,7 @@
 
 Fits the homography that turns a point in the undistorted frame into centimeters on the floor, and writes `calibration/ground_homography.json`. With it loaded, the stop-line distance is reported in cm (`distance_cm`) as well as in lane-ROI rows (`distance_px`). Without it, everything runs and the cm fields are empty.
 
-> **Only need the stop line's distance?** `calibrate_stop_line.md` does that with a few strips of tape and no checkerboard. The pipeline uses it whenever there's no homography.
+> **Optional.** The stop line's distance is the only thing that reads the homography, and the stop-line table (`calibrate_stop_line.md`: a few strips of tape, no checkerboard) gives it too; the pipeline uses the table whenever there's no homography. Lane keeping steers on the normalized offset and doesn't need either. So the robot runs without this file, and its absence is silent: only a stop line with neither the homography nor the table gets a warning at startup.
 
 The camera is rigidly mounted and the floor is flat, so one homography covers every floor point the camera sees. It is fit on the frames `preprocess_frame` produces with the robot's own settings (`MEASURED`), and is only valid for exactly those: the lens calibration, `undistort_alpha` and the 480×270 output. The file records all three, and the pipeline refuses it, with a warning, if any of them has changed.
 
@@ -91,5 +91,7 @@ Accuracy falls with distance: near the top of the lane ROI one pixel covers seve
 | `board is turned` | Its 9-corner side has to run across the view; turn it a quarter turn |
 | Reprojection POOR | Flatten and tape the board; measure `--square-cm` again; average more frames |
 | Grid not square on the board | Board not square to the robot, or `--square-cm` wrong |
-| `ground_homography.json not used (...)` at startup | The pipeline's settings changed since the fit; the reason is in the warning. Redo the fit |
+| `ground_homography.json not used (...)` at startup | The file exists but the pipeline's settings changed since the fit; the reason is in the warning. Redo the fit, or delete the file to use the stop-line table alone |
+| `stop line: no ground homography or stop-line table loaded` at startup | Neither cm source is there: the stop line runs in rows only. Measure the stop-line table (`calibrate_stop_line.md`) |
+| `test_the_script_end_to_end_...` skipped on the Pi: `OpenCV 4.6.0 finds no 9x6 board in the synthetic lens-distorted image` | The test's rendered board is at the edge of what OpenCV's chessboard detector takes, and the Pi's 4.6 (apt) misses it where desktop OpenCV finds it. A limit of the test image, not the script: run that test, or `calibrate_ground.py --image`, on a desktop |
 | `distance_cm` always empty | The warning above, or no file yet |
