@@ -123,7 +123,7 @@ ALT_ESTIMATION = replace(
     hold_max_frames = 4,
     cm_per_px = 0.05,
     vote_window = 5,
-    min_confidence_traffic = 0.5,
+    min_confidence_traffic = 0.6,          # the drive's faint lamp (0.53) passes 0.40, not this
     min_confidence_sign = 0.6,
     gyro_bias_dps = 1.5,
     heading_limit_deg = 20.0,
@@ -215,8 +215,9 @@ def scene(
         sign: A red octagon in the sign ROI (upper right).
         lights: BGR lamp colors, stacked downward in the traffic ROI (top center).
         noise_seed: Adds uniform noise in [0, 60) from this seed.
-        lamp_radius, sign_radius: Size in px. Lamps score about 0.42 at 11,
-            0.97 at 16 and 0.19 at 8; signs 0.71 at 28 and 0.56 at 16.
+        lamp_radius, sign_radius: Size in px. Lamps score 0.37 at 7, 0.53 at
+            8 and 1.0 from 11 (BlobFilter ref_area 300), and are rejected past
+            13 (max_area 600); signs 0.71 at 28 and 0.56 at 16.
 
     Outputs:
         (FRAME_H, FRAME_W, 3) uint8 BGR.
@@ -336,14 +337,17 @@ def drive_sequence() -> list[SequenceFrame]:
     steady = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=600.0, right_wheel_cps=600.0)
     turning = SensorSample(yaw_rate_dps=60.0, lateral_accel_mps2=-0.8, left_wheel_cps=700.0, right_wheel_cps=300.0)
     no_yaw = SensorSample(yaw_rate_dps=None, lateral_accel_mps2=0.2, left_wheel_cps=600.0, right_wheel_cps=600.0)
-    strong, dim = dict(lamp_radius=16), dict(lamp_radius=8)
+    # Lamp sizes against BlobFilter (ref_area 300, max_area 600; real lamps 262-370 px^2 at the
+    # stop, 2026-10-04): strong 408 px^2, confidence 1.0; faint 174 px^2, 0.53, past Phase 3's 0.40
+    # gate but under ALT_ESTIMATION's 0.60; dim 130 px^2, 0.37, under both
+    strong, faint, dim = dict(lamp_radius=12), dict(lamp_radius=8), dict(lamp_radius=7)
     segments = [
         # (segment, frame, count, sensors)
         ("cruise", scene(), 4, steady),
         ("red", scene(lights=(RED_LAMP,), **strong), 6, steady),
         ("yellow", scene(lights=(YELLOW_LAMP,), **strong), 6, steady),
         ("green", scene(lights=(GREEN_LAMP,), **strong), 6, None),
-        ("red_flicker", scene(lights=(RED_LAMP,), **strong), 1, steady),
+        ("red_flicker", scene(lights=(RED_LAMP,), **faint), 1, steady),
         ("green_after_flicker", scene(lights=(GREEN_LAMP,), **strong), 2, steady),
         ("dim_red", scene(lights=(RED_LAMP,), **dim), 4, steady),
         ("stop_sign", scene(sign=True), 6, steady),
@@ -396,7 +400,7 @@ def course_sequence() -> list[SequenceFrame]:
     moving = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=300.0, right_wheel_cps=300.0)
     stopped = SensorSample(yaw_rate_dps=0.0, lateral_accel_mps2=0.0, left_wheel_cps=0.0, right_wheel_cps=0.0)
     turning_left = SensorSample(yaw_rate_dps=-60.0, lateral_accel_mps2=0.3, left_wheel_cps=700.0, right_wheel_cps=1300.0)
-    red, green = dict(lights=(RED_LAMP,), lamp_radius=16), dict(lights=(GREEN_LAMP,), lamp_radius=16)
+    red, green = dict(lights=(RED_LAMP,), lamp_radius=12), dict(lights=(GREEN_LAMP,), lamp_radius=12)
     segments = [
         # (segment, frame, count, sensors)
         ("cruise", scene(), 6, moving),

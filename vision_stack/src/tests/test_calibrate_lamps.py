@@ -22,9 +22,10 @@ import pytest
 import src.scripts.calibrate_lamps as cl
 from src.params import FRAME_H, FRAME_W, HSV_RANGES_PATH
 from src.perception.color_branch import load_hsv_ranges
+from src.perception.roi_crop import TRAFFIC
 from src.tests.scenes import SCENE_CONFIG
 
-CENTER = (216, 50)          # frame px: inside roi_crop.TRAFFIC (x 168-264, y 0-108 at 480x270)
+CENTER = (216, 50)          # frame px: inside roi_crop.TRAFFIC (x 144-288, y 0-94 at 480x270, 2026-10-04)
 LAMP_R, GLOW_R = 9, 24      # the drawn lamp (~250 px^2) and its glow
 BACKGROUND = (85, 11, 205)  # pale and bright, as the 2026-10-04 green profile's background
 
@@ -67,7 +68,7 @@ def write_frames(tmp_path, name, lamp, n=3):
 @pytest.mark.software
 def test_the_lamp_is_found_at_its_center_in_the_traffic_roi():
     m, _, _ = measured("green", GREEN)
-    x0 = round(0.35 * FRAME_W)                             # TRAFFIC's left edge
+    x0 = round(TRAFFIC.x0 * FRAME_W)                       # TRAFFIC's left edge
     assert m["center"] == pytest.approx((CENTER[0] - x0, CENTER[1]), abs=1.0)
 
 
@@ -206,6 +207,23 @@ def test_with_half_the_frames_white_the_band_and_area_are_the_colored_frames_alo
     clean, clean_area = run([RED, RED], "clean")
     assert (mixed["red_low"], mixed["red_high"]) == (clean["red_low"], clean["red_high"])
     assert mixed_area == clean_area
+
+
+@pytest.mark.software
+def test_the_lamps_hue_comes_from_its_colored_pixels_not_its_dark_edge():
+    """A lamp disc with a dark, washed-out edge: that edge's hue is noise and mustn't widen the band or mark the frame mixed."""
+    hsv = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
+    hsv[:] = (0, 0, 20)                                            # a dark background
+    rng = np.random.default_rng(0)
+    yy, xx = np.ogrid[:FRAME_H, :FRAME_W]
+    edge = np.hypot(yy - CENTER[1], xx - CENTER[0]) <= LAMP_R + 4
+    hsv[edge] = np.stack([rng.integers(0, 180, edge.sum()), rng.integers(0, 15, edge.sum()),
+                          np.full(edge.sum(), 60)], 1).astype(np.uint8)    # unsaturated, of random hue
+    cv2.circle(hsv, CENTER, 5, (86, 160, 230), -1)                 # the lamp: green, saturated
+    m = cl.measure_lamp(cl.traffic_roi(cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR), SCENE_CONFIG))
+    assert m["hue_spread"] <= 4, m["hue_spread"]
+    e = cl.bands_for("green", m["band"])["green"]
+    assert 80 <= e["lower"][0] <= 86 <= e["upper"][0] <= 92
 
 
 @pytest.mark.software

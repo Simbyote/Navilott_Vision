@@ -75,6 +75,12 @@ MAX_HUE_SPREAD = 30         # the lamp disc's 5th-95th percentile hue span, Open
 # reported. On 2026-10-04 the first frame found the red lamp (S 214) and most
 # of the others a white spot, and the median over all of them hid the lamp
 MIN_COLORED_SHARE = 0.5
+# The lamp's hue is read from its colored pixels only (saturation at least
+# MIN_LAMP_S): dark or washed-out pixels at the disc's edge have a hue that's
+# noise. Their spread flagged real lamp frames as mixed and stretched red's
+# band to hue 150 (2026-10-04, S ~160 frames). Fewer colored pixels than this,
+# and every pixel's hue is used, so a white spot still reads as one
+MIN_HUE_PIXELS = 10
 
 _CLI_HELP = """\
 Calibrate the traffic-light HSV bands from frames of each lamp, lit the way
@@ -116,7 +122,8 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
 
     Outputs:
         {"center": (x, y) in ROI px, "lamp" / "glow": {"h", "s", "v"} 5/50/95th
-         percentiles (h unwrapped past 180 for red), "band": {"h_lo", "h_hi",
+         percentiles (h unwrapped past 180 for red; the lamp's hue from its
+         colored pixels, see MIN_HUE_PIXELS), "band": {"h_lo", "h_hi",
          "s_min", "v_min"} (h_hi may pass 179 for red), "s_gap", "v_gap": the
          lamp's 10th percentile minus the glow's 90th (> 0: that channel separates them)}
     """
@@ -129,7 +136,9 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
     d = np.hypot(yy - y, xx - x)
     lamp = hsv[d <= LAMP_RADIUS_PX].astype(float)
     glow = hsv[(d > GLOW_INNER * LAMP_RADIUS_PX) & (d <= GLOW_OUTER * LAMP_RADIUS_PX)].astype(float)
-    h_lamp, h_glow = _unwrap(lamp[:, 0]), _unwrap(glow[:, 0])
+    hued = lamp[lamp[:, 1] >= MIN_LAMP_S]
+    h_lamp = _unwrap((hued if len(hued) >= MIN_HUE_PIXELS else lamp)[:, 0])
+    h_glow = _unwrap(glow[:, 0])
     if h_lamp.max() >= 180 and h_glow.max() < 180:     # red: put the glow on the same side of the wrap
         h_glow = np.where(h_glow < 90, h_glow + 180, h_glow)
     gap = {c: float(np.percentile(lamp[:, i], LAMP_PCT) - np.percentile(glow[:, i], GLOW_PCT)) for c, i in (("s", 1), ("v", 2))}
@@ -346,8 +355,9 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
         elif res["s_gap"] <= 0 or res["v_gap"] <= 0:
             warnings.append(f"{color}: only {'V' if res['s_gap'] <= 0 else 'S'} separates the lamp from its glow")
     for a, b in same_spot(results):
-        warnings.append(f"the {a} and {b} lamps were found at the same spot: the brightest thing in the traffic "
-                        "ROI isn't the lit lamp (a reflection, a light behind it), or one diffuser covers both")
+        warnings.append(f"the {a} and {b} lamps were found within {LAMP_RADIUS_PX} px of each other: fine if they "
+                        "share one housing or lens at this distance; otherwise the brightest thing in the traffic "
+                        "ROI isn't the lit lamp (a reflection, a light behind it)")
     for a, b in hue_overlaps(entries):
         warnings.append(f"{a} and {b} share hues: a {a} lamp could pass for {b}. Darken the exposure "
                         "(an overexposed red goes orange) and measure again")

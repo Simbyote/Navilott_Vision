@@ -219,8 +219,8 @@ traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area +
 - **It's off without ranges.** With `ColorConfig.hsv_ranges = None` (the `PipelineConfig` default), the stage returns no candidates and never reads the ROI. `MEASURED` loads `calibration/hsv_ranges.json` at import, tuned or not, so the robot and both linkers run with the branch on; `--hsv` swaps in other ranges.
 - **Red uses two bands** because hue wraps around: 0–10 and 170–180 in OpenCV units (degrees / 2), combined with OR.
 - **The built-in ranges are a scaffold,** not a calibration. `HSVRanges.is_calibrated` is only true for ranges loaded from JSON, and the debug dict reports it.
-- **Blob gates** (area 30–5000 px², w/h aspect 0.3–3.0) are placeholders, not tuned. `max_area` went to 70 in 8b3944c and back to 5000 on 2026-10-01: 70 rejected the lamps too. Measure lamp areas on course frames before narrowing it again.
-- **Confidence is area only,** saturating at 800 px², the expected lamp size at detection range. Fusion keeps the highest confidence across all three colors, so the largest blob wins.
+- **Blob gates** (area 30–600 px², w/h aspect 0.3–3.0). The lamps measured 262–370 px² under their calibrated bands with the robot where it stops at the light (`calibrate_lamps`, 2026-10-04); 600 leaves headroom for stopping closer. Earlier values: 5000 passed background patches; 300 (2026-10-04) rejected the red and green lamps themselves; 70 (8b3944c) rejected every lamp. Re-measure with `calibrate_lamps` when the stopping distance or the lights change.
+- **Confidence is area only:** `(area − min_area) / (ref_area − min_area)`, saturating at `ref_area` = 300 px², a typical lamp at the stop. A 262 px² lamp scores 0.86; Phase 3 needs 0.40 (about 140 px²). `ref_area` must stay under `max_area`, or no lamp can reach the gate (800 with a 300 cap topped out at 0.35). Fusion keeps the highest confidence across all three colors, so the largest blob wins.
 
 The HSV ranges have to be tuned under course lighting. Ranges from a lab or office won't carry over.
 
