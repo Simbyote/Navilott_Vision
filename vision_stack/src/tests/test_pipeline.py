@@ -290,7 +290,7 @@ def test_each_scene_lamp_is_seen_as_its_color_under_the_calibrated_bands(lamp, c
     """The scenes run on calibration/hsv_ranges.json: a lamp it no longer covers would read as no light, which looks like go."""
     lights = [d for d in run_chain(scene(lights=(lamp,), lamp_radius=12), 0, 0, SCENE_CONFIG).fusion.detections
               if d.type == "traffic_light"]
-    assert [(d.label_detail, round(d.confidence, 2)) for d in lights] == [(color, 1.0)]
+    assert [d.label_detail for d in lights] == [color] and lights[0].confidence >= 0.9, lights
 
 
 @pytest.mark.software

@@ -59,7 +59,7 @@ green: 3 frame(s); per frame, the brightest spot in the traffic ROI:
   blob area under it: 228 px^2 (median over the frames)
 ```
 
-- **Per frame:** where the brightest spot in the traffic ROI was, its saturation and brightness, and whether it's a colored lamp (saturation 25 or more, one hue) or white / mixed. The band comes from the colored frames, when they're at least half; a mix is reported (below). The spot should sit at the same place in every frame, well inside the ROI.
+- **Per frame:** where the brightest spot in the traffic ROI was, its saturation and brightness, its clipped core (near-white pixels at its center: the color branch needs 3 to take it as a lamp, not a reflection), and whether it's a colored lamp (saturation 25 or more, one hue) or white / mixed. The band comes from the colored frames, when they're at least half; a mix is reported (below). The spot should sit at the same place in every frame, well inside the ROI.
 - **lamp / glow:** H, S and V percentiles of a disc around the brightest blob (radius 8 px) and of a ring outside it (12-24 px). The lamp's hue comes from its colored pixels only (saturation 25 or more): the dark or washed-out pixels at the disc's edge have a hue that's noise.
 - **The band:** hue spans the lamp's (5th-95th percentile, 4 either side); the S and V minimums sit halfway between the lamp's 10th percentile and the glow's 90th. Red gets both halves of its band (`red_low`, `red_high`), split at the hue wrap.
 - **blob area:** the largest blob under the new band, measured as the color branch measures it. Set `BlobFilter` from these: `ref_area` (confidence 1.0) about the typical lamp, `max_area` with some headroom above the largest.
@@ -83,6 +83,7 @@ python3 -m src.scripts.calibrate_lamps red=runs/lamp_red yellow=runs/lamp_yellow
 | `no band: the spot's hue spans ...` | The spot's pixels aren't one color | As above |
 | `no band: only N of M frames found a colored lamp, under half` | Most frames' brightest spot is something white, not the lamp | Find it in the per-frame lines (its position) and block it, or move the robot |
 | `only N of M frames found the colored lamp` | A band was made from the colored frames, but something white and brighter took the others: in a run, the color branch may lose the lamp to it | Block it, then measure again |
+| `the lamp doesn't clip` | Its center isn't near-white (V ≥ 240, S ≤ 60), so the color branch's core gate would reject it as a reflection | Make sure it's lit as on the course; if the course lights really don't clip at the camera's exposure, lower `BlobFilter.core_min_v` |
 | `the lamp sits at the edge of the traffic ROI` | Part of the lamp is outside the area the color branch looks at (top-center of the view) | Move the robot back from the light, or aim the camera, until the lamp sits inside it |
 | `the red and yellow lamps were found within 8 px of each other` | Two colors' brightest spots nearly coincide. Fine if the LEDs share one housing or lens and sit that close at this distance; otherwise at least one isn't its lamp: a reflection or a light behind the signal | If the LEDs are separate, block the other light, or aim so only the signal is in the traffic ROI |
 

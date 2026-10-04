@@ -43,7 +43,7 @@ TEST_HSV = HSVRanges(
     red_high=ColorRange((170, 120, 120), (180, 255, 255)),
     yellow=ColorRange((20, 120, 120), (35, 255, 255)),
     green=ColorRange((40, 120, 120), (80, 255, 255)))
-TEST_BLOB = BlobFilter(min_area=50.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0)
+TEST_BLOB = BlobFilter(min_area=50.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0, min_roundness=0.0, min_core_px=0)
 TEST_COLOR_CFG = ColorConfig(TEST_HSV, TEST_BLOB)
 
 TYPES = ("traffic_light", "lane_boundary", "stop_sign")

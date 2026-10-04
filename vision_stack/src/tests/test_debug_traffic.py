@@ -38,7 +38,8 @@ TEST_HSV = HSVRanges(
     green=ColorRange((40, 120, 120), (80, 255, 255)))
 TEST_CFG = replace(SCENE_CONFIG, color=ColorConfig(TEST_HSV, BlobFilter(min_area=50.0, max_area=5000.0,
                                                                    min_aspect=0.3, max_aspect=3.0,
-                                                                   ref_area=800.0)))
+                                                                   ref_area=800.0, min_roundness=0.0,
+                                                                   min_core_px=0)))
 ROI_SHAPE = (60, 90)                     # (h, w) of the hand-built traffic ROI
 
 

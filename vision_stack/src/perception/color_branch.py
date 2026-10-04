@@ -14,7 +14,10 @@ Main package:
 Flow:
     1. Convert the BGR traffic ROI to HSV.
     2. Threshold into red, yellow and green masks (red spans the hue wrap).
-    3. Find blobs in each mask and gate them by area and aspect.
+    3. Find blobs in each mask and gate them by area, aspect, roundness and
+       a clipped core: a lit lamp is brighter than the camera can record, so
+       its middle clips to near-white inside the colored ring. A shirt, a
+       wall or a sign of the same color reflects light and never does.
     4. Score survivors by area and package them with the frame identity.
 """
 import json
@@ -64,21 +67,42 @@ class HSVRanges:
 
 @dataclass
 class BlobFilter:
-    """Blob gates for traffic-light candidates. Defaults are placeholders, not tuned."""
+    """
+    Blob gates for traffic-light candidates.
+
+    Size, color and shape can't tell a lamp from a shirt of the same color;
+    the core can. A lit lamp clips: inside its colored ring sit pixels the
+    camera records as near-white (V at the top, S low), which is why every
+    lamp measured on 2026-10-04 had a "missing" center in its color mask. A
+    reflecting surface under room light stays colored throughout. A blob
+    passes only with min_core_px such pixels inside its outline (the hole
+    counts: the outline is the outer contour) and a round enough outline.
+    """
     min_area: float = 30.0      # px^2; rejects mask speckle
-    # px^2; rejects large background regions caught by a band. The lamps measured
-    # 262-370 px^2 under their calibrated bands (calibrate_lamps, 2026-10-04, the
-    # robot where it stops at the light); 600 leaves headroom for stopping closer.
-    # 5000 before 2026-10-04 passed background patches; 300 then rejected the red
-    # and green lamps themselves
-    max_area: float = 600.0
+    # px^2; a sanity bound, not what keeps junk out (the core and roundness
+    # gates do). The lamps measured red 300-400, yellow 400-500, green 700-800
+    # px^2 at normal exposure, the green glowing most (2026-10-04, with the
+    # robot where it stops at the light); 1200 leaves headroom for stopping
+    # closer. 600 rejected every green lamp; 300 the red ones too
+    max_area: float = 1200.0
     min_aspect: float = 0.3     # w/h; together with max_aspect, rejects elongated streaks
     max_aspect: float = 3.0
-    # px^2 scoring confidence 1.0: a typical lamp at the stop (262-370 measured).
-    # Confidence is (area - min_area) / (ref_area - min_area), so with ref_area
-    # above max_area no lamp could reach Phase 3's 0.40 gate (800 with max 300
-    # topped out at 0.35); at 300 a 262 px^2 lamp scores 0.86, 150 px^2 still 0.44
-    ref_area: float = 300.0
+    # px^2 scoring confidence 1.0: the smallest lamp at the stop (red, 300-400).
+    # Confidence is (area - min_area) / (ref_area - min_area), so ref_area must
+    # stay under max_area or no lamp can reach Phase 3's 0.40 gate (800 with a
+    # 300 cap topped out at 0.35); at 350 every measured lamp scores 1.0, and
+    # Phase 3's gate needs about 160 px^2
+    ref_area: float = 350.0
+    # Outline area over its enclosing circle's: ~0.9 for a disc or a ring
+    # (the hole counts), 0.64 a square, 0.38 a 3:1 bar; rejects shirts, edges
+    # and streaks that the aspect gate (bounding box only) lets through
+    min_roundness: float = 0.5
+    # The clipped core: pixels inside the outline with V >= core_min_v and
+    # S <= core_max_s. The lamps' cores read V 254-255, S 4-5 (calibrate_lamps'
+    # 5th percentiles, 2026-10-04). 0 turns the gate off
+    core_min_v: int = 240
+    core_max_s: int = 60
+    min_core_px: int = 3
 
 @dataclass(frozen=True)
 class ColorConfig:
@@ -209,6 +233,53 @@ def _mean_hsv(
     m = cv2.mean(hsv[y:y + h, x:x + w], mask=mask)
     return (round(m[0], 1), round(m[1], 1), round(m[2], 1))
 
+def _roundness(
+        contour: np.ndarray,
+        area: float
+    ) -> float:
+    """The outline's area over its minimum enclosing circle's: 1.0 a perfect disc, lower the less round."""
+    _, r = cv2.minEnclosingCircle(contour)
+    return area / (np.pi * r * r) if r > 0 else 0.0
+
+def _core_px(
+        hsv: np.ndarray,
+        contour: np.ndarray,
+        blob_filter: BlobFilter
+    ) -> int:
+    """Clipped near-white pixels inside the outline, its hole included (see BlobFilter)."""
+    x, y, w, h = cv2.boundingRect(contour)
+    inside = np.zeros((h, w), dtype=np.uint8)
+    cv2.drawContours(inside, [contour - np.array([[[x, y]]])], -1, 255, thickness=cv2.FILLED)
+    patch = hsv[y:y + h, x:x + w]
+    clipped = (patch[..., 2] >= blob_filter.core_min_v) & (patch[..., 1] <= blob_filter.core_max_s)
+    return int(np.count_nonzero(clipped & (inside > 0)))
+
+def _shape_and_core(
+        contour: np.ndarray,
+        area: float,
+        hsv: np.ndarray | None,
+        blob_filter: BlobFilter
+    ) -> tuple[str | None, float, int | None]:
+    """
+    The roundness and core gates, shared by both twins.
+
+    Outputs:
+        (gate, roundness, core_px): gate None if both pass, else "round" or
+        "core"; core_px None when the core gate is off or wasn't reached.
+
+    Raises:
+        ValueError: If the core gate is on and hsv is None.
+    """
+    roundness = _roundness(contour, area)
+    if roundness < blob_filter.min_roundness:
+        return "round", roundness, None
+    if blob_filter.min_core_px <= 0:
+        return None, roundness, None
+    if hsv is None:
+        raise ValueError("the core gate needs the ROI's HSV image (BlobFilter.min_core_px > 0)")
+    core = _core_px(hsv, contour, blob_filter)
+    return (None if core >= blob_filter.min_core_px else "core"), roundness, core
+
 # An area-rejected blob is traced only if its bounding box covers at least this
 # fraction of min_area; smaller ones are mask speckle and are only counted
 TRACE_MIN_BBOX_FRAC = 1.0
@@ -224,18 +295,21 @@ def _blobs_to_candidates(
     hsv: np.ndarray | None = None,
 ) -> list[TrafficLightCandidate]:
     """
-    Find blobs in one color mask, run them through the area and aspect gates, and build candidates.
+    Find blobs in one color mask, run them through the area, aspect, roundness and core gates, and build candidates.
 
     Inputs:
         mask: 0/255 mask for one color.
         label: "red" | "yellow" | "green".
-        reject_counts: Filled with seen / area / aspect / accepted. Every blob
-            lands in exactly one bucket, so the buckets sum to "seen".
+        reject_counts: Filled with seen / area / aspect / round / core /
+            accepted. Every blob lands in exactly one bucket, so the buckets
+            sum to "seen".
         trace: A list to receive one entry per blob that reached a gate
-            (label, bbox, gate, area, aspect, fill, confidence, hsv), or None
-            to skip. gate is None if accepted, else "area" or "aspect". Area
-            rejects are traced only if their bbox clears TRACE_MIN_BBOX_FRAC.
-        hsv: HSV image of the ROI, used only for the trace's mean HSV.
+            (label, bbox, gate, area, aspect, fill, confidence, roundness,
+            core_px, hsv), or None to skip. gate is None if accepted, else
+            "area", "aspect", "round" or "core". Area rejects are traced only
+            if their bbox clears TRACE_MIN_BBOX_FRAC.
+        hsv: HSV image of the ROI: the core gate reads it (required while
+            blob_filter.min_core_px > 0), and the trace's mean HSV.
 
     Outputs:
         Accepted candidates.
@@ -246,12 +320,12 @@ def _blobs_to_candidates(
     candidates = []
 
     rc = reject_counts if reject_counts is not None else {}
-    for _k in ("seen", "area", "aspect", "accepted"):
+    for _k in ("seen", "area", "aspect", "round", "core", "accepted"):
         rc.setdefault(_k, 0)
 
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-    def note(contour, gate, area, bbox, aspect=None, confidence=None):
+    def note(contour, gate, area, bbox, aspect=None, confidence=None, roundness=None, core=None):
         if trace is None:
             return
         x, y, w, h = bbox
@@ -263,6 +337,8 @@ def _blobs_to_candidates(
             "aspect": None if aspect is None else round(aspect, 3),
             "fill": round(area / (w * h), 3) if w * h else None,
             "confidence": confidence,
+            "roundness": None if roundness is None else round(roundness, 3),
+            "core_px": core,
             "hsv": _mean_hsv(hsv, contour) if hsv is not None else None,
         })
 
@@ -296,8 +372,14 @@ def _blobs_to_candidates(
             note(contour, "aspect", area, (x, y, w, h), aspect, confidence)
             continue
 
+        gate, roundness, core = _shape_and_core(contour, area, hsv, blob_filter)
+        if gate is not None:
+            rc[gate] += 1
+            note(contour, gate, area, (x, y, w, h), aspect, confidence, roundness, core)
+            continue
+
         rc["accepted"] += 1
-        note(contour, None, area, (x, y, w, h), aspect, confidence)
+        note(contour, None, area, (x, y, w, h), aspect, confidence, roundness, core)
         candidates.append(TrafficLightCandidate(
             label = label,
             bbox = (x, y, w, h),
@@ -314,10 +396,11 @@ def _filter_blobs(
     blob_filter: BlobFilter,
     frame_id: int,
     timestamp_ms: int,
+    hsv: np.ndarray | None = None,
 ) -> list[TrafficLightCandidate]:
     """
     Production twin of _blobs_to_candidates(): same gates in the same order,
-    without reject counting or tracing.
+    without reject counting or tracing. hsv as there: the core gate's input.
 
     Outputs:
         Accepted candidates.
@@ -337,6 +420,8 @@ def _filter_blobs(
             continue
         aspect = w / h
         if aspect < blob_filter.min_aspect or aspect > blob_filter.max_aspect:
+            continue
+        if _shape_and_core(contour, area, hsv, blob_filter)[0] is not None:
             continue
 
         confidence = round(clamp(
@@ -378,7 +463,7 @@ def extract_traffic_light_candidates(
         (candidates, debug). debug is for inspection; the pipeline doesn't
         pass it on. It always holds hsv, the red / yellow / green masks, roi
         (the input), mask_px ({color: nonzero px}), reject_counts ({color:
-        {seen, area, aspect, accepted}}) and calibrated. With trace, it also
+        {seen, area, aspect, round, core, accepted}}) and calibrated. With trace, it also
         holds trace (see _blobs_to_candidates).
 
     Raises:
@@ -412,7 +497,7 @@ def extract_traffic_light_candidates(
         rc = reject_counts[label] = {}
         candidates += _blobs_to_candidates(
             mask, label, blob_filter, frame_id, timestamp_ms,
-            rc, trace_log, hsv if trace else None,
+            rc, trace_log, hsv,
         )
 
     debug = {
@@ -471,7 +556,7 @@ def find_traffic_light_candidates(
 
     candidates = []
     for label, mask in masks.items():
-        candidates += _filter_blobs(mask, label, blob_filter, frame_id, timestamp_ms)
+        candidates += _filter_blobs(mask, label, blob_filter, frame_id, timestamp_ms, hsv)
 
     return candidates
 

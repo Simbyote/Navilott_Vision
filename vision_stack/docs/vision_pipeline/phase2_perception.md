@@ -213,14 +213,19 @@ With `trace=True`, every contour that reached a gate is recorded with the gate t
 **File:** `color_branch.py` · **Config:** `ColorConfig` · **Output:** `list[TrafficLightCandidate]`
 
 ```
-traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area + aspect gates → confidence
+traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area + aspect + roundness + clipped-core gates → confidence
 ```
 
 - **It's off without ranges.** With `ColorConfig.hsv_ranges = None` (the `PipelineConfig` default), the stage returns no candidates and never reads the ROI. `MEASURED` loads `calibration/hsv_ranges.json` at import, tuned or not, so the robot and both linkers run with the branch on; `--hsv` swaps in other ranges.
 - **Red uses two bands** because hue wraps around: 0–10 and 170–180 in OpenCV units (degrees / 2), combined with OR.
 - **The built-in ranges are a scaffold,** not a calibration. `HSVRanges.is_calibrated` is only true for ranges loaded from JSON, and the debug dict reports it.
-- **Blob gates** (area 30–600 px², w/h aspect 0.3–3.0). The lamps measured 262–370 px² under their calibrated bands with the robot where it stops at the light (`calibrate_lamps`, 2026-10-04); 600 leaves headroom for stopping closer. Earlier values: 5000 passed background patches; 300 (2026-10-04) rejected the red and green lamps themselves; 70 (8b3944c) rejected every lamp. Re-measure with `calibrate_lamps` when the stopping distance or the lights change.
-- **Confidence is area only:** `(area − min_area) / (ref_area − min_area)`, saturating at `ref_area` = 300 px², a typical lamp at the stop. A 262 px² lamp scores 0.86; Phase 3 needs 0.40 (about 140 px²). `ref_area` must stay under `max_area`, or no lamp can reach the gate (800 with a 300 cap topped out at 0.35). Fusion keeps the highest confidence across all three colors, so the largest blob wins.
+- **A lamp, not just a color.** Color and size can't tell a lit lamp from a shirt, a wall or a sign of the same color; the confidence score couldn't either, since it's area only. What can is that a lamp makes light: it's brighter than the camera can record, so its middle clips to near-white inside the colored ring (why every lamp measured had a "missing" center in its color mask), while a reflecting surface stays colored throughout. So a blob passes only with:
+  - **a clipped core:** at least `min_core_px` (3) pixels inside its outline with V ≥ `core_min_v` (240) and S ≤ `core_max_s` (60). The outline is the outer contour, so the ring's hole is inside it; clipped pixels beside the blob, in its bounding box but outside the outline, don't count. The lamps' cores read V 254–255, S 4–5 on 2026-10-04; `calibrate_lamps` reports each lamp's core, and warns if a lamp doesn't clip;
+  - **a round outline:** area over its enclosing circle's ≥ `min_roundness` (0.5). A disc or ring is ~0.9, a square 0.64, a 2.5:1 bar 0.44: bars and shirts the aspect gate (bounding box only) lets through;
+  - **area 30–1200 px², w/h aspect 0.3–3.0,** now only sanity bounds. The lamps measured red 300–400, yellow 400–500 and green 700–800 px² at normal exposure, green glowing most (2026-10-04). Earlier caps: 600 rejected every green lamp, 300 the red too, 70 (8b3944c) every lamp; 5000 passed background patches.
+
+  Setting `min_core_px` to 0 turns the core gate off (some tests do, to test the other gates on solid shapes). The limit: a lamp that doesn't clip at the camera's exposure fails the gate; check the course lights with `calibrate_lamps` first.
+- **Confidence is area only:** `(area − min_area) / (ref_area − min_area)`, saturating at `ref_area` = 350 px², the smallest lamp at the stop (red), so every measured lamp scores 1.0; Phase 3 needs 0.40 (about 160 px²). `ref_area` must stay under `max_area`, or no lamp can reach the gate (800 with a 300 cap topped out at 0.35). Fusion keeps the highest confidence across all three colors, so the largest blob wins.
 
 The HSV ranges have to be tuned under course lighting. Ranges from a lab or office won't carry over.
 
