@@ -38,14 +38,16 @@ TEST_HSV = HSVRanges(
     red_high=ColorRange((170, 120, 120), (180, 255, 255)),
     yellow=ColorRange((20, 120, 120), (35, 255, 255)),
     green=ColorRange((40, 120, 120), (80, 255, 255)))
-TEST_BLOB = BlobFilter(min_area=50.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0)
+# The roundness and core gates off: these tests draw solid shapes to test the other gates;
+# the lamp-vs-shirt tests below run the production gates on lamps drawn with a clipped core
+TEST_BLOB = BlobFilter(min_area=50.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0, min_roundness=0.0, min_core_px=0)
 TEST_CFG = ColorConfig(TEST_HSV, TEST_BLOB)
 
 LABELS = ("red", "yellow", "green")
 PURE = {"red": (0, 0, 255), "yellow": (0, 255, 255), "green": (0, 255, 0)}   # BGR
 BG = 20                                                                       # dark background, below every band's V floor
-GATES = ("seen", "area", "aspect", "accepted")
-TRACE_KEYS = {"label", "bbox", "gate", "area", "aspect", "fill", "confidence", "hsv"}
+GATES = ("seen", "area", "aspect", "round", "core", "accepted")
+TRACE_KEYS = {"label", "bbox", "gate", "area", "aspect", "fill", "confidence", "roundness", "core_px", "hsv"}
 CALIB = Path(__file__).resolve().parents[2] / "calibration" / "hsv_ranges.json"
 
 
@@ -101,7 +103,7 @@ def assert_color_contract(cands, dbg, fid, ts):
         assert dbg["mask_px"][color] == int(np.count_nonzero(m))
         rc = dbg["reject_counts"][color]
         assert set(rc) == set(GATES)
-        assert rc["seen"] == rc["area"] + rc["aspect"] + rc["accepted"], f"{color}: {rc}"
+        assert rc["seen"] == rc["area"] + rc["aspect"] + rc["round"] + rc["core"] + rc["accepted"], f"{color}: {rc}"
         assert rc["accepted"] == sum(1 for c in cands if c.label == color)
     assert isinstance(dbg["calibrated"], bool)
 
@@ -253,7 +255,7 @@ def test_accepted_blob_reports_its_exact_bbox_and_carries_identity():
     (c,), rc = blobs_of(rect_mask(SHAPE, (10, 5, 20, 20)), label="green")
     assert c.bbox == (10, 5, 20, 20) and c.label == "green"
     assert (c.frame_id, c.timestamp_ms) == (3, 4)
-    assert rc == {"seen": 1, "area": 0, "aspect": 0, "accepted": 1}
+    assert rc == {"seen": 1, "area": 0, "aspect": 0, "round": 0, "core": 0, "accepted": 1}
 
 
 @pytest.mark.software
@@ -266,12 +268,12 @@ def test_accepted_blob_reports_its_exact_bbox_and_carries_identity():
 def test_each_blob_gate_rejects_and_is_counted_under_its_own_name(rect, gate):
     out, rc = blobs_of(rect_mask(SHAPE, rect))
     assert out == [] and rc[gate] == 1 and rc["accepted"] == 0
-    assert rc["seen"] == rc["area"] + rc["aspect"] + rc["accepted"]
+    assert rc["seen"] == rc["area"] + rc["aspect"] + rc["round"] + rc["core"] + rc["accepted"]
 
 
 @pytest.mark.software
 def test_blobs_exactly_at_the_area_limits_are_accepted():
-    lo = BlobFilter(min_area=49.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0)
+    lo = BlobFilter(min_area=49.0, max_area=5000.0, min_aspect=0.3, max_aspect=3.0, ref_area=800.0, min_roundness=0.0, min_core_px=0)
     (c,), _ = blobs_of(rect_mask(SHAPE, (10, 10, 8, 8)), lo)          # contour area is (8-1)^2 = 49
     assert c.confidence == 0.0
 
@@ -281,7 +283,7 @@ def test_every_blob_in_a_mask_is_judged_independently():
     mask = rect_mask(SHAPE, (10, 5, 20, 20), (60, 5, 6, 6), (100, 5, 90, 20), (200, 40, 24, 24))
     out, rc = blobs_of(mask)
     assert sorted(c.bbox for c in out) == [(10, 5, 20, 20), (200, 40, 24, 24)]
-    assert rc == {"seen": 4, "area": 1, "aspect": 1, "accepted": 2}
+    assert rc == {"seen": 4, "area": 1, "aspect": 1, "round": 0, "core": 0, "accepted": 2}
 
 
 @pytest.mark.software
@@ -398,7 +400,7 @@ def test_loaded_ranges_report_calibrated(tmp_path):
 
 @pytest.mark.software
 def test_uncalibrated_scaffold_ranges_are_accepted_for_tuning():
-    cands, dbg = extract_traffic_light_candidates(scene(blobs=THREE), HSVRanges(), BlobFilter())
+    cands, dbg = extract_traffic_light_candidates(scene(blobs=THREE), HSVRanges(), TEST_BLOB)
     assert dbg["calibrated"] is False and {c.label for c in cands} == set(LABELS)
 
 
@@ -617,3 +619,101 @@ def test_color_characterization(request, frames, artifacts):
             artifacts.image(f"{fid:06d}_mask_{lb}.png", dbg[lb])
         artifacts.image(f"{fid:06d}_overlay.png", draw_candidates(dbg["roi"], cands))
         artifacts.json(f"{fid:06d}_blob_trace.json", _jsonable_trace(dbg["trace"]))
+
+
+# =============================================================================
+# A lamp or a shirt: the roundness and core gates, at the robot's BlobFilter()
+# =============================================================================
+
+PROD = BlobFilter()                         # every gate on, as the robot runs
+LAMP_BOX = (120, 200)                       # (h, w) of the drawn traffic ROI
+
+
+def lit(color, r=12, core_r=4, core=(250, 250, 250), center=(100, 60), shape=None):
+    """A lamp as the camera records it: a colored disc with a clipped near-white middle (or a given shape)."""
+    img = np.zeros((*LAMP_BOX, 3), np.uint8)
+    if shape is None:
+        cv2.circle(img, center, r, PURE[color], -1)
+    else:
+        shape(img, PURE[color])
+    if core_r:
+        cv2.circle(img, center, core_r, core, -1)
+    return img
+
+
+def found(img, blob=PROD):
+    cands, dbg = extract_traffic_light_candidates(img, TEST_HSV, blob, trace=True)
+    return [c.label for c in cands], dbg
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("color", LABELS)
+def test_a_lit_lamp_of_each_color_passes_every_gate(color):
+    labels, dbg = found(lit(color))
+    assert labels == [color]
+    (t,) = [t for t in dbg["trace"] if t["gate"] is None]
+    assert t["roundness"] > 0.8 and t["core_px"] >= PROD.min_core_px
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("color", LABELS)
+@pytest.mark.parametrize("r", [8, 12, 16])
+def test_a_shirt_the_lamps_color_and_size_is_rejected_for_having_no_clipped_core(color, r):
+    labels, dbg = found(lit(color, r=r, core_r=0))
+    assert labels == [] and dbg["reject_counts"][color]["core"] == 1
+
+
+@pytest.mark.software
+def test_a_bar_the_aspect_gate_passes_is_rejected_as_not_round():
+    bar = lambda img, bgr: cv2.rectangle(img, (75, 50), (125, 70), bgr, -1)       # 2.5:1, inside max_aspect 3
+    labels, dbg = found(lit("red", shape=bar))
+    assert labels == [] and dbg["reject_counts"]["red"]["round"] == 1
+    (t,) = dbg["trace"]
+    assert t["gate"] == "round" and t["roundness"] < PROD.min_roundness and t["aspect"] <= PROD.max_aspect
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("core, core_r, passes", [
+    ((250, 250, 250), 4, True),
+    ((235, 235, 235), 4, False),            # V 235: bright, but under core_min_v (240): not clipped
+    ((140, 160, 250), 4, False),            # V 250 but S ~112, over core_max_s (60): colored, not white
+    ((250, 250, 250), 0, False),            # no core at all
+])
+def test_only_a_clipped_near_white_core_counts(core, core_r, passes):
+    labels, _ = found(lit("green", core=core, core_r=core_r))
+    assert (labels == ["green"]) is passes
+
+
+@pytest.mark.software
+def test_the_core_needs_min_core_px_pixels():
+    img = lit("yellow", core_r=0)
+    img[60, 100] = img[60, 101] = (250, 250, 250)                   # 2 clipped px
+    assert found(img)[0] == [] and found(img, replace(PROD, min_core_px=2))[0] == ["yellow"]
+
+
+@pytest.mark.software
+def test_with_the_core_gate_off_a_solid_disc_passes_and_without_hsv_the_gate_refuses():
+    assert found(lit("red", core_r=0), replace(PROD, min_core_px=0))[0] == ["red"]
+    mask = np.zeros(LAMP_BOX, np.uint8)
+    cv2.circle(mask, (100, 60), 12, 255, -1)
+    with pytest.raises(ValueError, match="core gate needs"):
+        cb._blobs_to_candidates(mask, "red", PROD, 0, 0)
+    with pytest.raises(ValueError, match="core gate needs"):
+        cb._filter_blobs(mask, "red", PROD, 0, 0)
+
+
+@pytest.mark.software
+def test_the_production_twin_takes_lamps_and_rejects_shirts_alike():
+    for img in (lit("red"), lit("green", core_r=0), lit("yellow", r=16)):
+        a, _ = extract_traffic_light_candidates(img, TEST_HSV, PROD, 3, 4)
+        b = cb.find_traffic_light_candidates(img, TEST_HSV, PROD, 3, 4)
+        assert a == b
+
+
+@pytest.mark.software
+def test_clipped_pixels_beside_a_shirt_dont_count_as_its_core():
+    """White inside the shirt's bounding box but outside its outline: a window or a white sleeve, not a lamp's core."""
+    img = lit("red", core_r=0)                                      # disc r 12 at (100, 60): its box is 88-112 x 48-72
+    img[48:51, 88:91] = (250, 250, 250)                             # the box's corner, outside the circle
+    labels, dbg = found(img)
+    assert labels == [] and dbg["reject_counts"]["red"]["core"] == 1

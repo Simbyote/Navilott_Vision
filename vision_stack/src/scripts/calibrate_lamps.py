@@ -48,7 +48,7 @@ import numpy as np
 from src.capture.camera import FrameData
 from src.config import MEASURED
 from src.params import HSV_RANGES_PATH
-from src.perception.color_branch import load_hsv_ranges
+from src.perception.color_branch import BlobFilter, load_hsv_ranges
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
 
@@ -143,7 +143,9 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
         h_glow = np.where(h_glow < 90, h_glow + 180, h_glow)
     gap = {c: float(np.percentile(lamp[:, i], LAMP_PCT) - np.percentile(glow[:, i], GLOW_PCT)) for c, i in (("s", 1), ("v", 2))}
     mid = {c: float(np.percentile(lamp[:, i], LAMP_PCT) + np.percentile(glow[:, i], GLOW_PCT)) / 2 for c, i in (("s", 1), ("v", 2))}
-    return {"center": (round(x, 1), round(y, 1)), "roi_size": (hsv.shape[1], hsv.shape[0]),
+    gate = BlobFilter()                  # the color branch's core gate: a lit lamp clips to near-white
+    core = int(np.count_nonzero((lamp[:, 2] >= gate.core_min_v) & (lamp[:, 1] <= gate.core_max_s)))
+    return {"center": (round(x, 1), round(y, 1)), "roi_size": (hsv.shape[1], hsv.shape[0]), "core_px": core,
             "s_median": float(np.median(lamp[:, 1])), "v_median": float(np.median(lamp[:, 2])),
             "hue_spread": float(np.percentile(h_lamp, 95) - np.percentile(h_lamp, 5)),
             "lamp": {"h": _pcts(h_lamp), "s": _pcts(lamp[:, 1]), "v": _pcts(lamp[:, 2])},
@@ -318,7 +320,7 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
         for i, m in enumerate(measures):
             kind = "colored" if is_colored(m) else "white / mixed"
             say(f"  {i:3d}  at ({m['center'][0]:5.1f}, {m['center'][1]:5.1f})  S {m['s_median']:5.0f}  "
-                f"V {m['v_median']:5.0f}  {kind}")
+                f"V {m['v_median']:5.0f}  core {m['core_px']:3d} px  {kind}")
         res = results[color] = combine(colored or measures)
         first = res["first"]
         say(f"  {'colored frames' if colored else 'all frames'}, the first of them:")
@@ -338,6 +340,13 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
             warnings.append(f"{color}: only {len(colored)} of {len(measures)} frames found the colored lamp; the "
                             f"rest found something white and brighter (near {others[0]}): block it, or the band "
                             "may miss the lamp in a run. The band is from the colored frames")
+        used_m = [m for m in measures if colored is None or is_colored(m)]
+        min_core = BlobFilter().min_core_px
+        core_med = float(np.median([m["core_px"] for m in used_m]))
+        if core_med < min_core:
+            warnings.append(f"{color}: the lamp doesn't clip (median {core_med:.0f} near-white px at its center, the "
+                            f"color branch needs {min_core}): its core gate would reject this lamp as a reflection. "
+                            "Check the lamp is lit as on the course, or lower BlobFilter.core_min_v")
         if at_edge(first):
             warnings.append(f"{color}: the lamp sits at the edge of the traffic ROI ({first['center'][0]:.0f}, "
                             f"{first['center'][1]:.0f} of {first['roi_size'][0]}x{first['roi_size'][1]}): part of "

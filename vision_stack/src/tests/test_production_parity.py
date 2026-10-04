@@ -222,14 +222,22 @@ def test_sign_gate_twins_fuzz():
 @pytest.mark.software
 def test_blob_gate_twins_fuzz():
     rng = np.random.default_rng(91011)
-    bf = cb.BlobFilter()
+    bf = cb.BlobFilter()                          # every gate on, the core one included
     for trial in range(FUZZ_N // 10):
         mask = np.zeros((120, 200), np.uint8)
+        hsv = np.zeros((120, 200, 3), np.uint8)
+        hsv[..., 1], hsv[..., 2] = 200, 150       # colored, not clipped
         for _ in range(6):
             x, y = int(rng.integers(0, 190)), int(rng.integers(0, 110))
-            cv2.rectangle(mask, (x, y), (x + int(rng.integers(0, 90)), y + int(rng.integers(0, 60))), 255, -1)
-        a = cb._blobs_to_candidates(mask, "red", bf, 1, 2, {}, [])
-        b = cb._filter_blobs(mask, "red", bf, 1, 2)
+            shape = int(rng.integers(0, 2))
+            if shape:
+                cv2.circle(mask, (x, y), int(rng.integers(3, 25)), 255, -1)
+            else:
+                cv2.rectangle(mask, (x, y), (x + int(rng.integers(0, 90)), y + int(rng.integers(0, 60))), 255, -1)
+            if rng.random() < 0.5:                # a clipped core in some, of random size
+                cv2.circle(hsv, (x, y), int(rng.integers(0, 4)), (0, 10, 255), -1)
+        a = cb._blobs_to_candidates(mask, "red", bf, 1, 2, {}, [], hsv)
+        b = cb._filter_blobs(mask, "red", bf, 1, 2, hsv)
         _same(a, b, f"trial {trial}")
 
 def _random_lane_candidate(rng, cfg):

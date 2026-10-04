@@ -123,7 +123,7 @@ ALT_ESTIMATION = replace(
     hold_max_frames = 4,
     cm_per_px = 0.05,
     vote_window = 5,
-    min_confidence_traffic = 0.6,          # the drive's faint lamp (0.53) passes 0.40, not this
+    min_confidence_traffic = 0.6,          # the drive's faint lamp (0.45) passes 0.40, not this
     min_confidence_sign = 0.6,
     gyro_bias_dps = 1.5,
     heading_limit_deg = 20.0,
@@ -215,9 +215,10 @@ def scene(
         sign: A red octagon in the sign ROI (upper right).
         lights: BGR lamp colors, stacked downward in the traffic ROI (top center).
         noise_seed: Adds uniform noise in [0, 60) from this seed.
-        lamp_radius, sign_radius: Size in px. Lamps score 0.37 at 7, 0.53 at
-            8 and 1.0 from 11 (BlobFilter ref_area 300), and are rejected past
-            13 (max_area 600); signs 0.71 at 28 and 0.56 at 16.
+        lamp_radius, sign_radius: Size in px. Lamps score 0.31 at 7, 0.45 at
+            8 and 1.0 from 11 (BlobFilter ref_area 350), each drawn lit, with a
+            clipped near-white core (BlobFilter's core gate); signs 0.71 at 28
+            and 0.56 at 16.
 
     Outputs:
         (FRAME_H, FRAME_W, 3) uint8 BGR.
@@ -239,14 +240,19 @@ def scene(
                          cy + r * np.sin(np.pi / 8 + k * np.pi / 4)) for k in range(8)], np.int32)
         cv2.fillPoly(frame, [pts], (40, 40, 255))   # red, bright enough in gray for Canny
     for i, bgr in enumerate(lights):
-        cv2.circle(frame, (FRAME_W // 2, 25 + i * 30), lamp_radius, bgr, -1)
+        center = (FRAME_W // 2, 25 + i * 30)
+        cv2.circle(frame, center, lamp_radius, bgr, -1)
+        # lit: the middle clips to near-white, as a real lamp's does (color_branch.BlobFilter's core gate)
+        cv2.circle(frame, center, max(2, lamp_radius // 3), (250, 250, 250), -1)
     if noise_seed is not None:
         rng = np.random.default_rng(noise_seed)
         frame = cv2.add(frame, rng.integers(0, 60, frame.shape, dtype=np.uint8))
     return frame
 
 
-RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (0, 200, 0)
+# BGR. Green is the course lamp's measured hue, 88 (H 86-91 on camera, calibrate_lamps 2026-10-04):
+# a pure (0, 200, 0) green is hue 60, outside the calibrated green band
+RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (233, 250, 0)
 
 def _paint(frame, x_left, x_right, y_top, height, value):
     """A gray rectangle in lane-ROI coordinates, on a copy of frame."""
@@ -337,9 +343,9 @@ def drive_sequence() -> list[SequenceFrame]:
     steady = SensorSample(yaw_rate_dps=0.5, lateral_accel_mps2=0.1, left_wheel_cps=600.0, right_wheel_cps=600.0)
     turning = SensorSample(yaw_rate_dps=60.0, lateral_accel_mps2=-0.8, left_wheel_cps=700.0, right_wheel_cps=300.0)
     no_yaw = SensorSample(yaw_rate_dps=None, lateral_accel_mps2=0.2, left_wheel_cps=600.0, right_wheel_cps=600.0)
-    # Lamp sizes against BlobFilter (ref_area 300, max_area 600; real lamps 262-370 px^2 at the
-    # stop, 2026-10-04): strong 408 px^2, confidence 1.0; faint 174 px^2, 0.53, past Phase 3's 0.40
-    # gate but under ALT_ESTIMATION's 0.60; dim 130 px^2, 0.37, under both
+    # Lamp sizes against BlobFilter (min_area 30, ref_area 350): strong 408 px^2, confidence 1.0;
+    # faint 174 px^2, 0.45, past Phase 3's 0.40 gate but under ALT_ESTIMATION's 0.60; dim 130 px^2,
+    # 0.31, under both. Each lamp is drawn lit, with a clipped near-white core
     strong, faint, dim = dict(lamp_radius=12), dict(lamp_radius=8), dict(lamp_radius=7)
     segments = [
         # (segment, frame, count, sensors)

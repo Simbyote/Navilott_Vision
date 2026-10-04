@@ -303,3 +303,17 @@ def test_a_bad_argument_is_exit_2_and_a_band_the_loader_refuses_is_not_written(t
     with pytest.raises(ValueError, match="doesn't load"):
         cl.write_ranges(out, {"green": {"lower": [90, 40, 230], "upper": [80, 255, 255]}})
     assert out.read_text() == before and not list(tmp_path.glob("*.tmp.json"))
+
+
+@pytest.mark.software
+def test_each_frame_reports_its_clipped_core_and_a_lamp_that_doesnt_clip_is_warned(tmp_path):
+    flat = (YELLOW[1], YELLOW[1], YELLOW[2])                        # the ring's color (S 140) right through: no clipped core
+    lines = []
+    args = [f"green={write_mixed(tmp_path, 'g', [GREEN, GREEN])}", f"yellow={write_mixed(tmp_path, 'y', [flat, flat])}",
+            f"--out={tmp_path / 'x.json'}"]
+    assert cl.main(args, config=SCENE_CONFIG, say=lines.append) == 0
+    text = "\n".join(lines)
+    assert "core" in text and " px  colored" in text
+    assert "yellow: the lamp doesn't clip" in text and "green: the lamp doesn't clip" not in text
+    m = cl.measure_lamp(cl.traffic_roi(lamp_frame(*GREEN), SCENE_CONFIG))
+    assert m["core_px"] >= 25                                       # the drawn core: r 3, V 255, S 30
