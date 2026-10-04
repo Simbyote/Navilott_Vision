@@ -1,4 +1,4 @@
 {
-  "maneuvers": [],
+  "maneuvers": ["right", "straight", "left", "left", "straight", "right"],
   "finish": "edge"
 }

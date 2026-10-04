@@ -29,6 +29,14 @@ FPS = 20
 # quad-core A53 can't keep up with capture plus processing.
 MIN_FPS = 5
 MAX_FPS = 30
+# OpenCV's worker threads (src/perception/__init__.py sets it). This Pi's
+# OpenCV runs its parallel operations on TBB, one thread per core by
+# default, the extra three spinning while they wait for work. 60 s runs on
+# the lane, 2026-10-03, threads 4 / 2 / 1: median frame 32.7 / 33.7 /
+# 42.7 ms (preprocess 11.2 / 12.4 / 22.0), process CPU 189 / 165 / 153%
+# of a core, the workers' preemptions ~3,800 / 6 / 0 a second. Two keep
+# the parallel speedup and give back a quarter of a core
+OPENCV_THREADS = 2
 
 # --- Paths ---
 # Resolved from this file (<root>/src/params.py) so the working directory never matters

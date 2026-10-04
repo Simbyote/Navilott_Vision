@@ -231,6 +231,73 @@ def test_the_figure_shades_the_run_judged(tmp_path):
     assert json.loads((folder / "pi_load.json").read_text())["window"]["used"]
 
 
+# =============================================================================
+# How the threads share the Pi
+# =============================================================================
+
+@pytest.mark.software
+def test_python_and_native_threads_are_told_apart_by_name():
+    for name in ("main", "sensor-hub", "frame-recorder", "motor-watchdog", "system-monitor", "pigpio-cb"):
+        assert pl.is_python_thread(name), name
+    for name in ("task0", "CameraManager", "IPAProxyRPi", "python3", "pool-1", "python3-ust"):
+        assert not pl.is_python_thread(name), name
+
+
+@pytest.mark.software
+def test_the_split_sums_each_side_per_sample():
+    rows = [trow(0.5, 1, "main", 60.0), trow(0.5, 2, "sensor-hub", 5.0), trow(0.5, 3, "task0", 30.0),
+            trow(0.5, 4, "python3", 20.0), trow(0.5, 5, "python3", 15.0),
+            trow(1.0, 1, "main", 90.0), trow(1.0, 3, "task0", 10.0)]
+    split = pl.python_native(rows)
+    assert split["t"].tolist() == [0.5, 1.0]
+    assert split["python"].tolist() == [65.0, 90.0] and split["native"].tolist() == [65.0, 10.0]
+    assert split["python_threads"] == ["main", "sensor-hub"] and split["native_threads"] == ["python3", "task0"]
+
+
+@pytest.mark.software
+def test_lanes_follow_each_thread_s_core_busiest_first_and_leave_out_idle_ones():
+    rows = [trow(0.5, 1, "main", 60.0, core=0), trow(1.0, 1, "main", 70.0, core=2), trow(1.5, 1, "main", 65.0, core=2),
+            trow(0.5, 7, "python3", 20.0, core=1), trow(1.0, 7, "python3", 25.0, core=1),
+            trow(0.5, 8, "python3", 30.0, core=3), trow(1.0, 8, "python3", 30.0, core=3),
+            trow(0.5, 9, "pool-1", 0.0), trow(1.0, 9, "pool-1", 0.4)]
+    lanes = pl.thread_lanes(rows)
+    assert lanes["step"] == 0.5 and lanes["idle"] == 1
+    assert [lane["label"] for lane in lanes["lanes"]] == ["main", "python3 8", "python3 7"]   # by total CPU
+    main = lanes["lanes"][0]
+    assert main["python"] and main["t"].tolist() == [0.5, 1.0, 1.5] and main["core"].tolist() == [0, 2, 2]
+    assert main["cpu"].tolist() == [60.0, 70.0, 65.0] and not lanes["lanes"][1]["python"]
+
+
+@pytest.mark.software
+def test_the_figure_draws_the_split_and_the_lanes(tmp_path):
+    pytest.importorskip("matplotlib")
+    import matplotlib
+    matplotlib.use("Agg")
+    from matplotlib import pyplot as plt
+    folder = startup_recording(tmp_path)
+    d = pl.load(str(folder))
+    res = pl.analyze(d["threads"], d["cores"], d["system"])
+    drawn = {}
+    real_savefig = plt.Figure.savefig
+
+    def keep(fig, *a, **kw):
+        drawn["fig"] = fig
+        return real_savefig(fig, *a, **kw)
+    plt.Figure.savefig = keep
+    try:
+        assert pl.figure(d["threads"], d["cores"], d["system"], res, "t", tmp_path / "f.png") is not None
+    finally:
+        plt.Figure.savefig = real_savefig
+    axes = drawn["fig"].axes
+    labels = [t.get_text() for a in axes for t in a.get_yticklabels()]
+    assert {"main", "sensor-hub", "src"} <= set(labels), "a lane per busy thread"
+    legends = " ".join(t.get_text() for a in axes if a.get_legend() for t in a.get_legend().get_texts())
+    assert "Python threads" in legends and "native threads" in legends and "core 0" in legends
+    plot_axes = [a for a in axes if a.get_label() != "<colorbar>"]
+    widths = {round(a.get_position().width, 3) for a in plot_axes if a.get_position().width > 0.1}
+    assert len(widths) == 1, f"every panel the same width on the shared time axis: {widths}"
+
+
 def report_text(res):
     return "\n".join(pl.report_lines(res))
 

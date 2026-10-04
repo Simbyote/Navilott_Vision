@@ -190,8 +190,9 @@ def fit_conditions_problem(size, alpha: float, lens: str | None, preprocess,
 
 
 def _refuse(path, why: str) -> None:
-    warnings.warn(f"ground: {Path(path).name} not used ({why}); floor distances in cm are off "
-                  "for this run. Rerun scripts/calibrate_ground.py.", stacklevel=3)
+    warnings.warn(f"ground: {Path(path).name} not used ({why}); the stop line's cm come from the "
+                  "stop-line table if there is one. Rerun scripts/calibrate_ground.py, or delete the "
+                  "file to use the table alone.", stacklevel=3)
     return None
 
 def load_ground_homography(
@@ -208,17 +209,18 @@ def load_ground_homography(
         frame_size: (height, width) of the frames the pipeline will see.
 
     Outputs:
-        GroundHomography, or None with a warning when the file is missing or
-        malformed, or was fit under a different image size, undistort_alpha
-        or lens calibration, or undistortion is off. Never raises: a missing
-        ground plane only turns the cm outputs off.
+        GroundHomography; None, silently, when there's no file (it's
+        optional: the stop-line table gives the stop line's cm without it,
+        and nothing else reads it); None with a warning when it's malformed
+        or was fit under a different image size, undistort_alpha or lens
+        calibration, or undistortion is off. Never raises.
 
     Side effects:
         Reads path and the lens calibration file. Call once at startup.
     """
     path = Path(path)
     if not path.is_file():
-        return _refuse(path, "file not found")
+        return None
     try:
         g = json.loads(path.read_text())
         H = np.array(g["H"], np.float64).reshape(3, 3)
