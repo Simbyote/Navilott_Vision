@@ -27,7 +27,16 @@ python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 5 
 python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 5 --no-render --out runs/lamp_green
 ```
 
-A run that ends early because no lane is in view is fine: a few frames are enough. The lamp must be the brightest thing in the traffic ROI (top-center of the view, `roi_crop.TRAFFIC`).
+A run that ends early because no lane is in view is fine: a few frames are enough.
+
+**If the lamps come out white** (`no band: the spot found is white`), the camera's auto exposure is brightening the room past the lamps. Record again with exposure set, on every lamp the same way, and keep what works in `params.CAMERA_CONTROLS` so the robot drives with the exposure it was calibrated under:
+
+```
+python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 5 --no-render --out runs/lamp_red \
+    --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1
+```
+
+`ae-constraint-mode=highlight` has the auto exposure protect the brightest parts of the view (the lamps); `exposure-value` darkens everything by stops (-1 halves it). `awb-mode=daylight` (or `fluorescent`, `indoor`) holds the white balance instead of letting it follow the room's light. The lamp must be the brightest thing in the traffic ROI (top-center of the view, `roi_crop.TRAFFIC`).
 
 ## 2. Measuring
 

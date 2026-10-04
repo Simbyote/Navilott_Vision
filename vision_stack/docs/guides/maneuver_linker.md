@@ -182,7 +182,7 @@ Typical adjustments:
 
 Once a value works reliably, tell whoever maintains `config.py` so it becomes the default.
 
-Other flags: `--hold` (stop after each step to measure; see section 3), `--no-button` (starts after a 3 s console countdown; with `--hold`, press Enter to continue), `--no-display` (don't play the video), `--no-render` (skip the video), `--render RUN_DIR` (make the video later from a run folder), `--scale 2` (a bigger video), `--out DIR`.
+Other flags: `--hold` (stop after each step to measure; see section 3), `--no-button` (starts after a 3 s console countdown; with `--hold`, press Enter to continue), `--no-display` (don't play the video), `--no-render` (skip the video), `--render RUN_DIR` (make the video later from a run folder), `--scale 2` (a bigger video), `--camera-control KEY=VALUE` (a camera exposure or white-balance setting for this run, repeatable; `phase1_capture.md`), `--out DIR`.
 
 ## 6. Sending results back
 

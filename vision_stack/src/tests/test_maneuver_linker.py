@@ -288,6 +288,22 @@ def test_cli_hold_flag_reaches_run(monkeypatch, tmp_path):
 
 
 @pytest.mark.software
+def test_cli_camera_controls_reach_the_camera_and_a_bad_one_stops_it(monkeypatch, tmp_path, capsys):
+    opened = {}
+
+    def no_camera(w, h, fps, controls):
+        opened.update(controls)
+        raise OSError("stop here")
+    monkeypatch.setattr(lio, "CameraFrameSource", no_camera)
+    monkeypatch.setattr(lio, "CAMERA_CONTROLS", {})
+    monkeypatch.setattr(ml, "run", lambda *a, **k: pytest.fail("ran without hardware"))
+    assert ml.cli(["--no-motors", "--no-button", "--out", str(tmp_path), "--camera-control", "exposure-value=-1.5"]) == 2
+    assert opened == {"exposure-value": -1.5}
+    assert ml.cli(["--no-motors", "--no-button", "--camera-control", "nope=1"]) == 2
+    assert "camera control error" in capsys.readouterr().out
+
+
+@pytest.mark.software
 def test_cli_hardware_that_wont_open_is_exit_2_before_any_run(monkeypatch, tmp_path, capsys):
     def no_camera(*a, **k):
         raise OSError("no camera")

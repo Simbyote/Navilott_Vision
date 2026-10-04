@@ -42,7 +42,7 @@ from src.capture.camera import CaptureError
 from src.debugger.debug_maneuver import FRAMES_DIR, RECORDS_FILE, frame_path
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
 from src.diagnostics.threads import name_os_thread
-from src.params import FPS, FRAME_H, FRAME_W
+from src.params import CAMERA_CONTROLS, FPS, FRAME_H, FRAME_W
 from src.peripherals.sensing import Sensors
 
 JPEG_QUALITY = 90       # frames are only a video background; decisions come from the records
@@ -74,7 +74,7 @@ def release(*things) -> None:
 
 def open_rig(camera: bool = False, video: str | None = None, frames: str | None = None,
              fps: int | None = None, size: tuple[int, int] = (FRAME_W, FRAME_H),
-             motors: bool = True, button: bool = True) -> Rig:
+             motors: bool = True, button: bool = True, camera_controls: dict | None = None) -> Rig:
     """
     Open a driving linker's source, sensors, motors and start button.
 
@@ -88,6 +88,8 @@ def open_rig(camera: bool = False, video: str | None = None, frames: str | None 
             camera. NoMotors otherwise.
         button: The start button (peripherals.system.System); only with the
             camera. None otherwise.
+        camera_controls: Added over params.CAMERA_CONTROLS for this run (a
+            linker's --camera-control); only with the camera.
     Outputs:
         Rig(source, sensors, motor, system).
     Raises:
@@ -96,7 +98,7 @@ def open_rig(camera: bool = False, video: str | None = None, frames: str | None 
     source = sensors = motor = system = None
     try:
         if camera:
-            source = CameraFrameSource(size[0], size[1], fps or FPS)
+            source = CameraFrameSource(size[0], size[1], fps or FPS, {**CAMERA_CONTROLS, **(camera_controls or {})})
             sensors = Sensors(imu=True, encoders=True)
         elif video:
             source = VideoFrameSource(video, fps)

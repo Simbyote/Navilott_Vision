@@ -33,6 +33,7 @@ What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 | **The end of the course** | With the route done (or a `stop_line` finish reached), the lane staying lost (creep at 0.30 for 1 s, then brake) or the finish line ends it: `ended by end of course at step N`. The production run ends the same way |
 | **Ended early** | The lane stays lost before the route is done: a safety stop, `ended by ended early (...) at step N` |
 | `--max-run-s` (default 30 s) | The linker's safety backstop |
+| `--camera-control KEY=VALUE` | A camera exposure or white-balance setting for this run, over `params.CAMERA_CONTROLS`; repeatable, e.g. `--camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1` (`phase1_capture.md`) |
 | Ctrl-C | Motors stop first, then everything is saved and the video rendered |
 | The source ending | Replays only |
 | `--limit N` frames | Mostly for replays |

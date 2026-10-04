@@ -16,7 +16,8 @@ import numpy as np
 import pytest
 
 import src.capture.camera as camera
-from src.capture.camera import CameraSource, CaptureError, FrameData, VideoSink, build_gst_pipeline
+from src.capture.camera import (CameraSource, CaptureError, FrameData, VideoSink, build_gst_pipeline,
+                                format_controls, parse_controls)
 from src.tests.artifacts import summarize
 from src.tests.conftest import CAMERA, DATA_DIR
 
@@ -156,6 +157,59 @@ def test_gst_pipeline_string_carries_parameters():
     assert "format=BGR" in p
     # drop/max-buffers is what keeps read() from returning a stale backlog
     assert p.rstrip().endswith("appsink drop=true max-buffers=1 sync=false")
+
+
+@pytest.mark.software
+def test_no_controls_leaves_the_camera_on_its_own_auto_settings(monkeypatch):
+    monkeypatch.setattr(camera, "CAMERA_CONTROLS", {})
+    p = build_gst_pipeline()
+    assert p.startswith('libcamerasrc sensor-config="') and '" ! video/x-raw' in p
+
+
+@pytest.mark.software
+def test_controls_ride_on_the_libcamerasrc_element(monkeypatch):
+    monkeypatch.setattr(camera, "CAMERA_CONTROLS", {"awb-mode": "daylight"})
+    assert "libcamerasrc " in build_gst_pipeline() and " awb-mode=daylight ! " in build_gst_pipeline()
+    p = build_gst_pipeline(controls={"ae-constraint-mode": "highlight", "exposure-value": -1.5, "awb-enable": False})
+    head = p.split(" ! ")[0]
+    assert head.endswith('" ae-constraint-mode=highlight exposure-value=-1.5 awb-enable=false')
+    assert "awb-mode" not in p, "given controls replace params', they don't add to them"
+
+
+@pytest.mark.software
+def test_an_unknown_control_fails_by_name_before_the_camera_opens():
+    with pytest.raises(ValueError, match="unknown camera control.*exposure"):
+        format_controls({"exposure": -1})
+    with pytest.raises(ValueError, match="brightnes"):
+        CameraSource(480, 270, 20, controls={"brightnes": 0.1})
+
+
+@pytest.mark.software
+def test_command_line_pairs_become_typed_controls():
+    got = parse_controls(["exposure-value=-1", "saturation = 1.3", "ae-constraint-mode=highlight",
+                          "awb-enable=False", "exposure-time=8000"])
+    assert got == {"exposure-value": -1, "saturation": 1.3, "ae-constraint-mode": "highlight",
+                   "awb-enable": False, "exposure-time": 8000}
+    assert type(got["exposure-time"]) is int, "integer properties stay integers: GStreamer may refuse 8000.0"
+    assert "exposure-time=8000 " in build_gst_pipeline(controls=got)
+    assert parse_controls(None) == {}
+    for bad in (["exposure-value"], ["=1"], ["exposure-value="], ["shutter=1"]):
+        with pytest.raises(ValueError):
+            parse_controls(bad)
+
+
+@pytest.mark.software
+def test_the_source_keeps_its_controls_and_opens_with_them(monkeypatch):
+    seen = {}
+
+    class Cap:
+        def __init__(self, pipeline, api):
+            seen["pipeline"] = pipeline
+        def isOpened(self):
+            return True
+    monkeypatch.setattr(camera.cv2, "VideoCapture", Cap)
+    src = CameraSource(480, 270, 20, controls={"exposure-value": -1.0}).open()
+    assert src.controls == {"exposure-value": -1.0} and "exposure-value=-1.0 ! " in seen["pipeline"]
 
 
 class FakeWriter:

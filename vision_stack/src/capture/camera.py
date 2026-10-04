@@ -23,7 +23,16 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 
-from src.params import CAMERA_ROTATE_180, FPS, FRAME_H, FRAME_W, MAX_FPS, MIN_FPS, SENSOR_CONFIG
+from src.params import CAMERA_CONTROLS, CAMERA_ROTATE_180, FPS, FRAME_H, FRAME_W, MAX_FPS, MIN_FPS, SENSOR_CONFIG
+
+# The libcamerasrc controls this camera takes (gst-inspect-1.0 libcamerasrc on
+# the robot, 2026-10-04: libcamera v0.7.2, IMX290). A name outside these
+# fails here, by name, rather than as GStreamer's "unable to start pipeline"
+CAMERA_CONTROL_NAMES = frozenset({
+    "ae-constraint-mode", "ae-enable", "ae-exposure-mode", "ae-flicker-period", "analogue-gain",
+    "analogue-gain-mode", "awb-enable", "awb-mode", "digital-gain", "exposure-time", "exposure-time-mode",
+    "exposure-value", "saturation", "sharpness",
+})
 
 
 def _now_ms() -> int:
@@ -54,7 +63,8 @@ class CameraSource:
             width: int,
             height: int,
             fps: int,
-            max_consecutive_failures: int | None = None
+            max_consecutive_failures: int | None = None,
+            controls: dict | None = None,
         ) -> None:
         """
         Configure the source. The camera is not touched until open().
@@ -66,6 +76,10 @@ class CameraSource:
             max_consecutive_failures: Consecutive failed reads tolerated
                 before read() raises. Defaults to fps (~1 s of dead camera).
                 Lower it to fail fast; raise it to ride out longer stalls.
+            controls: libcamerasrc controls; None is params.CAMERA_CONTROLS.
+
+        Raises:
+            ValueError: For an unknown control name, here rather than at open().
         """
         if fps < MIN_FPS:
             warnings.warn(
@@ -80,6 +94,8 @@ class CameraSource:
                 RuntimeWarning, stacklevel=2,
             )
         self.width, self.height, self.fps = width, height, fps
+        self.controls = dict(CAMERA_CONTROLS if controls is None else controls)
+        format_controls(self.controls)
         self.max_consecutive_failures = (
             fps if max_consecutive_failures is None else max_consecutive_failures
         )
@@ -102,7 +118,7 @@ class CameraSource:
         Raises:
             CaptureError: If GStreamer cannot open the pipeline.
         """
-        pipeline = build_gst_pipeline(self.width, self.height, self.fps)
+        pipeline = build_gst_pipeline(self.width, self.height, self.fps, controls=self.controls)
         self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not self._cap.isOpened():
             raise CaptureError("Failed to open camera pipeline")
@@ -228,11 +244,58 @@ class VideoSink:
             self._out = None
 
 
+def format_controls(controls: dict) -> str:
+    """
+    libcamerasrc properties for the pipeline string: name=value, booleans as
+    true / false, in the dict's order.
+
+    Raises:
+        ValueError: For a name not in CAMERA_CONTROL_NAMES, naming it.
+    """
+    unknown = sorted(set(controls) - CAMERA_CONTROL_NAMES)
+    if unknown:
+        raise ValueError(f"unknown camera control(s) {', '.join(unknown)}; "
+                         f"known: {', '.join(sorted(CAMERA_CONTROL_NAMES))}")
+    fmt = lambda v: ("true" if v else "false") if isinstance(v, bool) else str(v)      # noqa: E731
+    return " ".join(f"{k}={fmt(v)}" for k, v in controls.items())
+
+
+def parse_controls(pairs: list[str] | None) -> dict:
+    """
+    KEY=VALUE strings (a linker's --camera-control) as a controls dict:
+    true / false become booleans, numbers numbers, anything else stays a
+    string (an enum name such as highlight). Checked like format_controls.
+
+    Raises:
+        ValueError: For a pair without "=", or an unknown name.
+    """
+    out = {}
+    for pair in pairs or []:
+        key, sep, raw = pair.partition("=")
+        key, raw = key.strip(), raw.strip()
+        if not sep or not key or not raw:
+            raise ValueError(f"{pair!r}: expected KEY=VALUE, e.g. exposure-value=-1")
+        if raw.lower() in ("true", "false"):
+            value = raw.lower() == "true"
+        else:
+            try:
+                value = int(raw)
+            except ValueError:
+                try:
+                    value = float(raw)
+                except ValueError:
+                    value = raw
+        out[key] = value
+    format_controls(out)
+    return out
+
+
 def build_gst_pipeline(
         width: int = FRAME_W,
         height: int = FRAME_H,
         fps: int = FPS,
-        color_space: str = "BGR"
+        color_space: str = "BGR",
+        controls: dict | None = None,
     ) -> str:
     """
     Build the libcamera -> GStreamer -> OpenCV capture pipeline string.
@@ -242,16 +305,22 @@ def build_gst_pipeline(
             SENSOR_CONFIG mode.
         fps: Requested frame rate.
         color_space: Raw format handed to OpenCV. Downstream stages assume "BGR".
+        controls: libcamerasrc controls (exposure, white balance); None is
+            params.CAMERA_CONTROLS.
 
     Outputs:
         Pipeline string for cv2.VideoCapture(..., cv2.CAP_GSTREAMER).
+
+    Raises:
+        ValueError: For an unknown control name.
     """
     # sensor-config: pinned mode so field of view doesn't change with output size
     # videoflip:     see CAMERA_ROTATE_180
     # appsink:       hold only the newest frame so a slow consumer never reads a stale backlog
     flip = "videoflip method=rotate-180 ! " if CAMERA_ROTATE_180 else ""
+    ctl = format_controls(CAMERA_CONTROLS if controls is None else controls)
     return (
-        f'libcamerasrc sensor-config="{SENSOR_CONFIG}" ! '
+        f'libcamerasrc sensor-config="{SENSOR_CONFIG}"{" " + ctl if ctl else ""} ! '
         f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
         "videoconvert ! "
         f"{flip}"

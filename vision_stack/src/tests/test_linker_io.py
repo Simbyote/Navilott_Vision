@@ -64,14 +64,21 @@ def rig(monkeypatch):
 def test_the_camera_opens_the_sensors_motors_and_button(rig):
     r = io.open_rig(camera=True)
     assert (r.source.kind, r.sensors.kind, r.motor.kind, r.system.kind) == ("camera", "sensors", "motor", "system")
-    assert r.source.args == (FRAME_W, FRAME_H, FPS) and r.sensors.args == ({"imu": True, "encoders": True},)
+    assert r.source.args == (FRAME_W, FRAME_H, FPS, {}) and r.sensors.args == ({"imu": True, "encoders": True},)
 
 
 @pytest.mark.software
 def test_the_camera_without_motors_or_button(rig):
     r = io.open_rig(camera=True, fps=15, size=(320, 240), motors=False, button=False)
-    assert r.source.args == (320, 240, 15) and r.sensors.kind == "sensors"
+    assert r.source.args == (320, 240, 15, {}) and r.sensors.kind == "sensors"
     assert isinstance(r.motor, io.NoMotors) and r.system is None
+
+
+@pytest.mark.software
+def test_a_runs_camera_controls_go_over_the_params_ones(rig, monkeypatch):
+    monkeypatch.setattr(io, "CAMERA_CONTROLS", {"awb-mode": "daylight", "exposure-value": 0.0})
+    r = io.open_rig(camera=True, motors=False, button=False, camera_controls={"exposure-value": -1.0})
+    assert r.source.args[3] == {"awb-mode": "daylight", "exposure-value": -1.0}
 
 
 @pytest.mark.software

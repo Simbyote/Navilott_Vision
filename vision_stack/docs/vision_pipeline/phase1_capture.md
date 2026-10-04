@@ -53,6 +53,8 @@ appsink drop=true max-buffers=1 sync=false
 
 **The image is flipped in GStreamer, not in Python.** The camera is mounted upside down (`CAMERA_ROTATE_180`). Flipping in the pipeline means every consumer, from the perception stages to recordings and the calibration script, sees the same upright frame.
 
+**Exposure and white balance are the camera's own unless set.** `CAMERA_CONTROLS` (`params.py`) passes libcamerasrc controls as properties on the element, e.g. `{"ae-constraint-mode": "highlight", "exposure-value": -1.0, "awb-mode": "daylight"}`; empty, the camera's auto exposure and white balance run as they always have. The names the robot's camera takes are in `capture/camera.CAMERA_CONTROL_NAMES` (from `gst-inspect-1.0 libcamerasrc`), and an unknown one fails by name when the source is built, not as GStreamer's "unable to start pipeline". The driving linkers take `--camera-control KEY=VALUE` (repeatable) over these for one run, to try values before setting them. Why it matters: in a dim room the auto exposure brightens the scene until the traffic lamps blow out to white (`calibrate_lamps.md`), and the white balance follows the room's light. Any change also changes how the lanes look, so re-check lane detection with it.
+
 **Only the newest frame is kept.** `drop=true max-buffers=1` makes the appsink throw away frames the pipeline didn't get to. If a frame takes too long to process, the next read gets the current view of the course instead of a backlog. For steering, a skipped frame is better than a late one.
 
 **Frames arrive as BGR.** That's what OpenCV expects everywhere downstream. Older docs described YUV frames; the pipeline no longer uses YUV.
@@ -91,6 +93,7 @@ All in `src/params.py`:
 | `CAMERA_ROTATE_180` | `True` | Camera mounted upside down |
 | `FRAME_W`, `FRAME_H` | 480, 270 | Output size |
 | `FPS` | 20 | Requested frame rate |
+| `CAMERA_CONTROLS` | `{}` | libcamerasrc controls (exposure, white balance); empty is the camera's auto |
 | `MIN_FPS`, `MAX_FPS` | 5, 30 | Warning band |
 | `CAMERA_CALIB_PATH` | `calibration/camera_calib.json` | Lens calibration for this mode |
 
