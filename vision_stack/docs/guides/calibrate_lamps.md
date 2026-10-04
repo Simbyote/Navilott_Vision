@@ -65,6 +65,18 @@ python3 -m src.scripts.calibrate_lamps red=runs/lamp_red yellow=runs/lamp_yellow
 | `the lamp and its glow overlap in both S and V` | At this exposure no band takes the lamp without its glow | Darken the exposure and measure again. Preview it with `rpicam-still --ev -1 -o test.jpg` |
 | `only V separates the lamp from its glow` (or S) | One channel carries the whole separation | Works, but marginal: a change in lighting can tip it |
 | `red and yellow share hues` | An overexposed red goes orange; a red lamp could pass for yellow | Darken the exposure and measure again. Never drive with this one standing |
+| `no band: the spot found is white, not colored` | The brightest spot has no color (saturation under 25): the lamp is blown out to white, or the brightest thing isn't the lamp. No band is suggested or written for that color | Darken the exposure; check what's brightest in the traffic ROI (top-center of the view) |
+| `no band: the spot's hue spans ...` | The spot's pixels aren't one color | As above |
+| `the red and yellow lamps were found at the same spot` | Two colors' brightest spots coincide, so at least one isn't its lamp: a reflection or a light behind the signal, or one diffuser covering both LEDs | Block the other light, or aim so only the signal is in the traffic ROI |
+
+## Room lighting
+
+The lamps make their own light, so the room's lighting barely changes their color directly. It changes everything around them, and the camera's automatic adjustments carry that into the lamps:
+- **Exposure:** the camera sets its brightness for the whole scene. A dim room makes it brighten, and the lamps blow out to white (the `no band: ... white` message). A bright room darkens them.
+- **White balance:** the camera shifts all colors to make the room's light look neutral. Under a warm, yellowish bulb it pushes the whole image toward blue, lamps included: green toward cyan, yellow toward green.
+- **The surroundings:** a warm bulb tints white and gray surfaces orange-yellow, with low saturation. Those can pass a loose yellow or red band and show up as false lamps.
+
+So calibrate **where and under the light the robot will race in**. Bands measured under a ceiling-fan bulb at home will be off under a venue's LED or fluorescent lighting. If you can't calibrate there, keep the room's main light off and light the scene with something neutral (daylight or a white LED), and measure again on site before the run.
 
 ## Troubleshooting
 
