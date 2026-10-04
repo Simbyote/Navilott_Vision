@@ -41,8 +41,8 @@ from src.navigation.route import Route
 from src.phase3_linker import make_processor, run_phase3_chain
 from src.pipeline import Pipeline
 from src.tests.scenes import (
-    ALT_CONFIG, ALT_ESTIMATION, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE,
-    course_sequence, differs, drive_sequence, scene, same, sweep_frame,
+    ALT_CONFIG, ALT_ESTIMATION, GREEN_LAMP, RED_LAMP, SCENE_CONFIG, SCENES, SWEEP, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE,
+    YELLOW_LAMP, course_sequence, differs, drive_sequence, scene, same, sweep_frame,
 )
 
 # MEASURED undistorts; synthetic frames come out warped, but both paths warp
@@ -282,6 +282,15 @@ def test_step_is_perceive_estimate_then_navigate(case):
         same(split.last_estimation_debug, stepped.last_estimation_debug, where)
         assert split.navigate(packet) == cmd and isinstance(cmd, Command), where
         same(split.navigation.record, stepped.navigation.record, where)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("lamp, color", [(RED_LAMP, "red"), (YELLOW_LAMP, "yellow"), (GREEN_LAMP, "green")])
+def test_each_scene_lamp_is_seen_as_its_color_under_the_calibrated_bands(lamp, color):
+    """The scenes run on calibration/hsv_ranges.json: a lamp it no longer covers would read as no light, which looks like go."""
+    lights = [d for d in run_chain(scene(lights=(lamp,), lamp_radius=12), 0, 0, SCENE_CONFIG).fusion.detections
+              if d.type == "traffic_light"]
+    assert [(d.label_detail, round(d.confidence, 2)) for d in lights] == [(color, 1.0)]
 
 
 @pytest.mark.software

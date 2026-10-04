@@ -246,7 +246,9 @@ def scene(
     return frame
 
 
-RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (0, 200, 0)
+# BGR. Green is the course lamp's measured hue, 88 (H 86-91 on camera, calibrate_lamps 2026-10-04):
+# a pure (0, 200, 0) green is hue 60, outside the calibrated green band
+RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (233, 250, 0)
 
 def _paint(frame, x_left, x_right, y_top, height, value):
     """A gray rectangle in lane-ROI coordinates, on a copy of frame."""
