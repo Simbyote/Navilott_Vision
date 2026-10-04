@@ -78,7 +78,7 @@ Then:
 2. **Press the start button.** The display counts down 5-4-3-2-1. Step back.
 3. **Don't touch the robot for the first few seconds.** It sits still for 2 s (settling), then makes two short spins: left, then right.
 4. It drives forward, stops for 1 s, turns left in place 180°, stops, drives back and stops. Every stop is a **short brake** (`MotorController.brake()`), not a coast, so it stops sharply; that's intended.
-5. The video renders and plays if a screen is attached; close the window or wait for it to end. The summary prints at the end.
+5. The display shows the run's time, and keeps showing it after the program exits, until the next run shows `rdy`. The video renders and plays if a screen is attached; close the window or wait for it to end. The summary prints at the end.
 
 **Stopping it early:** Ctrl-C in the terminal. The motors stop first, and everything recorded so far is still saved and rendered. The run also stops itself if:
 - a wheel is commanded but no encoder counts arrive for 0.5 s (stall);

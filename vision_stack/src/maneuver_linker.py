@@ -254,8 +254,9 @@ def run(
             source.close()
             if system is not None:
                 system.show_final_time(0.0 if t0 is None else clock() - t0)
-                system.cleanup(blank=True)          # release pigpio
-                
+                # Releases pigpio without blanking: the TM1637 holds the final time after the
+                # program exits, until the next run's "rdy", as main.py and navigation_linker do
+                system.cleanup(blank=False)
 
     wall = 0.0 if t0 is None else clock() - t0
     report = machine.report()
