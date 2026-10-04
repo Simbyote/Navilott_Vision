@@ -38,6 +38,8 @@ The motors are halted first every time: a short brake for 0.3 s (`HALT_BRAKE_S`)
 
 The last screen stays up after the program exits (the display isn't blanked).
 
+**If the loop gets stuck.** A camera that stops delivering frames mid-run (a loose camera cable does this: libcamera prints `Camera frontend has timed out!`) leaves the loop waiting inside the camera read, and none of the endings above happen. The motor driver's watchdog covers that: `MotorController` expects a `drive()` every frame, and once none has come for 0.5 s (`MOTOR_WATCHDOG_S` in `params.py`, 10 frames) while it was driving, it short-brakes the motors on its own and logs `motor watchdog: no drive() for ...`. The robot stops within a few cm and stays braked; Ctrl-C then ends the run as usual. A loop that was only slow and comes back drives again with its next command. `brake()` and `stop()` turn the watchdog off until the next `drive()`, since both already leave the motors safe.
+
 ---
 
 ## 3. What it uses

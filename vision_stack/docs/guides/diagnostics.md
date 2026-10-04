@@ -67,6 +67,7 @@ flowchart LR
 | `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has two: the encoders' (counting edges) and the motors' (idle) | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
 | GStreamer's own names | Capture threads inside OpenCV (pure C, no GIL) | Moderate CPU, steady |
 | `frame-recorder` | Linkers only: writes frames to disk (`linker_io.FrameRecorder`) | Bursts while recording |
+| `motor-watchdog` | `peripherals/drive.py`: brakes the motors if the loop stops commanding them (`production_run.md`, "If the loop gets stuck"). Only with real motors | Near zero; 10 wakes a second |
 | `system-monitor` | Soak tests only (`SystemMonitor`) | Near zero |
 
 The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` names pigpio's. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.

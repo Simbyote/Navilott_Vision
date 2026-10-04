@@ -211,4 +211,5 @@ The `frames/` folder is the bulk (about 30 KB a frame). If the archive is too bi
 | `STOPPED: no IMU readings while settling` | The IMU isn't answering; check wiring and `i2cdetect -y 1` |
 | The first leg drives backward | Motor direction is reversed; stop and report it (see 2a) |
 | Turn FAILs by a similar amount every run | Report the final angle and what you saw; that's the data we need, not a fault in the run |
+| The robot stopped and braked mid-run, the terminal froze, and it printed `motor watchdog: no drive() for ...` | The run loop stopped commanding the motors, so the driver braked them (`production_run.md`, "If the loop gets stuck"). Usually the camera: look for `Camera frontend has timed out!` above it and reseat the camera cable. Ctrl-C to end the run |
 | `error.txt` appears | The program crashed. Motors were stopped. Send the folder |
