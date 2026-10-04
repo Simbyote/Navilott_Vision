@@ -29,6 +29,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
 | Give the stop line a distance in cm (tape marks, no checkerboard) | `guides/calibrate_stop_line.md` |
 | Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
+| Calibrate the traffic-light colors from the real lamps | `guides/calibrate_lamps.md` |
 | Check an existing calibration | `guides/test_calibration.md` |
 
 ---
@@ -46,6 +47,7 @@ docs/
         calibrate_camera.md     lens calibration
         calibrate_ground.md     ground-plane homography: floor distances in cm
         calibrate_stop_line.md  stop-line distance in cm from tape marks
+        calibrate_lamps.md      traffic-light HSV bands from the real lamps
         phase2_linker.md        watching the pipeline, with video
         phase3_linker.md        checking estimation, with video
         maneuver_linker.md      drive trial: straight legs and a 180° turn on encoders and IMU
