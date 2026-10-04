@@ -70,6 +70,11 @@ IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
 # noise (the first home run, 2026-10-04: lamp S median 3, hue spread 0-114)
 MIN_LAMP_S = 25             # the lamp disc's median saturation
 MAX_HUE_SPREAD = 30         # the lamp disc's 5th-95th percentile hue span, OpenCV units (60 degrees)
+# A band comes from the frames that found a colored lamp, when at least this
+# share of them did; the others found something white and brighter, which is
+# reported. On 2026-10-04 the first frame found the red lamp (S 214) and most
+# of the others a white spot, and the median over all of them hid the lamp
+MIN_COLORED_SHARE = 0.5
 
 _CLI_HELP = """\
 Calibrate the traffic-light HSV bands from frames of each lamp, lit the way
@@ -129,8 +134,8 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
         h_glow = np.where(h_glow < 90, h_glow + 180, h_glow)
     gap = {c: float(np.percentile(lamp[:, i], LAMP_PCT) - np.percentile(glow[:, i], GLOW_PCT)) for c, i in (("s", 1), ("v", 2))}
     mid = {c: float(np.percentile(lamp[:, i], LAMP_PCT) + np.percentile(glow[:, i], GLOW_PCT)) / 2 for c, i in (("s", 1), ("v", 2))}
-    return {"center": (round(x, 1), round(y, 1)),
-            "s_median": float(np.median(lamp[:, 1])),
+    return {"center": (round(x, 1), round(y, 1)), "roi_size": (hsv.shape[1], hsv.shape[0]),
+            "s_median": float(np.median(lamp[:, 1])), "v_median": float(np.median(lamp[:, 2])),
             "hue_spread": float(np.percentile(h_lamp, 95) - np.percentile(h_lamp, 5)),
             "lamp": {"h": _pcts(h_lamp), "s": _pcts(lamp[:, 1]), "v": _pcts(lamp[:, 2])},
             "glow": {"h": _pcts(h_glow), "s": _pcts(glow[:, 1]), "v": _pcts(glow[:, 2])},
@@ -162,6 +167,23 @@ def no_color(res: dict) -> str | None:
         return (f"the spot's hue spans {res['hue_spread']:.0f} (one color spans under {MAX_HUE_SPREAD}): "
                 "it isn't one lamp's color")
     return None
+
+
+def is_colored(m: dict) -> bool:
+    """True when one frame's spot is a lamp with a color: saturated, and of one hue."""
+    return m["s_median"] >= MIN_LAMP_S and m["hue_spread"] <= MAX_HUE_SPREAD
+
+
+def colored_frames(measures: list[dict]) -> list[dict] | None:
+    """The frames that found a colored lamp, when they're at least MIN_COLORED_SHARE of them; else None."""
+    colored = [m for m in measures if is_colored(m)]
+    return colored if colored and len(colored) >= MIN_COLORED_SHARE * len(measures) else None
+
+
+def at_edge(m: dict) -> bool:
+    """True when the lamp's disc runs past the traffic ROI's border: part of the lamp is out of it."""
+    (x, y), (w, h) = m["center"], m["roi_size"]
+    return min(x, y, w - 1 - x, h - 1 - y) < LAMP_RADIUS_PX
 
 
 def same_spot(results: dict) -> list[tuple[str, str]]:
@@ -281,20 +303,40 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
 
     entries, warnings, results = {}, [], {}
     for color, frames in rois.items():
-        res = results[color] = combine([measure_lamp(r) for r in frames])
+        measures = [measure_lamp(r) for r in frames]
+        colored = colored_frames(measures)
+        say(f"\n{color}: {len(measures)} frame(s); per frame, the brightest spot in the traffic ROI:")
+        for i, m in enumerate(measures):
+            kind = "colored" if is_colored(m) else "white / mixed"
+            say(f"  {i:3d}  at ({m['center'][0]:5.1f}, {m['center'][1]:5.1f})  S {m['s_median']:5.0f}  "
+                f"V {m['v_median']:5.0f}  {kind}")
+        res = results[color] = combine(colored or measures)
         first = res["first"]
-        say(f"\n{color}: {res['frames']} frame(s); lamp at {first['center']} in the traffic ROI (first frame)")
+        say(f"  {'colored frames' if colored else 'all frames'}, the first of them:")
         say("          H p5/p50/p95      S p5/p50/p95      V p5/p50/p95")
         for part in ("lamp", "glow"):
             say(f"  {part}  " + "  ".join(" ".join(f"{x:5.0f}" for x in first[part][c]) for c in "hsv"))
-        why = no_color(res)
+        n_colored = sum(map(is_colored, measures))
+        why = None if colored else (no_color(res) or f"only {n_colored} of {len(measures)} frames found a "
+                                    "colored lamp, under half: the brightest thing in the traffic ROI is "
+                                    "mostly something else")
         if why:
             say(f"  no band: {why}")
             warnings.append(f"{color}: no band suggested; see above")
             continue
+        if len(colored) < len(measures):
+            others = [m["center"] for m in measures if not is_colored(m)]
+            warnings.append(f"{color}: only {len(colored)} of {len(measures)} frames found the colored lamp; the "
+                            f"rest found something white and brighter (near {others[0]}): block it, or the band "
+                            "may miss the lamp in a run. The band is from the colored frames")
+        if at_edge(first):
+            warnings.append(f"{color}: the lamp sits at the edge of the traffic ROI ({first['center'][0]:.0f}, "
+                            f"{first['center'][1]:.0f} of {first['roi_size'][0]}x{first['roi_size'][1]}): part of "
+                            "it is outside. Move the robot back or aim the camera so the light sits inside it")
         e = bands_for(color, res["band"])
         entries[color] = e
-        area = float(np.median([blob_area(r, e) for r in frames]))
+        used = [r for r, m in zip(frames, measures) if colored is None or is_colored(m)]
+        area = float(np.median([blob_area(r, e) for r in used]))
         for key, val in e.items():
             say(f"  {key:9s} lower {val['lower']}  upper {val['upper']}")
         say(f"  blob area under it: {area:.0f} px^2 (median over the frames)")

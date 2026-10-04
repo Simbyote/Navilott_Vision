@@ -47,7 +47,11 @@ python3 -m src.scripts.calibrate_lamps red=runs/lamp_red yellow=runs/lamp_yellow
 Any colors, each an image or a run folder (up to 15 frames, spread across it). Each frame goes through the robot's own preprocess and traffic-ROI crop, so the numbers are what the color branch sees. Per color it prints (here a drawn cyan-green lamp, like the course's):
 
 ```
-green: 15 frame(s); lamp at (48.0, 50.0) in the traffic ROI (first frame)
+green: 3 frame(s); per frame, the brightest spot in the traffic ROI:
+    0  at ( 48.0,  50.0)  S    52  V   245  colored
+    1  at ( 48.0,  50.0)  S    52  V   245  colored
+    2  at ( 48.0,  50.0)  S    52  V   245  colored
+  colored frames, the first of them:
           H p5/p50/p95      S p5/p50/p95      V p5/p50/p95
   lamp     99   100   100     33    52    52    243   245   254
   glow     96    98    98     24    29    29    210   212   212
@@ -55,6 +59,7 @@ green: 15 frame(s); lamp at (48.0, 50.0) in the traffic ROI (first frame)
   blob area under it: 228 px^2 (median over the frames)
 ```
 
+- **Per frame:** where the brightest spot in the traffic ROI was, its saturation and brightness, and whether it's a colored lamp (saturation 25 or more, one hue) or white / mixed. The band comes from the colored frames, when they're at least half; a mix is reported (below). The spot should sit at the same place in every frame, well inside the ROI.
 - **lamp / glow:** H, S and V percentiles of a disc around the brightest blob (radius 8 px) and of a ring outside it (12-24 px).
 - **The band:** hue spans the lamp's (5th-95th percentile, 4 either side); the S and V minimums sit halfway between the lamp's 10th percentile and the glow's 90th. Red gets both halves of its band (`red_low`, `red_high`), split at the hue wrap.
 - **blob area:** the largest blob under the new band, measured as the color branch measures it. Set `BlobFilter` from these: `ref_area` (confidence 1.0) about the typical lamp, `max_area` with some headroom above the largest.
@@ -76,6 +81,9 @@ python3 -m src.scripts.calibrate_lamps red=runs/lamp_red yellow=runs/lamp_yellow
 | `red and yellow share hues` | An overexposed red goes orange; a red lamp could pass for yellow | Darken the exposure and measure again. Never drive with this one standing |
 | `no band: the spot found is white, not colored` | The brightest spot has no color (saturation under 25): the lamp is blown out to white, or the brightest thing isn't the lamp. No band is suggested or written for that color | Darken the exposure; check what's brightest in the traffic ROI (top-center of the view) |
 | `no band: the spot's hue spans ...` | The spot's pixels aren't one color | As above |
+| `no band: only N of M frames found a colored lamp, under half` | Most frames' brightest spot is something white, not the lamp | Find it in the per-frame lines (its position) and block it, or move the robot |
+| `only N of M frames found the colored lamp` | A band was made from the colored frames, but something white and brighter took the others: in a run, the color branch may lose the lamp to it | Block it, then measure again |
+| `the lamp sits at the edge of the traffic ROI` | Part of the lamp is outside the area the color branch looks at (top-center of the view) | Move the robot back from the light, or aim the camera, until the lamp sits inside it |
 | `the red and yellow lamps were found at the same spot` | Two colors' brightest spots coincide, so at least one isn't its lamp: a reflection or a light behind the signal, or one diffuser covering both LEDs | Block the other light, or aim so only the signal is in the traffic ROI |
 
 ## Room lighting

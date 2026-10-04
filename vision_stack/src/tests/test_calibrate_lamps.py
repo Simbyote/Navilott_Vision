@@ -167,6 +167,82 @@ def test_the_command_line_writes_only_the_lamps_that_gave_a_band(tmp_path):
     assert "nothing written" in "\n".join(lines) and json.loads(out.read_text()) == after
 
 
+def write_mixed(tmp_path, name, lamps):
+    """A run folder whose frames show the given lamps, in order."""
+    folder = tmp_path / name / "frames"
+    folder.mkdir(parents=True)
+    for i, lamp in enumerate(lamps):
+        cv2.imwrite(str(folder / f"{i:06d}.png"), lamp_frame(*lamp))
+    return tmp_path / name
+
+
+@pytest.mark.software
+def test_the_band_comes_from_the_frames_that_found_the_colored_lamp(tmp_path):
+    out = tmp_path / "hsv.json"
+    out.write_text(HSV_RANGES_PATH.read_text())
+    lines = []
+    folder = write_mixed(tmp_path, "r", [RED, WHITE, RED, RED])
+    assert cl.main([f"red={folder}", f"--out={out}", "--write"], config=SCENE_CONFIG, say=lines.append) == 0
+    text = "\n".join(lines)
+    assert text.count("colored") >= 3 and "white / mixed" in text, "a line per frame"
+    assert "only 3 of 4 frames found the colored lamp" in text
+    written = json.loads(out.read_text())
+    assert written["red_high"]["lower"][0] <= 176 and written["red_low"]["upper"][0] >= 2
+    assert "blob area under it: " in text and "blob area under it: 0 " not in text
+
+
+@pytest.mark.software
+def test_with_half_the_frames_white_the_band_and_area_are_the_colored_frames_alone(tmp_path):
+    """At exactly half, a median over every frame would land between the lamp and the white spot."""
+    def run(lamps, name):
+        out = tmp_path / f"{name}.json"
+        out.write_text(HSV_RANGES_PATH.read_text())
+        lines = []
+        assert cl.main([f"red={write_mixed(tmp_path, name, lamps)}", f"--out={out}", "--write"],
+                       config=SCENE_CONFIG, say=lines.append) == 0
+        area = next(ln for ln in lines if "blob area under it" in ln)
+        return json.loads(out.read_text()), area
+    mixed, mixed_area = run([RED, WHITE, RED, WHITE], "mixed")
+    clean, clean_area = run([RED, RED], "clean")
+    assert (mixed["red_low"], mixed["red_high"]) == (clean["red_low"], clean["red_high"])
+    assert mixed_area == clean_area
+
+
+@pytest.mark.software
+def test_a_saturated_spot_of_many_hues_is_not_a_colored_lamp():
+    assert cl.is_colored({"s_median": 200.0, "hue_spread": 10.0})
+    assert not cl.is_colored({"s_median": 200.0, "hue_spread": 80.0})
+    assert not cl.is_colored({"s_median": 10.0, "hue_spread": 5.0})
+
+
+@pytest.mark.software
+def test_under_half_the_frames_colored_is_no_band(tmp_path):
+    lines = []
+    folder = write_mixed(tmp_path, "r", [RED, WHITE, WHITE, WHITE])
+    assert cl.main([f"red={folder}", f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append) == 0
+    assert "no band:" in "\n".join(lines) and "red_low" not in "\n".join(lines)
+    measures = [{"s_median": s, "hue_spread": 5.0} for s in (200, 200, 3, 3, 3)]
+    assert cl.colored_frames(measures) is None
+    assert len(cl.colored_frames(measures[:4])) == 2
+
+
+@pytest.mark.software
+def test_a_lamp_at_the_edge_of_the_traffic_roi_is_reported(tmp_path):
+    m = {"center": (25.8, 0.4), "roi_size": (96, 108)}
+    assert cl.at_edge(m) and not cl.at_edge({**m, "center": (48.0, 50.0)})
+    lines = []
+    folder = write_mixed(tmp_path, "r", [(RED[0], RED[1], RED[2])] * 2)
+    top = tmp_path / "top" / "frames"
+    top.mkdir(parents=True)
+    for i in range(2):
+        cv2.imwrite(str(top / f"{i:06d}.png"), lamp_frame(*RED, center=(216, 3)))
+    assert cl.main([f"red={top.parent}", f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append) == 0
+    assert "sits at the edge of the traffic ROI" in "\n".join(lines)
+    lines.clear()
+    cl.main([f"red={folder}", f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append)
+    assert "edge of the traffic ROI" not in "\n".join(lines)
+
+
 # =============================================================================
 # Frames, the file and the command line
 # =============================================================================
