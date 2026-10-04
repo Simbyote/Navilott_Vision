@@ -414,6 +414,25 @@ def test_the_camera_drives_the_motors_with_sensors_and_the_button(cli_env):
 
 
 @pytest.mark.software
+def test_camera_controls_from_the_command_line_reach_the_camera(cli_env, monkeypatch):
+    opened = {}
+    monkeypatch.setattr(lio, "CAMERA_CONTROLS", {})
+    monkeypatch.setattr(lio, "CameraFrameSource", lambda w, h, fps, controls: opened.update(controls) or
+                        SimpleNamespace(label="camera", fps=fps, close=lambda: None))
+    _, tmp = cli_env
+    assert nl.cli(["--camera", "--out", str(tmp / "o"), "--camera-control", "ae-constraint-mode=highlight",
+                   "--camera-control", "exposure-value=-1"]) == 0
+    assert opened == {"ae-constraint-mode": "highlight", "exposure-value": -1}
+
+
+@pytest.mark.software
+def test_an_unknown_camera_control_is_exit_2_before_anything_opens(cli_env, capsys):
+    _, tmp = cli_env
+    assert nl.cli(["--camera", "--out", str(tmp / "o"), "--camera-control", "shutter=1"]) == 2
+    assert "camera control error" in capsys.readouterr().out
+
+
+@pytest.mark.software
 def test_no_motors_and_no_button_on_the_camera(cli_env):
     got, tmp = cli_env
     assert nl.cli(["--camera", "--no-motors", "--no-button", "--max-run-s", "7"]) == 0

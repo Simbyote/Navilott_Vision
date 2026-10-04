@@ -247,3 +247,20 @@ def test_the_camera_opens_the_motors_and_button_unless_told_not_to(tmp_path, mon
     assert il.cli(["left", "--camera", "--out", str(tmp_path), *flags]) == 0
     assert getattr(got["motor"], "kind", None) == motor_kind and got["motors_on"] is (motor_kind is not None)
     assert (got["system"] is not None) is button
+
+
+@pytest.mark.software
+def test_camera_controls_reach_the_camera_and_a_bad_one_is_exit_2(tmp_path, monkeypatch, capsys):
+    opened = {}
+
+    def no_camera(w, h, fps, controls):
+        opened.update(controls)
+        raise OSError("stop here")
+    monkeypatch.setattr(lio, "CameraFrameSource", no_camera)
+    monkeypatch.setattr(lio, "CAMERA_CONTROLS", {})
+    monkeypatch.setattr(il, "run_sequence", lambda *a, **k: pytest.fail("ran without a camera"))
+    assert il.cli(["left", "--camera", "--no-motors", "--no-button", "--out", str(tmp_path),
+                   "--camera-control", "awb-mode=daylight"]) == 2
+    assert opened == {"awb-mode": "daylight"}
+    assert il.cli(["left", "--camera", "--camera-control", "nope=1"]) == 2
+    assert "camera control error" in capsys.readouterr().out

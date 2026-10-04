@@ -34,7 +34,7 @@ python3 -m src.intersection_linker straight --camera --no-motors   # bench: noth
 python3 -m src.intersection_linker left --video runs/<run>.avi     # replay one intersection
 ```
 
-Each sequence stops by itself. The backstop is `--max-run-s` (20 s), and Ctrl-C stops the motors first.
+Each sequence stops by itself. The backstop is `--max-run-s` (20 s), and Ctrl-C stops the motors first. `--camera-control KEY=VALUE` sets a camera exposure or white-balance control for the run (repeatable; `phase1_capture.md`).
 
 ---
 

@@ -37,6 +37,7 @@ import time
 import traceback
 from dataclasses import asdict, fields, replace
 
+from src.capture.camera import parse_controls
 from src.config import MANEUVER, MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.debugger.debug_maneuver import render_run
 from src.debugger.live_view import Display
@@ -398,9 +399,16 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--width", type=int, default=FRAME_W)
     ap.add_argument("--height", type=int, default=FRAME_H)
     ap.add_argument("--fps", type=int, default=FPS)
+    ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
+                    help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
     ap.add_argument("--out", default=None, metavar="DIR")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        camera_controls = parse_controls(args.camera_control)
+    except ValueError as exc:
+        print(f"camera control error: {exc}")
+        return 2
 
     try:
         cfg = trial_config(MANEUVER, args)
@@ -430,7 +438,8 @@ def cli(argv: list[str] | None = None) -> int:
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=cfg.gyro_bias_dps)
     try:
         source, sensors, motor, system = open_rig(camera=True, fps=args.fps, size=(args.width, args.height),
-                                                  motors=not args.no_motors, button=not args.no_button)
+                                                  motors=not args.no_motors, button=not args.no_button,
+                                                  camera_controls=camera_controls)
     except OPEN_ERRORS as exc:
         print(f"source / hardware error: {exc!r}")
         return 2

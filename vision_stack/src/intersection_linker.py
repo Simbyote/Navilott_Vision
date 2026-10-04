@@ -37,6 +37,7 @@ import sys
 import time
 from dataclasses import replace
 
+from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.estimation.estimation import LANE_VISION, Phase3Config
 from src.linker_io import OPEN_ERRORS, open_rig
@@ -210,9 +211,16 @@ def cli(argv: list[str] | None = None) -> int:
                     help=f"gyro Z at rest, + = right (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
     ap.add_argument("--cm-per-px", type=float, default=None, metavar="S")
     ap.add_argument("--fps", type=int, default=None)
+    ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
+                    help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--no-render", action="store_true", help="skip each sequence's video")
     ap.add_argument("--out", default=None, metavar="DIR")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        camera_controls = parse_controls(args.camera_control)
+    except ValueError as exc:
+        print(f"camera control error: {exc}")
+        return 2
 
     maneuvers = list(MANEUVERS) if args.maneuver == "all" else [args.maneuver]
     if len(maneuvers) > 1 and not args.camera:
@@ -231,7 +239,8 @@ def cli(argv: list[str] | None = None) -> int:
             print(f"\n{m.upper()}: robot in its lane, pointing along it, the stop line ahead in view.")
             try:
                 source, sensors, motor, system = open_rig(args.camera, args.video, args.frames, args.fps,
-                                                          motors=not args.no_motors, button=not args.no_button)
+                                                          motors=not args.no_motors, button=not args.no_button,
+                                                          camera_controls=camera_controls)
             except OPEN_ERRORS as exc:
                 print(f"source / hardware error: {exc!r}")
                 return 2

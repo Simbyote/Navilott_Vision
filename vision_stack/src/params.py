@@ -24,6 +24,15 @@ SENSOR_CONFIG = "sensor/config,width=1920,height=1080,depth=10"
 CAMERA_ROTATE_180 = True        # camera is mounted upside down
 FRAME_W, FRAME_H = 480, 270     # 16:9, matching the sensor mode
 FPS = 20
+# libcamerasrc controls set when the camera opens (capture/camera.py), as
+# {name: value}: e.g. {"ae-constraint-mode": "highlight", "exposure-value":
+# -1.0, "awb-mode": "daylight"}. Empty: the camera's own auto exposure and
+# white balance. The linkers' --camera-control KEY=VALUE adds to these for
+# one run, to try values before setting them here. Under a dim room the
+# auto exposure blew the traffic lamps out to white (2026-10-04,
+# calibrate_lamps: lamp saturation 3 of 255); setting exposure changes how
+# the lanes look too, so re-check lane detection with any change
+CAMERA_CONTROLS: dict = {}
 # Supported frame-rate band for the Pi Zero 2 W. Below MIN_FPS, per-frame
 # control updates are too sparse for lane following; above MAX_FPS the
 # quad-core A53 can't keep up with capture plus processing.

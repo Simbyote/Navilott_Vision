@@ -120,9 +120,10 @@ class FrameSource:
 
 class CameraFrameSource(FrameSource):
     """Live capture. Opens the camera on construction and keeps capture's own stamp."""
-    def __init__(self, width: int, height: int, fps: int) -> None:
-        super().__init__("camera", fps)
-        self.cam = CameraSource(width, height, fps)
+    def __init__(self, width: int, height: int, fps: int, controls: dict | None = None) -> None:
+        self.cam = CameraSource(width, height, fps, controls=controls)
+        set_ = " ".join(f"{k}={v}" for k, v in self.cam.controls.items())
+        super().__init__(f"camera ({set_})" if set_ else "camera", fps)
         self.cam.open()
 
     def read(self) -> Stamped | tuple[None, None, None]:

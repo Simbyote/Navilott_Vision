@@ -131,7 +131,8 @@ def test_camera_source_keeps_captures_stamp_and_passes_drops_through(monkeypatch
     reads = [FrameData(np.zeros((2, 2, 3), np.uint8), 41, 2050), None]
 
     class FakeCamera:
-        def __init__(self, w, h, fps): self.args = (w, h, fps)
+        def __init__(self, w, h, fps, controls=None):
+            self.args, self.controls = (w, h, fps), dict(controls or {})
         def open(self): return self
         def read(self): return reads.pop(0)
         def release(self): self.released = True
@@ -142,7 +143,10 @@ def test_camera_source_keeps_captures_stamp_and_passes_drops_through(monkeypatch
     assert (fid, ts) == (41, 2050)                               # not re-minted from an index
     assert src.read() == (None, None, None)                      # transient drop
     src.close()
-    assert src.cam.released and src.cam.args == (FRAME_W, FRAME_H, 20)
+    assert src.cam.released and src.cam.args == (FRAME_W, FRAME_H, 20) and src.label == "camera"
+    with_controls = lv.CameraFrameSource(FRAME_W, FRAME_H, 20, {"exposure-value": -1.0})
+    assert with_controls.cam.controls == {"exposure-value": -1.0}
+    assert with_controls.label == "camera (exposure-value=-1.0)", "the run's header shows what was set"
 
 
 @pytest.mark.software
