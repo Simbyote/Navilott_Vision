@@ -128,6 +128,45 @@ def test_colors_sharing_hues_are_reported():
     assert cl.hue_overlaps(clean) == []
 
 
+WHITE = ((0, 0, 255), (0, 3, 254), (90, 5, 200))            # a blown-out spot: no color, hue is noise
+
+
+@pytest.mark.software
+def test_a_spot_with_no_color_gets_no_band():
+    res = cl.combine([cl.measure_lamp(cl.traffic_roi(lamp_frame(*WHITE), SCENE_CONFIG))])
+    assert "white, not colored" in cl.no_color(res)
+    assert cl.no_color(cl.combine([measured("green", GREEN)[0]])) is None
+    noisy = {**res, "s_median": 60.0, "hue_spread": 80.0}
+    assert "isn't one lamp's color" in cl.no_color(noisy)
+
+
+@pytest.mark.software
+def test_two_lamps_found_at_the_same_spot_are_reported():
+    at = lambda c: {"center": c}                                     # noqa: E731
+    assert cl.same_spot({"red": at((91.8, 74.4)), "yellow": at((91.9, 74.2)), "green": at((94, 40))}) \
+        == [("red", "yellow")]
+    assert cl.same_spot({"red": at((90, 20)), "yellow": at((90, 40))}) == []
+
+
+@pytest.mark.software
+def test_the_command_line_writes_only_the_lamps_that_gave_a_band(tmp_path):
+    out = tmp_path / "hsv.json"
+    out.write_text(HSV_RANGES_PATH.read_text())
+    before = json.loads(out.read_text())
+    lines = []
+    args = [f"red={write_frames(tmp_path, 'r', WHITE)}", f"green={write_frames(tmp_path, 'g', GREEN)}",
+            f"--out={out}", "--write"]
+    assert cl.main(args, config=SCENE_CONFIG, say=lines.append) == 0
+    text = "\n".join(lines)
+    assert "no band: the spot found is white" in text and "WARNING: red: no band suggested" in text
+    after = json.loads(out.read_text())
+    assert after["red_low"] == before["red_low"] and after["red_high"] == before["red_high"]
+    assert after["green"] != before["green"]
+    lines.clear()
+    assert cl.main([args[0], f"--out={out}", "--write"], config=SCENE_CONFIG, say=lines.append) == 1
+    assert "nothing written" in "\n".join(lines) and json.loads(out.read_text()) == after
+
+
 # =============================================================================
 # Frames, the file and the command line
 # =============================================================================

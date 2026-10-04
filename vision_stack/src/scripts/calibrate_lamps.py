@@ -14,7 +14,9 @@ Purpose:
     lamp and the glow, so the band keeps the one and drops the other. It
     says when no S or V threshold separates them (try a darker exposure),
     when two colors' hues overlap, and how large each lamp's blob is under
-    its new band, for BlobFilter's areas. --write puts the measured colors
+    its new band, for BlobFilter's areas. It suggests no band at all when
+    what it found has no color to measure (a blown-out white spot, or not
+    the lamp), and says when two lamps were found at the same spot. --write puts the measured colors
     into calibration/hsv_ranges.json, leaving the others as they were.
 
 Main package:
@@ -63,6 +65,11 @@ HUE_MARGIN = 4              # widen the lamp's hue span (5th-95th percentile) by
 LAMP_PCT, GLOW_PCT = 10, 90
 FRAMES_PER_LAMP = 15        # frames read from a folder, spread across it
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
+# What a lamp with a color to measure looks like. The 2026-10-04 green lamp's
+# ring read S ~50; a clipped white spot reads S under ~10 and its hue is
+# noise (the first home run, 2026-10-04: lamp S median 3, hue spread 0-114)
+MIN_LAMP_S = 25             # the lamp disc's median saturation
+MAX_HUE_SPREAD = 30         # the lamp disc's 5th-95th percentile hue span, OpenCV units (60 degrees)
 
 _CLI_HELP = """\
 Calibrate the traffic-light HSV bands from frames of each lamp, lit the way
@@ -123,6 +130,8 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
     gap = {c: float(np.percentile(lamp[:, i], LAMP_PCT) - np.percentile(glow[:, i], GLOW_PCT)) for c, i in (("s", 1), ("v", 2))}
     mid = {c: float(np.percentile(lamp[:, i], LAMP_PCT) + np.percentile(glow[:, i], GLOW_PCT)) / 2 for c, i in (("s", 1), ("v", 2))}
     return {"center": (round(x, 1), round(y, 1)),
+            "s_median": float(np.median(lamp[:, 1])),
+            "hue_spread": float(np.percentile(h_lamp, 95) - np.percentile(h_lamp, 5)),
             "lamp": {"h": _pcts(h_lamp), "s": _pcts(lamp[:, 1]), "v": _pcts(lamp[:, 2])},
             "glow": {"h": _pcts(h_glow), "s": _pcts(glow[:, 1]), "v": _pcts(glow[:, 2])},
             "band": {"h_lo": float(np.percentile(h_lamp, 5)) - HUE_MARGIN,
@@ -132,12 +141,34 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
 
 
 def combine(measures: list[dict]) -> dict:
-    """The median band and gaps over a lamp's frames."""
+    """The median band, gaps and color checks over a lamp's frames."""
     med = lambda key: float(np.median([m["band"][key] for m in measures]))       # noqa: E731
     return {"band": {k: med(k) for k in ("h_lo", "h_hi", "s_min", "v_min")},
+            "s_median": float(np.median([m["s_median"] for m in measures])),
+            "hue_spread": float(np.median([m["hue_spread"] for m in measures])),
+            "center": tuple(float(np.median([m["center"][i] for m in measures])) for i in (0, 1)),
             "s_gap": float(np.median([m["s_gap"] for m in measures])),
             "v_gap": float(np.median([m["v_gap"] for m in measures])),
             "frames": len(measures), "first": measures[0]}
+
+
+def no_color(res: dict) -> str | None:
+    """Why the spot measured has no color to calibrate, or None when it has one."""
+    if res["s_median"] < MIN_LAMP_S:
+        return (f"the spot found is white, not colored (median saturation {res['s_median']:.0f}, "
+                f"a lamp's is over {MIN_LAMP_S}): the lamp is blown out, or the brightest thing in the "
+                "traffic ROI isn't the lamp")
+    if res["hue_spread"] > MAX_HUE_SPREAD:
+        return (f"the spot's hue spans {res['hue_spread']:.0f} (one color spans under {MAX_HUE_SPREAD}): "
+                "it isn't one lamp's color")
+    return None
+
+
+def same_spot(results: dict) -> list[tuple[str, str]]:
+    """Pairs of colors whose lamps were found within a lamp radius of each other: one of them isn't its lamp."""
+    names = sorted(results)
+    return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
+            if np.hypot(*np.subtract(results[a]["center"], results[b]["center"])) < LAMP_RADIUS_PX]
 
 
 def bands_for(color: str, band: dict) -> dict:
@@ -248,17 +279,22 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
         say(f"ERROR: {exc}")
         return 2
 
-    entries, warnings = {}, []
+    entries, warnings, results = {}, [], {}
     for color, frames in rois.items():
-        res = combine([measure_lamp(r) for r in frames])
-        e = bands_for(color, res["band"])
-        entries[color] = e
+        res = results[color] = combine([measure_lamp(r) for r in frames])
         first = res["first"]
-        area = float(np.median([blob_area(r, e) for r in frames]))
         say(f"\n{color}: {res['frames']} frame(s); lamp at {first['center']} in the traffic ROI (first frame)")
         say("          H p5/p50/p95      S p5/p50/p95      V p5/p50/p95")
         for part in ("lamp", "glow"):
             say(f"  {part}  " + "  ".join(" ".join(f"{x:5.0f}" for x in first[part][c]) for c in "hsv"))
+        why = no_color(res)
+        if why:
+            say(f"  no band: {why}")
+            warnings.append(f"{color}: no band suggested; see above")
+            continue
+        e = bands_for(color, res["band"])
+        entries[color] = e
+        area = float(np.median([blob_area(r, e) for r in frames]))
         for key, val in e.items():
             say(f"  {key:9s} lower {val['lower']}  upper {val['upper']}")
         say(f"  blob area under it: {area:.0f} px^2 (median over the frames)")
@@ -267,6 +303,9 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
                             "Darken the exposure and measure again")
         elif res["s_gap"] <= 0 or res["v_gap"] <= 0:
             warnings.append(f"{color}: only {'V' if res['s_gap'] <= 0 else 'S'} separates the lamp from its glow")
+    for a, b in same_spot(results):
+        warnings.append(f"the {a} and {b} lamps were found at the same spot: the brightest thing in the traffic "
+                        "ROI isn't the lit lamp (a reflection, a light behind it), or one diffuser covers both")
     for a, b in hue_overlaps(entries):
         warnings.append(f"{a} and {b} share hues: a {a} lamp could pass for {b}. Darken the exposure "
                         "(an overexposed red goes orange) and measure again")
@@ -275,6 +314,9 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
         say(f"WARNING: {w}")
 
     merged = {k: v for e in entries.values() for k, v in e.items()}
+    if args.write and not merged:
+        say("nothing written: no lamp gave a band")
+        return 1
     if args.write:
         try:
             write_ranges(args.out, merged)
