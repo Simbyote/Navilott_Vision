@@ -51,12 +51,14 @@ flowchart LR
         MAIN["main<br/>frame loop: camera read,<br/>pipeline, motor command"]
         SH["sensor-hub<br/>IMU + encoder totals every 10 ms"]
         CB["pigpio-cb<br/>encoder edge callbacks"]
-        GST["GStreamer threads<br/>capture, convert, newest frame"]
+        GST["camera threads<br/>libcamera + GStreamer (task0):<br/>capture, convert, newest frame"]
+        WD["motor-watchdog<br/>brakes if drive() stops"]
     end
     PD["pigpiod<br/>(separate process)<br/>GPIO: PWM out, edges in"]
     DIAG["src.diagnostics.monitor<br/>(separate process)<br/>reads /proc and vcgencmd"]
     PD <-->|socket| CB
     PD <-->|socket| MAIN
+    PD <-->|socket| WD
     DIAG -.->|"/proc/&lt;pid&gt;/task/*"| ROBOT
 ```
 
@@ -64,13 +66,16 @@ flowchart LR
 |---|---|---|
 | `main` | The frame loop. Perception, estimation and navigation all run here | The busiest thread |
 | `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | Low CPU, ~100 voluntary switches a second (one sleep per tick) |
-| `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has two: the encoders' (counting edges) and the motors' (idle) | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
-| GStreamer's own names | Capture threads inside OpenCV (pure C, no GIL) | Moderate CPU, steady |
+| `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has three: the encoders' (counting edges), the motors' and the start button's (both idle). A linker opens only what its flags ask for: `--no-motors --no-button` leaves the encoders' alone | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
+| `task0` | GStreamer's streaming thread: libcamera's frames through `videoconvert` into OpenCV's newest-frame `appsink` (pure C, no GIL) | 25–35%, steady (2026-10-03, 480x270 at 20 FPS) |
+| `CameraManager` ×3, `IPAProxyRPi` | libcamera itself: frame requests to the sensor, and the image algorithms (auto exposure, white balance) | `CameraManager` ~5%, ~200 voluntary switches a second; the rest near zero |
+| `pool-spawner`, `pool-1`, `python3-ust` ×2 | Thread pools and LTTng tracing threads libcamera starts | Idle |
+| `python3` ×3 (unnamed) | A native worker pool, one thread per core but the main thread's: not started by our code, so nothing names it. Not OpenCV's pool settings (`OPENCV_FOR_THREADS_NUM=1` left them) nor numpy's OpenBLAS (`OPENBLAS_NUM_THREADS=1` too); still being identified | 15–20% each with 1000–3500 involuntary switches a second: workers spinning while they wait for work |
 | `frame-recorder` | Linkers only: writes frames to disk (`linker_io.FrameRecorder`) | Bursts while recording |
 | `motor-watchdog` | `peripherals/drive.py`: brakes the motors if the loop stops commanding them (`production_run.md`, "If the loop gets stuck"). Only with real motors | Near zero; 10 wakes a second |
 | `system-monitor` | Soak tests only (`SystemMonitor`) | Near zero |
 
-The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` names pigpio's. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
+The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` and `system.py` name pigpio's whenever they open a connection. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
 
 ---
 
