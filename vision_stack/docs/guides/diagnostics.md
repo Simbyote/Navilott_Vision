@@ -51,26 +51,31 @@ flowchart LR
         MAIN["main<br/>frame loop: camera read,<br/>pipeline, motor command"]
         SH["sensor-hub<br/>IMU + encoder totals every 10 ms"]
         CB["pigpio-cb<br/>encoder edge callbacks"]
-        GST["GStreamer threads<br/>capture, convert, newest frame"]
+        GST["camera threads<br/>libcamera + GStreamer (task0):<br/>capture, convert, newest frame"]
+        WD["motor-watchdog<br/>brakes if drive() stops"]
     end
     PD["pigpiod<br/>(separate process)<br/>GPIO: PWM out, edges in"]
     DIAG["src.diagnostics.monitor<br/>(separate process)<br/>reads /proc and vcgencmd"]
     PD <-->|socket| CB
     PD <-->|socket| MAIN
+    PD <-->|socket| WD
     DIAG -.->|"/proc/&lt;pid&gt;/task/*"| ROBOT
 ```
 
 | Thread name (as recorded) | What it is | Expect |
 |---|---|---|
 | `main` | The frame loop. Perception, estimation and navigation all run here | The busiest thread |
-| `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | Low CPU, ~100 voluntary switches a second (one sleep per tick) |
-| `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has two: the encoders' (counting edges) and the motors' (idle) | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
-| GStreamer's own names | Capture threads inside OpenCV (pure C, no GIL) | Moderate CPU, steady |
+| `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | A few % CPU, ~200 voluntary switches a second: per tick one sleep and one I²C transfer (the IMU's sample block), more when it waits for the GIL. Before the block read (2026-10-03) the Adafruit driver's 7 transfers per reading took 4.6 ms and showed as ~800 a second alone, ~2,900 and 54% CPU in a run |
+| `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has three: the encoders' (counting edges), the motors' and the start button's (both idle). A linker opens only what its flags ask for: `--no-motors --no-button` leaves the encoders' alone | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
+| `task0` | GStreamer's streaming thread: libcamera's frames through `videoconvert` into OpenCV's newest-frame `appsink` (pure C, no GIL) | 25–35%, steady (2026-10-03, 480x270 at 20 FPS) |
+| `CameraManager` ×3, `IPAProxyRPi` | libcamera itself: frame requests to the sensor, and the image algorithms (auto exposure, white balance) | `CameraManager` ~5%, ~200 voluntary switches a second; the rest near zero |
+| `pool-spawner`, `pool-1`, `python3-ust` ×2 | Thread pools and LTTng tracing threads libcamera starts | Idle |
+| `python3` ×3 (unnamed) | A native worker pool, one thread per core but the main thread's: not started by our code, so nothing names it. Not OpenCV's pool settings (`OPENCV_FOR_THREADS_NUM=1` left them) nor numpy's OpenBLAS (`OPENBLAS_NUM_THREADS=1` too); still being identified | 15–20% each with 1000–3500 involuntary switches a second: workers spinning while they wait for work |
 | `frame-recorder` | Linkers only: writes frames to disk (`linker_io.FrameRecorder`) | Bursts while recording |
 | `motor-watchdog` | `peripherals/drive.py`: brakes the motors if the loop stops commanding them (`production_run.md`, "If the loop gets stuck"). Only with real motors | Near zero; 10 wakes a second |
 | `system-monitor` | Soak tests only (`SystemMonitor`) | Near zero |
 
-The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` names pigpio's. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
+The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` and `system.py` name pigpio's whenever they open a connection. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
 
 ---
 
@@ -112,7 +117,7 @@ system
 - **The clock range.** A minimum below the maximum during a run means the CPU was slowed, by heat or by the governor.
 - **`main` near 100% of a core.** The frame loop is CPU-bound; the frame rate drops. Compare with the run's own `stage_timing` or `nav.csv` timings.
 - **`invol/s` high on `main`.** Other threads or processes take its core. Check which cores are busy.
-- **`sensor-hub` far from ~100 `vol/s`, or with real CPU.** Its 10 ms ticks are slipping.
+- **`sensor-hub` below ~100 `vol/s`, or with real CPU.** Its 10 ms ticks are slipping, or each IMU read is slow. Time one read: `python3 -c "import time; from src.peripherals.imu import IMUReader; r = IMUReader(); t = time.perf_counter(); [r.read() for _ in range(500)]; print((time.perf_counter() - t) / 0.5, 'ms')"`. At the Pi's default 100 kHz I²C clock the 14-byte block takes about 1.5 ms on the wire; `dtparam=i2c_arm_baudrate=400000` in `/boot/firmware/config.txt` (the MPU-6050 is rated for it; the camera's I²C is a separate bus) cuts that to about 0.4 ms.
 - **Memory.** A rising run maximum over a long run is a leak. A low "available" minimum matters on a 512 MB Pi: the camera dropping out mid-run has looked like memory pressure before, so note the minimum on runs where it happens.
 
 **GIL hand-offs.** Python forces the GIL holder to hand it over every 5 ms when another Python thread is waiting (`sys.getswitchinterval()`). Each hand-off is a voluntary switch for the waiter. So a Python thread that never sleeps but shows tens of voluntary switches a second is sharing the GIL. To see who holds the GIL directly, use `py-spy` (section 5).

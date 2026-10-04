@@ -27,6 +27,7 @@ import logging
 import pigpio
 import tm1637
 
+from src.diagnostics.threads import name_pigpio_threads
 from src.params import GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO, GPIO_START_BUTTON
 
 log = logging.getLogger("system")
@@ -50,6 +51,9 @@ class System:
             raise RuntimeError(
                 "pigpio daemon not reachable. Run: sudo pigpiod"
             )
+        # this connection's callback thread too: the linkers open the button
+        # after the motors and encoders, so drive.py's naming has passed
+        name_pigpio_threads()
 
         self._pi.set_mode(GPIO_START_BUTTON, pigpio.INPUT)
         self._pi.set_pull_up_down(GPIO_START_BUTTON, pigpio.PUD_DOWN)

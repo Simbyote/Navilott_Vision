@@ -11,11 +11,14 @@ Purpose:
     hop between cores, and what heat, the clock and memory did (soak.py's
     analysis, on the same system.csv). Given the run's own folder
     (--run), it lines the run's frames up with the recording on the
-    monotonic clock and says what the slow frames coincided with: a clock
-    drop, a busy frame loop, or neither.
+    monotonic clock, judges the threads, cores and system over the run's
+    own time only (a recording also holds the imports, the camera opening
+    and the countdown before it, and the shutdown after, which would
+    otherwise pass for the run's load), and says what the slow frames
+    coincided with: a clock drop, a busy frame loop, or neither.
 
 Main package:
-    analyze(...) -> dict: threads, process, cores, system, aligned, findings.
+    analyze(...) -> dict: threads, process, cores, system, window, aligned, findings.
     report_lines(res): the printed report.
     pi_load.json, pi_load.png (CPU per thread, core load, temperature and
     clock, memory, and the run's frame intervals when aligned).
@@ -54,6 +57,7 @@ CORE_SPREAD_PCT = 40.0      # mean busy % between the busiest and idlest core
 TEMP_WARN_C = 75.0          # the Pi's firmware throttles at 80 C
 CLOCK_DROP = 0.9            # a clock below this x its maximum is a drop
 LATE = 1.5                  # a frame interval over this x the frame budget is a slow frame
+MIN_WINDOW_SAMPLES = 4      # a run shorter than this many thread samples is judged over the whole recording
 MIN_LATE_FRAMES = 5         # fewer slow frames than this aren't worth attributing
 BUDGET_MS = 1000.0 / FPS
 
@@ -175,20 +179,60 @@ def align(rows: list[dict], system: Table | None, diag_t0: float, nav: Table, na
             "corr_main_cpu_interval": corr}
 
 
+def run_window(rows: list[dict], diag_t0: float, nav: Table, nav_t0: float) -> dict:
+    """
+    The run's own span on the recording's clock: from its t0 to its last
+    frame. A thread sample covers the interval before its time, so it
+    belongs to the run when the middle of that interval does.
+    """
+    t = nav.numeric("t")
+    start = nav_t0 - diag_t0
+    end = start + (float(np.nanmax(t)) if np.any(~np.isnan(t)) else 0.0)
+    times = np.array(sorted({r["elapsed_s"] for r in rows}))
+    step = float(np.median(np.diff(times))) if len(times) > 1 else 0.0
+    mid = times - step / 2
+    inside = times[(mid >= start) & (mid <= end)]
+    return {"start_s": round(start, 3), "end_s": round(end, 3), "samples": int(len(inside)),
+            "recording_s": round(float(times[-1]), 3) if len(times) else 0.0,
+            "step_s": step, "used": len(inside) >= MIN_WINDOW_SAMPLES}
+
+
+def _in_window(elapsed: np.ndarray, w: dict, step: float = 0.0) -> np.ndarray:
+    mid = elapsed - step / 2
+    return (mid >= w["start_s"]) & (mid <= w["end_s"])
+
+
 def analyze(threads: Table, cores: Table | None = None, system: Table | None = None,
             nav: Table | None = None, diag_t0: float | None = None, nav_t0: float | None = None) -> dict:
     missing = [c for c in ("tid", "name", "core", "cpu_pct") if not threads.has(c)]
     if missing:
         raise ValueError(f"{threads.path.name}: not a diagnostics threads.csv (no {', '.join(missing)})")
     rows = thread_rows(threads)
-    res = {"threads": thread_summary(rows), "process": process_load(rows), "cores": core_load(cores),
-           "system": soak.analyze(system) if system is not None and len(system) >= 2 else None,
-           "since_boot": since_boot(system), "aligned": None}
-    if nav is not None and diag_t0 is not None and nav_t0 is not None:
+    alignable = nav is not None and diag_t0 is not None and nav_t0 is not None
+    window = run_window(rows, diag_t0, nav, nav_t0) if alignable else None
+    judged_rows, judged_cores, judged_system = rows, cores, system
+    if window and window["used"]:
+        keep = _in_window(np.array([r["elapsed_s"] for r in rows]), window, window["step_s"])
+        judged_rows = [r for r, k in zip(rows, keep) if k]
+        if cores is not None and len(cores):
+            judged_cores = cores.subset(_in_window(cores.numeric("elapsed_s"), window, window["step_s"]))
+        if system is not None and len(system):
+            # once a second, each a reading at that moment: the rows inside the run, timed from its start
+            sub = system.subset(_in_window(system.numeric("elapsed_s"), window),
+                                shift={"elapsed_s": window["start_s"]})
+            judged_system = sub if len(sub) >= 2 else system
+    res = {"threads": thread_summary(judged_rows), "process": process_load(judged_rows),
+           "cores": core_load(judged_cores),
+           "system": soak.analyze(judged_system) if judged_system is not None and len(judged_system) >= 2 else None,
+           "since_boot": since_boot(system), "window": window, "aligned": None}
+    if alignable:
         res["aligned"] = align(rows, system, diag_t0, nav, nav_t0)
     res["findings"] = findings(res)
     # Caveats, not problems: soak's "too short to judge memory" on any run under ~6 minutes
     res["notes"] = [f for f in (res["system"] or {}).get("findings", []) if f.startswith("run too short")]
+    if window and not window["used"]:
+        res["notes"].append(f"the run covers {window['samples']} thread samples (under {MIN_WINDOW_SAMPLES}): "
+                            "judged over the whole recording, startup and shutdown included")
     return res
 
 
@@ -255,7 +299,13 @@ def findings(res: dict) -> list[str]:
 
 def report_lines(res: dict) -> list[str]:
     p = res["process"]
-    lines = [f"process   CPU mean {common.fmt(p['total_cpu_pct']['mean'], 1)}% of one core, "
+    w = res.get("window")
+    lines = []
+    if w and w["used"]:
+        lines.append(f"window    the run's own {w['end_s'] - w['start_s']:.1f} s ({w['start_s']:.1f}-{w['end_s']:.1f} s "
+                     f"of the {w['recording_s']:.1f} s recording, {w['samples']} samples): "
+                     "startup and shutdown left out")
+    lines += [f"process   CPU mean {common.fmt(p['total_cpu_pct']['mean'], 1)}% of one core, "
              f"p95 {common.fmt(p['total_cpu_pct']['p95'], 1)}%, max {common.fmt(p['total_cpu_pct']['max'], 1)}%"
              + (f"; main {100 * p['main_share']:.0f}% of it" if p["main_share"] is not None else ""),
              "threads   " + "; ".join(f"{t['name']} {t['cpu_mean']:.0f}% (max {t['cpu_max']:.0f})"
@@ -340,7 +390,11 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
         ax.plot(offset_s + t[1:], np.diff(t) * 1000.0, lw=0.6)
         ax.axhline(LATE * BUDGET_MS, color="#d62728", lw=0.6, ls="--")
         ax.set_ylabel("frame interval ms", fontsize=8)
-    axes[-1].set_xlabel("time since the recording started, s")
+    w = res.get("window")
+    if w and w["used"]:
+        for a in axes:
+            a.axvspan(w["start_s"], w["end_s"], color="#2ca02c", alpha=0.07, lw=0)
+    axes[-1].set_xlabel("time since the recording started, s" + (" (shaded: the run judged)" if w and w["used"] else ""))
     axes[0].set_title(title, fontsize=11, loc="left")
     out_path = Path(out_path)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")

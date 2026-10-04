@@ -34,6 +34,16 @@ def test_blank_and_text_cells_read_as_nan_and_text_is_kept(tmp_path):
 
 
 @pytest.mark.software
+def test_subset_keeps_the_masked_rows_and_can_rebase_a_column(tmp_path):
+    t = Table(write_csv(tmp_path / "a.csv", ["t", "v", "name"], [["1", "10", "a"], ["2", "", "b"], ["3", "30", "c"]]))
+    t.numeric("t")                                          # a cached column must not leak into the subset
+    sub = t.subset(np.array([False, True, True]), shift={"t": 2.0})
+    assert len(sub) == 2 and sub.columns == ["t", "v", "name"] and sub.text("name") == ["b", "c"]
+    assert sub.numeric("t").tolist() == [0.0, 1.0] and math.isnan(sub.numeric("v")[0]) and sub.numeric("v")[1] == 30
+    assert t.numeric("t").tolist() == [1.0, 2.0, 3.0] and len(t) == 3, "the original is untouched"
+
+
+@pytest.mark.software
 def test_short_rows_are_padded_with_blanks(tmp_path):
     t = Table(write_csv(tmp_path / "a.csv", ["a", "b"], [["1"], ["2", "3"]]))
     assert t.text("b") == ["", "3"]

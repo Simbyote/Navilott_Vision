@@ -32,7 +32,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `soak` | `system.csv` (from `test_soak` or a diagnostics recording), `soak_frames.csv` if there is one | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
-| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock; what slow frames coincided with |
+| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock, over the run's own time when given the run; what slow frames coincided with |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 **Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
@@ -98,6 +98,8 @@ The findings list says, in words, what passed a threshold (`nav_run.py`'s consta
 python3 -m src.diagnostics.monitor -- python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 120
 python3 -m src.analysis.pi_load runs/diag_20261003_101500 --run runs/nav_20261003_101502
 ```
+
+**With `--run`, only the run's own time is judged.** A recording starts before the run (imports, the camera opening, the countdown) and ends after it (shutdown, writing reports), and that startup alone can hold `main` near 100% for several seconds. So the threads, cores, temperature, clock and memory are taken from the run's t0 to its last frame, shaded in `pi_load.png`, and the report's first line says which part of the recording that was. A run under 4 thread samples (2 s at the default interval) is too short for that: it's judged over the whole recording, with a note saying so. Without `--run`, the whole recording is judged: fine for `main.py`, which has no run folder, as long as you read the startup for what it is. Flags latched since boot always come from the whole recording.
 
 It reports:
 - **The process:** total CPU (% of one core), and how much of it was the busiest thread. Over 70% in one thread means the work is mostly serial: one thread, or Python threads taking turns on the GIL, which look the same from outside. Either way the other cores mostly wait.
