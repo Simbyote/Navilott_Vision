@@ -47,7 +47,8 @@ def recording(tmp_path, n=20, main=50.0, hub=2.0, gst=20.0, hub_vol=100.0, main_
                          core=main_core(i) if main_core else 0, invol=main_invol),
                     trow(t, 101, "sensor-hub", hub, core=1, vol=hub_vol),
                     trow(t, 102, "src", gst, core=2)]
-        core_rows += [{"elapsed_s": t, "core": c, "busy_pct": b} for c, b in enumerate(cores)]
+        core_rows += [{"elapsed_s": t, "core": c, "busy_pct": b}
+                      for c, b in enumerate(cores(i) if callable(cores) else cores)]
     rec = {"threads": threads, "cores": core_rows,
            "system": system if system is not None else [srow(float(s)) for s in range(int(n * STEP) + 1)],
            "interrupted": False, "elapsed_s": n * STEP, "t0_monotonic": t0}
@@ -172,6 +173,66 @@ def test_slow_frames_are_put_down_to_what_they_coincided_with(tmp_path, cause):
     assert any(words in f for f in res["findings"]), res["findings"]
     if cause == "cpu":
         assert a["late_main_cpu"] == pytest.approx(95.0) and a["normal_main_cpu"] < 50.0
+
+
+# Startup: imports and the camera opening load main for the recording's first
+# 6 s; the run starts at 7 s (t0 = 1007) and lasts 12 s; the recording goes on 3 s more
+STARTUP_S, RUN_START_S, RUN_S, RECORDING_N = 6.0, 7.0, 12.0, 44
+
+
+def startup_recording(tmp_path, **kw):
+    startup = lambda i: i * STEP <= STARTUP_S                                       # noqa: E731
+    args = dict(n=RECORDING_N, main=lambda i: 100.0 if startup(i) else 40.0,
+                cores=lambda i: (95.0, 5.0, 5.0, 5.0) if startup(i) else (40.0, 35.0, 30.0, 25.0),
+                system=[srow(float(s), cpu_mhz=600.0 if s <= STARTUP_S else 1000.0, rss_mb=50.0 + s)
+                        for s in range(int(RECORDING_N * STEP) + 1)])
+    args.update(kw)
+    return recording(tmp_path, t0=1000.0, **args)
+
+
+@pytest.mark.software
+def test_with_the_run_its_own_time_is_judged_and_startup_left_out(tmp_path):
+    folder = startup_recording(tmp_path)
+    alone = run(folder)
+    assert any("CPU-bound" in f for f in alone["findings"]) and any("clock dropped" in f for f in alone["findings"])
+    assert alone["cores"]["0"]["max"] == 95.0                                      # startup's core 0 is in it
+    res = run(folder, run=str(nav_run(tmp_path, 1000.0 + RUN_START_S, [50.0] * int(RUN_S * 20))))
+    w = res["window"]
+    assert w["used"] and (w["start_s"], w["end_s"]) == pytest.approx((RUN_START_S, RUN_START_S + RUN_S), abs=0.06)
+    assert w["samples"] == pytest.approx(RUN_S / STEP, abs=1) and w["recording_s"] == RECORDING_N * STEP
+    assert res["process"]["main_cpu_p95"] == pytest.approx(40.0)
+    main = next(t for t in res["threads"] if t["name"] == "main")
+    assert main["cpu_mean"] == pytest.approx(40.0) and main["samples"] == w["samples"]
+    assert res["cores"]["0"] == {"mean": 40.0, "max": 40.0}
+    assert res["system"]["cpu_mhz"]["min"] == 1000.0 and res["system"]["duration_s"] == pytest.approx(RUN_S, abs=1.0)
+    assert res["system"]["memory"]["rss_start_mb"] >= 50.0 + RUN_START_S, "memory from the run's start, not boot"
+    for words in ("CPU-bound", "clock dropped", "unevenly loaded"):
+        assert not any(words in f for f in res["findings"]), (words, res["findings"])
+    assert report_text(res).startswith("window    the run's own 12.0 s (7.0-19.0 s of the 22.0 s recording")
+
+
+@pytest.mark.software
+def test_a_run_too_short_for_its_own_window_is_judged_over_the_whole_recording_and_says_so(tmp_path):
+    folder = startup_recording(tmp_path)
+    res = run(folder, run=str(nav_run(tmp_path, 1000.0 + RUN_START_S, [50.0] * 20)))     # 1 s: 2 samples
+    assert not res["window"]["used"] and res["window"]["samples"] < pl.MIN_WINDOW_SAMPLES
+    assert any("CPU-bound" in f for f in res["findings"])
+    assert any("judged over the whole recording" in n for n in res["notes"])
+    assert not report_text(res).startswith("window")
+
+
+@pytest.mark.software
+def test_the_figure_shades_the_run_judged(tmp_path):
+    pytest.importorskip("matplotlib")
+    folder = startup_recording(tmp_path)
+    nav = nav_run(tmp_path, 1000.0 + RUN_START_S, [50.0] * int(RUN_S * 20))
+    assert pl.main([str(folder), "--run", str(nav)]) == 0
+    assert (folder / "pi_load.png").is_file()
+    assert json.loads((folder / "pi_load.json").read_text())["window"]["used"]
+
+
+def report_text(res):
+    return "\n".join(pl.report_lines(res))
 
 
 @pytest.mark.software

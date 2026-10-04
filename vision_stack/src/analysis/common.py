@@ -87,6 +87,20 @@ class Table:
         """The first of columns that has numbers, or None."""
         return next((c for c in columns if self.has_values(c)), None)
 
+    def subset(self, mask, shift: dict | None = None) -> "Table":
+        """
+        The rows where mask is True, as a new Table (same path and columns).
+        shift {column: value} subtracts value from that column's numbers, to
+        start a time axis at the subset's own beginning.
+        """
+        out = object.__new__(Table)
+        out.path, out.columns, out._num = self.path, list(self.columns), {}
+        idx = np.flatnonzero(np.asarray(mask, bool))
+        out._raw = {c: [v[i] for i in idx] for c, v in self._raw.items()}
+        for c, by in (shift or {}).items():
+            out._raw[c] = ["" if np.isnan(x) else repr(float(x) - by) for x in self.numeric(c)[idx]]
+        return out
+
 
 def interval_ms(table: Table):
     """
