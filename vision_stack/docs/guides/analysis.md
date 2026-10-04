@@ -112,6 +112,19 @@ It reports:
 
 A memory verdict needs a run of about 6 minutes; shorter ones get a note, not a finding.
 
+`pi_load.png` puts everything on one time axis, top to bottom:
+
+| Panel | Shows |
+| --- | --- |
+| CPU per thread | The six busiest threads, the rest summed as "others" |
+| Python vs native | All threads' CPU stacked in two groups. **Python threads** (blue): the ones our code starts and pigpio's callback thread, which take turns on the GIL. **Native** (orange): GStreamer (`task0`), libcamera and OpenCV's TBB worker, which never need it. The dashed line is one core: the Python side can only rise above it while one of its threads is inside C code that releases the GIL (`main` in OpenCV, a blocked I²C read), so it shows how much of the frame loop escapes the GIL. Everything above the blue is real parallelism on the other cores |
+| Thread lanes | One row per thread, busiest first, its label blue (Python) or orange (native). Each sample is colored by the core the thread was last on and faded by its CPU: a thread hopping cores shows as changing colors (`pi_load`'s "changes core" finding), a pinned one as one color, an idle one as a faint row. Threads idle throughout are counted under the lanes, not drawn |
+| Core load | Each core's busy %, every process included |
+| Temperature and clock, memory | From `system.csv` |
+| Frame intervals | With `--run`: each frame against the slow-frame line |
+
+The Pi's venv has no matplotlib by default, so `pi_load` prints its report and skips the figure there. Either `pip install matplotlib` in the venv, or copy the folders to a laptop with the repo and run it there: `scp -r ancarls@autobot:~/Navilott_Vision/vision_stack/runs/{diag_x,nav_x} runs/`.
+
 **Detection range:** robot still, target placed straight ahead at measured distances, one short run per distance (about 10 s each). Measure from the same point on the robot every time, such as the lens. List the runs in a manifest:
 
 ```

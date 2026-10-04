@@ -20,8 +20,12 @@ Purpose:
 Main package:
     analyze(...) -> dict: threads, process, cores, system, window, aligned, findings.
     report_lines(res): the printed report.
-    pi_load.json, pi_load.png (CPU per thread, core load, temperature and
-    clock, memory, and the run's frame intervals when aligned).
+    python_native(rows), thread_lanes(rows): the two views of how the
+        threads share the Pi, as data the figure draws.
+    pi_load.json, pi_load.png (CPU per thread; Python vs native CPU against
+    the one core the GIL allows Python; one lane per thread colored by the
+    core it ran on; core load, temperature and clock, memory, and the run's
+    frame intervals when aligned).
 
 Input:
     A runs/diag_<time> folder (threads.csv, cores.csv, system.csv,
@@ -62,6 +66,21 @@ MIN_LATE_FRAMES = 5         # fewer slow frames than this aren't worth attributi
 BUDGET_MS = 1000.0 / FPS
 
 PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#7f7f7f")
+
+# Threads that run Python, so take turns on the GIL: the ones our code starts
+# (each names itself, diagnostics.md) and pigpio's callback thread, a Python
+# threading.Thread. Everything else is native code that never needs the GIL:
+# GStreamer (task0), libcamera, and the unnamed "python3" threads, which on
+# this Pi are OpenCV's TBB workers (our own threads are all named)
+PYTHON_THREADS = frozenset({MAIN_THREAD, SENSOR_THREAD, "frame-recorder", "motor-watchdog", "system-monitor",
+                            "pigpio-cb"})
+# Categorical slots 1-2 and 1-4 of the validated default palette (dataviz
+# skill): cores 0-3 pass the colorblind checks; two are under 3:1 contrast,
+# so the lanes carry a legend
+SPLIT_COLORS = {"python": "#2a78d6", "native": "#eb6834"}
+CORE_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+LANE_IDLE_PCT = 0.5         # a thread under this % of a core in every sample gets no lane
+LANE_MIN_ALPHA = 0.2        # a lane cell's opacity at 0% CPU; 100% of a core is fully opaque
 
 _CLI_HELP = """\
 How a run used the Pi, from a diagnostics recording: CPU per thread and core,
@@ -331,6 +350,106 @@ def report_lines(res: dict) -> list[str]:
 
 
 # =============================================================================
+# How the threads share the Pi
+# =============================================================================
+
+def is_python_thread(name: str) -> bool:
+    return name in PYTHON_THREADS
+
+
+def python_native(rows: list[dict]) -> dict:
+    """
+    CPU per sample split into threads that run Python and native ones.
+
+    Python threads can only add up to more than one core while some of them
+    are inside C code that lets go of the GIL (OpenCV, I/O): the rest of
+    their time they take turns.
+
+    Outputs:
+        {"t": sample times, "python": % of a core, "native": % of a core,
+         "python_threads": names, "native_threads": names}
+    """
+    times, cpu = by_sample(rows)
+    zero = np.zeros(len(times))
+    py = [n for n in sorted(cpu) if is_python_thread(n)]
+    nat = [n for n in sorted(cpu) if not is_python_thread(n)]
+    return {"t": times, "python": sum((cpu[n] for n in py), zero), "native": sum((cpu[n] for n in nat), zero),
+            "python_threads": py, "native_threads": nat}
+
+
+def thread_lanes(rows: list[dict], idle_pct: float = LANE_IDLE_PCT) -> dict:
+    """
+    One lane per thread, busiest first: at each sample, the core it was last
+    on and its CPU. Threads under idle_pct in every sample are counted, not
+    drawn. Two threads sharing a name are told apart by their tid.
+
+    Outputs:
+        {"step": sample interval, "lanes": [{"label", "python", "t", "core", "cpu"}], "idle": count}
+    """
+    times = sorted({r["elapsed_s"] for r in rows})
+    step = float(np.median(np.diff(times))) if len(times) > 1 else 0.5
+    by_tid = defaultdict(list)
+    for r in rows:
+        by_tid[r["tid"]].append(r)
+    names = defaultdict(int)
+    for rs in by_tid.values():
+        names[rs[0]["name"]] += 1
+    lanes, idle = [], 0
+    for tid, rs in by_tid.items():
+        rs.sort(key=lambda r: r["elapsed_s"])
+        cpu = np.array([r["cpu_pct"] for r in rs])
+        if cpu.max() < idle_pct:
+            idle += 1
+            continue
+        name = rs[0]["name"]
+        lanes.append({"label": f"{name} {tid}" if names[name] > 1 else name, "python": is_python_thread(name),
+                      "t": np.array([r["elapsed_s"] for r in rs]), "core": np.array([r["core"] for r in rs]),
+                      "cpu": cpu, "_total": float(cpu.sum())})
+    lanes.sort(key=lambda lane: -lane["_total"])
+    for lane in lanes:
+        del lane["_total"]
+    return {"step": step, "lanes": lanes, "idle": idle}
+
+
+def _draw_split(ax, split: dict, cores_n: int) -> None:
+    t = split["t"]
+    ax.stackplot(t, split["python"], split["native"], colors=(SPLIT_COLORS["python"], SPLIT_COLORS["native"]),
+                 labels=("Python threads (take turns on the GIL)", "native threads (no GIL)"),
+                 edgecolor="white", linewidth=0.5)
+    ax.axhline(100.0, color="#333333", lw=0.8, ls="--",
+               label="one core: all the Python threads together,\nexcept while one is in C code that releases the GIL")
+    ax.set_ylim(0, max(100.0 * cores_n, 1.0) if cores_n else None)
+    ax.set_ylabel("CPU % of a core", fontsize=8)
+    ax.legend(fontsize=7, frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
+
+
+def _draw_lanes(ax, lanes: dict) -> None:
+    from matplotlib.colors import to_rgba
+    from matplotlib.patches import Patch
+    step = lanes["step"]
+    for row, lane in enumerate(lanes["lanes"]):
+        for core in sorted(set(lane["core"].tolist())):
+            sel = lane["core"] == core
+            color = CORE_COLORS[int(core) % len(CORE_COLORS)]
+            alphas = LANE_MIN_ALPHA + (1 - LANE_MIN_ALPHA) * np.clip(lane["cpu"][sel] / 100.0, 0, 1)
+            ax.broken_barh([(t - step, step) for t in lane["t"][sel]], (row - 0.4, 0.8),
+                           facecolors=[to_rgba(color, a) for a in alphas], edgecolor="none")
+    ax.set_yticks(range(len(lanes["lanes"])))
+    ax.set_yticklabels([lane["label"] for lane in lanes["lanes"]], fontsize=7)
+    for label, lane in zip(ax.get_yticklabels(), lanes["lanes"]):
+        label.set_color(SPLIT_COLORS["python"] if lane["python"] else SPLIT_COLORS["native"])
+    ax.set_ylim(len(lanes["lanes"]) - 0.5, -0.5)
+    used = sorted({int(c) for lane in lanes["lanes"] for c in lane["core"]})
+    handles = [Patch(color=CORE_COLORS[c % len(CORE_COLORS)], label=f"core {c}") for c in used]
+    ax.legend(handles=handles, fontsize=7, frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5),
+              title="the core it ran on;\nfainter = less CPU", title_fontsize=7)
+    ax.set_ylabel("thread (blue: Python,\norange: native)", fontsize=8)
+    if lanes["idle"]:
+        ax.text(1.0, -0.02, f"+{lanes['idle']} idle threads not shown", transform=ax.transAxes, fontsize=7,
+                ha="right", va="top", color="#777777")
+
+
+# =============================================================================
 # Figure and command line
 # =============================================================================
 
@@ -341,9 +460,16 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
         return None
     rows = thread_rows(threads)
     times, cpu = by_sample(rows)
-    panels = 3 + (system is not None) + (nav is not None and offset_s is not None)
-    fig, axes = plt.subplots(panels, 1, figsize=(13, 2.2 * panels), sharex=True)
-    ax = axes[0]
+    lanes = thread_lanes(rows)
+    cores_n = len({r["core"] for r in rows}) if cores is None or not len(cores) else \
+        len({int(c) for c in cores.numeric("core") if not np.isnan(c)})
+    kinds = ["cpu", "split", "lanes", "cores"] + (["temp", "memory"] if system is not None else []) + \
+        (["frames"] if nav is not None and offset_s is not None else [])
+    heights = {"lanes": max(2.0, 0.22 * len(lanes["lanes"]) + 0.6)}
+    fig, axes = plt.subplots(len(kinds), 1, figsize=(13, sum(heights.get(k, 2.2) for k in kinds)), sharex=True,
+                             gridspec_kw={"height_ratios": [heights.get(k, 2.2) for k in kinds]})
+    ax_of = dict(zip(kinds, axes))
+    ax = ax_of["cpu"]
     top = sorted(cpu, key=lambda n: -cpu[n].mean())
     for i, name in enumerate(top[:6]):
         ax.plot(times, cpu[name], lw=0.9, color=PALETTE[i % len(PALETTE)], label=name)
@@ -351,7 +477,9 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
         ax.plot(times, sum(cpu[n] for n in top[6:]), lw=0.8, color="#bbbbbb", label="others")
     ax.set_ylabel("CPU % of a core", fontsize=8)
     ax.legend(fontsize=7, frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
-    ax = axes[1]
+    _draw_split(ax_of["split"], python_native(rows), cores_n)
+    _draw_lanes(ax_of["lanes"], lanes)
+    ax = ax_of["cores"]
     if cores is not None and len(cores):
         c, b, t = cores.numeric("core"), cores.numeric("busy_pct"), cores.numeric("elapsed_s")
         ids = sorted({int(x) for x in c[~np.isnan(c)]})
@@ -360,13 +488,18 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
         for ci, ti, bi in zip(c, t, b):
             if not np.isnan(ci):
                 grid[ids.index(int(ci)), ct.index(ti)] = bi
-        im = ax.imshow(grid, aspect="auto", cmap="viridis", vmin=0, vmax=100, interpolation="nearest",
-                       extent=(ct[0], ct[-1], len(ids) - 0.5, -0.5))
-        fig.colorbar(im, ax=ax, pad=0.01, label="busy %")
+        # each sample covers the interval before it, as in the lanes; cell edges on the shared time axis
+        step = float(np.median(np.diff(ct))) if len(ct) > 1 else 0.5
+        edges = np.concatenate(([ct[0] - step], ct))
+        im = ax.pcolormesh(edges, np.arange(len(ids) + 1) - 0.5, grid, cmap="viridis", vmin=0, vmax=100)
+        ax.set_ylim(len(ids) - 0.5, -0.5)
+        # the colorbar outside the plot, like the other panels' legends, so every panel keeps the same width
+        cax = ax.inset_axes((1.01, 0.0, 0.012, 1.0))
+        fig.colorbar(im, cax=cax, label="busy %")
         ax.set_yticks(range(len(ids)))
         ax.set_yticklabels([f"core {i}" for i in ids], fontsize=7)
-    ax = axes[2]
     if system is not None:
+        ax = ax_of["temp"]
         st = system.numeric("elapsed_s")
         if system.has_values("temp_c") or system.has_values("cpu_mhz"):
             ax.plot(st, system.numeric("temp_c"), color="#d62728", lw=0.9)
@@ -378,14 +511,14 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
             ax.set_yticks([])
             ax.text(0.5, 0.5, "no temperature or clock readings here (not a Pi)", transform=ax.transAxes,
                     ha="center", va="center", fontsize=9, color="#777777")
-        ax = axes[3]
+        ax = ax_of["memory"]
         ax.plot(st, system.numeric("rss_mb"), lw=0.9, color="#1f77b4")
         ax.set_ylabel("run memory MB", fontsize=8, color="#1f77b4")
         ax2 = ax.twinx()                    # the Pi's free memory is far larger: its own axis
         ax2.plot(st, system.numeric("mem_available_mb"), lw=0.9, color="#ff7f0e")
         ax2.set_ylabel("Pi available MB", fontsize=8, color="#ff7f0e")
-    if nav is not None and offset_s is not None:
-        ax = axes[-1]
+    if "frames" in ax_of:
+        ax = ax_of["frames"]
         t = nav.numeric("t")
         ax.plot(offset_s + t[1:], np.diff(t) * 1000.0, lw=0.6)
         ax.axhline(LATE * BUDGET_MS, color="#d62728", lw=0.6, ls="--")
