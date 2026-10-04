@@ -65,7 +65,7 @@ flowchart LR
 | Thread name (as recorded) | What it is | Expect |
 |---|---|---|
 | `main` | The frame loop. Perception, estimation and navigation all run here | The busiest thread |
-| `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | Low CPU, ~100 voluntary switches a second (one sleep per tick) |
+| `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | A few % CPU, ~200 voluntary switches a second: per tick one sleep and one I²C transfer (the IMU's sample block), more when it waits for the GIL. Before the block read (2026-10-03) the Adafruit driver's 7 transfers per reading took 4.6 ms and showed as ~800 a second alone, ~2,900 and 54% CPU in a run |
 | `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has three: the encoders' (counting edges), the motors' and the start button's (both idle). A linker opens only what its flags ask for: `--no-motors --no-button` leaves the encoders' alone | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
 | `task0` | GStreamer's streaming thread: libcamera's frames through `videoconvert` into OpenCV's newest-frame `appsink` (pure C, no GIL) | 25–35%, steady (2026-10-03, 480x270 at 20 FPS) |
 | `CameraManager` ×3, `IPAProxyRPi` | libcamera itself: frame requests to the sensor, and the image algorithms (auto exposure, white balance) | `CameraManager` ~5%, ~200 voluntary switches a second; the rest near zero |
@@ -117,7 +117,7 @@ system
 - **The clock range.** A minimum below the maximum during a run means the CPU was slowed, by heat or by the governor.
 - **`main` near 100% of a core.** The frame loop is CPU-bound; the frame rate drops. Compare with the run's own `stage_timing` or `nav.csv` timings.
 - **`invol/s` high on `main`.** Other threads or processes take its core. Check which cores are busy.
-- **`sensor-hub` far from ~100 `vol/s`, or with real CPU.** Its 10 ms ticks are slipping.
+- **`sensor-hub` below ~100 `vol/s`, or with real CPU.** Its 10 ms ticks are slipping, or each IMU read is slow. Time one read: `python3 -c "import time; from src.peripherals.imu import IMUReader; r = IMUReader(); t = time.perf_counter(); [r.read() for _ in range(500)]; print((time.perf_counter() - t) / 0.5, 'ms')"`. At the Pi's default 100 kHz I²C clock the 14-byte block takes about 1.5 ms on the wire; `dtparam=i2c_arm_baudrate=400000` in `/boot/firmware/config.txt` (the MPU-6050 is rated for it; the camera's I²C is a separate bus) cuts that to about 0.4 ms.
 - **Memory.** A rising run maximum over a long run is a leak. A low "available" minimum matters on a 512 MB Pi: the camera dropping out mid-run has looked like memory pressure before, so note the minimum on runs where it happens.
 
 **GIL hand-offs.** Python forces the GIL holder to hand it over every 5 ms when another Python thread is waiting (`sys.getswitchinterval()`). Each hand-off is a voluntary switch for the waiter. So a Python thread that never sleeps but shows tens of voluntary switches a second is sharing the GIL. To see who holds the GIL directly, use `py-spy` (section 5).
