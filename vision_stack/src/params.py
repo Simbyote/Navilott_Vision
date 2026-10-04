@@ -64,6 +64,15 @@ SENSOR_RATE_HZ = IMU_RATE_HZ
 # fills if the frame loop stalls, and then the oldest readings are dropped
 SENSOR_HISTORY_S = 2.0
 
+# --- Motor watchdog (src/peripherals/drive.py) ---
+# The run loops command the motors once per frame (~50 ms at FPS; p95 54 ms
+# over a 60 s run, 2026-10-03). If no command arrives for this long, the loop
+# is stuck (the camera stopped delivering frames mid-run that day, and
+# cap.read() blocked with the last command still driving), so the driver
+# brakes the motors on its own. 0.5 s = 10 missed frames: clear of any
+# frame the loop has taken in a run, short enough to stop within a few cm.
+MOTOR_WATCHDOG_S = 0.5
+
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"
 

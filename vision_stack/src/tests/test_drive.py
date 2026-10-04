@@ -7,16 +7,21 @@ the motion as encoder edges, so nothing waits.
 
 --software  Quadrature decoding, cps, TB6612 direction/PWM commands, brake
             and stop, against a fake pigpio and a simple wheel model. No GPIO.
+            The watchdog on a fake clock: braking a quiet loop, never a
+            steady one, disarmed by brake and stop, re-armed by drive; and
+            its thread in real time.
 --hardware  Skips unless pigpio is up and a short nudge makes an encoder
             count, so the motorless chassis skips here. Then spins each
             wheel alone, both forward, reverse and in place, checks the
             counts hold when stopped, and drives 3 s straight open loop,
-            recording counts per leg and the motors' natural mismatch.
-            WHEELS OFF THE GROUND: about 10 s of motor time.
+            recording counts per leg and the motors' natural mismatch. A
+            second test drives once and goes quiet: the watchdog must stop
+            the wheels. WHEELS OFF THE GROUND: about 12 s of motor time.
 """
 import importlib
 import subprocess
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -341,6 +346,13 @@ def test_encoder_signs_follow_the_commanded_direction(env, left, right, sign):
     assert (f.left_count * sign[0] > 150) and (f.right_count * sign[1] > 150)
 
 
+def _hold(motor, left, right, seconds, sleep, period=0.05):
+    """Command left/right every period for seconds, as a run loop does each frame (the watchdog wants it)."""
+    for _ in range(max(1, round(seconds / period))):
+        motor.drive(left, right)
+        sleep(period)
+
+
 def _motors_respond(enc, motor, sleep, duty=0.4, seconds=0.3):
     """
     Presence probe: a short nudge forward. True if either encoder counted.
@@ -387,7 +399,6 @@ def test_motor_probe_counts_a_chassis_with_one_dead_encoder_as_fitted(env):
 # -----------------------------------------------------------------------------
 @pytest.mark.hardware
 def test_drive_characterization(artifacts):
-    import time
     pi = pigpio_or_skip("drive")
     try:
         mod = importlib.import_module(DRIVE_MODULE)
@@ -398,8 +409,7 @@ def test_drive_characterization(artifacts):
 
     def leg(left, right, seconds=1.0):
         enc.reset()
-        m.drive(left, right)
-        time.sleep(seconds)
+        _hold(m, left, right, seconds, time.sleep)
         m.stop()
         f = _counted(enc)
         time.sleep(0.5)                         # let the wheels spin down before the next leg
@@ -418,8 +428,7 @@ def test_drive_characterization(artifacts):
         time.sleep(0.5)
         coast = _counted(enc)                  # motors stopped: counts should stay put
         enc.reset()
-        m.drive(0.5, 0.5)                       # 3 s straight, open loop: the motors' natural mismatch
-        time.sleep(3.0)
+        _hold(m, 0.5, 0.5, 3.0, time.sleep)     # 3 s straight, open loop: the motors' natural mismatch
         m.stop()
         straight = _counted(enc)
     finally:
@@ -474,3 +483,159 @@ def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
     assert enc.counts() == (25, 10)
     pi.quad(19, 16, 5, c1_leads=False)          # the left wheel backward
     assert enc.counts() == (20, 10)
+
+
+# -----------------------------------------------------------------------------
+# Watchdog
+# -----------------------------------------------------------------------------
+def _braked(pi, m):
+    return all(pi.levels[p] == 1 for p in (m.ain1, m.ain2, m.bin1, m.bin2, m.stby)) and \
+        pi.pwm[m.pwma][1] == pi.pwm[m.pwmb][1] == FULL_DUTY
+
+
+def _watched(env, watchdog_s=0.5):
+    """A MotorController on the fake pigpio whose watchdog reads the fake clock (its thread can't trip it early)."""
+    mod, pi, clock = env
+    return mod.MotorController(pi, watchdog_s=watchdog_s, clock=lambda: clock.now), pi, clock
+
+
+@pytest.mark.software
+def test_the_default_watchdog_is_the_params_timeout(env):
+    from src.params import MOTOR_WATCHDOG_S
+    mod, pi, _ = env
+    assert mod.MotorController(pi).watchdog_s == MOTOR_WATCHDOG_S
+
+
+@pytest.mark.software
+def test_a_quiet_loop_is_braked_once_drive_is_overdue(env):
+    m, pi, clock = _watched(env)
+    m.drive(0.5, 0.5)
+    clock.now += 0.49
+    assert not m.check() and not _braked(pi, m), "braked before the timeout"
+    clock.now += 0.02
+    m.check()                                   # or the thread did: either way, one trip
+    assert _braked(pi, m) and m.watchdog_trips == 1
+    clock.now += 5.0
+    assert not m.check() and m.watchdog_trips == 1, "a trip disarms: it brakes once"
+    m.stop()
+
+
+@pytest.mark.software
+def test_a_steady_loop_never_trips_it(env):
+    m, pi, clock = _watched(env)
+    for _ in range(200):                        # 10 s at 20 FPS
+        m.drive(0.4, 0.4)
+        clock.now += 0.05
+        assert not m.check()
+    assert m.watchdog_trips == 0 and pi.levels[m.ain2] == 1 and not _braked(pi, m)
+    m.stop()
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("then", ["brake", "stop"])
+def test_brake_and_stop_disarm_it_since_both_leave_the_motors_safe(env, then):
+    m, pi, clock = _watched(env)
+    m.drive(0.5, 0.5)
+    getattr(m, then)()
+    clock.now += 10.0
+    assert not m.check() and m.watchdog_trips == 0
+    if then == "stop":
+        _assert_stopped(pi, m)                  # left in standby, not turned into a brake
+
+
+@pytest.mark.software
+def test_driving_again_after_a_trip_drives_and_re_arms(env):
+    m, pi, clock = _watched(env)
+    m.drive(0.5, 0.5)
+    clock.now += 0.6
+    m.check()
+    m.drive(-0.3, 0.3)                          # a slow loop that came back carries on
+    assert not _braked(pi, m) and pi.levels[m.ain1] == 1 and pi.levels[m.bin1] == 1
+    clock.now += 0.6
+    m.check()
+    assert _braked(pi, m) and m.watchdog_trips == 2
+    m.stop()
+
+
+@pytest.mark.software
+def test_the_watchdog_can_be_turned_off(env):
+    mod, pi, clock = env
+    for off in (None, 0):
+        m = mod.MotorController(pi, watchdog_s=off, clock=lambda: clock.now)
+        m.drive(0.5, 0.5)
+        clock.now += 60.0
+        assert m.watchdog_s is None and not m.check() and m._wd_thread is None
+
+
+@pytest.mark.software
+def test_its_thread_brakes_a_stalled_loop_in_real_time_names_itself_and_ends_with_stop(env, monkeypatch):
+    mod, pi, _ = env
+    names = []
+    monkeypatch.setattr(mod, "name_os_thread", lambda name, thread=None: names.append(name) or True)
+    m = mod.MotorController(pi, watchdog_s=0.05)
+    m.drive(0.5, 0.5)                           # then nothing: the loop is stuck
+    deadline = time.monotonic() + 2.0
+    while m.watchdog_trips == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert m.watchdog_trips == 1 and _braked(pi, m)
+    assert names == ["motor-watchdog"]
+    thread = m._wd_thread
+    m.stop()
+    assert not thread.is_alive() and m._wd_thread is None
+    _assert_stopped(pi, m)
+
+
+@pytest.mark.software
+def test_a_failing_brake_is_logged_and_the_watching_goes_on(env, caplog):
+    mod, pi, _ = env
+    m = mod.MotorController(pi, watchdog_s=0.05)
+    m.drive(0.5, 0.5)
+    real_write, fails = pi.write, []
+
+    def write(pin, level):
+        if not fails:
+            fails.append(pin)
+            raise ConnectionError("pigpio socket closed")
+        real_write(pin, level)
+    pi.write = write
+    deadline = time.monotonic() + 2.0
+    while m.watchdog_trips == 0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert fails and "check failed" in caplog.text
+    assert m.watchdog_trips == 1 and _braked(pi, m), "the next look braked"
+    m.stop()
+
+
+@pytest.mark.hardware
+def test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet():
+    """
+    As when the camera stops mid-run: one drive(), then silence. The wheels
+    turn, the watchdog brakes them within watchdog_s (+ one check period),
+    and they stay stopped. WHEELS OFF THE GROUND.
+    """
+    pi = pigpio_or_skip("drive")
+    try:
+        mod = importlib.import_module(DRIVE_MODULE)
+        enc, m = mod.EncoderReader(pi), mod.MotorController(pi)
+    except BaseException:
+        pi.stop()
+        raise
+    try:
+        if not _motors_respond(enc, m, time.sleep):
+            pytest.skip("drive not found on this chassis: a 0.3 s nudge at 40% duty gave no encoder counts")
+        enc.reset()
+        m.drive(0.4, 0.4)                       # the loop's last command, then it's stuck
+        time.sleep(0.3)
+        moving = _counted(enc)
+        time.sleep(m.watchdog_s * (1 + 1 / mod.WATCHDOG_CHECKS) + 0.3)     # the trip, then spin-down
+        trips = m.watchdog_trips
+        enc.reset()
+        time.sleep(0.5)
+        after = _counted(enc)
+    finally:
+        m.stop()
+        enc.cancel()
+        pi.stop()
+    assert moving.left_count > 10 and moving.right_count > 10, "the wheels never turned: nothing to stop"
+    assert trips == 1, f"watchdog tripped {trips} times, want 1"
+    assert abs(after.left_count) <= 2 and abs(after.right_count) <= 2, "wheels still turning after the watchdog"
