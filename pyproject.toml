@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
     "numpy",
     "adafruit-circuitpython-mpu6050",
+    "adafruit-circuitpython-ads1x15",
     "adafruit-blinka",
     "raspberrypi-tm1637",
 ]

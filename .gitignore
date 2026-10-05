@@ -93,3 +93,5 @@ video/
 *.swo
 # Pi setup markers written by setup.mk / session.mk
 .make-stamps/
+
+.DS_Store

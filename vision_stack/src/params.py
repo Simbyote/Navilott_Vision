@@ -65,6 +65,9 @@ GPIO_START_BUTTON = 17      # active-high, pull-down, header pin 11
 
 # --- IMU ---
 IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
+
+# --- Battery monitor (src/diagnostics/battery.py) ---
+ADS1115_I2C_ADDRESS = 0x48  # ADS1115 with ADDR tied to GND; A0 reads the 4:1 V-Sense divider
 IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 44 Hz to match
 # Multiplies raw gyro Z so yaw reads + = turning right, Estimation's convention.
 # The driver reads + = left for a Z-up IMU; this robot's is mounted upside
