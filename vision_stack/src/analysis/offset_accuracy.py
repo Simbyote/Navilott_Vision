@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 from src.analysis import common, stability
-from src.analysis.common import Table, fmt
+from src.analysis.common import Table
 
 SPEC_CM = 2.0
 WARMUP_FRAMES = 5

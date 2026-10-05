@@ -25,10 +25,7 @@ import cv2
 import numpy as np
 from dataclasses import dataclass
 
-from src.params import (
-    LANE_BOUNDARY, ROI_LANE, ROI_SIGN, ROI_TRAFFIC, STOP_SIGN, TRAFFIC_LIGHT,
-    FUSION_OVERLAY_SUFFIX as OVERLAY_SUFFIX, FUSION_SUMMARY_SUFFIX as SUMMARY_SUFFIX,
-)
+from src.params import LANE_BOUNDARY, ROI_LANE, ROI_SIGN, ROI_TRAFFIC, STOP_SIGN, TRAFFIC_LIGHT
 from src.perception.geometry import GeometryBranchResult
 from src.utils import check_same_frame
 from src.perception.roi_crop import ROICropResult

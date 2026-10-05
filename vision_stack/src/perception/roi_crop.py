@@ -26,10 +26,6 @@ from dataclasses import dataclass
 from src.perception.preprocess import PreprocessResult
 
 from src.params import ROI_LANE, ROI_SIGN, ROI_TRAFFIC
-# Re-exported so debug harnesses can keep importing the suffixes from here
-from src.params import (
-    LANE_ROI_SUFFIX, ROI_OVERLAY_SUFFIX as OVERLAY_SUFFIX, SIGN_ROI_SUFFIX, TRAFFIC_ROI_SUFFIX,
-)
 
 
 @dataclass(frozen=True)

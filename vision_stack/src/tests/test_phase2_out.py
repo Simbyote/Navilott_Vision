@@ -15,7 +15,7 @@ real DetectionObject/LaneOffsetResult instances, since a "missing field" or
             the packaged output per sample frame.
 """
 import time
-from dataclasses import FrozenInstanceError, asdict
+from dataclasses import FrozenInstanceError
 from types import SimpleNamespace
 
 import cv2

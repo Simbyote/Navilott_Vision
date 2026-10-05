@@ -15,6 +15,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Know the course and camera measurements the tuning depends on | `course.md` |
 | Write Navigation: what it receives, what it returns, how the robot responds | `vision_stack/navigation_contract.md` |
 | Consume the vision output in navigation code | `vision_stack/phase3_estimation.md`, "Contract" and "Sign conventions" |
+| Run anything without remembering its flags: `make` lists every command | `guides/make.md` |
 | Run the tests | `guides/pytest.md` |
 | Watch what the pipeline detects | `guides/phase2_linker.md` |
 | Check what estimation decides | `guides/phase3_linker.md` |
@@ -57,6 +58,7 @@ docs/
         navigation_walkthrough.md  how a frame becomes a motor command; where to change things
         system_maps.md          the system as diagrams: pipeline, linkers, phases, tests
         linker_code_maps.md     each linker's code as diagrams, with line numbers
+        make.md                 the Makefile: every command by a short name (make, make run, ...)
         code_cards.md           one generated card per source file: python3 -m src.scripts.code_cards
         production_run.md       the course run: python3 -m src.main
         diagnostics.md          recording threads, cores, throttling and memory during a run

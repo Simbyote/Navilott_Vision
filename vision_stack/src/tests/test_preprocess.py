@@ -9,14 +9,13 @@ test_preprocess.py  --  src/perception/preprocess.py
 import time
 from dataclasses import FrozenInstanceError, asdict
 
-import cv2
 import numpy as np
 import pytest
 
+from src.params import COLOR_BLUR_SUFFIX, GRAY_BLUR_SUFFIX, GRAY_SUFFIX
 from src.perception.preprocess import (
-    COLOR_BLUR_SUFFIX, GRAY_BLUR_SUFFIX, GRAY_SUFFIX,
     PreprocessParams, PreprocessResult,
-    gaussian_blur, histogram_equalization, preprocess_frame, to_grayscale,
+    gaussian_blur, histogram_equalization, preprocess_frame,
 )
 from src.capture.camera import FrameData
 from src.params import FRAME_H, FRAME_W

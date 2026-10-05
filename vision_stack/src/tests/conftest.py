@@ -18,7 +18,6 @@ Tests outside the selected mode are deselected rather than skipped, so the
 output only lists what actually ran.
 """
 import csv
-import json
 import platform
 import subprocess
 import sys

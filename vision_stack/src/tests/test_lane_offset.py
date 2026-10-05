@@ -27,7 +27,7 @@ from src.capture.camera import FrameData
 from src.perception import lane_offset as lo
 from src.perception.geometry import GeometryBranchResult, GeometryConfig, LaneCandidate, run_geometry_stage
 from src.perception.lane_offset import (
-    BoundaryAnchor, LaneOffsetConfig, LaneOffsetResult,
+    LaneOffsetConfig, LaneOffsetResult,
     compute_lane_offset, estimate_lane_offset, foot_x,
 )
 from src.perception.preprocess import preprocess_frame

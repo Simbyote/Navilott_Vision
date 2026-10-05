@@ -19,10 +19,10 @@ import pytest
 
 from src.capture.camera import FrameData
 from src.perception.preprocess import PreprocessResult, preprocess_frame
+from src.params import LANE_ROI_SUFFIX, ROI_OVERLAY_SUFFIX, SIGN_ROI_SUFFIX, TRAFFIC_ROI_SUFFIX
 from src.perception.roi_crop import (
-    LANE_COLOR, LANE_ROI_SUFFIX, OVERLAY_SUFFIX, SIGN_COLOR, SIGN_ROI_SUFFIX,
-    TRAFFIC_COLOR, TRAFFIC_ROI_SUFFIX,
-    ROIBounds, ROIConfig, ROICropResult,
+    LANE_COLOR, SIGN_COLOR, TRAFFIC_COLOR,
+    ROIBounds, ROIConfig,
     crop, crop_rois, draw_roi_overlay, resolve,
 )
 from src.params import FRAME_H, FRAME_W
@@ -333,7 +333,7 @@ def test_roi_crop_characterization(request, frames, artifacts):
     artifacts.json("summary.json", {"crop_us": summarize(us)})
     artifacts.histogram("crop_us_hist.png", us, "crop_rois latency", "microseconds")
     for fid, (raw, r) in samples.items():
-        artifacts.image(f"{fid:06d}{OVERLAY_SUFFIX}", draw_roi_overlay(raw, r))
+        artifacts.image(f"{fid:06d}{ROI_OVERLAY_SUFFIX}", draw_roi_overlay(raw, r))
         artifacts.image(f"{fid:06d}{LANE_ROI_SUFFIX}", r.lane_roi)
         artifacts.image(f"{fid:06d}{TRAFFIC_ROI_SUFFIX}", r.traffic_roi)
         artifacts.image(f"{fid:06d}{SIGN_ROI_SUFFIX}", r.sign_roi)
