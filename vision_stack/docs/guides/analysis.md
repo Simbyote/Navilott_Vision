@@ -84,6 +84,7 @@ python3 -m src.analysis.nav_run runs/intersection_20261003_101500/left
 ```
 
 It reports, from `nav.csv`:
+
 - **Rules:** time and episodes per deciding rule, the commonest changes between rules, braking and why.
 - **Lane keeping:** time on vision / hold / stale; the offset's mean (a bias), spread and p95; **weaving**, steering sign changes per second (past a 0.02 deadband, only within unbroken lane keeping); time at full steering.
 - **Each intersection** (one unbroken run of intersection, stop-sign or traffic-light frames): its route step, stage times, time held, how the turn ended, the turn angle by the rule and by the gyro (net of `--gyro-bias`, default `config.GYRO_BIAS_DPS`), and **the 2 s after it**: offset, weaving, how long until both lane lines are back on vision, and a **veer** flag when the offset passes 1.5x the p95 of normal lane keeping (vision frames outside these windows).
@@ -102,6 +103,7 @@ python3 -m src.analysis.pi_load runs/diag_20261003_101500 --run runs/nav_2026100
 **With `--run`, only the run's own time is judged.** A recording starts before the run (imports, the camera opening, the countdown) and ends after it (shutdown, writing reports), and that startup alone can hold `main` near 100% for several seconds. So the threads, cores, temperature, clock and memory are taken from the run's t0 to its last frame, shaded in `pi_load.png`, and the report's first line says which part of the recording that was. A run under 4 thread samples (2 s at the default interval) is too short for that: it's judged over the whole recording, with a note saying so. Without `--run`, the whole recording is judged: fine for `main.py`, which has no run folder, as long as you read the startup for what it is. Flags latched since boot always come from the whole recording.
 
 It reports:
+
 - **The process:** total CPU (% of one core), and how much of it was the busiest thread. Over 70% in one thread means the work is mostly serial: one thread, or Python threads taking turns on the GIL, which look the same from outside. Either way the other cores mostly wait.
 - **The frame loop:** `main`'s p95 CPU. At 90% or more it's CPU-bound, and frames stretch whenever one needs more. A single spike doesn't count.
 - **`sensor-hub`:** how often it wakes against its 100 Hz. Fewer than 80 a second means its ticks slip.

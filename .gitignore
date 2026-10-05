@@ -62,6 +62,11 @@ logs/
 results/
 /results
 
+/runs/
+**/runs/
+runs/
+/runs
+
 /sample_img/
 **/sample_img/
 sample_img/
