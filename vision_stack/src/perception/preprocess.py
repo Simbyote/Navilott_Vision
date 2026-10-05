@@ -31,12 +31,6 @@ import cv2
 
 from src.capture.camera import FrameData
 
-from src.params import CAMERA_CALIB_PATH as DEFAULT_CALIBRATION_PATH
-# Re-exported so debug harnesses can keep importing the suffixes from here
-from src.params import (
-    COLOR_BLUR_SUFFIX, EQUALIZED_SUFFIX, GRAY_BLUR_SUFFIX, GRAY_SUFFIX, UNDISTORT_SUFFIX,
-)
-
 
 @dataclass(frozen=True)
 class PreprocessParams:

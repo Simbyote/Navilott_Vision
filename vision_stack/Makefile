@@ -11,9 +11,16 @@
 #     ARGS="..."                    anything else, passed straight to the command
 # Each target's comment names the guide in docs/guides/ that explains it.
 #
-# The venv is used if there is one (.venv/), so it needn't be activated.
+# Session start and the Pi's install live in ../session.mk and ../setup.mk; this
+# file runs the robot's code. `make session TIME="YYYY-MM-DD HH:MM"` here is
+# session.mk's session (clock, pigpiod, venv shell), and `pigpiod` is its
+# pigpiod-start, so each step is written once. Commands run on the venv
+# setup.mk creates (VENV_DIR, the same default as there), so it needn't be
+# activated.
 
-PY ?= $(if $(wildcard .venv/bin/python),.venv/bin/python,python3)
+SESSION_MK := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../session.mk)
+VENV_DIR   ?= $(HOME)/.venv/navilott
+PY         ?= $(if $(wildcard $(VENV_DIR)/bin/python),$(VENV_DIR)/bin/python,python3)
 
 # --- options (make <target> NAME=value) ---------------------------------------
 # Comments sit above each line: one after the value would become part of it.
@@ -43,6 +50,9 @@ MINUTES   ?= 15
 HW_FRAMES ?= 100
 # calib-lamps: "red=runs/lamp_red green=runs/lamp_green ..."
 LAMPS     ?=
+# session: the clock, "YYYY-MM-DD HH:MM" (the Pi has no clock of its own); make hands it,
+# like every NAME=value given here, to session.mk
+TIME      ?=
 # monitor-attach: watch the newest process matching this
 MATCH     ?= src.
 # extra arguments for the command
@@ -57,7 +67,7 @@ NEWEST  = $(shell ls -dt runs/$(1)*/ 2>/dev/null | head -1)
 RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
-.PHONY: help setup pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
+.PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render diag-nav diag-run monitor-attach pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps code-cards newest clean
@@ -71,11 +81,11 @@ help: ## this list
 	@echo "Options: make <target> NAME=value, e.g. VIDEO=clip.mp4  RUN=runs/nav_...  ARGS=\"--scale 2\""
 	@echo "Python: $(PY)"
 
-setup: pigpiod ## on the Pi, once per boot: start pigpiod and list the camera
-	@rpicam-hello --list-cameras 2>/dev/null | grep -i imx || echo "camera not listed: check the ribbon (rpicam-hello --list-cameras)"
+session: ## every boot on the Pi: set the clock, start pigpiod, open a venv shell (TIME="YYYY-MM-DD HH:MM")
+	@$(MAKE) --no-print-directory -f $(SESSION_MK) session
 
 pigpiod: ## start the GPIO daemon if it isn't running (motors, encoders, button, display)
-	@pgrep -x pigpiod >/dev/null && echo "pigpiod running" || (sudo pigpiod && echo "pigpiod started")
+	@$(MAKE) --no-print-directory -f $(SESSION_MK) pigpiod-start
 
 ##@ Race day (production_run.md)
 run: $(HW) ## the course: route, St N, button, countdown, time on the display; nothing recorded

@@ -15,9 +15,8 @@ rather than assuming fusion did it.
 --hardware  Times fuse_detections per frame (live or --replay), chaining
             geometry and color, and writes CSV, per-class counts, and overlays.
 """
-import math
 import time
-from dataclasses import FrozenInstanceError, asdict, replace
+from dataclasses import FrozenInstanceError, asdict
 
 import cv2
 import numpy as np
@@ -171,7 +170,6 @@ def test_best_candidate_breaks_ties_by_keeping_the_first():
 @pytest.mark.software
 def test_color_branch_module_is_never_imported():
     # Fusion must load and fuse lane/sign detections without the color branch
-    import sys
     assert "src.perception.color_branch" not in getattr(ff, "__dict__", {}).values()
     assert not hasattr(ff, "color_branch")
 

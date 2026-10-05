@@ -27,7 +27,7 @@ pytestmark = [pytest.mark.software,
 
 MAKEFILE = PIPELINE_ROOT / "Makefile"
 # Targets that only print or tidy, with no python command to check
-NO_COMMAND = {"help", "setup", "pigpiod", "newest", "clean", "compare", "calib-lamps", "render"}
+NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "calib-lamps", "render"}
 # Arguments the guarded targets need before they run anything
 NEEDS = {"compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
 
@@ -140,15 +140,29 @@ def test_options_reach_their_commands_and_empty_ones_add_nothing():
     assert make_n("test-hw", "HW_FRAMES=600")[-1].endswith("--frames=600")
 
 
-def test_the_venv_is_used_when_there_is_one(tmp_path):
-    (tmp_path / ".venv" / "bin").mkdir(parents=True)
-    (tmp_path / ".venv" / "bin" / "python").write_text("")
-    shutil.copy(MAKEFILE, tmp_path / "Makefile")
-    out = subprocess.run(["make", "-s", "-n", "-C", str(tmp_path), "lint"], capture_output=True, text=True)
-    assert out.stdout.strip() == ".venv/bin/python -m pyflakes src"
-    (tmp_path / ".venv" / "bin" / "python").unlink()
-    out = subprocess.run(["make", "-s", "-n", "-C", str(tmp_path), "lint"], capture_output=True, text=True)
-    assert out.stdout.strip() == "python3 -m pyflakes src"
+def test_the_venv_setup_mk_makes_is_used_when_there_is_one(tmp_path):
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "bin" / "python").write_text("")
+    def lint(*assigns):
+        return subprocess.run(["make", "-s", "-n", "-C", str(PIPELINE_ROOT), "lint", *assigns],
+                              capture_output=True, text=True).stdout.strip()
+    assert lint(f"VENV_DIR={venv}") == f"{venv}/bin/python -m pyflakes src"
+    assert lint(f"VENV_DIR={tmp_path / 'none'}") == "python3 -m pyflakes src"
+    setup_mk = (PIPELINE_ROOT.parent / "setup.mk").read_text()
+    assert re.search(r"^VENV_DIR\s+\?= \$\(HOME\)/\.venv/navilott$", setup_mk, re.M)       # the same default
+    assert "VENV_DIR   ?= $(HOME)/.venv/navilott" in MAKEFILE.read_text()
+
+
+def test_session_steps_come_from_session_mk():
+    # make -n still runs a recursive $(MAKE) line, but passes -n on, so session.mk only prints
+    pig = make_n("pigpiod")
+    assert pig[0] == f"make --no-print-directory -f {PIPELINE_ROOT.parent / 'session.mk'} pigpiod-start"
+    assert any("sudo pigpiod" in line for line in pig)
+    session = make_n("session", "TIME=2026-10-05 12:00")
+    assert any('sudo date -s "2026-10-05 12:00"' in line for line in session)
+    assert any("exec bash --rcfile" in line for line in session)        # session.mk's venv shell
+    assert any("pigpiod-start" in line for line in make_n("navigate"))  # camera targets start it the same way
 
 
 def test_no_option_carries_a_comment_after_its_value():

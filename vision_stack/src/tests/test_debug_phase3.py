@@ -13,7 +13,6 @@ summary.
 import copy
 from dataclasses import replace
 
-import numpy as np
 import pytest
 
 import src.debugger.debug_video as dv

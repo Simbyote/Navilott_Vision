@@ -13,14 +13,28 @@ From `vision_stack/`:
 
 ```
 make                        the list, grouped: race day, linkers, diagnostics, analysis, tests, calibration
-make setup                  on the Pi, once per boot: starts pigpiod, checks the camera
+make session TIME="2026-10-05 14:30"   on the Pi, every boot: clock, pigpiod, a venv shell
 make run                    the course
 make nav-dry                the whole chain on the bench, motors off
 make nav-report             the newest navigation run's report
 ```
 
-The venv (`.venv/`) is used when there is one, so it needn't be activated. Every command is printed
-before it runs, so you can see (and copy) exactly what `make` did.
+Commands run on the venv `setup.mk` creates (`~/.venv/navilott`, the same `VENV_DIR`), so it needn't
+be activated; without one they use `python3`. Every command is printed before it runs, so you can see
+(and copy) exactly what `make` did.
+
+## How it fits with setup.mk and session.mk
+
+The repository root holds two more makefiles, for the Pi itself:
+
+| File | Run | What it's for |
+|---|---|---|
+| `setup.mk` | once, on a fresh Pi: `make -f setup.mk setup` | apt packages, the camera stack, I2C, pigpio as a service, the venv |
+| `session.mk` | every boot: `make -f session.mk session TIME="..."` | set the clock (the Pi has none), start pigpiod, open a venv shell |
+| `vision_stack/Makefile` | any time | run the robot's code: the course, linkers, diagnostics, analysis, tests |
+
+This Makefile doesn't repeat them: `make session` and `make pigpiod` here call `session.mk`'s
+`session` and `pigpiod-start`, so a change to either is made in one place.
 
 ## Options
 

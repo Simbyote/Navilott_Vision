@@ -27,7 +27,7 @@ from src.perception.color_branch import (
     draw_candidates, extract_traffic_light_candidates, load_color_config,
     load_hsv_ranges, run_color_stage,
 )
-from src.perception.preprocess import PreprocessResult, preprocess_frame
+from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
 from src.params import FRAME_H, FRAME_W
 from src.tests.artifacts import summarize

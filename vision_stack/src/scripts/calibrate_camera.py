@@ -366,7 +366,7 @@ def verify(args) -> None:
     out_dir = Path(args.verify_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nStraightness (mean worst bow per board line, px; lower is straighter)")
+    print("\nStraightness (mean worst bow per board line, px; lower is straighter)")
     raw_scores, und_scores = [], []
     for _, name, img, c_raw in scored[:args.verify_count]:
         und = undistort(img, params)

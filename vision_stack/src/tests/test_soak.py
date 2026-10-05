@@ -21,7 +21,6 @@ import csv
 import time
 import warnings
 
-import numpy as np
 import pytest
 
 from src.analysis import soak

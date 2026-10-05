@@ -7,10 +7,8 @@ test_capture.py  --  src/capture/camera.py
             sample frames, and (with --record) writes the frames out as the
             dataset that downstream software tests replay.
 """
-import time
 import warnings
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
 import numpy as np
 import pytest
