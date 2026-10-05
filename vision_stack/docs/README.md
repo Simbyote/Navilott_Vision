@@ -24,6 +24,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Understand how navigation fits together (where a turn lives) | `guides/navigation_walkthrough.md` |
 | See the whole system as diagrams: the pipeline, the linkers, each phase, the tests | `guides/system_maps.md` |
 | Read a linker's code as diagrams: who builds what, one frame's calls, line by line | `guides/linker_code_maps.md` |
+| See any source file as a card: purpose, imports both ways, classes, calls, constants | `guides/code_cards.md` |
 | Run the course (start button, timed, nothing recorded) | `guides/production_run.md` |
 | Record how a run uses the Pi: threads, cores, throttling, memory | `guides/diagnostics.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
@@ -56,6 +57,7 @@ docs/
         navigation_walkthrough.md  how a frame becomes a motor command; where to change things
         system_maps.md          the system as diagrams: pipeline, linkers, phases, tests
         linker_code_maps.md     each linker's code as diagrams, with line numbers
+        code_cards.md           one generated card per source file: python3 -m src.scripts.code_cards
         production_run.md       the course run: python3 -m src.main
         diagnostics.md          recording threads, cores, throttling and memory during a run
         pytest.md               running the test suite

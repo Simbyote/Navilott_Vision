@@ -163,6 +163,17 @@ The course plan is `route.json` in `vision_stack/`, read at startup; edit it bet
 
 ---
 
+## Code cards — [code_cards.md](code_cards.md)
+
+One PNG per source file (purpose, imports both ways, classes, calls, constants, flow); no camera needed:
+
+```
+python3 -m src.scripts.code_cards                                  every file, into runs/code_cards/
+python3 -m src.scripts.code_cards --only src.navigation.navigation src/peripherals/drive.py
+```
+
+---
+
 ## Camera calibration — [calibrate_camera.md](calibrate_camera.md), [test_calibration.md](test_calibration.md)
 
 ```
