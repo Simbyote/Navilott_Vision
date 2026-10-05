@@ -103,7 +103,7 @@ MEASURED = PipelineConfig(
     # Stop lines within 15 deg of horizontal (default 20): the near end of a
     # thick diagonal lane line passed for a stop line past an intersection
     # (2026-10-01 run) and restarted the crossing
-    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 15.0)),
+    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 5.0)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,
