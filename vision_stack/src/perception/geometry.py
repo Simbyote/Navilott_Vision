@@ -127,7 +127,7 @@ class StopLineFilter:
     min_length_px: float = 60.0
     min_thickness_px: float = 3.0
     max_thickness_px: float = 40.0
-    min_intensity: float = 130.0        # 0-255 mean between the paired edges; tape, not a shadow edge
+    min_intensity: float = 70.0        # 0-255 mean between the paired edges; tape, not a shadow edge
     # Paired edges must overlap by this fraction of the shorter one
     min_edge_overlap: float = 0.5
     # (width, height) px closing rectangle on each edge map; bridges gaps
@@ -187,7 +187,7 @@ class LaneCandidate:
     proximity: float = 0.0              # [0, 1] bottom-edge position; 1.0 = bottom of ROI, nearest the robot
     width_px: float = 0.0               # minAreaRect short side, px; raw, not floored to 1 like the aspect gate
     length_px: float = 0.0              # minAreaRect long side, px
-    mean_intensity: float = 0.0         # 0-255 inside the filled contour; length-weighted when merged
+    mean_intensity: float = 10.0         # 0-255 inside the filled contour; length-weighted when merged
     foot_x: float = -1.0                # see contour_foot_x; -1.0 = not computed
 
 @dataclass

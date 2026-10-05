@@ -108,7 +108,7 @@ MEASURED = PipelineConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,
         max_width_px = 45.0,
-        min_intensity = 130.0,
+        min_intensity = 90.0,
     ),
 )
 
