@@ -10,6 +10,8 @@ cd ~/Navilott_Vision/vision_stack
 source .venv/bin/activate
 ```
 
+Most of these have a short name in the Makefile: run `make` for the list ([make.md](make.md)).
+
 On the Pi, check the clock first so run folders get the right timestamp:
 
 ```
