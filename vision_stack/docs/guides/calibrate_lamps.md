@@ -40,6 +40,31 @@ python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 5 
 
 `ae-constraint-mode=highlight` has the auto exposure protect the brightest parts of the view (the lamps); `exposure-value` darkens everything by stops (-1 halves it). `awb-mode=daylight` (or `fluorescent`, `indoor`) holds the white balance instead of letting it follow the room's light. The lamp must be the brightest thing in the traffic ROI (top-center of the view, `roi_crop.TRAFFIC`).
 
+## Lit against off (an off run)
+
+Lamp against glow can't tell a lit lamp from an **unlit** one, and that's what failed at the course's light: its lenses are colored plastic, and the red lens off still reads red at V ~180, so it passed as lit (2026-10-06). Record one more run with **every lamp off**, the robot not moved:
+
+```
+python3 -m src.navigation_linker --camera --no-motors --no-button --max-run-s 5 --no-render --out runs/lamps_off
+make calib-lamps LAMPS="red=runs/lamp_red yellow=runs/lamp_yellow green=runs/lamp_green off=runs/lamps_off"
+```
+
+With `off=`, each lamp is measured differently:
+
+- **Where the lamp is:** the pixels whose mean V rises at least `LIT_DELTA` (25) from the off run to its run. That's whatever lights up with the lamp, the LED and any reflection of it, and not what's there either way (the board, glare, the other lenses). The brightest spot isn't used: at the course's light it was a glare off the board, or the LED's reflection in the panel above. Each place that lit up is printed with its pixels and position. When more than a quarter of the ROI lit up, the scene changed between the runs (exposure, the robot moved), and it says so.
+- **The cross-check:** those pixels lit against the same pixels unlit, in the off run and in the other lamps' runs (a lens is off there too):
+
+  ```
+              lit p10   off p90     gap   floor
+  S              66     202    -136      66 (doesn't separate: the lit p10)
+  V             133     120     +13     126
+  white px        5       0      +5   (near-white pixels per frame, the core gate's)
+  ```
+
+  Lit is the lit pixels that have a color (S ≥ 25), at their 10th percentile. Off is the unlit pixels that share the lamp's hue (only they could pass its band), at their 90th. A positive gap separates them, and the floor goes halfway; a channel that doesn't separate keeps the lit 10th percentile. Hue comes from the lit colored pixels, as before.
+- **No band when nothing separates.** If neither S nor V separates the lamp lit from unlit, it suggests no band for that color: one would pass the unlit lens. It says whether the white center separates them instead, in which case only the core gate (`BlobFilter.min_core_px`) can tell them apart. The course's red and yellow came out this way on 2026-10-06: lit V 133 / 103 against unlit 178 / 174, white center 14 / 8 against 0.
+- **The blob area with the lamp off:** the largest blob its new band finds in the off frames. Anything over 0 is something that would read as this color with the lamp off, and it's reported.
+
 ## 2. Measuring
 
 ```

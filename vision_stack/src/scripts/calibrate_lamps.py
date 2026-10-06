@@ -19,6 +19,15 @@ Purpose:
     the lamp), and says when two lamps were found at the same spot. --write puts the measured colors
     into calibration/hsv_ranges.json, leaving the others as they were.
 
+    Lamp against glow can't tell a lit lamp from an unlit one, and the
+    course's unlit lenses passed for lit ones (2026-10-06: the red lens off
+    read V ~180, its plastic still red). Given a run with every lamp off
+    (off=PATH), each lens is also cross-checked: the same spot lit against
+    off, in the off run and in the other colors' runs. Its S and V floors
+    then sit halfway between the lens lit and the lens off, where a channel
+    separates them; the lamp-against-glow floor is kept for one that
+    doesn't, and a lens nothing separates is reported.
+
 Main package:
     traffic_roi(): a recorded frame's traffic ROI, as the pipeline cuts it.
     measure_lamp(): one frame's lamp and glow statistics and suggested band.
@@ -26,6 +35,8 @@ Main package:
     bands_for(): a color's band(s) in hsv_ranges.json form (red: both halves).
     blob_area(): the lamp's largest blob under a band, as the color branch measures it.
     hue_overlaps(): pairs of colors whose hue spans meet.
+    lit_pixels(): the pixels that light up with a lamp, from its run and the off run.
+    cross_check(): those pixels lit against unlit: the band, S, V and white center.
     write_ranges(): merge bands into hsv_ranges.json, checked by its loader.
     main(): the command line.
 
@@ -35,7 +46,8 @@ Flow:
     2. Each frame: preprocess, crop the traffic ROI, find the brightest blob,
        measure the lamp disc and the glow ring around it.
     3. The median band over the frames; the blob area under it.
-    4. Print the bands, the warnings and the areas; --write merges them.
+    4. With an off run: each lens lit against off; floors between the two.
+    5. Print the bands, the warnings and the areas; --write merges them.
 """
 import argparse
 import json
@@ -81,6 +93,17 @@ MIN_COLORED_SHARE = 0.5
 # band to hue 150 (2026-10-04, S ~160 frames). Fewer colored pixels than this,
 # and every pixel's hue is used, so a white spot still reads as one
 MIN_HUE_PIXELS = 10
+# Lens lit against lens off: the lit lens's 10th percentile against the off
+# lens's 90th, per pixel of its disc that shares the band's hue (a pixel of
+# another hue can't pass the band whatever its S and V)
+ON_PCT, OFF_PCT = 10, 90
+OFF = "off"                 # the label for a run with every lamp off
+# A pixel is the lamp's when its mean V rises this much from the off run to
+# the lit run: the course's red lens rose ~66 lit (180 -> 246), yellow ~30
+# (213 -> 243) and its reflection more; auto exposure moves a scene ~10-20
+LIT_DELTA = 25
+# More of the ROI than this lighting up is the scene changing, not a lamp
+MAX_LIT_SHARE = 0.25
 
 _CLI_HELP = """\
 Calibrate the traffic-light HSV bands from frames of each lamp, lit the way
@@ -93,6 +116,11 @@ then (any colors, each an image or a run folder):
 
     python3 -m src.scripts.calibrate_lamps red=runs/lamp_red yellow=runs/lamp_yellow green=runs/lamp_green
     python3 -m src.scripts.calibrate_lamps ... --write        also update calibration/hsv_ranges.json
+
+Record one more run with every lamp off and add it as off=, and each lens is
+also checked lit against off; its S and V floors then sit between the two:
+
+    python3 -m src.scripts.calibrate_lamps red=runs/lamp_red ... off=runs/lamps_off
 """
 
 
@@ -251,6 +279,80 @@ def hue_overlaps(per_color: dict) -> list[tuple[str, str]]:
     return out
 
 
+def _in_span(h: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    """Hues inside lo-hi, which may run past 179 for red (unwrapped)."""
+    return ((h >= lo) & (h <= hi)) | ((h + 180 >= lo) & (h + 180 <= hi))
+
+
+def lit_pixels(on_rois: list, off_rois: list) -> np.ndarray:
+    """
+    Where the lamp is: the pixels whose mean V rises at least LIT_DELTA from
+    the off run to the lit run. Whatever lights up with the lamp, the LED and
+    any reflection of it, and nothing that's there either way (the board,
+    glare, the other lenses).
+    """
+    v = lambda rois: np.mean([cv2.cvtColor(r, cv2.COLOR_BGR2HSV)[..., 2] for r in rois], axis=0)    # noqa: E731
+    return (v(on_rois) - v(off_rois)) >= LIT_DELTA
+
+
+def regions(mask: np.ndarray) -> list[tuple[float, float, int]]:
+    """Each connected region of a mask: (x, y) center and its pixels, largest first."""
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask.astype(np.uint8))
+    found = [(round(float(cents[k][0]), 1), round(float(cents[k][1]), 1), int(stats[k, cv2.CC_STAT_AREA]))
+             for k in range(1, n)]
+    return sorted(found, key=lambda r: -r[2])
+
+
+def cross_check(on_rois: list, unlit_rois: list, mask: np.ndarray) -> dict:
+    """
+    The lamp's pixels (mask) lit against the same pixels unlit.
+
+    Inputs:
+        on_rois / unlit_rois: traffic ROIs with this lamp lit / off (the off
+            run and the other lamps' runs).
+        mask: the lamp's pixels, lit_pixels().
+
+    Outputs:
+        None when the mask is empty (nothing lit up). Else {"band": {"h_lo",
+        "h_hi", "s_min", "v_min"} (h from the lit pixels' colored ones; s / v
+        the floor where a channel separates, else the lit ON_PCT percentile),
+        "s" / "v": {"on", "off", "gap", "floor"} (the lit colored pixels'
+        ON_PCT percentile, the unlit pixels' OFF_PCT percentile over those of
+        the band's hue, None if there are none, on minus off, and the floor
+        halfway between, None unless the gap is positive), "white": {"on",
+        "off"} (near-white pixels, the core gate's, per frame: ON_PCT /
+        OFF_PCT percentile), "colored": the lit colored pixels, "frames": (on, unlit)}
+    """
+    if not mask.any():
+        return None
+    gate = BlobFilter()
+    hsv = lambda rois: [cv2.cvtColor(r, cv2.COLOR_BGR2HSV)[mask].astype(float) for r in rois]    # noqa: E731
+    on, off = hsv(on_rois), hsv(unlit_rois)
+    on_all = np.vstack(on)
+    on_c = on_all[on_all[:, 1] >= MIN_LAMP_S]
+    out = {"frames": (len(on), len(off)), "colored": len(on_c)}
+    if len(on_c) < MIN_HUE_PIXELS:
+        out["band"] = None
+        return out
+    h = _unwrap(on_c[:, 0])
+    lo, hi = float(np.percentile(h, 5)) - HUE_MARGIN, float(np.percentile(h, 95)) + HUE_MARGIN
+    off_all = np.vstack(off)
+    off_c = off_all[_in_span(off_all[:, 0], lo, hi)]
+    band = {"h_lo": lo, "h_hi": hi}
+    for ch, i in (("s", 1), ("v", 2)):
+        on_lo = float(np.percentile(on_c[:, i], ON_PCT))
+        off_hi = float(np.percentile(off_c[:, i], OFF_PCT)) if len(off_c) else None
+        gap = None if off_hi is None else on_lo - off_hi
+        floor = (on_lo + off_hi) / 2 if gap is not None and gap > 0 else None
+        out[ch] = {"on": on_lo, "off": off_hi, "gap": gap, "floor": floor}
+        band[f"{ch}_min"] = on_lo if floor is None else floor
+    out["band"] = band
+    white = lambda p: int(np.count_nonzero((p[:, 2] >= gate.core_min_v) & (p[:, 1] <= gate.core_max_s)))  # noqa: E731
+    out["white"] = {"on": float(np.percentile([white(p) for p in on], ON_PCT)),
+                    "off": float(np.percentile([white(p) for p in off], OFF_PCT))}
+    return out
+
+
 # =============================================================================
 # Frames, the file and the command line
 # =============================================================================
@@ -291,16 +393,71 @@ def _parse(args: list[str]) -> dict:
     out = {}
     for a in args:
         color, sep, path = a.partition("=")
-        if not sep or color not in COLORS or not path:
-            raise ValueError(f"{a!r}: expected color=path with color one of {', '.join(COLORS)}")
+        if not sep or color not in COLORS + (OFF,) or not path:
+            raise ValueError(f"{a!r}: expected color=path with color one of {', '.join(COLORS)}, or off=path")
         out[color] = path
     return out
+
+
+def _on_off(color: str, frames: list, off_rois: list, others: list, say, warnings: list) -> dict | None:
+    """One lamp from its lit run against the off run: prints the check, returns its hsv_ranges.json entries or None."""
+    mask = lit_pixels(frames, off_rois)
+    lit = regions(mask)
+    say(f"\n{color}: {len(frames)} frame(s) lit, {len(off_rois)} off (+{len(others)} from the other lamps' runs)")
+    if mask.mean() > MAX_LIT_SHARE:
+        warnings.append(f"{color}: {100 * mask.mean():.0f}% of the traffic ROI brightened with the lamp: the scene "
+                        "changed between the runs (exposure, a shadow, the robot moved), not just the lamp. "
+                        "Record the two runs back to back without moving anything")
+    say("  lit up: " + ("nothing" if not lit else
+                        ", ".join(f"{n} px at ({x:.0f}, {y:.0f})" for x, y, n in lit[:4])))
+    if len(lit) > 1:
+        say("  (more than one place: the LED and a reflection of it, or another lamp on the same switch)")
+    cc = cross_check(frames, off_rois + others, mask)
+    if cc is None or cc["band"] is None:
+        why = ("nothing brightened by " + str(LIT_DELTA) if cc is None
+               else f"only {cc['colored']} colored pixels lit up (under {MIN_HUE_PIXELS}): the lamp clips to white")
+        say(f"  no band: {why}")
+        warnings.append(f"{color}: no band suggested; see above")
+        return None
+    say(f"              lit p{ON_PCT}   off p{OFF_PCT}     gap   floor")
+    for ch, name in (("s", "S"), ("v", "V")):
+        r = cc[ch]
+        if r["off"] is None:
+            say(f"  {name:10s}  {r['on']:5.0f}       -       -   {r['on']:5.0f} (no unlit pixel shares the hue)")
+        else:
+            say(f"  {name:10s}  {r['on']:5.0f}   {r['off']:5.0f}   {r['gap']:+5.0f}   "
+                + (f"{r['on']:5.0f} (doesn't separate: the lit p{ON_PCT})" if r["floor"] is None
+                   else f"{r['floor']:5.0f}"))
+    w = cc["white"]
+    say(f"  white px    {w['on']:5.0f}   {w['off']:5.0f}   {w['on'] - w['off']:+5.0f}   "
+        "(near-white pixels per frame, the core gate's)")
+    if all(cc[ch]["gap"] is not None and cc[ch]["gap"] <= 0 for ch in ("s", "v")):
+        if w["on"] > w["off"]:
+            tell = (f"its white center does (lit {w['on']:.0f} near-white px, off {w['off']:.0f}): only the core "
+                    "gate (BlobFilter.min_core_px) can tell an unlit lens from a lit one")
+        else:
+            tell = f"nor does its white center (lit {w['on']:.0f}, off {w['off']:.0f})"
+        say("  no band: neither S nor V separates the lamp lit from unlit; the band now in the file stays")
+        warnings.append(f"{color}: no S or V floor separates the lamp lit from unlit, so none is suggested; {tell}")
+        return None
+    e = bands_for(color, cc["band"])
+    for key, val in e.items():
+        say(f"  {key:9s} lower {val['lower']}  upper {val['upper']}")
+    area = float(np.median([blob_area(r, e) for r in frames]))
+    off_area = max(blob_area(r, e) for r in off_rois + others)
+    say(f"  blob area under it: {area:.0f} px^2 lit (median), {off_area:.0f} px^2 off (the largest)")
+    if off_area > 0:
+        warnings.append(f"{color}: with the lamp off its band still finds a blob of {off_area:.0f} px^2 (lit: "
+                        f"{area:.0f}). If that's under the lit lamp's, BlobFilter.min_area above it drops it; "
+                        "else see what it is: make phase2 VIEWS=traffic on the off run")
+    return e
 
 
 def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
     p = argparse.ArgumentParser(prog="calibrate_lamps", description=_CLI_HELP,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("lamps", nargs="+", metavar="COLOR=PATH", help="red, yellow or green = an image or a run folder")
+    p.add_argument("lamps", nargs="+", metavar="COLOR=PATH",
+                   help="red, yellow or green = an image or a run folder; off = a run with every lamp off")
     p.add_argument("--write", action="store_true", help="merge the measured bands into --out")
     p.add_argument("--out", default=str(HSV_RANGES_PATH))
     p.add_argument("--frames", type=int, default=FRAMES_PER_LAMP, help="frames read per folder")
@@ -311,9 +468,19 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
     except (ValueError, FileNotFoundError) as exc:
         say(f"ERROR: {exc}")
         return 2
+    off_rois = rois.pop(OFF, None)
+    if not rois:
+        say("ERROR: no lamp to measure: give at least one of red, yellow, green as well as off")
+        return 2
 
     entries, warnings, results = {}, [], {}
     for color, frames in rois.items():
+        if off_rois is not None:
+            others = [r for c, rs in rois.items() if c != color for r in rs]
+            e = _on_off(color, frames, off_rois, others, say, warnings)
+            if e is not None:
+                entries[color] = e
+            continue
         measures = [measure_lamp(r) for r in frames]
         colored = colored_frames(measures)
         say(f"\n{color}: {len(measures)} frame(s); per frame, the brightest spot in the traffic ROI:")
