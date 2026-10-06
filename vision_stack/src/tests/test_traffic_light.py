@@ -2,19 +2,23 @@
 test_traffic_light.py  --  src/navigation/traffic_light.py
 
 The traffic-light rule against a real tracker: red at the line waits until
-the light changes; green and caution drive on; red with no line, or a light
-that turns red after the line, says nothing; reset.
+the light has been something else for RELEASE_MS; green and caution drive
+on; red with no line, or a light that turns red after the line, says
+nothing; red seen within RED_MEMORY_MS before the line counts, older red
+doesn't; a dropped frame neither runs the light nor releases the wait; reset.
 """
 import pytest
 
 from src.navigation.navigation_contract import BRAKE
 from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
 from src.tests.navigation_checks import packet
-from src.navigation.traffic_light import RED_STATE, REASON_RED, TrafficLightRule
+from src.navigation.traffic_light import (RED_MEMORY_MS, RED_STATE, REASON_RED, RELEASE_MS,
+                                          TrafficLightRule)
 
 MS = 50
 LINE = [30.0, 15.0, 5.0]
 REACHED = len(LINE) + STOP_DELAY_MS // MS
+RELEASE = RELEASE_MS // MS          # frames after the first non-red one that still brake
 
 
 def drive(states, lines=LINE):
@@ -41,11 +45,16 @@ def test_red_is_phase_3s_stop_state():
 
 
 @pytest.mark.software
-def test_red_at_the_line_waits_until_it_changes():
+def test_the_memory_and_release_cover_a_few_frames_at_20_fps():
+    assert RED_MEMORY_MS == 500 and RELEASE_MS == 250
+
+
+@pytest.mark.software
+def test_red_at_the_line_waits_until_it_has_changed_for_release_ms():
     green_at = REACHED + 30
     _, out = drive(["stop"] * green_at + ["go"] * 20)
-    assert braked(out) == list(range(REACHED, green_at))
-    assert out[REACHED][1] == {"reason": REASON_RED} and out[green_at] == (None, {})
+    assert braked(out) == list(range(REACHED, green_at + RELEASE))
+    assert out[REACHED][1] == {"reason": REASON_RED} and out[green_at + RELEASE] == (None, {})
 
 
 @pytest.mark.software
@@ -57,8 +66,35 @@ def test_green_and_caution_drive_on(state):
 
 @pytest.mark.software
 def test_caution_after_red_releases_too():
-    _, out = drive(["stop"] * (REACHED + 5) + ["caution"] * 10)
-    assert braked(out) == list(range(REACHED, REACHED + 5))
+    _, out = drive(["stop"] * (REACHED + 5) + ["caution"] * 20)
+    assert braked(out) == list(range(REACHED, REACHED + 5 + RELEASE))
+
+
+@pytest.mark.software
+def test_red_dropped_on_the_reached_frame_still_stops():
+    states = ["stop"] * (REACHED + 30)
+    states[REACHED] = "go"
+    _, out = drive(states)
+    assert braked(out) == list(range(REACHED, REACHED + 30))
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("gap_ms, waits", [(RED_MEMORY_MS, True), (RED_MEMORY_MS + MS, False)])
+def test_red_counts_only_within_red_memory_ms_of_the_line(gap_ms, waits):
+    last_red = REACHED - gap_ms // MS
+    _, out = drive(["stop"] * (last_red + 1) + ["go"] * (REACHED + 30 - last_red - 1))
+    assert bool(braked(out)) == waits
+    if waits:
+        assert braked(out) == list(range(REACHED, REACHED + RELEASE))      # then clear for RELEASE_MS
+
+
+@pytest.mark.software
+def test_a_dropped_frame_while_waiting_does_not_release():
+    states = ["stop"] * (REACHED + 40)
+    for k in (10, 11, 20):                          # dropouts shorter than RELEASE_MS
+        states[REACHED + k] = "go"
+    _, out = drive(states)
+    assert braked(out) == list(range(REACHED, REACHED + 40))
 
 
 @pytest.mark.software
@@ -82,8 +118,10 @@ def test_red_is_watched_while_a_higher_rule_holds():
 
 
 @pytest.mark.software
-def test_reset_stops_waiting():
+def test_reset_stops_waiting_and_forgets_the_red():
     rule, out = drive(["stop"] * (REACHED + 2))
     assert braked(out)
     rule.reset()
-    assert rule.update(packet(drive_state="stop")) is None and rule.record == {}
+    assert rule.update(packet(drive_state="go")) is None and rule.record == {}
+    rule.tracker.reached = True
+    assert rule.update(packet(drive_state="go")) is None        # no red remembered from before the reset
