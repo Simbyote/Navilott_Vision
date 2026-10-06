@@ -70,8 +70,8 @@ MAX_DT_MS = 500
 # Turn duties (left, right), measured on the
 # mat (2026-10-01): left is a wide arc into the far lane, right pivots on
 # the right wheel
-LEFT_TURN = Command(0.36, 0.63)
-RIGHT_TURN = Command(0.45, 0.0)
+LEFT_TURN = Command(0.46, 0.73)
+RIGHT_TURN = Command(0.55, 0.25)
 # A turn ends once the gyro reads this many degrees turned its way: 90 less
 # the drive's coast after the turn stops (maneuver_linker's 180 turn aims
 # at 171). Tune on the mat: overshoot -> lower, short -> raise
