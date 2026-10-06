@@ -52,11 +52,13 @@ class ROIBounds:
 LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
 # Top-center, around the course's light as seen from its stop line
 # (2026-10-06: the board spans x 142-208, y 28-55 px at 480x270). Kept
-# tight: above it, the clear panel reflects each lit LED ~30 px higher (red's
-# reflection reads yellow); to the right, ~x 270, a second traffic light;
-# below, a red box on a shelf. Wider, the other light read yellow while this
-# one was green. 10 px of margin sideways, 6 up and down
-TRAFFIC = ROIBounds(x0=0.23, y0=0.09, x1=0.53, y1=0.23)
+# narrow: to the right, ~x 270, a second traffic light read yellow while
+# this one was green; below, a red box on a shelf. It runs to the top of the
+# frame: stopped further forward (at a stop sign) the light rises out of a
+# y0 of 0.09. The clear panel above the board reflects each lit LED ~30 px
+# higher (red's reads yellow), but with the swept bands the frames at the
+# stop still read 139 of 139 right with it in view (2026-10-06)
+TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
 # Upper-right: signs are posted right of the lane
 SIGN = ROIBounds(x0=0.55, y0=0.20, x1=1.00, y1=0.85)
 

@@ -371,7 +371,7 @@ def test_overlay_title_is_only_drawn_when_given():
 
 
 # Lamp radius in px: ~200 px^2, over the test blob gates' min_area, and fits
-# the default traffic ROI, 38 px tall since it was cut to the course's light (2026-10-06)
+# the default traffic ROI, 62 px tall since it was cut to the course's light (2026-10-06)
 LAMP_R = 8
 
 
