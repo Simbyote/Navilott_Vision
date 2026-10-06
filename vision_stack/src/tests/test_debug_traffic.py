@@ -62,7 +62,7 @@ def view_data(entries=(), trace=True, enabled=True, calibrated=True, masks=None,
 
 
 # Lamp radius in px: ~200 px^2, over the test blob gates' min_area, and fits
-# the default traffic ROI, 38 px tall since it was cut to the course's light (2026-10-06)
+# the default traffic ROI, 62 px tall since it was cut to the course's light (2026-10-06)
 LAMP_R = 8
 
 
