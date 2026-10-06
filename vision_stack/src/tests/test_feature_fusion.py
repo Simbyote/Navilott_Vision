@@ -370,6 +370,11 @@ def test_overlay_title_is_only_drawn_when_given():
     assert not np.array_equal(plain, titled)
 
 
+# Lamp radius in px: ~200 px^2, over the test blob gates' min_area, and fits
+# the default traffic ROI, 38 px tall since it was cut to the course's light (2026-10-06)
+LAMP_R = 8
+
+
 def build_fusion_scene(frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     """Frame with a tape, an octagon and a green light placed from the default rects; returns (roi, expected frame coords)."""
     frame = np.full((H, W, 3), 30, np.uint8)
@@ -384,7 +389,7 @@ def build_fusion_scene(frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     cv2.fillPoly(frame, [pts], (40, 40, 200))                   # stop-sign red: the sign is found by color
     tx, ty, tw, th = probe.traffic_rect
     gcx, gcy = tx + int(0.5 * tw), ty + int(0.5 * th)
-    cv2.circle(frame, (gcx, gcy), int(0.1 * min(tw, th)), (0, 255, 0), -1)
+    cv2.circle(frame, (gcx, gcy), LAMP_R, (0, 255, 0), -1)
     roi = crop_rois(preprocess_frame(FrameData(frame, frame_id, ts)), ROIConfig())
     return roi, {"lane_x": tx_lane, "sign_center": (ox, oy), "traffic_center": (gcx, gcy)}
 

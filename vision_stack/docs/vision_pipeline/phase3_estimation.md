@@ -100,7 +100,7 @@ Both use the same pattern: a confidence gate per frame, then a majority vote.
 
 Fusion already keeps at most one light and one sign per frame, so there's no candidate selection here.
 
-The traffic light path runs with `calibration/hsv_ranges.json`. Its bands were set on 2026-10-04 from `calibrate_lamps` on the course's lamp at the camera's normal exposure (red H 163-180 and 0-6, yellow 19-35, green 80-96, each 40 or more apart in hue), with S and V minimums looser than measured so other lighting doesn't drop the lamps; re-check them under the course's lighting (`calibrate_lamps.md`). The stop sign path is live, gated at 0.45 on geometry that hasn't been tuned on course frames yet. On synthetic frames every detected sign scores at least 0.53, so the gate is never reached from below there.
+The traffic light path runs with `calibration/hsv_ranges.json`. Its bands were set on 2026-10-04 from `calibrate_lamps` on the course's lamp at the camera's normal exposure (red H 163-180 and 0-6, yellow 19-35, green 80-96, each 40 or more apart in hue), with S and V minimums looser than measured so other lighting doesn't drop the lamps; re-check them under the course's lighting (`calibrate_lamps.md`). On 2026-10-06 the course's light turned out to be bare LEDs that measurement can't separate from their reflections; its floors and blob gates now come from `sweep_lamps.md`, scored on labelled frames. The stop sign path is live, gated at 0.45 on geometry that hasn't been tuned on course frames yet. On synthetic frames every detected sign scores at least 0.53, so the gate is never reached from below there.
 
 ## Stop line
 

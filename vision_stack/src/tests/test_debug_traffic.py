@@ -61,11 +61,16 @@ def view_data(entries=(), trace=True, enabled=True, calibrated=True, masks=None,
             "fused": fused, "suppressed": suppressed}
 
 
+# Lamp radius in px: ~200 px^2, over the test blob gates' min_area, and fits
+# the default traffic ROI, 38 px tall since it was cut to the course's light (2026-10-06)
+LAMP_R = 8
+
+
 def light_scene(color=(0, 0, 255), frame_id=11, ts=222, cfg=TEST_CFG):
     """Chain result for a frame with lane tape and one filled circle in the traffic ROI."""
     frame = synthetic_frame([150, 290])
     tx, ty, tw, th = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig()).traffic_rect
-    cv2.circle(frame, (tx + tw // 2, ty + th // 2), int(0.1 * min(tw, th)), color, -1)
+    cv2.circle(frame, (tx + tw // 2, ty + th // 2), LAMP_R, color, -1)
     return run_chain(frame, frame_id, ts, cfg, trace=True), frame
 
 

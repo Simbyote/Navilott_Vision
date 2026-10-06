@@ -13,6 +13,8 @@ It writes `calibration/hsv_ranges.json` with `--write`, changing only the colors
 
 **Code:** `src/scripts/calibrate_lamps.py` · **Tests:** `test_calibrate_lamps.py`
 
+**When the lamps aren't discs** (bare LEDs, reflections, another light in view), the measurement can't find a band between lamp and glow. Use `sweep_lamps.md` instead: it scores the real detector on labelled frames, with no assumption about what a lamp looks like.
+
 ---
 
 ## 1. Recording the lamps

@@ -79,10 +79,13 @@ def test_bare_pipeline_config_is_each_stages_defaults():
 @pytest.mark.software
 def test_scene_config_is_measured_without_undistortion():
     assert SCENE_CONFIG.preprocess.calibration_path is None
-    # Everything else, the color branch included, is MEASURED's; the cm
-    # calibrations (ground plane, stop-line table) are left out on purpose
+    # Everything else, the HSV bands included, is MEASURED's; the cm
+    # calibrations (ground plane, stop-line table) are left out on purpose,
+    # and the lamps get the scenes' own traffic ROI and blob gates
     assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess, ground=MEASURED.ground,
-                   stop_line_table=MEASURED.stop_line_table) == MEASURED
+                   stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color) == MEASURED
+    assert SCENE_CONFIG.color.hsv_ranges == MEASURED.color.hsv_ranges
+    assert replace(SCENE_CONFIG.roi, traffic=MEASURED.roi.traffic) == MEASURED.roi
     assert replace(SCENE_CONFIG.preprocess, calibration_path=MEASURED.preprocess.calibration_path) \
         == MEASURED.preprocess
 

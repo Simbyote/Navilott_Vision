@@ -78,13 +78,13 @@ class BlobFilter:
     passes only with min_core_px such pixels inside its outline (the hole
     counts: the outline is the outer contour) and a round enough outline.
     """
-    min_area: float = 40.0      # px^2; rejects mask speckle
+    min_area: float = 30.0      # px^2; rejects mask speckle
     # px^2; a sanity bound, not what keeps junk out (the core and roundness
     # gates do). The lamps measured red 300-400, yellow 400-500, green 700-800
     # px^2 at normal exposure, the green glowing most (2026-10-04, with the
     # robot where it stops at the light); 1200 leaves headroom for stopping
     # closer. 600 rejected every green lamp; 300 the red ones too
-    max_area: float = 500.0
+    max_area: float = 1200.0
     min_aspect: float = 0.3     # w/h; together with max_aspect, rejects elongated streaks
     max_aspect: float = 3.0
     # px^2 scoring confidence 1.0: the smallest lamp at the stop (red, 300-400).
@@ -92,17 +92,17 @@ class BlobFilter:
     # stay under max_area or no lamp can reach Phase 3's 0.40 gate (800 with a
     # 300 cap topped out at 0.35); at 350 every measured lamp scores 1.0, and
     # Phase 3's gate needs about 160 px^2
-    ref_area: float = 250.0
+    ref_area: float = 350.0
     # Outline area over its enclosing circle's: ~0.9 for a disc or a ring
     # (the hole counts), 0.64 a square, 0.38 a 3:1 bar; rejects shirts, edges
     # and streaks that the aspect gate (bounding box only) lets through
-    min_roundness: float = 0.4
+    min_roundness: float = 0.5
     # The clipped core: pixels inside the outline with V >= core_min_v and
     # S <= core_max_s. The lamps' cores read V 254-255, S 4-5 (calibrate_lamps'
     # 5th percentiles, 2026-10-04). 0 turns the gate off
-    core_min_v: int = 220
-    core_max_s: int = 50
-    min_core_px: int = 2
+    core_min_v: int = 240
+    core_max_s: int = 60
+    min_core_px: int = 3
 
 @dataclass(frozen=True)
 class ColorConfig:

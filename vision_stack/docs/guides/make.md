@@ -52,7 +52,7 @@ Options are make variables, written after the target: `make <target> NAME=value`
 | `BASE=… NEW=…` | `compare` | the two runs to compare |
 | `MINUTES=30` | `soak` | soak length (default 15) |
 | `HW_FRAMES=600` | `test-hw` | frames per hardware test (default 100) |
-| `LAMPS="red=… green=…"` | `calib-lamps` | each lamp's recording |
+| `LAMPS="red=… green=…"` | `calib-lamps`, `sweep-lamps` | each lamp's recording; for the sweep, `color=run:A-B` labels frames A to B |
 | `ARGS="…"` | every target | anything else, passed straight to the command |
 
 `ARGS` covers every flag the Makefile doesn't name, e.g. `make phase3 ARGS="--verbose"` or
@@ -77,7 +77,7 @@ make compare BASE=runs/nav_20261003_101500 NEW=runs/nav_20261005_140200
 
 - Targets that use the camera start `pigpiod` first if it isn't running (`sudo`), because the encoders,
   motors and start button need it. `phase2` and replays don't.
-- `compare`, `calib-lamps` and `render` refuse to run without their argument, and say what it is.
+- `compare`, `calib-lamps`, `sweep-lamps` and `render` refuse to run without their argument, and say what it is.
 - `make newest` shows the newest run folder of each kind; `make clean` removes Python caches only,
   never `runs/` or `artifacts/`.
 - Adding a command: add a target with a `## description` comment after the colon and add it to
