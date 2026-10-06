@@ -14,7 +14,9 @@ Purpose:
 
     Hue spans stay as they are in hsv_ranges.json; a lamp's hue is rarely
     the problem. What's swept is what took hand-tuning: each color's S and V
-    floors, and the blob gates (min_area, ref_area, roundness, core).
+    floors, and the blob gates (min_area, ref_area, roundness, core). In
+    glow mode (MEASURED.color.glow set) the bands only name each white spot's
+    ring, and only they are swept.
 
 Main package:
     parse_label(): "red=runs/nav_x:108-200" -> (label, path, frame span).
@@ -48,7 +50,7 @@ import numpy as np
 
 from src.config import MEASURED, MEASURED_ESTIMATION
 from src.params import HSV_RANGES_PATH
-from src.perception.color_branch import (BlobFilter, ColorRange, HSVRanges, find_traffic_light_candidates,
+from src.perception.color_branch import (BlobFilter, ColorRange, GlowFilter, HSVRanges, find_traffic_light_candidates,
                                          load_hsv_ranges)
 from src.scripts.calibrate_lamps import COLORS, IMAGE_SUFFIXES, traffic_roi, write_ranges
 
@@ -139,12 +141,13 @@ def read_labelled(path: str, span: tuple[int, int] | None, limit: int = FRAMES_P
 # Scoring
 # =============================================================================
 
-def detect(roi: np.ndarray, hsv: HSVRanges, blob: BlobFilter, gate: float) -> list:
+def detect(roi: np.ndarray, hsv: HSVRanges, blob: BlobFilter, gate: float, glow: GlowFilter | None = None) -> list:
     """The color branch's candidates at or above Phase 3's gate."""
-    return [c for c in find_traffic_light_candidates(roi, hsv, blob) if c.confidence >= gate]
+    return [c for c in find_traffic_light_candidates(roi, hsv, blob, glow=glow) if c.confidence >= gate]
 
 
-def color_score(samples: list, color: str, hsv: HSVRanges, blob: BlobFilter, gate: float) -> dict:
+def color_score(samples: list, color: str, hsv: HSVRanges, blob: BlobFilter, gate: float,
+                glow: GlowFilter | None = None) -> dict:
     """
     One color on its own: hits (a lamp of this color on its frames), false
     readings (one on any other frame), and the lowest hit confidence.
@@ -152,7 +155,7 @@ def color_score(samples: list, color: str, hsv: HSVRanges, blob: BlobFilter, gat
     hits = false = n = 0
     low = None
     for label, roi in samples:
-        mine = [c.confidence for c in detect(roi, hsv, blob, gate) if c.label == color]
+        mine = [c.confidence for c in detect(roi, hsv, blob, gate, glow) if c.label == color]
         if label == color:
             n += 1
             if mine:
@@ -163,22 +166,23 @@ def color_score(samples: list, color: str, hsv: HSVRanges, blob: BlobFilter, gat
     return {"hits": hits, "n": n, "false": false, "low": low, "score": hits - FALSE_WEIGHT * false}
 
 
-def reading(roi: np.ndarray, hsv: HSVRanges, blob: BlobFilter, gate: float) -> tuple[str, float | None]:
+def reading(roi: np.ndarray, hsv: HSVRanges, blob: BlobFilter, gate: float,
+            glow: GlowFilter | None = None) -> tuple[str, float | None]:
     """What the frame reads as: the highest-confidence lamp at the gate (fusion's pick), or OFF."""
-    cands = detect(roi, hsv, blob, gate)
+    cands = detect(roi, hsv, blob, gate, glow)
     if not cands:
         return OFF, None
     best = max(cands, key=lambda c: c.confidence)
     return best.label, best.confidence
 
 
-def fusion_score(samples: list, hsv: HSVRanges, blob: BlobFilter, gate: float) -> dict:
+def fusion_score(samples: list, hsv: HSVRanges, blob: BlobFilter, gate: float, glow: GlowFilter | None = None) -> dict:
     """Whole frames: label -> Counter of readings; right, wrong (a color that wasn't lit), missed; lowest right confidence."""
     table = {label: Counter() for label in LABELS}
     right = wrong = missed = 0
     low = None
     for label, roi in samples:
-        got, conf = reading(roi, hsv, blob, gate)
+        got, conf = reading(roi, hsv, blob, gate, glow)
         table[label][got] += 1
         if got == label:
             right += 1
@@ -218,14 +222,15 @@ def with_floor(hsv: HSVRanges, color: str, s: int, v: int) -> HSVRanges:
     return replace(hsv, **{color: floor(getattr(hsv, color))})
 
 
-def sweep_bands(samples: list, hsv: HSVRanges, blob: BlobFilter, gate: float) -> tuple[HSVRanges, dict]:
+def sweep_bands(samples: list, hsv: HSVRanges, blob: BlobFilter, gate: float,
+                glow: GlowFilter | None = None) -> tuple[HSVRanges, dict]:
     """Each labelled color's floors on its own; returns the new ranges and, per color, every (s, v) -> score."""
     tables = {}
     for color in COLORS:
         if not any(label == color for label, _ in samples):
             continue                                 # not lit in any frame: nothing to fit it to
         grid = [(s, v) for v in V_FLOORS for s in S_FLOORS]
-        scores = {sv: color_score(samples, color, with_floor(hsv, color, *sv), blob, gate) for sv in grid}
+        scores = {sv: color_score(samples, color, with_floor(hsv, color, *sv), blob, gate, glow) for sv in grid}
         s, v = _best([(sv, scores[sv]) for sv in grid])
         hsv = with_floor(hsv, color, s, v)
         tables[color] = scores
@@ -288,15 +293,17 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
     counts = Counter(label for label, _ in samples)
     say("frames: " + ", ".join(f"{k} {counts[k]}" for k in LABELS if counts[k]))
     blob = config.color.blob
-    before = fusion_score(samples, hsv, blob, gate)
-    say("\nnow (hsv_ranges.json, MEASURED's blob gates):")
+    glow = config.color.glow           # glow mode: the bands name the rings; no blob gates to sweep
+    before = fusion_score(samples, hsv, blob, gate, glow)
+    say(f"\nnow (hsv_ranges.json, MEASURED's {'glow mode' if glow is not None else 'blob gates'}):")
     for line in _table_lines(before):
         say(line)
 
     tables = {}
     for _ in range(ROUNDS):
-        hsv, tables = sweep_bands(samples, hsv, blob, gate)
-        blob, _scores = sweep_blob(samples, hsv, gate)
+        hsv, tables = sweep_bands(samples, hsv, blob, gate, glow)
+        if glow is None:
+            blob, _scores = sweep_blob(samples, hsv, gate)
 
     for color, scores in tables.items():
         chosen = tuple(getattr(hsv, "red_low" if color == "red" else color).lower[1:])
@@ -308,7 +315,7 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
             low = "-" if r["low"] is None else f"{r['low']:.2f}"
             mark = "   <- chosen" if (s, v) == chosen else ""
             say(f"  S {s:3d}  V {v:3d}   {r['hits']:3d} / {r['n']:3d}   false {r['false']:3d}   {low}{mark}")
-    after = fusion_score(samples, hsv, blob, gate)
+    after = fusion_score(samples, hsv, blob, gate, glow)
     say("\nswept:")
     for line in _table_lines(after):
         say(line)
@@ -317,9 +324,12 @@ def main(argv: list[str] | None = None, config=MEASURED, say=print) -> int:
     entries = bands_json(hsv)
     for k, e in entries.items():
         say(f"  {k:9s} lower {e['lower']}  upper {e['upper']}")
-    say(f"blob gates (config.py, _TRAFFIC_LIGHT_BLOB):\n  BlobFilter(min_area = {blob.min_area}, max_area = "
-        f"{blob.max_area}, ref_area = {blob.ref_area}, min_roundness = {blob.min_roundness}, "
-        f"min_core_px = {blob.min_core_px})")
+    if glow is not None:
+        say("glow mode (config.py, _TRAFFIC_LIGHT_GLOW): the bands name each white spot's ring; no blob gates swept")
+    else:
+        say(f"blob gates (config.py, _TRAFFIC_LIGHT_BLOB):\n  BlobFilter(min_area = {blob.min_area}, max_area = "
+            f"{blob.max_area}, ref_area = {blob.ref_area}, min_roundness = {blob.min_roundness}, "
+            f"min_core_px = {blob.min_core_px})")
     if after["wrong"]:
         say(f"\nWARNING: {after['wrong']} frame(s) still read as a color that wasn't lit. Something in the "
             "traffic ROI looks like a lamp (a reflection, another light): narrow roi_crop.TRAFFIC around it")

@@ -4,7 +4,8 @@ test_color_branch.py  --  src/perception/color_branch.py
 Detection tests use their own explicit HSV bands and blob filter (never the
 shipped scaffold or your calibration), synthetic ROIs with known blob positions,
 and hand-drawn masks for the blob gates. The chained tests place blobs from
-crop_rois()'s traffic_rect, so they hold for any ROI bounds.
+crop_rois()'s traffic_rect, so they hold for any ROI bounds. Glow mode gets
+LEDs drawn as a clipped white center in a colored ring, beside unlit lenses.
 
 --software  Contract, gate-wiring, loader, known-answer and chained tests.
 --hardware  Times run_color_stage per frame (live or --replay), using your
@@ -23,9 +24,9 @@ import pytest
 from src.capture.camera import FrameData
 from src.perception import color_branch as cb
 from src.perception.color_branch import (
-    BlobFilter, ColorConfig, ColorRange, HSVRanges, TrafficLightCandidate,
-    draw_candidates, extract_traffic_light_candidates, load_color_config,
-    load_hsv_ranges, run_color_stage,
+    BlobFilter, ColorConfig, ColorRange, GlowFilter, HSVRanges, TrafficLightCandidate,
+    detect_color, draw_candidates, extract_traffic_light_candidates, find_traffic_light_candidates,
+    load_color_config, load_hsv_ranges, run_color_stage,
 )
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIBounds, ROIConfig, crop_rois
@@ -722,3 +723,123 @@ def test_clipped_pixels_beside_a_shirt_dont_count_as_its_core():
     img[48:51, 88:91] = (250, 250, 250)                             # the box's corner, outside the circle
     labels, dbg = found(img)
     assert labels == [] and dbg["reject_counts"]["red"]["core"] == 1
+
+
+
+# =============================================================================
+# Glow mode: the white spot with the most white pixels, named by its ring
+# =============================================================================
+
+GLOW = GlowFilter()
+
+
+def led(roi, center, color, white_r=2, ring_r=4):
+    """A lit LED: a colored ring around a clipped white center (BGR roi, drawn in place)."""
+    cv2.circle(roi, center, ring_r, PURE[color], -1)
+    cv2.circle(roi, center, white_r, (255, 255, 255), -1)
+
+
+def glow_roi():
+    return np.full((60, 120, 3), BG, np.uint8)
+
+
+def glow_read(roi, glow=GLOW, trace=False):
+    return extract_traffic_light_candidates(roi, TEST_HSV, TEST_BLOB, 7, 70, trace=trace, glow=glow)
+
+
+@pytest.mark.software
+def test_glow_finds_a_lit_led_by_its_white_center_and_names_it_by_its_ring():
+    roi = glow_roi()
+    led(roi, (40, 30), "red")
+    cands, dbg = glow_read(roi)
+    assert [(c.label, c.confidence, c.frame_id, c.timestamp_ms) for c in cands] == [("red", 1.0, 7, 70)]
+    x, y, w, h = cands[0].bbox
+    assert x <= 38 and x + w >= 42 and y <= 28 and y + h >= 32          # the white center and its ring
+    assert dbg["reject_counts"]["red"] == {"seen": 1, "white": 0, "smaller": 0, "accepted": 1}
+
+
+@pytest.mark.software
+def test_glow_never_picks_an_unlit_lens_however_large_or_bright():
+    roi = glow_roi()
+    cv2.circle(roi, (90, 30), 14, PURE["green"], -1)                    # big, saturated, V 255: no white center
+    led(roi, (30, 30), "yellow")
+    cands, _ = glow_read(roi)
+    assert [c.label for c in cands] == ["yellow"]
+    unlit_only = glow_roi()
+    cv2.circle(unlit_only, (90, 30), 14, PURE["green"], -1)
+    assert glow_read(unlit_only)[0] == []
+
+
+@pytest.mark.software
+def test_glow_keeps_the_spot_with_the_most_white_over_a_reflection():
+    roi = glow_roi()
+    led(roi, (30, 40), "green", white_r=3, ring_r=5)
+    led(roi, (90, 15), "yellow", white_r=1, ring_r=3)                   # the dimmer reflection, read orange
+    cands, dbg = glow_read(roi, trace=True)
+    assert [c.label for c in cands] == ["green"]
+    gates = {e["label"]: e["gate"] for e in dbg["trace"]}
+    assert gates == {"green": None, "yellow": "smaller"}
+    assert all(set(e) == TRACE_KEYS for e in dbg["trace"])
+
+
+@pytest.mark.software
+def test_glow_a_white_spot_without_a_colored_ring_or_too_small_is_no_light():
+    roi = glow_roi()
+    cv2.circle(roi, (30, 30), 3, (255, 255, 255), -1)                   # glare: white, no ring color
+    roi[10, 90] = (255, 255, 255)                                       # one clipped pixel
+    cv2.circle(roi, (90, 10), 3, PURE["red"], -1)
+    roi[10, 90] = (255, 255, 255)
+    cands, dbg = glow_read(roi, trace=True)
+    assert cands == []
+    assert sorted((e["label"], e["gate"]) for e in dbg["trace"]) == [("none", "ring"), ("red", "white")]
+    assert dbg["reject_counts"]["red"]["white"] == 1
+
+
+@pytest.mark.software
+def test_glow_confidence_is_white_pixels_over_ref_white_px():
+    roi = glow_roi()
+    roi[29:31, 39:41] = 255
+    cv2.circle(roi, (40, 30), 4, PURE["red"], -1)
+    roi[29:31, 39:41] = 255                                             # 4 white px
+    cands, _ = glow_read(roi)
+    assert cands[0].confidence == round(4 / GLOW.ref_white_px, 4)
+    assert glow_read(roi, replace(GLOW, ref_white_px=2.0))[0][0].confidence == 1.0
+    assert glow_read(roi, replace(GLOW, min_white_px=5))[0] == []
+
+
+@pytest.mark.software
+def test_glow_twins_and_the_stage_agree():
+    roi = glow_roi()
+    led(roi, (40, 30), "green")
+    led(roi, (90, 30), "red", white_r=1)
+    cands, _ = glow_read(roi)
+    assert find_traffic_light_candidates(roi, TEST_HSV, TEST_BLOB, 7, 70, glow=GLOW) == cands
+    frame = np.full((FRAME_H, FRAME_W, 3), BG, np.uint8)
+    probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig())
+    tx, ty, tw, th = probe.traffic_rect
+    led(frame, (tx + tw // 2, ty + th // 2), "green", white_r=3, ring_r=6)
+    roi_res = crop_rois(preprocess_frame(FrameData(frame, 3, 30)), ROIConfig())
+    cfg = ColorConfig(TEST_HSV, TEST_BLOB, GLOW)
+    staged, dbg = run_color_stage(roi_res, cfg)
+    assert [c.label for c in staged] == ["green"] and dbg["enabled"]
+    assert detect_color(roi_res, cfg) == staged
+    assert [c.label for c in run_color_stage(roi_res, ColorConfig(TEST_HSV, TEST_BLOB))[0]] == ["green"]   # blob mode too
+
+
+@pytest.mark.software
+def test_load_color_config_carries_glow_and_leaves_it_off_by_default():
+    assert load_color_config(str(CALIB)).glow is None
+    assert load_color_config(str(CALIB), glow=GLOW).glow == GLOW
+
+
+@pytest.mark.software
+def test_glow_names_a_spot_by_its_ring_not_its_own_tinted_white():
+    # A clipped center keeps a trace of tint (S up to white_max_s); with a band
+    # whose S floor is under that, as yellow's 20 is on the robot, the center
+    # itself would vote for that band
+    hsv = replace(TEST_HSV, yellow=ColorRange((20, 20, 120), (35, 255, 255)))
+    roi = glow_roi()
+    cv2.circle(roi, (40, 30), 4, PURE["red"], -1)
+    cv2.circle(roi, (40, 30), 3, bgr_from_hsv(28, 50, 255), -1)       # white with a yellow tint, 29 px
+    cands, _ = extract_traffic_light_candidates(roi, hsv, TEST_BLOB, glow=GLOW)
+    assert [c.label for c in cands] == ["red"]

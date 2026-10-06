@@ -25,7 +25,7 @@ import src.debugger.debug_video as dv
 from src.capture.camera import FrameData
 from src.debugger.debug_traffic import COLORS, LIGHT_COLORS, TrafficView
 from src.params import GREEN, HSV_RANGES_PATH, RED, TRAFFIC_LIGHT, YELLOW
-from src.perception.color_branch import BlobFilter, ColorConfig, ColorRange, HSVRanges, load_color_config
+from src.perception.color_branch import BlobFilter, ColorConfig, ColorRange, GlowFilter, HSVRanges, load_color_config
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
 from src.phase2_linker import run_chain
@@ -83,6 +83,25 @@ def test_extract_reads_the_color_branch_and_fusion_from_a_real_chain():
     assert set(data["masks"]) == set(COLORS) and data["mask_px"][RED] > 0
     assert [c.label for c in data["accepted"]] == [RED]
     assert len(data["fused"]) == 1 and data["fused"][0].type == TRAFFIC_LIGHT
+
+
+@pytest.mark.software
+def test_glow_mode_frames_extract_render_and_log():
+    frame = synthetic_frame([150, 290])
+    tx, ty, tw, th = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), ROIConfig()).traffic_rect
+    center = (tx + tw // 2, ty + th // 2)
+    cv2.circle(frame, center, 6, (0, 0, 255), -1)
+    cv2.circle(frame, center, 3, (255, 255, 255), -1)                  # a lit LED: white center, red ring
+    cfg = replace(TEST_CFG, color=replace(TEST_CFG.color, glow=GlowFilter()))
+    chain = run_chain(frame, 11, 222, cfg, trace=True)
+    v = TrafficView()
+    data = v.extract(chain, frame)
+    assert [c.label for c in data["accepted"]] == [RED] and data["trace"][0]["gate"] is None
+    assert v.render(data).ndim == 3
+    row = v.row(data)
+    assert len(row) == len(v.CSV_FIELDS) and row[v.CSV_FIELDS.index("best_label")] == RED
+    v.observe(data)
+    assert "fusion passed a light on" in "\n".join(v.report())
 
 
 @pytest.mark.software

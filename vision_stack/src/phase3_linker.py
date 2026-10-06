@@ -36,7 +36,7 @@ from dataclasses import dataclass, field, replace
 import numpy as np
 
 from src.capture.camera import CaptureError
-from src.perception.color_branch import ColorConfig, load_hsv_ranges
+from src.perception.color_branch import load_hsv_ranges
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.phase2_linker import ChainResult, run_chain
@@ -553,8 +553,7 @@ def cli(argv: list[str] | None = None) -> int:
 
     config = MEASURED
     if args.hsv:
-        config = replace(config, color=ColorConfig(load_hsv_ranges(args.hsv),
-                                                   config.color.blob))
+        config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(args.hsv)))
     p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
 
     out_dir = args.out or str(RUNS_DIR / ("p3_" + time.strftime("%Y%m%d_%H%M%S")))

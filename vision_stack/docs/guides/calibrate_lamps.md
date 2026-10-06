@@ -62,7 +62,7 @@ With `off=`, each lamp is measured differently:
   ```
 
   Lit is the lit pixels that have a color (S ≥ 25), at their 10th percentile. Off is the unlit pixels that share the lamp's hue (only they could pass its band), at their 90th. A positive gap separates them, and the floor goes halfway; a channel that doesn't separate keeps the lit 10th percentile. Hue comes from the lit colored pixels, as before.
-- **No band when nothing separates.** If neither S nor V separates the lamp lit from unlit, it suggests no band for that color: one would pass the unlit lens. It says whether the white center separates them instead, in which case only the core gate (`BlobFilter.min_core_px`) can tell them apart. The course's red and yellow came out this way on 2026-10-06: lit V 133 / 103 against unlit 178 / 174, white center 14 / 8 against 0.
+- **No band when nothing separates.** If neither S nor V separates the lamp lit from unlit, it suggests no band for that color: one would pass the unlit lens. It says whether the white center separates them instead, in which case only the white center can tell them apart. That's glow mode, which the robot runs (`phase2_perception.md`). The course's red and yellow came out this way on 2026-10-06: lit V 133 / 103 against unlit 178 / 174, white center 14 / 8 against 0.
 - **The blob area with the lamp off:** the largest blob its new band finds in the off frames. Anything over 0 is something that would read as this color with the lamp off, and it's reported.
 
 ## 2. Measuring

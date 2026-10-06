@@ -88,3 +88,5 @@ To keep the result, save the bands with `ARGS=--write` (only `hsv_ranges.json` i
    - **Blob gates:** scored on whole frames over `MIN_AREAS` × `REF_AREAS` × `MIN_ROUNDNESS` × `MIN_CORE_PX`, the frame reading as its highest-confidence lamp at the gate, which is fusion's pick.
 
 The grids are constants at the top of the script; widen them there.
+
+**In glow mode** (`MEASURED.color.glow`, the robot's since 2026-10-06; see `phase2_perception.md`), a lamp is found by its clipped white center and the bands only name the ring around it. The sweep scores that mode, sweeps only the bands, and prints no `BlobFilter`.
