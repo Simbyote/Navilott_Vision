@@ -48,7 +48,7 @@ NEW       ?=
 MINUTES   ?= 15
 # frames per hardware test
 HW_FRAMES ?= 100
-# calib-lamps: "red=runs/lamp_red green=runs/lamp_green ..."
+# calib-lamps / sweep-lamps: "red=runs/lamp_red green=runs/nav_X:0-86 ..."
 LAMPS     ?=
 # session: the clock, "YYYY-MM-DD HH:MM" (the Pi has no clock of its own); make hands it,
 # like every NAME=value given here, to session.mk
@@ -70,7 +70,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render diag-nav diag-run monitor-attach pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
-        calib-ground calib-lamps code-cards newest clean
+        calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
 help: ## this list
@@ -189,6 +189,10 @@ calib-ground: ## floor homography from a checkerboard (ARGS="--square-cm 2.46 --
 calib-lamps: ## traffic-light HSV bands (LAMPS="red=runs/lamp_red ..."; ARGS=--write to save)
 	@test -n "$(strip $(LAMPS))" || (echo 'usage: make calib-lamps LAMPS="red=runs/lamp_red yellow=... green=..." [ARGS=--write]'; exit 2)
 	$(PY) -m src.scripts.calibrate_lamps $(strip $(LAMPS)) $(ARGS)
+
+sweep-lamps: ## sweep HSV floors + blob gates on labelled frames (LAMPS="green=runs/nav_X:0-86 red=runs/nav_X:108-200"; ARGS=--write)
+	@test -n "$(strip $(LAMPS))" || (echo 'usage: make sweep-lamps LAMPS="green=runs/nav_X:0-86 yellow=runs/nav_X:87-107 red=runs/nav_X:108-200" [ARGS=--write]'; exit 2)
+	$(PY) -m src.scripts.sweep_lamps $(strip $(LAMPS)) $(ARGS)
 
 ##@ Docs and housekeeping
 code-cards: ## one structure card per source file, into runs/code_cards/

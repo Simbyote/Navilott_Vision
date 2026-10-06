@@ -27,9 +27,9 @@ pytestmark = [pytest.mark.software,
 
 MAKEFILE = PIPELINE_ROOT / "Makefile"
 # Targets that only print or tidy, with no python command to check
-NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "calib-lamps", "render"}
+NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "calib-lamps", "sweep-lamps", "render"}
 # Arguments the guarded targets need before they run anything
-NEEDS = {"compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
+NEEDS = {"compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "sweep-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
 
 
 def make_n(target, *assigns):
