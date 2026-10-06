@@ -42,7 +42,7 @@ from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
     STOP_LINE_TABLE_PATH,
 )
-from src.perception.color_branch import ColorConfig, load_color_config
+from src.perception.color_branch import BlobFilter, ColorConfig, load_color_config
 from src.perception.geometry import GeometryConfig, StopLineFilter
 from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
@@ -95,9 +95,25 @@ class PipelineConfig:
 # homography is optional: the stop line's cm are all that reads it. Only
 # having neither warns (below), since then the stop line has no cm.
 _MEASURED_PREPROCESS = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH))
+# Traffic-light blob gates for the course's light: bare 5 mm LEDs on a teal
+# board, seen from the stop line (nav run frames at 11.4 cm, 2026-10-06). A
+# lit LED is a white center with a thin colored ring, 10-35 px^2 of color in
+# the traffic ROI, so min_area is 4 and confidence saturates at 30 (a lit red
+# ring scores over Phase 3's 0.40). The green LED's glow reaches ~700 px^2,
+# hence max_area. The white center and the red ring trace as separate blobs,
+# so the core gate is off (on, it dropped 80 of 93 red frames); the tight
+# traffic ROI (roi_crop.TRAFFIC) keeps out what it was there for. With these
+# and calibration/hsv_ranges.json: 201 of 201 frames right (87 green, 21
+# yellow, 93 red), and still right with the light 10 px off sideways or 6 px
+# up or down. ref_area 45 or the core gate back on lose yellow and red. The
+# lowest red and yellow scores were 0.46 and 0.44, close to the 0.40 gate;
+# ref_area 20 lifts them to 0.75 but lets 73 frames carry a wrong color over
+# 0.40 too (the unlit yellow lens while green is lit), against 4 at 30
+_TRAFFIC_LIGHT_BLOB = BlobFilter(min_area = 4.0, max_area = 3000.0, ref_area = 30.0, min_roundness = 0.2,
+                                 min_core_px = 0)
 MEASURED = PipelineConfig(
     preprocess = _MEASURED_PREPROCESS,
-    color = load_color_config(str(HSV_RANGES_PATH)),
+    color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     # Stop lines within 15 deg of horizontal (default 20): the near end of a

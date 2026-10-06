@@ -71,10 +71,17 @@ SYNTHETIC_STOP_LINE_TABLE = StopLineTable(a=800.0, b=160.0, c=-2.0, image_size=(
                                           undistort_alpha=0.0, lens_sha256=None, max_rows=70.0)
 
 # Synthetic frames are drawn already undistorted, and a ground plane fit on
-# real undistorted frames doesn't describe them, so both are off here
+# real undistorted frames doesn't describe them, so both are off here. Their
+# lamps are diffused discs stacked down the top center (scene()), scored
+# against the placeholder blob gates (the sizes in scene() and
+# drive_sequence()): not the course's bare LEDs, which MEASURED's blob gates
+# and traffic ROI are fit to (config.py, roi_crop.TRAFFIC, 2026-10-06)
+SCENE_TRAFFIC_ROI = ROIBounds(x0 = 0.30, y0 = 0.00, x1 = 0.60, y1 = 0.35)
 SCENE_CONFIG = replace(
     MEASURED,
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
+    roi = replace(MEASURED.roi, traffic = SCENE_TRAFFIC_ROI),
+    color = replace(MEASURED.color, blob = BlobFilter()),
     ground = None,
     stop_line_table = None,
 )

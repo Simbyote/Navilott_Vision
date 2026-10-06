@@ -114,12 +114,17 @@ ROI_CONFIGS = {
 }
 
 
+# Lamp radius in px: ~200 px^2, over the test blob gates' min_area, and fits
+# the default traffic ROI, 38 px tall since it was cut to the course's light (2026-10-06)
+LAMP_R = 8
+
+
 def build_traffic_scene(roi_cfg, frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
     """Colored blobs drawn inside the traffic rect; returns the crop result and the drawn blob centers."""
     frame = np.full((H, W, 3), BG, np.uint8)
     probe = crop_rois(preprocess_frame(FrameData(frame, 0, 0)), roi_cfg)
     tx, ty, tw, th = probe.traffic_rect
-    r = int(0.10 * min(tw, th))
+    r = LAMP_R
     spots = {"red": (0.2, 0.3), "green": (0.8, 0.3), "yellow": (0.5, 0.65)}
     expect = {}
     for label, (fx, fy) in spots.items():

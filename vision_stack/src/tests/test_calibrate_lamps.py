@@ -22,10 +22,9 @@ import pytest
 import src.scripts.calibrate_lamps as cl
 from src.params import FRAME_H, FRAME_W, HSV_RANGES_PATH
 from src.perception.color_branch import load_hsv_ranges
-from src.perception.roi_crop import TRAFFIC
-from src.tests.scenes import SCENE_CONFIG
+from src.tests.scenes import SCENE_CONFIG, SCENE_TRAFFIC_ROI as TRAFFIC
 
-CENTER = (216, 50)          # frame px: inside roi_crop.TRAFFIC (x 144-288, y 0-94 at 480x270, 2026-10-04)
+CENTER = (216, 50)          # frame px: inside SCENE_CONFIG's traffic ROI (x 144-288, y 0-94 at 480x270)
 LAMP_R, GLOW_R = 9, 24      # the drawn lamp (~250 px^2) and its glow
 BACKGROUND = (85, 11, 205)  # pale and bright, as the 2026-10-04 green profile's background
 
@@ -68,8 +67,8 @@ def write_frames(tmp_path, name, lamp, n=3):
 @pytest.mark.software
 def test_the_lamp_is_found_at_its_center_in_the_traffic_roi():
     m, _, _ = measured("green", GREEN)
-    x0 = round(TRAFFIC.x0 * FRAME_W)                       # TRAFFIC's left edge
-    assert m["center"] == pytest.approx((CENTER[0] - x0, CENTER[1]), abs=1.0)
+    x0, y0 = round(TRAFFIC.x0 * FRAME_W), round(TRAFFIC.y0 * FRAME_H)      # TRAFFIC's top-left corner
+    assert m["center"] == pytest.approx((CENTER[0] - x0, CENTER[1] - y0), abs=1.0)
 
 
 @pytest.mark.software
@@ -253,7 +252,7 @@ def test_a_lamp_at_the_edge_of_the_traffic_roi_is_reported(tmp_path):
     top = tmp_path / "top" / "frames"
     top.mkdir(parents=True)
     for i in range(2):
-        cv2.imwrite(str(top / f"{i:06d}.png"), lamp_frame(*RED, center=(216, 3)))
+        cv2.imwrite(str(top / f"{i:06d}.png"), lamp_frame(*RED, center=(216, round(TRAFFIC.y0 * FRAME_H) + 3)))
     assert cl.main([f"red={top.parent}", f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append) == 0
     assert "sits at the edge of the traffic ROI" in "\n".join(lines)
     lines.clear()
