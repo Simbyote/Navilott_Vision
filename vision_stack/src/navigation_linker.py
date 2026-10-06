@@ -54,7 +54,7 @@ from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
-from src.perception.color_branch import ColorConfig, load_hsv_ranges
+from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 
 # The run's backstop: brake and end after this long, whatever the navigator
@@ -420,7 +420,7 @@ def cli(argv: list[str] | None = None) -> int:
 
     config = MEASURED
     if args.hsv:
-        config = replace(config, color=ColorConfig(load_hsv_ranges(args.hsv), config.color.blob))
+        config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(args.hsv)))
 
     if args.render:
         fps = args.fps or FPS

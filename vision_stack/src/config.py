@@ -42,7 +42,7 @@ from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
     STOP_LINE_TABLE_PATH,
 )
-from src.perception.color_branch import BlobFilter, ColorConfig, load_color_config
+from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, load_color_config
 from src.perception.geometry import GeometryConfig, StopLineFilter
 from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
@@ -111,9 +111,17 @@ _MEASURED_PREPROCESS = PreprocessParams(calibration_path = str(CAMERA_CALIB_PATH
 # 0.40 too (the unlit yellow lens while green is lit), against 4 at 30
 _TRAFFIC_LIGHT_BLOB = BlobFilter(min_area = 4.0, max_area = 3000.0, ref_area = 30.0, min_roundness = 0.2,
                                  min_core_px = 0)
+# Glow mode (color_branch.GlowFilter): the frame's clipped-white spot with the
+# most white pixels, named by its ring's band. The blob gates above passed
+# unlit lenses at the stop light: their colored ring is no brighter than the
+# lens unlit (lit V 133 / 103 at the 10th percentile against 178 / 174 off,
+# red / yellow, calibrate_lamps with off=, 2026-10-06), and only a lit LED
+# clips white. On the 2026-10-06 frames at the stop: 196 of 196 labelled
+# right, every one at confidence 1.0; the blob gates stay for glow=None
+_TRAFFIC_LIGHT_GLOW = GlowFilter()
 MEASURED = PipelineConfig(
     preprocess = _MEASURED_PREPROCESS,
-    color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB),
+    color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB, glow = _TRAFFIC_LIGHT_GLOW),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     # Stop lines within 15 deg of horizontal (default 20): the near end of a

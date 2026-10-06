@@ -46,7 +46,7 @@ from src.debugger.estimation_debug import TracedPhase3Processor
 from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.maneuver import FORWARD_2, Maneuver, ManeuverConfig, Tick
 from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
-from src.perception.color_branch import ColorConfig, load_hsv_ranges
+from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, run_phase3_chain
 
 # --help text. Kept apart from the module docstring, which documents the code.
@@ -417,7 +417,7 @@ def cli(argv: list[str] | None = None) -> int:
         return 2
     config = MEASURED
     if args.hsv:
-        config = replace(config, color=ColorConfig(load_hsv_ranges(args.hsv), config.color.blob))
+        config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(args.hsv)))
 
     if args.render:
         saved = os.path.join(args.render, "config.json")

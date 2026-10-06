@@ -30,7 +30,7 @@ from src.capture.camera import FrameData
 from src.perception.preprocess import preprocess_frame, PreprocessResult
 from src.perception.roi_crop import crop_rois, ROICropResult
 from src.perception.geometry import run_geometry_stage, GeometryBranchResult
-from src.perception.color_branch import ColorConfig, run_color_stage, load_hsv_ranges
+from src.perception.color_branch import run_color_stage, load_hsv_ranges
 from src.perception.lane_offset import compute_lane_offset, LaneOffsetResult
 from src.perception.feature_fusion import fuse_detections, FusionResult
 from src.perception.phase2_out import package_phase2, Phase2Output
@@ -158,8 +158,7 @@ def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
         display windows and recordings under out_dir.
     """
     if hsv_path:
-        config = replace(config, color=ColorConfig(load_hsv_ranges(hsv_path),
-                                                   config.color.blob))
+        config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(hsv_path)))
 
     def process(frame_bgr, frame_id, timestamp_ms):
         return run_chain(frame_bgr, frame_id, timestamp_ms, config, trace=trace)

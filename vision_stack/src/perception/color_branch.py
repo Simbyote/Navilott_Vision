@@ -19,6 +19,15 @@ Flow:
        its middle clips to near-white inside the colored ring. A shirt, a
        wall or a sign of the same color reflects light and never does.
     4. Score survivors by area and package them with the frame identity.
+
+    Glow mode (ColorConfig.glow set): for lamps whose colored ring is no
+    brighter than the same lens unlit, the course's bare LEDs (2026-10-06),
+    where steps 3-4 read an unlit lens as lit. A lit LED clips the camera to
+    white and an unlit lens never does, so the light starts there: the
+    clipped-white spots, each named by the color band its ring of pixels
+    falls in, and the spot with the most white pixels is the frame's one
+    candidate (a traffic light shows one lamp at a time; the LED beats its
+    dimmer reflection).
 """
 import json
 from dataclasses import dataclass, field
@@ -105,10 +114,33 @@ class BlobFilter:
     min_core_px: int = 3
 
 @dataclass(frozen=True)
+class GlowFilter:
+    """
+    Glow mode's gates (see the module docstring). Measured on the course's
+    light from its stop line, 2026-10-06: a lit LED's white center held 3-31
+    clipped pixels (median 8-14), an unlit lens 0; with these, 196 of 196
+    labelled frames read right, and an unlit lens can't be picked whatever
+    its size.
+    """
+    # A clipped pixel: as BlobFilter's core gate. The lit LEDs' centers read
+    # V 240-255, S 5-20; the board's glare clips too, so the ring decides
+    white_min_v: int = 230
+    white_max_s: int = 60
+    min_white_px: int = 2       # fewer is a glint, not a lamp
+    # The ring a spot is named by: pixels within ring_px of it, in a color's
+    # band. Its dimmer colored rim is 1-3 px wide at the stop
+    ring_px: int = 2
+    min_ring_px: int = 3        # ring pixels of the winning color, or the spot has no color
+    # Confidence: white pixels over this, to 1.0. 2 px scores 0.40, Phase 3's gate
+    ref_white_px: float = 5.0
+
+
+@dataclass(frozen=True)
 class ColorConfig:
     """Color tuning as one unit, so the stage takes a single config like every other stage."""
     hsv_ranges: HSVRanges | None = None     # None leaves the branch off
     blob: BlobFilter = field(default_factory=BlobFilter)
+    glow: GlowFilter | None = None          # set: glow mode, the blob gates unused
 
 
 @dataclass
@@ -181,6 +213,7 @@ def load_hsv_ranges(json_path: str) -> HSVRanges:
 def load_color_config(
         json_path: str = DEFAULT_HSV_PATH,
         blob: BlobFilter | None = None,
+        glow: GlowFilter | None = None,
     ) -> ColorConfig:
     """
     ColorConfig with calibrated ranges, ready to switch the branch on in a PipelineConfig.
@@ -188,8 +221,9 @@ def load_color_config(
     Inputs:
         json_path: Calibration file; see load_hsv_ranges().
         blob: Blob gates. None uses the BlobFilter() placeholders.
+        glow: Glow mode's gates; None leaves the branch on the blob gates.
     """
-    return ColorConfig(load_hsv_ranges(json_path), blob or BlobFilter())
+    return ColorConfig(load_hsv_ranges(json_path), blob or BlobFilter(), glow)
 
 
 # @TODO assumes BGR; does not handle a YUV frame
@@ -440,6 +474,78 @@ def _filter_blobs(
     return candidates
 
 
+def _masks(hsv: np.ndarray, ranges: HSVRanges) -> dict:
+    return {RED: _threshold_red(hsv, ranges), YELLOW: _threshold_single(hsv, ranges.yellow),
+            GREEN: _threshold_single(hsv, ranges.green)}
+
+
+def _glow_candidates(
+    hsv: np.ndarray,
+    masks: dict,
+    glow: GlowFilter,
+    frame_id: int,
+    timestamp_ms: int,
+    reject_counts: dict | None = None,
+    trace: list[dict] | None = None,
+) -> list[TrafficLightCandidate]:
+    """
+    Glow mode: the clipped-white spot with the most white pixels, named by its ring.
+
+    Inputs:
+        masks: The color bands' masks; a ring pixel counts for each band it's in.
+        reject_counts: Filled per color with seen / white / smaller /
+            accepted (a spot without a ring color isn't a color's and isn't
+            counted).
+        trace: As _blobs_to_candidates, one entry per spot: area is its
+            white pixels, gate None (the candidate), "white" (under
+            min_white_px), "ring" (no color, label "none") or "smaller"
+            (another spot had more white).
+
+    Outputs:
+        At most one candidate.
+    """
+    white = ((hsv[..., 2] >= glow.white_min_v) & (hsv[..., 1] <= glow.white_max_s)).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(white)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * glow.ring_px + 1,) * 2)
+    rc = reject_counts if reject_counts is not None else {}
+    for c in masks:
+        for k in ("seen", "white", "smaller", "accepted"):
+            rc.setdefault(c, {}).setdefault(k, 0)
+    spots = []
+    for k in range(1, n):
+        x, y, w, h, px = (int(v) for v in stats[k])
+        y0, y1 = max(0, y - glow.ring_px), y + h + glow.ring_px
+        x0, x1 = max(0, x - glow.ring_px), x + w + glow.ring_px
+        spot = (labels[y0:y1, x0:x1] == k).astype(np.uint8)
+        ring = cv2.dilate(spot, kernel) > spot
+        votes = {c: int(np.count_nonzero(ring & (m[y0:y1, x0:x1] > 0))) for c, m in masks.items()}
+        label = max(votes, key=votes.get)
+        if votes[label] < glow.min_ring_px:
+            label = None
+        gate = "white" if px < glow.min_white_px else ("ring" if label is None else None)
+        bbox = (x0, y0, min(x1, hsv.shape[1]) - x0, min(y1, hsv.shape[0]) - y0)
+        spots.append([label, bbox, gate, px])
+    eligible = [sp for sp in spots if sp[2] is None]
+    best = max(eligible, key=lambda sp: sp[3]) if eligible else None
+    for sp in eligible:
+        if sp is not best:
+            sp[2] = "smaller"
+    for label, bbox, gate, px in spots:
+        if label is not None:
+            rc[label]["seen"] += 1
+            rc[label]["accepted" if gate is None else gate] += 1
+        if trace is not None:
+            x, y, w, h = bbox
+            trace.append({"label": label or "none", "bbox": bbox, "gate": gate, "area": float(px),
+                          "aspect": round(w / h, 3) if h else None, "fill": round(px / (w * h), 3) if w * h else None,
+                          "confidence": round(min(1.0, px / glow.ref_white_px), 4), "roundness": None,
+                          "core_px": px, "hsv": None})
+    if best is None:
+        return []
+    return [TrafficLightCandidate(label=best[0], bbox=best[1], confidence=round(min(1.0, best[3] / glow.ref_white_px), 4),
+                                  frame_id=frame_id, timestamp_ms=timestamp_ms)]
+
+
 def extract_traffic_light_candidates(
     roi: np.ndarray,
     hsv_ranges: HSVRanges,
@@ -447,6 +553,7 @@ def extract_traffic_light_candidates(
     frame_id: int = 0,
     timestamp_ms: int = 0,
     trace: bool = False,
+    glow: GlowFilter | None = None,
 ) -> tuple[list[TrafficLightCandidate], dict]:
     """
     Find traffic-light color candidates in the traffic ROI.
@@ -458,6 +565,7 @@ def extract_traffic_light_candidates(
             accepted for tuning; debug["calibrated"] reports which.
         trace: Also record every blob that reached a gate under
             debug["trace"]. Off by default; the live loop doesn't read it.
+        glow: Glow mode's gates (_glow_candidates); None: the blob gates.
 
     Outputs:
         (candidates, debug). debug is for inspection; the pipeline doesn't
@@ -483,22 +591,20 @@ def extract_traffic_light_candidates(
         )
 
     hsv = _to_hsv(roi)
+    masks = _masks(hsv, hsv_ranges)
 
-    masks = {
-        RED: _threshold_red(hsv, hsv_ranges),
-        YELLOW: _threshold_single(hsv, hsv_ranges.yellow),
-        GREEN: _threshold_single(hsv, hsv_ranges.green),
-    }
-
-    candidates = []
     reject_counts = {}
     trace_log = [] if trace else None
-    for label, mask in masks.items():
-        rc = reject_counts[label] = {}
-        candidates += _blobs_to_candidates(
-            mask, label, blob_filter, frame_id, timestamp_ms,
-            rc, trace_log, hsv,
-        )
+    if glow is not None:
+        candidates = _glow_candidates(hsv, masks, glow, frame_id, timestamp_ms, reject_counts, trace_log)
+    else:
+        candidates = []
+        for label, mask in masks.items():
+            rc = reject_counts[label] = {}
+            candidates += _blobs_to_candidates(
+                mask, label, blob_filter, frame_id, timestamp_ms,
+                rc, trace_log, hsv,
+            )
 
     debug = {
         "hsv": hsv,
@@ -522,10 +628,11 @@ def find_traffic_light_candidates(
     blob_filter: BlobFilter,
     frame_id: int = 0,
     timestamp_ms: int = 0,
+    glow: GlowFilter | None = None,
 ) -> list[TrafficLightCandidate]:
     """
     Production twin of extract_traffic_light_candidates(): no debug dict
-    (masks, pixel counts, reject counts) and no trace.
+    (masks, pixel counts, reject counts) and no trace. glow as there.
 
     Outputs:
         Candidates, red then yellow then green.
@@ -547,12 +654,9 @@ def find_traffic_light_candidates(
         )
 
     hsv = _to_hsv(roi)
-
-    masks = {
-        RED: _threshold_red(hsv, hsv_ranges),
-        YELLOW: _threshold_single(hsv, hsv_ranges.yellow),
-        GREEN: _threshold_single(hsv, hsv_ranges.green),
-    }
+    masks = _masks(hsv, hsv_ranges)
+    if glow is not None:
+        return _glow_candidates(hsv, masks, glow, frame_id, timestamp_ms)
 
     candidates = []
     for label, mask in masks.items():
@@ -588,6 +692,7 @@ def run_color_stage(
         roi.frame_id,
         roi.timestamp_ms,
         trace,
+        config.glow,
     )
     debug["enabled"] = True
     return candidates, debug
@@ -612,6 +717,7 @@ def detect_color(
         config.blob,
         roi.frame_id,
         roi.timestamp_ms,
+        config.glow,
     )
 
 _LABEL_COLORS = {   # BGR
