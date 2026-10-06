@@ -52,7 +52,7 @@ Options are make variables, written after the target: `make <target> NAME=value`
 | `BASE=… NEW=…` | `compare` | the two runs to compare |
 | `MINUTES=30` | `soak` | soak length (default 15) |
 | `HW_FRAMES=600` | `test-hw` | frames per hardware test (default 100) |
-| `LAMPS="red=… green=…"` | `calib-lamps`, `sweep-lamps` | each lamp's recording; for the sweep, `color=run:A-B` labels frames A to B |
+| `LAMPS="red=… green=…"` | `calib-lamps`, `sweep-lamps` | each lamp's recording, and `off=` a run with every lamp off; for the sweep, `color=run:A-B` labels frames A to B |
 | `ARGS="…"` | every target | anything else, passed straight to the command |
 
 `ARGS` covers every flag the Makefile doesn't name, e.g. `make phase3 ARGS="--verbose"` or

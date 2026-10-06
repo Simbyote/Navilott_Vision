@@ -316,3 +316,135 @@ def test_each_frame_reports_its_clipped_core_and_a_lamp_that_doesnt_clip_is_warn
     assert "yellow: the lamp doesn't clip" in text and "green: the lamp doesn't clip" not in text
     m = cl.measure_lamp(cl.traffic_roi(lamp_frame(*GREEN), SCENE_CONFIG))
     assert m["core_px"] >= 25                                       # the drawn core: r 3, V 255, S 30
+
+
+# =============================================================================
+# Lit against off (an off= run)
+# =============================================================================
+
+# HSV: a lens's colored plastic unlit, and its LED lit: a white center, a colored
+# ring and a dimmer colored glow past it, as the course's LEDs (2026-10-06)
+LENS_OFF = {"red": (178, 200, 120), "green": (80, 200, 110)}
+LENS_LIT = {"red": (178, 200, 245), "green": (80, 200, 245)}
+GLOW_V = 170
+BRIGHT_UNLIT_V = 215        # an unlit lens brighter than the lit LED's glow: V can't separate them
+LENS_AT = {"red": (196, 50), "green": (236, 50)}
+BOARD_HSV = (85, 200, 100)          # teal, under the lenses
+
+
+def light(lit=None, unlit_like=None, brighter=0, red_box=False):
+    """
+    A teal board with a red and a green lens; lit= lights one; unlit_like=
+    draws that unlit lens bright; red_box= adds a bright red box beside the
+    light, there lit or not.
+    """
+    hsv = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
+    hsv[:] = (0, 0, 60 + brighter)
+    cv2.rectangle(hsv, (180, 38), (252, 62), BOARD_HSV, -1)
+    if red_box:
+        cv2.rectangle(hsv, (160, 70), (172, 82), (178, 220, 240), -1)
+    for color, at in LENS_AT.items():
+        if color == lit:
+            cv2.circle(hsv, at, 7, (LENS_LIT[color][0], 200, GLOW_V), -1)
+            cv2.circle(hsv, at, 5, LENS_LIT[color], -1)
+            cv2.circle(hsv, at, 2, (0, 0, 255), -1)                 # the white center
+        elif color == unlit_like:
+            cv2.circle(hsv, at, 5, (LENS_OFF[color][0], 200, BRIGHT_UNLIT_V), -1)
+        else:
+            cv2.circle(hsv, at, 5, LENS_OFF[color], -1)
+    return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+
+def write_light(tmp_path, name, n=3, **kw):
+    folder = tmp_path / name / "frames"
+    folder.mkdir(parents=True)
+    for i in range(n):
+        cv2.imwrite(str(folder / f"{i:06d}.png"), light(**kw))
+    return folder.parent
+
+
+def on_off(tmp_path, *labels):
+    (tmp_path / "x.json").write_text(HSV_RANGES_PATH.read_text())     # --write merges into a full file
+    lines = []
+    code = cl.main([*labels, f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append)
+    return code, "\n".join(lines)
+
+
+@pytest.mark.software
+def test_the_lamps_pixels_are_what_lights_up_between_the_off_run_and_its_run():
+    on = [cl.traffic_roi(light("red"), SCENE_CONFIG)] * 2
+    off = [cl.traffic_roi(light(), SCENE_CONFIG)] * 2
+    found = cl.regions(cl.lit_pixels(on, off))
+    x0 = TRAFFIC.x0 * FRAME_W
+    assert len(found) == 1 and found[0][0] == pytest.approx(LENS_AT["red"][0] - x0, abs=1.5)
+    assert found[0][1] == pytest.approx(LENS_AT["red"][1], abs=1.5)
+
+
+@pytest.mark.software
+def test_v_floors_sit_between_each_lamp_lit_and_off(tmp_path):
+    red, green, off = (write_light(tmp_path, "r", lit="red"), write_light(tmp_path, "g", lit="green"),
+                       write_light(tmp_path, "o"))
+    code, out = on_off(tmp_path, f"red={red}", f"green={green}", f"off={off}", "--write")
+    assert code == 0 and "no band" not in out
+    bands = load_hsv_ranges(str(tmp_path / "x.json"))
+    for color, entry in (("red", bands.red_high), ("green", bands.green)):
+        assert LENS_OFF[color][2] < entry.lower[2] < LENS_LIT[color][2], color
+    assert "0 px^2 off (the largest)" in out and "with the lamp off its band still finds" not in out
+    assert "(+3 from the other lamps' runs)" in out
+
+
+@pytest.mark.software
+def test_an_unlit_lens_as_bright_as_a_lit_one_gets_no_band_and_points_at_the_white_center(tmp_path):
+    red, off = write_light(tmp_path, "r", lit="red"), write_light(tmp_path, "o", unlit_like="red")
+    code, out = on_off(tmp_path, f"red={red}", f"off={off}", "--write")
+    assert "no S or V floor separates the lamp lit from unlit" in out and "its white center does" in out
+    assert code == 1 and "nothing written" in out          # the only lamp gave no band
+
+
+@pytest.mark.software
+def test_the_whole_scene_brightening_is_reported(tmp_path):
+    red, off = write_light(tmp_path, "r", lit="red", brighter=60), write_light(tmp_path, "o")
+    _, out = on_off(tmp_path, f"red={red}", f"off={off}")
+    assert "the scene changed between the runs" in out
+
+
+@pytest.mark.software
+def test_off_alone_is_refused_and_off_is_a_label():
+    assert cl._parse(["red=a", "off=b"]) == {"red": "a", "off": "b"}
+    lines = []
+    assert cl.main(["off=x"], config=SCENE_CONFIG, say=lines.append) == 2
+
+
+@pytest.mark.software
+def test_cross_check_with_nothing_lit_is_none():
+    roi = cl.traffic_roi(light(), SCENE_CONFIG)
+    assert cl.cross_check([roi], [roi], np.zeros(roi.shape[:2], bool)) is None
+
+
+@pytest.mark.software
+def test_something_the_band_finds_with_the_lamp_off_is_reported(tmp_path):
+    red, off = write_light(tmp_path, "r", lit="red", red_box=True), write_light(tmp_path, "o", red_box=True)
+    _, out = on_off(tmp_path, f"red={red}", f"off={off}")
+    assert "lit up: " in out and "with the lamp off its band still finds a blob" in out
+
+
+def patch(bgr_hsv, size=(20, 20)):
+    """A ROI of one HSV color."""
+    return cv2.cvtColor(np.full((*size, 3), bgr_hsv, np.uint8), cv2.COLOR_HSV2BGR)
+
+
+@pytest.mark.software
+def test_floors_are_halfway_and_come_from_the_lamps_colored_pixels_and_the_unlit_ones_of_its_hue():
+    mask = np.zeros((20, 20), bool)
+    mask[5:15, 5:15] = True
+    lit = patch((178, 200, 240))
+    lit[8:12, 8:12] = (255, 255, 255)                                   # the white center: no hue, no S
+    off = patch((178, 150, 140))
+    cc = cl.cross_check([lit], [off], mask)
+    assert cc["s"]["on"] >= cl.MIN_LAMP_S                               # the white center isn't counted
+    assert cc["v"]["floor"] == pytest.approx((cc["v"]["on"] + cc["v"]["off"]) / 2)
+    assert cc["v"]["off"] < cc["v"]["floor"] < cc["v"]["on"] and cc["band"]["v_min"] == cc["v"]["floor"]
+    assert cc["white"] == {"on": 16.0, "off": 0.0}
+    other_hue = patch((90, 220, 250))                                   # bright, but no red could pass for it
+    cc = cl.cross_check([lit], [other_hue], mask)
+    assert cc["v"]["off"] is None and cc["v"]["floor"] is None and cc["band"]["v_min"] == cc["v"]["on"]

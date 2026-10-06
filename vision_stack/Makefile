@@ -186,7 +186,7 @@ calib-stopline: ## stop-line distance in cm from tape marks, one at a time
 calib-ground: ## floor homography from a checkerboard (ARGS="--square-cm 2.46 --origin-x-cm -9.8")
 	$(PY) -m src.scripts.calibrate_ground $(ARGS)
 
-calib-lamps: ## traffic-light HSV bands (LAMPS="red=runs/lamp_red ..."; ARGS=--write to save)
+calib-lamps: ## traffic-light HSV bands (LAMPS="red=runs/lamp_red ... off=runs/lamps_off"; ARGS=--write to save)
 	@test -n "$(strip $(LAMPS))" || (echo 'usage: make calib-lamps LAMPS="red=runs/lamp_red yellow=... green=..." [ARGS=--write]'; exit 2)
 	$(PY) -m src.scripts.calibrate_lamps $(strip $(LAMPS)) $(ARGS)
 
