@@ -51,18 +51,22 @@ from src.params import MODE_LEFT_ONLY, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY
 from src.navigation.route import LEFT, RIGHT, STRAIGHT, RouteProgress
 from src.navigation.stop_line import CROSSING, StopLineTracker
 
-# Both boundaries this many frames in a row ends the crossing (~0.15 s at
-# 20 FPS); one frame could be a stray mark
+# Both boundaries this many frames in a row ends the crossing (~0.5 s at
+# 20 FPS). 3 ended it as soon as the far side's lane lines showed, and the
+# next lane's stop line was taken up right after a straight crossing; the
+# crossing keeps new stop lines out while it lasts (2026-10-05)
 TWO_BOUNDARY_FRAMES = 10
 # At least one boundary (two, or left_only / right_only) this many frames in
 # a row also ends it: past some intersections the camera sees only one lane
 # line, and the crossing never ended (2026-10-01 run: right_only for 5 s,
 # the robot pressed against the right line). Longer than TWO_BOUNDARY_FRAMES,
-# since one line is weaker evidence than two (~0.3 s at 20 FPS)
+# since one line is weaker evidence than two (~1 s at 20 FPS; 6 until
+# 2026-10-05, raised with it)
 ONE_BOUNDARY_FRAMES = 20
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # Driving time in STAGE_EXIT before lane keeping takes over anyway; a guess
-# at crossing one intersection, tuned on the mat (3 s, 2026-10-01)
+# at crossing one intersection, tuned on the mat (3 s 2026-10-01, 4 s
+# 2026-10-05 with the longer boundary counts)
 MAX_CROSS_MS = 4000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500

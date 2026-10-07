@@ -61,7 +61,7 @@ def test_measured_runs_the_color_branch_with_the_calibrated_ranges():
 def test_measured_keeps_the_swept_lane_gates():
     lo = MEASURED.lane_offset
     assert (lo.conf_threshold, lo.min_proximity, lo.max_width_px, lo.min_intensity) \
-        == (0.25, 0.05, 45.0, 130.0)
+        == (0.25, 0.05, 45.0, 90.0)
 
 
 @pytest.mark.software
@@ -235,9 +235,9 @@ def test_the_route_file_config_points_at_loads():
 
 
 @pytest.mark.software
-def test_measured_takes_stop_lines_within_15_degrees_and_keeps_the_rest_of_the_geometry():
+def test_measured_takes_stop_lines_within_5_degrees_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, StopLineFilter
-    assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=15.0))
+    assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=5.0))
 
 
 @pytest.mark.software

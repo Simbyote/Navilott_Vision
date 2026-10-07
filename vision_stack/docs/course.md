@@ -18,7 +18,7 @@ Values marked **TBD** haven't been measured or written down yet.
 | Intersection square | about 28–30 cm per side | Future intersection detection |
 | Center line | Dashed. Dash and gap length; 4 cm ech | Minimum line length for steering (so dashes don't anchor a boundary) |
 | Surface / marking | White tape on dark mats | Edge thresholds and the minimum brightness gates |
-| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `geometry.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (15° in `MEASURED`). Check all three against real captures |
+| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `geometry.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (5° in `MEASURED`). Check all three against real captures |
 
 **How lane width is measured:** from the center of one line to the center of the other.
 

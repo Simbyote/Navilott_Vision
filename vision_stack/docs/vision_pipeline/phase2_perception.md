@@ -170,7 +170,7 @@ The kept edges split by polarity: a **top** edge (brightness rising going down, 
 | Gate | Default | Rejects |
 | --- | --- | --- |
 | `short` | length ≥ 60 px | Anything as short as a lane-tape width (up to ~41 px), such as the end of a dash |
-| `tilt` | ≤ 20° (`MEASURED`: 15°) | Edges fitted steeper than the split allowed. `MEASURED` uses 15°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run) |
+| `tilt` | ≤ 20° (`MEASURED`: 5°) | Edges fitted steeper than the split allowed. `MEASURED` uses 5°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run), 15° until 2026-10-05 |
 | `unpaired` | a bottom edge 3–40 px below, overlapping half the shorter edge | Single edges, and bars thicker than tape |
 | `intensity` | mean between the edges ≥ 130 | Shadow edges and dim patches |
 

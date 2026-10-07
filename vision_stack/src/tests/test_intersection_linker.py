@@ -20,6 +20,7 @@ from src.config import GYRO_BIAS_DPS
 from src.estimation.estimation import SensorSample
 from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO, TURN_END_TIME
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
+from src.navigation.stop_line import STOP_DELAY_MS
 from src.tests.scenes import SCENE_CONFIG, scene
 from src.tests.sim_robot import FakeClock
 
@@ -32,7 +33,7 @@ def sequence(maneuver):
     out = [(scene(), 0.0)] * 6
     for y in (10, 30, 60, 70):
         out += [(scene(stop_line=(120, 320, y)), 0.0)] * 3
-    out += [(scene(marks=()), 0.0)] * 30                               # to the line (STOP_DELAY_MS)
+    out += [(scene(marks=()), 0.0)] * round(STOP_DELAY_MS / 1000 / DT)  # to the line
     yaw = {LEFT: -YAW_DPS, RIGHT: YAW_DPS}.get(maneuver)
     if yaw:
         out += [(scene(marks=()), yaw)] * 30                           # the turn: 90 deg on the gyro
@@ -104,7 +105,8 @@ def test_each_sequence_turns_its_way_holds_the_lane_after_and_passes(tmp_path, m
     findings, motor, source = go(tmp_path, maneuver)
     assert findings["ended_by"] == il.SEQUENCE_DONE and findings["intersections"] == 1
     assert findings["verdict"] == "PASS", il.judge(findings)[1]
-    assert findings["stage_s"][STAGE_TO_LINE] > 1.0 and findings["stage_s"][STAGE_EXIT] > 0.0
+    assert findings["stage_s"][STAGE_TO_LINE] == pytest.approx(STOP_DELAY_MS / 1000, abs=2 * DT)
+    assert findings["stage_s"][STAGE_EXIT] > 0.0
     if duties:
         assert ("drive", *duties) in motor.calls and findings["turn_end"] == TURN_END_GYRO
         assert findings["stage_s"][STAGE_TURN] > 1.0

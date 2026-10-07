@@ -26,7 +26,7 @@ def feed(tracker, seq):
 
 @pytest.mark.software
 def test_the_constants_follow_the_calibration_and_the_runs():
-    assert STOP_DELAY_MS == 1500 and NEAR_BOTTOM_ROWS == 25.0
+    assert STOP_DELAY_MS == 500 and NEAR_BOTTOM_ROWS == 25.0
 
 
 @pytest.mark.software

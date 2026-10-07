@@ -56,7 +56,8 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (3, 6, 3000, 500)
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
+    assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 
 @pytest.mark.software
@@ -125,7 +126,8 @@ def test_one_boundary_for_one_boundary_frames_after_the_line_ends_it(mode):
 
 @pytest.mark.software
 def test_one_and_two_boundary_frames_count_together_toward_one_boundary_frames():
-    mixed = [{"lane_mode": m} for m in ("right_only", "two_boundary", "left_only")] * 2
+    cycle = ("right_only", "two_boundary", "left_only")             # never TWO_BOUNDARY_FRAMES of two in a row
+    mixed = [{"lane_mode": cycle[i % 3]} for i in range(ONE_BOUNDARY_FRAMES)]
     after = [{"lane_mode": "none"}] * (REACHED - LOST + 5) + mixed + [{"lane_mode": "none"}] * 5
     _, out = drive(after)
     end = LOST + (REACHED - LOST + 5) + ONE_BOUNDARY_FRAMES - 1
@@ -144,7 +146,7 @@ def test_active_is_true_from_the_line_leaving_until_the_crossing_ends():
     rule = IntersectionRule(tracker, LaneKeepingNavigator())
     seen = []
     seq = ([{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "none"} for r in LINE]
-           + [{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "two_boundary"}] * 5)
+           + [{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "two_boundary"}] * (TWO_BOUNDARY_FRAMES + 2))
     for i, fields in enumerate(seq):
         p = packet(frame_id=i, timestamp_ms=i * MS, **fields)
         tracker.update(p)
@@ -199,7 +201,7 @@ TURN_FRAMES = int(TURN_TARGET_DEG / YAW_DPS * 1000) // MS + 1
 def turn_case(yaw, turn_frames=TURN_FRAMES, after=None):
     """Straight to the line, turning at yaw for turn_frames, then after (lane back by default)."""
     return ([{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "none", "yaw_rate": yaw}] * turn_frames
-            + (after if after is not None else [{"lane_mode": "two_boundary"}] * 5))
+            + (after if after is not None else [{"lane_mode": "two_boundary"}] * (TWO_BOUNDARY_FRAMES + 2)))
 
 
 def stages(out):

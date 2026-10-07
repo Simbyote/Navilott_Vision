@@ -113,7 +113,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
-- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
+- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
