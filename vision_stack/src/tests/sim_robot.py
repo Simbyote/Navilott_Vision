@@ -7,8 +7,10 @@ reports that turn with a chosen sign convention and a constant bias, as the
 sensing hub delivers it, so the yaw-sign check and the bias measurement have
 something real to find. Readings go through sensing.SensorBatch, so the wheel
 speeds are the hub's own count-delta math.
-Time is a FakeClock the tests advance; nothing sleeps.
+Time is a FakeClock the tests advance; nothing sleeps. FakeBattery stands in
+for diagnostics.battery.Power in the runs that watch the pack.
 """
+from src.diagnostics.battery_state import BatteryState
 from src.estimation.estimation import SensorSample
 from src.peripherals.sensing import SensorBatch, SensorReading
 
@@ -20,6 +22,44 @@ class FakeClock:
 
     def __call__(self):
         return self.now
+
+
+class FakeBattery:
+    """
+    diagnostics.battery.Power stand-in: a pack draining volts_step per
+    should_stop() check (once per frame in the runs) from start_v, CRITICAL
+    once it reaches critical_at (None: never). log gets "battery started" /
+    "battery released".
+    """
+    VOLTAGE_WARNING, VOLTAGE_CRITICAL = 10.5, 9.9
+
+    def __init__(self, start_v=12.0, volts_step=0.0, critical_at=None, log=None, start_fails=False):
+        self.v, self.step, self.critical_at = start_v, volts_step, critical_at
+        self.log = log if log is not None else []
+        self.start_fails, self.checks = start_fails, 0
+
+    def start_monitoring(self, interval_s=1.0):
+        if self.start_fails:
+            raise OSError("ADC read failed")
+        self.log.append("battery started")
+
+    def should_stop(self):
+        self.checks += 1
+        self.v = round(self.v - self.step, 3)
+        return self.critical_at is not None and self.checks >= self.critical_at
+
+    def voltage(self):
+        return self.v
+
+    def state(self):
+        return BatteryState.CRITICAL if self.critical_at is not None and self.checks >= self.critical_at \
+            else BatteryState.OK
+
+    def sensor_ok(self):
+        return True
+
+    def cleanup(self):
+        self.log.append("battery released")
 
 
 class SimRobot:

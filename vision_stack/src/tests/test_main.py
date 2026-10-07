@@ -3,9 +3,9 @@ test_main.py  --  src/main.py
 
 The production run end to end on a synthetic course with fake hardware:
 the start screen and the button, the motors getting exactly the pipeline's
-commands, every way a run ends (finished, ended early, the cap, Ctrl-C,
-an error) with the motors halted first, the end screens, and the command
-line's startup checks. Production records nothing and imports no linker
+commands, every way a run ends (finished, ended early, the cap, a critical
+battery, Ctrl-C, an error) with the motors halted first, the end screens,
+and the command line's startup checks (a critical pack at rest refuses). Production records nothing and imports no linker
 or debugger.
 
 --software  run() / cli() with fakes. No camera, motors or GPIO.
@@ -23,7 +23,7 @@ from src.navigation.route import Route
 from src.params import PIPELINE_ROOT
 from src.pipeline import Pipeline
 from src.tests.scenes import SCENE_CONFIG, course_sequence
-from src.tests.sim_robot import FakeClock
+from src.tests.sim_robot import FakeBattery, FakeClock
 
 COURSE = course_sequence()
 DT = 0.05
@@ -113,14 +113,15 @@ class System:
         self.log.append(f"display released (blank={blank})")
 
 
-def go(route=Route(("left",)), max_run_s=main.MAX_RUN_S, system_kw=None, motor_kw=None, **camera_kw):
+def go(route=Route(("left",)), max_run_s=main.MAX_RUN_S, system_kw=None, motor_kw=None, battery=None,
+       **camera_kw):
     clock, log = FakeClock(), []
     camera = Camera(clock, log, **camera_kw)
     sensors, motor, system = Sensors(camera, log), Motor(log, **(motor_kw or {})), System(log, **(system_kw or {}))
     pipeline = Pipeline(SCENE_CONFIG, route=route)
     sleeps = []
     result = main.run(camera, sensors, motor, pipeline, system, route, clock=clock, sleep=sleeps.append,
-                      max_run_s=max_run_s)
+                      max_run_s=max_run_s, battery=battery)
     return result, motor, system, log, pipeline, sleeps
 
 
@@ -165,6 +166,24 @@ def test_the_run_time_cap_ends_it_and_halts():
     result, motor, _, log, _, _ = go(max_run_s=CAP_S)
     assert result.ended_by == main.END_CAP and result.frames == CAP_FRAMES and result.end_step == 0
     assert log[-4:] == ["brake", "motor stop", "sensors stopped", "camera released"]
+
+
+@pytest.mark.software
+def test_a_critical_battery_ends_the_run_and_halts():
+    battery = FakeBattery(critical_at=8)
+    result, motor, _, log, _, _ = go(battery=battery)
+    assert result.ended_by == main.END_BATTERY and result.frames == 7          # checked before each frame
+    assert log[-4:] == ["brake", "motor stop", "sensors stopped", "camera released"]
+    assert "battery started" in battery.log
+
+
+@pytest.mark.software
+def test_a_healthy_battery_or_one_that_wont_start_changes_nothing():
+    healthy, _, _, _, _, _ = go(battery=FakeBattery())
+    broken, _, _, _, _, _ = go(battery=FakeBattery(start_fails=True))
+    plain, _, _, _, _, _ = go()
+    assert healthy.ended_by == broken.ended_by == plain.ended_by == main.END_FINISHED
+    assert healthy.frames == broken.frames == plain.frames
 
 
 @pytest.mark.software
@@ -237,7 +256,7 @@ def test_early_code(step, code):
 @pytest.mark.software
 @pytest.mark.parametrize("ended_by, screens", [
     (main.END_FINISHED, [42.5]), (main.END_INTERRUPT, [42.5]), (main.END_ERROR, ["Err "]),
-    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5])])
+    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5]), (main.END_BATTERY, ["Lo-b", 42.5])])
 def test_end_screen(ended_by, screens):
     assert main.end_screen(main.RunResult(ended_by, 42.5, 100, 2)) == screens
 
@@ -329,6 +348,33 @@ def test_cli_hardware_that_wont_open_exits_2_and_releases_the_rest(hardware, cap
     assert main.cli([]) == 2
     assert "hardware error" in capsys.readouterr().out
     assert log[-3:] == ["sensors stopped", "motor stop", "display released (blank=True)"]
+
+
+@pytest.mark.software
+def test_cli_a_critical_pack_at_rest_refuses_shows_lo_b_and_releases_everything(hardware, monkeypatch, capsys):
+    made, log = hardware
+    battery = FakeBattery(start_v=9.6, log=log)
+    battery.preflight = lambda: (False, 9.6)
+    monkeypatch.setattr(main.battery_run, "open_battery", lambda: battery)
+    monkeypatch.setattr(main, "run", lambda *a, **kw: pytest.fail("ran on a critical pack"))
+    assert main.cli([]) == 2
+    assert "critical" in capsys.readouterr().out and made["system"].screens == ["Lo-b"]
+    assert log[-5:] == ["camera released", "sensors stopped", "motor stop", "battery released",
+                        "display released (blank=False)"]
+
+
+@pytest.mark.software
+def test_cli_a_low_pack_warns_runs_with_the_battery_and_releases_it(hardware, monkeypatch, capsys):
+    made, log = hardware
+    battery = FakeBattery(start_v=10.3, log=log)
+    battery.preflight = lambda: (False, 10.3)
+    monkeypatch.setattr(main.battery_run, "open_battery", lambda: battery)
+    seen = {}
+    monkeypatch.setattr(main, "run", lambda *a, **kw: seen.update(kw) or main.RunResult(main.END_FINISHED, 1.0, 20, 0))
+    assert main.cli([]) == 0
+    out = capsys.readouterr().out
+    assert "10.30 V: under 10.5 V (low)" in out and "battery  10.30 V at the end" in out
+    assert seen["battery"] is battery and "battery released" in log
 
 
 @pytest.mark.software

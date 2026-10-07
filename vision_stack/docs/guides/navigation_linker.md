@@ -58,6 +58,8 @@ The motors stop first however the run ends.
 
 ---
 
+**The battery** (with `--camera` only): checked at rest before the start, as in a course run (`production_run.md`), except that on the bench (`--no-motors`) a critical pack only warns, since nothing moves. It's watched from the start: a critical pack ends the run (`ended by battery critical`), and `summary.txt` gets a line with the start, lowest and end voltage. The lowest under load, against `stop_line_cm` and where the robot stopped, shows whether a sagging pack is what moves the stop (`STOP_DELAY_MS` is a time).
+
 ## 3. Running it on the mat
 
 Place the robot in its lane, pointing along it, with clear space ahead.
@@ -95,7 +97,7 @@ Everything goes to `runs/nav_<timestamp>/`.
 
 - **Timings:** `capture_ms`, `phase2_ms`, `phase3_ms`, `nav_ms`, `latency_ms`.
 - **Packet fields the navigator used:** lane status, offset (and cm), heading, light, stop sign, stop line cm, wheel counts per second.
-- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
+- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, `battery_v` and `battery_state` (the pack's smoothed volts and OK / WARNING / CRITICAL; empty without the ADC or on a replay), and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
 
 **`nav.avi`**: the Phase 3 video with a strip under it:
 

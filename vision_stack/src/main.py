@@ -17,8 +17,15 @@ Purpose:
                           and the time until Ctrl-C.
         run time cap      MAX_RUN_S, a backstop in case the end is never
                           seen: alternates "E  t" and the time, as above.
+        battery critical  the pack fell to CRITICAL (Power.should_stop):
+                          alternates "Lo-b" and the time, as above.
         Ctrl-C            the time so far stays up.
         error             "Err " stays up; the traceback is printed.
+
+    The battery (diagnostics.battery_run): checked at rest before the start
+    screen, where a critical pack refuses to start ("Lo-b", exit 2) and a
+    low one warns, then watched during the run. Without the ADC it says so
+    and runs unmonitored.
 
 Main package:
     run(): one run, from the button to the halt; returns a RunResult.
@@ -28,10 +35,11 @@ Main package:
 Flow:
     1. load_route(), print the plan; open the camera, sensors, motors and
        display; build the Pipeline. A bad route or missing hardware exits 2
-       before anything moves.
+       before anything moves; so does a critical pack at rest.
     2. "St N" until the button, then the countdown.
     3. Per frame: camera -> Pipeline.step(frame, sensors) -> motors; time on
-       the display; until Navigation finishes, the cap, Ctrl-C or an error.
+       the display; until Navigation finishes, the cap, a critical battery,
+       Ctrl-C or an error.
     4. Halt the motors, release the camera and sensors.
     5. The end screen; release the display without blanking it.
 """
@@ -43,6 +51,8 @@ from dataclasses import dataclass
 
 from src.capture.camera import CameraSource, CaptureError
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
+from src.diagnostics import battery_run
+from src.diagnostics.battery_run import CODE_BATTERY
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W
@@ -61,6 +71,7 @@ ALTERNATE_S = 2.0
 
 END_FINISHED, END_EARLY, END_CAP, END_INTERRUPT, END_ERROR = (
     "finished", "ended early", "run time cap", "interrupted (Ctrl-C)", "error")
+END_BATTERY = "battery critical"
 CODE_CAP, CODE_ERROR = "E  t", "Err "
 
 
@@ -112,7 +123,7 @@ def halt(motor, sleep=time.sleep) -> None:
 
 
 def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
-        clock=time.monotonic, sleep=time.sleep, max_run_s: float = MAX_RUN_S) -> RunResult:
+        clock=time.monotonic, sleep=time.sleep, max_run_s: float = MAX_RUN_S, battery=None) -> RunResult:
     """
     One run, from the start button to the halt.
 
@@ -126,6 +137,8 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         route: For the start screen.
         clock, sleep: Seconds, monotonic; injected by tests.
         max_run_s: Brake and end once this long has passed since GO.
+        battery: diagnostics.battery.Power, or None: monitored from GO, and
+            the run ends once it should_stop() (CRITICAL).
 
     Outputs:
         The RunResult. The display is left for end_screen().
@@ -139,10 +152,15 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         system.wait_for_start(step_text(route))
         system.run_countdown()
         sensors.sample()                                # start the first window at GO
+        if battery is not None and not battery_run.start(battery):
+            battery = None
         t0 = clock()
         while True:
             if clock() - t0 >= max_run_s:
                 ended_by = END_CAP
+                break
+            if battery is not None and battery.should_stop():
+                ended_by = END_BATTERY
                 break
             fd = camera.read()
             if fd is None:                              # a dropped frame: no id spent, carry on
@@ -188,6 +206,8 @@ def end_screen(result: RunResult) -> list:
         return [early_code(result.end_step), result.elapsed_s]
     if result.ended_by == END_CAP:
         return [CODE_CAP, result.elapsed_s]
+    if result.ended_by == END_BATTERY:
+        return [CODE_BATTERY, result.elapsed_s]
     return [result.elapsed_s]                           # finished, Ctrl-C
 
 
@@ -227,8 +247,8 @@ def cli(argv: list[str] | None = None) -> int:
     Command line: python3 -m src.main [--route PATH] [--max-run-s S]
 
     Outputs:
-        0 after a run (however it ended); 2 for a bad route or hardware
-        that wouldn't open, before anything moves.
+        0 after a run (however it ended); 2 for a bad route, hardware
+        that wouldn't open or a critical pack, before anything moves.
     """
     ap = argparse.ArgumentParser(description="Run the course: start button, drive, time on the display.")
     ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
@@ -264,9 +284,23 @@ def cli(argv: list[str] | None = None) -> int:
                 close()
         return 2
 
+    battery = battery_run.open_battery()
+    if battery is not None and battery_run.preflight(battery, motors_on=True)[0] == battery_run.REFUSE:
+        system.show_text(CODE_BATTERY)
+        for close in (camera.release, sensors.stop, motor.stop, battery.cleanup):
+            close()
+        system.cleanup(blank=False)                     # "Lo-b" stays up
+        return 2
+
     print("press the start button")
-    result = run(camera, sensors, motor, pipeline, system, route, max_run_s=args.max_run_s)
+    try:
+        result = run(camera, sensors, motor, pipeline, system, route, max_run_s=args.max_run_s, battery=battery)
+    finally:
+        if battery is not None:
+            battery.cleanup()
     print(summary(result))
+    if battery is not None:
+        print(f"battery  {battery.voltage():.2f} V at the end ({battery.state().name})")
     if result.error is not None:
         traceback.print_exception(result.error)
     screens = end_screen(result)

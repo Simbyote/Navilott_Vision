@@ -21,15 +21,20 @@ Main package:
     rendering, nav.avi.
     NavStats: the [NAVIGATION] summary: how the run ended, which rule decided
     how many frames, time driving and braked (and why), steering, command
-    latency.
+    latency, and the battery (start, lowest, end) when it's monitored.
 
 Flow:
     1. Open the source, sensors, motors and start button; wait for the press.
     2. Per frame: read the camera and sensors, run the vision chain, ask the
        navigator, check the command, drive the motors, log, queue the frame.
-    3. On the navigator finishing (end of course), the run-time cap, the
-       source ending, the caller's stop_when, Ctrl-C or an error: stop the motors first, flush the
-       recorder, write the summary.
+    3. On the navigator finishing (end of course), the run-time cap, a
+       critical battery, the source ending, the caller's stop_when, Ctrl-C or
+       an error: stop the motors first, flush the recorder, write the summary.
+
+    The battery (diagnostics.battery_run), with the camera only: judged at
+    rest before the start (a critical pack refuses to drive the motors; a
+    low one, or any pack on a dry run, only warns), watched from the start,
+    and logged per frame in nav.csv (battery_v, battery_state).
     4. Render nav.avi from the recording, and play it if there's a display.
 """
 import argparse
@@ -48,6 +53,7 @@ from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import Display
+from src.diagnostics import battery_run
 from src.estimation.estimation import Phase3Config
 from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
@@ -66,12 +72,14 @@ END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
     "run time cap", "the source ended", "interrupted (Ctrl-C)", "error", "frame limit")
 END_COURSE = "end of course"                    # the navigator finished the route
 END_EARLY = "ended early (lane lost before the route was done)"
+END_BATTERY = "battery critical"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
-              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "event")
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
+              "battery_v", "battery_state", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -165,7 +173,9 @@ def summary_lines(report: dict) -> list[str]:
         f" command latency       p50 {lat['p50']:.1f} ms, p95 {lat['p95']:.1f} ms, max {lat['max']:.1f} ms "
         f"(frame in -> motors)",
         f" contract              {n['rejected']} commands rejected and braked",
-    ]
+    ] + ([] if not report.get("battery") else [
+        " battery               start {start_v} V, lowest {min_v} V, end {end_v} V; {state}".format(**report["battery"])
+        + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")])
 
 
 # =============================================================================
@@ -189,6 +199,7 @@ def run(
         display: bool = False,
         scale: int = 1,
         stop_when=None,
+        battery=None,
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
@@ -213,6 +224,8 @@ def run(
         stop_when: Called with each frame's nav.csv row once the motors have
             its command; a non-empty string it returns ends the run, as
             ended_by (intersection_linker ends a sequence this way).
+        battery: diagnostics.battery.Power, or None: monitored from the
+            start, logged per frame, and the run ends once it should_stop().
 
     Outputs:
         The findings, also written to report.json.
@@ -242,6 +255,9 @@ def run(
             system.run_countdown()
         if sensors is not None:
             sensors.read()                          # start every sensor window at the go
+        if battery is not None and not battery_run.start(battery):
+            battery = None
+        volts = []
         t0 = clock()
         while True:
             if limit is not None and nav_stats.frames >= limit:
@@ -250,6 +266,9 @@ def run(
             c0 = clock()
             if c0 - t0 >= max_run_s:
                 ended_by = END_CAP
+                break
+            if battery is not None and battery.should_stop():
+                ended_by = END_BATTERY
                 break
             item = source.read()
             arrived = clock()
@@ -296,7 +315,11 @@ def run(
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "battery_v": None if battery is None else round(battery.voltage(), 2),
+                 "battery_state": "" if battery is None else battery.state().name,
                  "event": event}
+            if battery is not None:
+                volts.append(n["battery_v"])
             if event:
                 print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
             stats.update(res)
@@ -334,9 +357,13 @@ def run(
                 system.cleanup(blank=False)          # the final time stays up
 
     wall = 0.0 if t0 is None else clock() - t0
+    battery_report = None
+    if battery is not None and t0 is not None and volts:
+        battery_report = {"start_v": volts[0], "min_v": min(volts), "end_v": round(battery.voltage(), 2),
+                          "state": battery.state().name, "sensor_ok": battery.sensor_ok()}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
-              "nav": nav_stats.report(),
+              "nav": nav_stats.report(), "battery": battery_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
                       "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
@@ -454,14 +481,27 @@ def cli(argv: list[str] | None = None) -> int:
     print(f"motors   {'ON' if motors_on else 'OFF (dry run)'}   cap {args.max_run_s:.0f} s   "
           f"cm/px {args.cm_per_px if args.cm_per_px else 'uncalibrated'}")
     print("\n".join(route.describe()))
+    battery = None
+    if args.camera:
+        battery = battery_run.open_battery()
+        if battery is not None and battery_run.preflight(battery, motors_on)[0] == battery_run.REFUSE:
+            for close in (source.close, getattr(sensors, "stop", None), motor.stop, battery.cleanup,
+                          getattr(system, "cleanup", None)):
+                if close is not None:
+                    close()
+            return 2
     if args.camera and system is None:
         countdown()
     elif system is not None:
         print("press the start button")
-    run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
-        out_dir, system,
-        max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
-        render=not args.no_render, display=not args.no_display, scale=args.scale)
+    try:
+        run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
+            out_dir, system,
+            max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
+            render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery)
+    finally:
+        if battery is not None:
+            battery.cleanup()
     return 0
 
 

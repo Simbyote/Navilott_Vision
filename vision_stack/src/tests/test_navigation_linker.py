@@ -4,9 +4,11 @@ test_navigation_linker.py  --  src/navigation_linker.py
 The linker end to end on synthetic camera frames and a fake motor: the run
 folder it writes, that the motors get exactly the navigator's commands (and
 a brake when a command breaks the contract), how a run ends (the run-time
-cap, the source ending, a frame limit, Ctrl-C, an error) with the motors
-stopped first every time, the start-button hooks, sensors reaching Phase 3,
-and the command line: which sources may drive the motors, render-only.
+cap, a critical battery, the source ending, a frame limit, Ctrl-C, an
+error) with the motors stopped first every time, the battery logged per
+frame and summarized, the start-button hooks, sensors reaching Phase 3, and
+the command line: which sources may drive the motors, the battery check at
+rest (a critical pack refuses only with the motors on), render-only.
 
 --software  run() / cli() with fakes. No camera, motors or GPIO.
 """
@@ -28,7 +30,7 @@ from src.estimation.estimation import SensorSample
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
-from src.tests.sim_robot import FakeClock
+from src.tests.sim_robot import FakeBattery, FakeClock
 
 DT = 0.05
 
@@ -272,6 +274,45 @@ def test_the_run_time_cap_ends_the_run_and_stops_the_motors(tmp_path):
 
 
 @pytest.mark.software
+def test_the_battery_is_logged_every_frame_and_summarized(tmp_path):
+    battery = FakeBattery(start_v=11.9, volts_step=0.1)
+    rep, out, _, _, _ = go(tmp_path, battery=battery)
+    r = rows(out / "nav.csv")
+    assert [float(x["battery_v"]) for x in r[:3]] == [11.8, 11.7, 11.6] and {x["battery_state"] for x in r} == {"OK"}
+    assert rep["battery"] == {"start_v": 11.8, "min_v": float(r[-1]["battery_v"]), "end_v": battery.v,
+                              "state": "OK", "sensor_ok": True}
+    assert " battery               start 11.8 V, lowest" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_the_lowest_voltage_is_kept_through_a_sag_under_load(tmp_path):
+    battery = FakeBattery(start_v=11.5)
+    sag = iter([11.5, 10.9, 11.4] + [11.4] * 50)
+
+    def should_stop():
+        battery.v = next(sag)
+        return False
+    battery.should_stop = should_stop
+    rep, _, _, _, _ = go(tmp_path, battery=battery)
+    assert (rep["battery"]["start_v"], rep["battery"]["min_v"]) == (11.5, 10.9)
+
+
+@pytest.mark.software
+def test_without_a_battery_the_columns_are_empty_and_there_is_no_summary_line(tmp_path):
+    rep, out, _, _, _ = go(tmp_path)
+    r = rows(out / "nav.csv")
+    assert r[0]["battery_v"] == "" and r[0]["battery_state"] == "" and rep["battery"] is None
+    assert "battery" not in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_a_critical_battery_ends_the_run_and_stops_the_motors(tmp_path):
+    rep, out, motor, _, _ = go(tmp_path, cam={}, battery=FakeBattery(critical_at=5))
+    assert rep["ended_by"] == nl.END_BATTERY and rep["run"]["frames"] == 4 and motor.calls[-1] == ("stop",)
+    assert rep["battery"]["state"] == "CRITICAL" and "ended by battery critical" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
 def test_a_frame_limit_ends_the_run(tmp_path):
     rep, *_ = go(tmp_path, cam={}, limit=5)
     assert rep["ended_by"] == nl.END_LIMIT and rep["run"]["frames"] == 5
@@ -430,6 +471,40 @@ def test_an_unknown_camera_control_is_exit_2_before_anything_opens(cli_env, caps
     _, tmp = cli_env
     assert nl.cli(["--camera", "--out", str(tmp / "o"), "--camera-control", "shutter=1"]) == 2
     assert "camera control error" in capsys.readouterr().out
+
+
+def with_battery(monkeypatch, volts, log):
+    battery = FakeBattery(start_v=volts, log=log)
+    battery.preflight = lambda: (volts > battery.VOLTAGE_WARNING, volts)
+    monkeypatch.setattr(nl.battery_run, "open_battery", lambda: battery)
+    return battery
+
+
+@pytest.mark.software
+def test_a_critical_pack_refuses_to_drive_the_motors(cli_env, monkeypatch, capsys):
+    got, tmp = cli_env
+    log = []
+    with_battery(monkeypatch, 9.6, log)
+    assert nl.cli(["--camera", "--out", str(tmp / "o")]) == 2
+    assert got == {} and "not starting" in capsys.readouterr().out and log == ["battery released"]
+
+
+@pytest.mark.software
+def test_on_the_bench_a_critical_pack_only_warns_and_the_run_gets_the_battery(cli_env, monkeypatch, capsys):
+    got, tmp = cli_env
+    log = []
+    battery = with_battery(monkeypatch, 9.6, log)
+    assert nl.cli(["--camera", "--no-motors", "--no-button", "--out", str(tmp / "o")]) == 0
+    assert got["battery"] is battery and "motors are off" in capsys.readouterr().out
+    assert log == ["battery released"]
+
+
+@pytest.mark.software
+def test_replays_never_open_the_battery(cli_env, monkeypatch):
+    got, tmp = cli_env
+    monkeypatch.setattr(nl.battery_run, "open_battery", lambda: pytest.fail("opened the ADC on a replay"))
+    assert nl.cli(["--video", "x.avi", "--out", str(tmp / "o")]) == 0
+    assert got["battery"] is None
 
 
 @pytest.mark.software
