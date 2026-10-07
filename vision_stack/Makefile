@@ -68,7 +68,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
-        intersection-dry render diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace pi-load nav-report timeline timing \
+        intersection-dry render diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
@@ -141,6 +141,9 @@ frame-meta: ## every frame's exposure, gains, sensor-to-Python time and traffic 
 
 i2c-trace: ## every I2C transfer from the kernel for 10 s (sudo; start a run first): bus load, IMU timing, errors
 	sudo $(PY) -m src.diagnostics.i2c_trace $(ARGS)
+
+sched-latency: ## how late Linux wakes a thread vs the 50 ms / 10 ms deadlines (sudo; ARGS="--label idle", then loaded)
+	sudo $(PY) -m src.diagnostics.sched_latency $(ARGS)
 
 ##@ Analysis: graphs and findings from a run (analysis.md); RUN= picks the run, default the newest
 pi-load: ## threads, cores, heat, memory from a diag_ recording (NAV=runs/nav_... to judge only the run)

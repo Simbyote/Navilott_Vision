@@ -24,10 +24,11 @@ PROJECT_DIR   ?= $(HOME)/Navilott_Vision
 STAMP_DIR     := .make-stamps
 APT_STAMP     := $(STAMP_DIR)/apt-base
 CAM_STAMP     := $(STAMP_DIR)/apt-camera
+DIAG_STAMP    := $(STAMP_DIR)/apt-diag
 I2C_STAMP     := $(STAMP_DIR)/i2c-enabled
 PIGPIO_STAMP  := $(STAMP_DIR)/pigpio-installed
 
-.PHONY: all setup help update base-deps camera-deps check i2c pigpio venv install reboot clean distclean
+.PHONY: all setup help update base-deps camera-deps diag-deps check i2c pigpio venv install reboot clean distclean
 
 # --- Meta ------------------------------------------------------------------
 
@@ -38,6 +39,7 @@ help:
 	@echo "  make update        - apt update && full-upgrade"
 	@echo "  make base-deps     - base build/dev tools"
 	@echo "  make camera-deps   - libcamera/gstreamer/opencv stack"
+	@echo "  make diag-deps     - the diagnostics' tools: media-ctl, graphviz, cyclictest, picamera2"
 	@echo "  make check         - verify camera stack is actually working"
 	@echo "  make i2c           - enable I2C via raspi-config"
 	@echo "  make pigpio        - clone, build, install pigpiod as a service"
@@ -46,7 +48,7 @@ help:
 	@echo "  make clean         - remove build artifacts (keeps venv)"
 	@echo "  make distclean     - clean + remove venv + stamps (full reset)"
 
-setup: update base-deps camera-deps i2c pigpio venv check
+setup: update base-deps camera-deps diag-deps i2c pigpio venv check
 	@echo ""
 	@echo "==> Setup complete. Review 'make check' output above,"
 	@echo "    then run 'make reboot' when ready."
@@ -82,6 +84,19 @@ camera-deps: $(STAMP_DIR)
 			gstreamer1.0-plugins-bad \
 			python3-gi python3-gst-1.0; \
 		touch $(CAM_STAMP); \
+	fi
+
+# --- Diagnostics -----------------------------------------------------------
+# What vision_stack's diagnostics call (docs/guides/diagnostics.md): media-ctl and
+# v4l2-ctl (capture-anatomy), graphviz to draw its graphs, cyclictest
+# (sched-latency), Picamera2 (frame-meta; a venv sees it with --system-site-packages)
+
+diag-deps: $(STAMP_DIR)
+	@if [ -f $(DIAG_STAMP) ]; then \
+		echo "==> diag-deps already installed, skipping (rm $(DIAG_STAMP) to force)"; \
+	else \
+		sudo apt install -y v4l-utils graphviz rt-tests python3-picamera2; \
+		touch $(DIAG_STAMP); \
 	fi
 
 # Check Commands

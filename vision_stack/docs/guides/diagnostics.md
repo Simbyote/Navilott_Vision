@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10), `sched_latency.py` (how late Linux wakes a thread, section 11) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`, `test_sched_latency.py`
 
 ---
 
@@ -349,4 +349,48 @@ Tracing needs root and a tracefs with the `i2c` events, which Raspberry Pi OS ha
 For one read, the thread's time minus the trace's time holding the bus is Python's overhead plus waiting for the GIL. A thread time well over the bus time therefore points at the GIL (`pi_load`'s `sensor-hub` cadence), not at I2C. Expect:
 - **An IMU read:** about 2 ms at 100 kHz.
 - **An ADS1115 read:** about 9 ms. It's a single-shot conversion at 128 samples/s, waited for on the bus.
+
+---
+
+## 11. Scheduling latency: Linux against an RTOS
+
+The robot runs on Linux, not a real-time OS. What an RTOS guarantees is a small, bounded delay between the moment a thread should run and the moment it does. Linux's delay is usually small, with a tail. The robot's timing splits into two kinds.
+
+**Hard timing is done by hardware:**
+- the PWM peripheral;
+- pigpiod's DMA sampling of the encoders every 5 µs;
+- the sensor, Unicam and the ISP;
+- the I2C controller.
+
+**Soft deadlines are left to the OS:**
+- a 50 ms frame;
+- a 10 ms IMU tick;
+- the motor watchdog's 0.5 s.
+
+So the question is how Linux's worst case compares with those soft deadlines. `make sched-latency` measures it three ways:
+
+| Case | What runs | Stands for |
+|---|---|---|
+| `python` | a Python thread at normal priority sleeping to a 1 ms grid; each wake-up's lateness | the robot's own threads (the sensor hub, the frame loop). Needs nothing |
+| `other` | `cyclictest` at normal priority (SCHED_OTHER), on every core | the kernel's wake-up latency for an ordinary thread, without Python |
+| `fifo` | `cyclictest` at real-time priority (SCHED_FIFO 80) | the best this kernel gives an RTOS-style thread |
+
+`cyclictest` comes with `rt-tests` (`make -f setup.mk diag-deps` from the repo root) and needs root, hence `sudo`. Without them only `python` runs, and the summary says why. Run it idle, then under the robot's load, and compare:
+
+```
+make sched-latency ARGS="--label idle"                 # 30 s per case
+make nav-dry                                           # terminal 1
+make sched-latency ARGS="--label loaded"               # terminal 2
+python3 -m src.diagnostics.sched_latency --compare runs/sched_idle_<time> runs/sched_loaded_<time>
+```
+
+`summary.txt` gives each case's wake-ups and its min, p50, p99, p99.9 and max lateness in µs. It also expresses the max as a share of the 50 ms frame and of the 10 ms IMU period, notes the kernel's preemption model, and gives a microcontroller RTOS's typical figure for scale (single-digit to tens of µs). Findings:
+- a worst case of a tenth of the IMU period or more (one over the whole period means a 100 Hz loop misses a tick); otherwise, that every case stayed under a tenth;
+- real-time priority cutting the kernel's worst case 2× or more (the robot's threads run at normal priority);
+- Python adding 2× or more to the kernel's p99;
+- a kernel that isn't PREEMPT_RT (one would shorten the tail on the same hardware).
+
+`sched_latency.png` plots each case's tail: the share of wake-ups at least x µs late, on log-log axes. p99 is where a line crosses 1%, p99.9 where it crosses 0.1%; the IMU period is marked. `histogram.csv` has the counts per µs, and `sched_latency.json` everything computed.
+
+**For a design review**, read it as a deadline ratio, not a contest with an RTOS. An RTOS's worst case is far smaller; the question is whether Linux's worst case, under the robot's own load, is small against 10 ms and 50 ms. The idle-vs-loaded comparison shows how much the robot's work widens the tail. `fifo` against `python` shows what real-time priority, or a PREEMPT_RT kernel, would buy if the margin were ever too thin.
 
