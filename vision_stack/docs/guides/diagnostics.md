@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `capture_anatomy.py` (the camera path, section 7) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_capture_anatomy.py`
 
 ---
 
@@ -168,3 +168,40 @@ Keep each run's `summary.txt`. The per-thread table, the core loads and the thro
 - **`cpu %` is an average over the interval.** A 50 ms spike inside a 0.5 s interval shows as 10%. Shorten `--interval` (0.1 is fine) to see bursts.
 - **Voluntary switches mix causes.** Sleeps, I/O and GIL waits all count. `py-spy --gil` separates out the GIL.
 - **Throttle flags need `vcgencmd`** (a Pi). Elsewhere the system lines say so, and the thread and core data still record.
+
+---
+
+## 7. Capture anatomy: the camera path
+
+`make capture-anatomy` (or `python3 -m src.diagnostics.capture_anatomy [--seconds 10] [--camera-control KEY=VALUE]`) records once how a frame gets from the sensor to OpenCV on this Pi. Stop the robot's pipeline first: the camera opens in one process at a time.
+
+```
+IMX290 --CSI-2--> Unicam --DMA--> raw Bayer in CMA memory --> VideoCore ISP --> YUV 480x270
+(1920x1080 10-bit)  (/dev/video0)                            (demosaic, colour, scale)
+                                         libcamera IPA (AGC/AWB, on the ARM cores) <-- ISP statistics
+                                         --> next exposure and gain, over I2C to the sensor
+YUV --> videoconvert --> videoflip --> BGR --> appsink --> OpenCV        (ARM cores, software)
+```
+
+It runs the robot's exact pipeline string, appsink swapped for a silent fakesink, under `gst-launch-1.0 -v` with GStreamer's latency tracer and libcamera's log on, and probes the rest:
+
+| File | From | Shows |
+|---|---|---|
+| `summary.txt` | all of it | the route, the caps, ms per element, the VideoCore side, findings |
+| `media<N>.txt`, `.dot`, `.png` | `media-ctl -p`, `--print-dot` | the kernel's hardware graph: sensor -> Unicam, the ISP's input and output nodes, the format on each link |
+| `gst_launch.txt`, `gst_pipeline.dot/.png` | `gst-launch-1.0 -v`, `GST_DEBUG_DUMP_DOT_DIR` | the caps every pad settled on: what the ISP hands over decides what videoconvert does |
+| `gst_trace.log`, `latency.csv` | `GST_TRACERS=latency(flags=pipeline+element)` | per frame: how long each element held it, and source pad to sink |
+| `libcamera.log` | `LIBCAMERA_LOG_LEVELS=*:INFO` | the sensor mode and Unicam format libcamera picked, the streams it configured |
+| `vc_*.txt` | `vcgencmd` | ARM, core, ISP, 3D and H.264 clocks; core volts; the ARM / GPU memory split |
+| `anatomy.json` | | everything parsed |
+
+Also kept: `uname.txt`, `v4l2_devices.txt`, `cameras.txt` (`rpicam-hello --list-cameras`), `gst_libcamerasrc.txt` (every control the camera takes). Graphviz (`sudo apt install graphviz`) draws the `.dot` files; without it they stay text. `media-ctl` and `v4l2-ctl` come with `v4l-utils`. A missing tool is listed under "not available here" and the rest still records.
+
+Findings it reports:
+- **videoconvert + videoflip over 2 ms a frame.** That is software work on the ARM cores. The ISP can output BGR, and the IMX290 can flip in hardware, which would make both copies go away.
+- **Fewer fps than asked for.**
+- **The CMA pool under 10% free.** Camera buffers are allocated from it.
+- **No frame at all.** Usually the camera is open in another process.
+
+Limits: the ISP's own time happens inside `libcamerasrc`, before its first pad, so GStreamer can't see it. The per-frame sensor timestamps (section 9) can. The tracer adds a little time to every element it measures, so treat the figures as an upper bound.
+

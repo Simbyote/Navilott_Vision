@@ -68,7 +68,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
-        intersection-dry render diag-nav diag-run monitor-attach pi-load nav-report timeline timing \
+        intersection-dry render diag-nav diag-run monitor-attach capture-anatomy pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
@@ -132,6 +132,9 @@ diag-run: $(HW) ## record the course run itself (motors on, start button); then:
 
 monitor-attach: ## record a process already running (MATCH=navigation_linker); Ctrl-C to stop
 	$(PY) -m src.diagnostics.monitor --match $(strip $(MATCH)) $(ARGS)
+
+capture-anatomy: ## the camera path once: media graph, ISP caps, ms per element, VideoCore (camera free)
+	$(PY) -m src.diagnostics.capture_anatomy $(ARGS)
 
 ##@ Analysis: graphs and findings from a run (analysis.md); RUN= picks the run, default the newest
 pi-load: ## threads, cores, heat, memory from a diag_ recording (NAV=runs/nav_... to judge only the run)
