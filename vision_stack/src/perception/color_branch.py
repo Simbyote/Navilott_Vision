@@ -137,6 +137,11 @@ class GlowFilter:
     # band. Its dimmer colored rim is 1-3 px wide at the stop
     ring_px: int = 2
     min_ring_px: int = 3        # ring pixels of the winning color, or the spot has no color
+    # ... and this share of the ring. A lit LED's ring held 18-20% of its
+    # color (2026-10-06 raw frames; the rest is washed-out glow under the
+    # bands' S floors); a glare's ~60 px ring passed on a few stray colored
+    # pixels, ~5%, where the mask panel showed nothing (2026-10-07)
+    min_ring_share: float = 0.10
     # Confidence: white pixels over this, to 1.0. 2 px scores 0.40, Phase 3's gate
     ref_white_px: float = 5.0
 
@@ -527,7 +532,7 @@ def _glow_candidates(
         ring = cv2.dilate(spot, kernel) > spot
         votes = {c: int(np.count_nonzero(ring & (m[y0:y1, x0:x1] > 0))) for c, m in masks.items()}
         label = max(votes, key=votes.get)
-        if votes[label] < glow.min_ring_px:
+        if votes[label] < max(glow.min_ring_px, glow.min_ring_share * np.count_nonzero(ring)):
             label = None
         aspect = w / h
         if px < glow.min_white_px:
