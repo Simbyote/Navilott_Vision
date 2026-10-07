@@ -5,7 +5,8 @@ Power on a fake ADC channel (the pin voltage it reads, scripted): the 4:1
 divider, preflight on a good, low and unreadable pack, the sampling thread
 taking it to WARNING and a latched CRITICAL with each callback once, a
 sensor fault after FAULT_AFTER failed reads that doesn't stop the robot, the
-percentage, and cleanup without an I2C bus. Then battery_run: a missing ADC
+percentage, cleanup without an I2C bus, and every monitoring read timed
+(a failed one too) in a bounded history. Then battery_run: a missing ADC
 is said and gives None, and preflight's verdicts (refuse only when critical
 with the motors on).
 
@@ -162,3 +163,63 @@ def test_start_says_and_reports_a_first_read_that_fails():
     ch.fail = False
     assert br.start(p, said.append) is True
     p.cleanup()
+
+
+# =============================================================================
+# Read timing
+# =============================================================================
+
+class Timer:
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
+class SlowChannel(Channel):
+    """A channel whose reads take read_ms on timer: the ADS1115's single-shot conversion."""
+    def __init__(self, timer, read_ms, pack_v=12.0):
+        super().__init__(pack_v)
+        self.timer, self.read_ms = timer, list(read_ms)
+
+    @property
+    def voltage(self):
+        self.timer.now += (self.read_ms.pop(0) if self.read_ms else 1.0) / 1000.0
+        return super().voltage
+
+
+def loop(monkeypatch, p, n):
+    """Run the monitoring loop for n reads on this thread (time.sleep ends it after the nth)."""
+    left = [n]
+
+    def sleep(_s):
+        left[0] -= 1
+        if left[0] == 0:
+            p._running = False
+    monkeypatch.setattr(time, "sleep", sleep)
+    p._running = True
+    p._sample_loop(0.0)
+
+
+@pytest.mark.software
+def test_each_monitoring_read_is_timed_failed_ones_too(monkeypatch):
+    timer = Timer()
+    ch = SlowChannel(timer, [9.0, 8.5, 9.25])
+    p = Power(channel=ch, timer=timer)
+    p._voltage_ema = 12.0
+    assert p.read_ms() == []
+    loop(monkeypatch, p, 2)
+    ch.fail = True                                                  # a read that times out still took its time
+    loop(monkeypatch, p, 1)
+    assert p.read_ms() == [9.0, 8.5, 9.25]
+
+
+@pytest.mark.software
+def test_the_read_history_keeps_only_the_newest(monkeypatch):
+    monkeypatch.setattr(Power, "READ_HISTORY", 3)
+    timer = Timer()
+    p = Power(channel=SlowChannel(timer, [1.0, 2.0, 3.0, 4.0, 5.0]), timer=timer)
+    p._voltage_ema = 12.0
+    loop(monkeypatch, p, 5)
+    assert p.read_ms() == [3.0, 4.0, 5.0]

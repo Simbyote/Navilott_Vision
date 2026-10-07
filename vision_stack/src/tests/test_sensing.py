@@ -17,12 +17,18 @@ from src.peripherals.sensing import SensorBatch, SensorHub, SensorReading, Senso
 
 
 class FakeIMU:
-    """IMUReader.read() stand-in: (raw yaw deg/s, accel m/s^2); raises when told to."""
-    def __init__(self, yaw=0.0, accel=0.0):
+    """
+    IMUReader.read() stand-in: (raw yaw deg/s, accel m/s^2); raises when told
+    to. Each read advances timer (when given) by read_ms, as an I2C read takes time.
+    """
+    def __init__(self, yaw=0.0, accel=0.0, timer=None, read_ms=1.5):
         self.yaw, self.accel, self.fail, self.reads = yaw, accel, False, 0
+        self.timer, self.read_ms = timer, read_ms
 
     def read(self):
         self.reads += 1
+        if self.timer is not None:
+            self.timer.now += self.read_ms / 1000.0
         if self.fail:
             raise OSError("simulated I2C error")
         return self.yaw, self.accel
@@ -51,10 +57,11 @@ def hub(imu=True, encoders=True, yaw_sign=-1, **kw):
     It flips yaw (yaw_sign -1) unless told otherwise, so the flip is tested
     whatever this robot's IMU_YAW_SIGN is.
     """
-    i = FakeIMU() if imu else None
+    timer = Clock()
+    i = FakeIMU(timer=timer) if imu else None
     e = FakeEncoders() if encoders else None
     clock = Clock()
-    h = SensorHub(i, e, clock=clock, yaw_sign=yaw_sign, **kw)
+    h = SensorHub(i, e, clock=clock, yaw_sign=yaw_sign, timer=timer, **kw)
     h._base = h._counts_reading()           # what start() does, without the thread
     return h, i, e, clock
 
@@ -136,7 +143,7 @@ def test_a_tick_reads_both_sensors_together_on_the_hub_clock_and_flips_yaw():
     h, imu, enc, clock = hub()
     imu.yaw, imu.accel, enc.left, enc.right = 30.0, -0.9, 7, 8
     r = h.tick()
-    assert r == SensorReading(clock.now, -30.0, -0.9, 7, 8)       # a flipping hub: raw + reads -
+    assert r == SensorReading(clock.now, -30.0, -0.9, 7, 8, 1.5)  # a flipping hub: raw + reads -; the read took 1.5 ms
 
 
 @pytest.mark.software
@@ -428,3 +435,31 @@ def test_the_hub_thread_carries_its_name_into_the_kernel():
         assert comm_of(h._thread) == "sensor-hub"
     finally:
         h.stop()
+
+
+# =============================================================================
+# IMU read timing
+# =============================================================================
+
+@pytest.mark.software
+def test_each_tick_times_its_imu_read_failed_or_not_and_none_without_an_imu():
+    h, imu, _, _ = hub()
+    imu.read_ms = 2.25
+    assert h.tick().imu_ms == 2.25
+    imu.fail, imu.read_ms = True, 7.5                                 # a NAK'd read still took its time
+    r = h.tick()
+    assert (r.yaw_dps, r.imu_ms) == (None, 7.5)
+    no_imu, *_ = hub(imu=False)
+    assert no_imu.tick().imu_ms is None
+
+
+@pytest.mark.software
+def test_a_batch_counts_its_imu_reads_failures_and_the_slowest():
+    h, imu, _, _ = hub()
+    for ms, fail in ((1.5, False), (4.0, False), (2.0, True), (1.6, False)):
+        imu.read_ms, imu.fail = ms, fail
+        h.tick()
+    b = h.drain()                                                       # its closing reading isn't an IMU read
+    assert (b.imu_attempts, b.imu_failed, b.imu_read_ms_max, b.imu_count) == (4, 1, 4.0, 3)
+    empty = h.drain()
+    assert (empty.imu_attempts, empty.imu_failed, empty.imu_read_ms_max) == (1 - 1, 0, None)

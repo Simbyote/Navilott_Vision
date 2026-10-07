@@ -342,3 +342,11 @@ Findings:
 
 Tracing needs root and a tracefs with the `i2c` events, which Raspberry Pi OS has. Without root it says so and records nothing.
 
+**The same reads, from the threads' side.** `make nav-dry` also logs how long each read took as the Python thread lived it:
+- **The IMU:** `nav.csv`'s `imu_read_ms` is the slowest read in each frame window, `imu_reads` how many were tried (5 expected), `imu_failed` how many gave nothing. `summary.txt` has the run's p50 / p95 / max.
+- **The battery ADC:** `summary.txt`'s battery line gives its read time.
+
+For one read, the thread's time minus the trace's time holding the bus is Python's overhead plus waiting for the GIL. A thread time well over the bus time therefore points at the GIL (`pi_load`'s `sensor-hub` cadence), not at I2C. Expect:
+- **An IMU read:** about 2 ms at 100 kHz.
+- **An ADS1115 read:** about 9 ms. It's a single-shot conversion at 128 samples/s, waited for on the bus.
+

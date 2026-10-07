@@ -27,6 +27,7 @@ import src.navigation_linker as nl
 from src.navigation.stop_line import STOP_DELAY_MS
 from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
 from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorBatch, SensorReading
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
@@ -280,8 +281,10 @@ def test_the_battery_is_logged_every_frame_and_summarized(tmp_path):
     r = rows(out / "nav.csv")
     assert [float(x["battery_v"]) for x in r[:3]] == [11.8, 11.7, 11.6] and {x["battery_state"] for x in r} == {"OK"}
     assert rep["battery"] == {"start_v": 11.8, "min_v": float(r[-1]["battery_v"]), "end_v": battery.v,
-                              "state": "OK", "sensor_ok": True}
-    assert " battery               start 11.8 V, lowest" in (out / "summary.txt").read_text()
+                              "state": "OK", "sensor_ok": True,
+                              "read_ms": {"n": 3, "p50": 9.1, "p95": 9.37, "max": 9.4}}
+    text = (out / "summary.txt").read_text()
+    assert " battery               start 11.8 V, lowest" in text and "; ADC reads 9.1 ms p50, 9.4 max" in text
 
 
 @pytest.mark.software
@@ -359,6 +362,43 @@ def test_sensor_readings_reach_the_packet_and_the_sensors_are_stopped(tmp_path):
     assert all((p.left_wheel_cps, p.right_wheel_cps) == (900.0, 880.0) for p in nav.packets)
     assert sensors.stopped
     assert {r["left_cps"] for r in rows(out / "nav.csv")} == {"900.0"}
+
+
+class TimedSensors(Sensors):
+    """Sensors whose batches carry IMU reads: 5 a frame at read_ms, the third failing every other frame."""
+    def __init__(self, read_ms=(1.6, 1.7, 2.9, 1.6, 1.8)):
+        super().__init__(SensorSample(yaw_rate_dps=0.0))
+        self.read_ms = read_ms
+
+    def read(self):
+        self.reads += 1
+        fail = self.reads % 2 == 0
+        readings = tuple(SensorReading(self.reads + k / 10, None if (fail and k == 2) else 0.0, 0.0, None, None, ms)
+                         for k, ms in enumerate(self.read_ms))
+        return self.sample, SensorBatch(readings)
+
+
+@pytest.mark.software
+def test_imu_read_times_and_reads_per_frame_reach_nav_csv_the_report_and_the_summary(tmp_path):
+    rep, out, *_ = go(tmp_path, sensors=TimedSensors())
+    r = rows(out / "nav.csv")
+    assert {(x["imu_reads"], x["imu_read_ms"]) for x in r} == {("5", "2.9")}
+    assert sorted({x["imu_failed"] for x in r}) == ["0", "1"]
+    s = rep["sensors"]
+    frames = rep["run"]["frames"]
+    assert s["imu_reads_per_frame"] == 5.0 and s["imu_failed"] == sum(int(x["imu_failed"]) for x in r)
+    assert s["imu_read_ms"]["n"] == 5 * frames and s["imu_read_ms"]["max"] == 2.9 and s["imu_read_ms"]["p50"] == 1.7
+    assert f" IMU reads             1.70 ms p50, {s['imu_read_ms']['p95']:.2f} p95, 2.90 max; 5 a frame " \
+           f"(median; expect 5), {s['imu_failed']} failed" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_without_imu_timing_there_is_no_sensors_line(tmp_path):
+    rep, out, *_ = go(tmp_path, sensors=Sensors(SensorSample(yaw_rate_dps=0.0)))      # batches aren't kept: None
+    assert rep["sensors"] is None and "IMU reads" not in (out / "summary.txt").read_text()
+    assert {x["imu_reads"] for x in rows(out / "nav.csv")} == {""}
+    batchless, out2, *_ = go(tmp_path / "b", sensors=TimedSensors(read_ms=()))         # batches without IMU reads
+    assert batchless["sensors"]["imu_read_ms"] is None and "IMU reads" not in (out2 / "summary.txt").read_text()
 
 
 @pytest.mark.software

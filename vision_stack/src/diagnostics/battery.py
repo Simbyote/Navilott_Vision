@@ -11,7 +11,9 @@ Main package:
                     state(), is_warning(), should_stop(), sensor_ok();
                     on_warning / on_critical / on_recovered / on_fault take
                     callbacks that run on the sampling thread (keep them short);
-                    preflight() is a resting-voltage check before a run.
+                    preflight() is a resting-voltage check before a run;
+                    read_ms() is how long each monitoring read took (the
+                    ADS1115's single-shot conversion and its I2C).
 
 Hardware:
     Battery -> 30k/10k divider (4:1) -> ADS1115 A0, I2C bus 1, address from
@@ -27,6 +29,7 @@ Usage:
 import logging
 import threading
 import time
+from collections import deque
 from typing import Callable, List, Tuple
 
 from src.diagnostics.battery_state import BatteryState, BatteryStateMachine
@@ -60,13 +63,17 @@ class Power:
     HYSTERESIS_V = 0.3     # WARNING clears at VOLTAGE_WARNING + this
     CONFIRM_SAMPLES = 3    # consecutive samples needed to change state
     FAULT_AFTER = 3        # consecutive failed ADC reads before sensor fault
+    READ_HISTORY = 3600    # monitoring read times kept: an hour at 1 Hz
 
-    def __init__(self, channel=None):
+    def __init__(self, channel=None, timer=time.perf_counter):
         """
         channel: anything with .voltage (volts at the ADC pin), to test
         without hardware; None opens the ADS1115 (the Pi's I2C libraries are
         imported only then, so this module imports anywhere).
+        timer: seconds, for timing each monitoring read.
         """
+        self._timer = timer
+        self._read_ms = deque(maxlen=self.READ_HISTORY)
         self._i2c = None
         if channel is None:
             import board
@@ -163,6 +170,11 @@ class Power:
         with self._lock:
             return self._voltage_ema
 
+    def read_ms(self) -> list[float]:
+        """How long each monitoring read took, ms, oldest first (failed ones too)."""
+        with self._lock:
+            return list(self._read_ms)
+
     def voltage_raw(self) -> float:
         """Single un-smoothed ADC reading (for characterization)."""
         return self._read_battery_voltage()
@@ -212,14 +224,17 @@ class Power:
     def _sample_loop(self, interval_s: float) -> None:
         while self._running:
             events: List[str] = []
+            r0 = self._timer()
             try:
                 v = self._read_battery_voltage()
             except Exception:
                 v = None
                 self._failures += 1
                 log.warning("ADC read failed (%d in a row)", self._failures)
+            took_ms = round((self._timer() - r0) * 1000.0, 3)
 
             with self._lock:
+                self._read_ms.append(took_ms)
                 if v is None:
                     if self._failures == self.FAULT_AFTER and self._sensor_ok:
                         self._sensor_ok = False
