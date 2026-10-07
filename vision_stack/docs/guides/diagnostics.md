@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`
 
 ---
 
@@ -249,4 +249,41 @@ What to look for:
 - **A climbing `mmc` rate with slow frames:** a recording's writes.
 - **pigpiod's share:** the price of DMA-timed PWM. Its `-s` sample rate sets it.
 - **CMA falling over a soak:** buffers leaking.
+
+---
+
+## 9. Frame metadata: what auto exposure did to every frame
+
+`make frame-meta` (or `python3 -m src.diagnostics.frame_meta [--seconds 20] [--camera-control KEY=VALUE] [--save-every N] [--no-detect]`) opens the camera through Picamera2. It sets it up like the robot's capture:
+- the 1920x1080 sensor mode;
+- 480x270 output at 20 fps;
+- the 180° flip;
+- `CAMERA_CONTROLS`, plus any `--camera-control`.
+
+For every frame, it logs the metadata libcamera reports next to what the color branch (MEASURED) reads in the traffic ROI. The robot's GStreamer pipeline drops that metadata at the appsink, which is why this is a separate recorder. Stop the robot's pipeline first.
+
+Picamera2 ships with Raspberry Pi OS (`sudo apt install python3-picamera2`). A venv sees it only if it was made with `--system-site-packages`. Without Picamera2, `rpicam-hello -n -t 10000 --metadata meta.json` records the same metadata, without the detection.
+
+| Column (`frames.csv`) | From | Meaning |
+|---|---|---|
+| `exposure_us`, `analogue_gain`, `digital_gain` | AGC (libcamera's IPA, on the ARM cores) | How long and how amplified the frame was. Exposure × gain is the light gathered |
+| `colour_gain_r`, `colour_gain_b`, `colour_temp_k` | AWB | The white balance applied |
+| `lux`, `frame_duration_us`, `ae_locked` | IPA | Scene brightness estimate, the frame's length, whether AE had settled |
+| `sensor_to_python_ms` | `SensorTimestamp` vs `time.monotonic_ns()` | From the sensor starting to expose the frame to Python having it: readout, ISP, IPA and queue. Both are on the monotonic clock; a value outside 0-1000 ms is dropped as a clock mismatch |
+| `label`, `confidence`, `white_px` | the color branch on the traffic ROI | What the robot would have read |
+
+`summary.txt` gives each field's min / median / max, and per label the median light, exposure, gain and white pixels. Findings:
+- **AGC swung the light gathered more than 2×.** The lamps look different as it moves.
+- **Red and yellow frames both seen.** If yellow frames got 1.2× the light of red ones or more, overexposure is turning the red ring orange: try `--camera-control exposure-value=-1`. If not, the angle is.
+- **Frames reach Python later than one frame time (50 ms).**
+- **AE settled on under half the frames.**
+- **Fewer fps than asked for.** An exposure longer than a frame stretches the frame.
+
+To chase red-reads-yellow:
+1. Hold the light on red.
+2. Record while moving the robot through the angles where it misreads.
+3. Read the per-label lines.
+4. Repeat with `--camera-control exposure-value=-1` and compare.
+
+`--save-every 5` keeps every fifth frame in `frames/`, a folder `phase2_linker --frames` and `calib-lamps` read.
 
