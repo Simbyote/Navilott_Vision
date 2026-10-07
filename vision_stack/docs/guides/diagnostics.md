@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `capture_anatomy.py` (the camera path, section 7) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_capture_anatomy.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`
 
 ---
 
@@ -39,7 +39,7 @@ python3 -m src.diagnostics.monitor --pid 1234 --duration 60
 | `--duration S` | until the run ends | Stop recording after S seconds |
 | `--out DIR` | `runs/diag_<timestamp>` | Where the files go |
 
-The recorder costs the robot almost nothing: per interval, it reads two small files per thread plus `/proc/stat`, and runs `vcgencmd` once a second, all in a separate process.
+The recorder costs the robot almost nothing. It runs in a separate process. Per interval it reads two small files per thread plus `/proc/stat`. Once a second it runs `vcgencmd` and reads `/proc/interrupts`, `diskstats`, `meminfo`, `pressure` and every process's `stat`. Every 5 s it runs two more `vcgencmd` calls, for the clocks. Its own CPU shows in `procs.csv` as `monitor (self)`.
 
 ---
 
@@ -97,6 +97,18 @@ system
   temperature max 61.2 C   clock 600-1000 MHz   memory: run max 182.0 MB, available min 210.5 MB
   throttled during the run: never
   latched since boot: under_voltage
+
+os (the whole Pi)
+  CMA free min 180 MB   clocks: ISP 300-300 MHz, core 400-400 MHz
+  SD card: write mean 210 kB/s (max 1400), read max 0 kB/s, busy max 12%
+  stalled (pressure, max of the 10 s averages): cpu 4.1%, io 0.3%, memory 0.0%
+
+interrupts per second, busiest 8 (counted by the hardware; Unicam follows the frames)
+  unicam                             (41)  mean     40.0  max     41.0
+  ...
+other processes, busiest 6 (cpu % of one core; the run itself is in threads above)
+  pigpiod                  412  mean   6.2  max   7.9
+  monitor (self)          1101  mean   3.0  max   4.1
 ```
 
 | Column | Meaning |
@@ -204,4 +216,37 @@ Findings it reports:
 - **No frame at all.** Usually the camera is open in another process.
 
 Limits: the ISP's own time happens inside `libcamerasrc`, before its first pad, so GStreamer can't see it. The per-frame sensor timestamps (section 9) can. The tracer adds a little time to every element it measures, so treat the figures as an upper bound.
+
+---
+
+## 8. The rest of the Pi: interrupts, other processes, SD card, pressure
+
+Around the robot's own threads, the kernel and the other processes keep working, and some of that is the robot's work done elsewhere:
+- the camera's frames arrive as **Unicam** interrupts and go to the ISP over **VCHIQ**;
+- the IMU and the ADS1115 answer over **I2C**;
+- **pigpiod** times the motor PWM by DMA in its own process;
+- a recording writes to the **SD card**.
+
+The recorder (section 1) reads all of this once a second from `/proc` and `vcgencmd` (`src/diagnostics/os_counters.py`), with no extra command:
+
+| Where | Column / file | What it is |
+|---|---|---|
+| `irqs.csv` | `irq`, `name`, `rate_hz` | Interrupts per second per `/proc/interrupts` line, summed over the cores, for each second the line fired. Unicam should sit near the frame rate (once or twice per frame); VCHIQ follows the ISP traffic; `mmc` the SD card |
+| `procs.csv` | `pid`, `name`, `cpu_pct` | Every other process's CPU (% of one core) for each second it ran. The robot's process is left out (its threads are in `threads.csv`); the recorder shows as `monitor (self)` |
+| `system.csv` | `cma_free_mb` | The contiguous memory pool camera buffers come from |
+| | `isp_mhz`, `core_mhz` | VideoCore clocks, every 5 s (blank between) |
+| | `disk_read_kbps`, `disk_write_kbps`, `disk_busy_pct` | The SD card (`mmcblk0`), from `/proc/diskstats` |
+| | `psi_cpu_some`, `psi_io_some`, `psi_memory_some` | Pressure stall information: % of the last 10 s that some task waited for CPU, I/O or memory. Blank when the kernel doesn't have PSI (Raspberry Pi OS needs `psi=1` in `cmdline.txt`) |
+| | `os_dt_s` | Seconds since the last reading; blank on the first, which has no rates |
+
+The summary's `os`, `interrupts` and `other processes` sections are these, averaged over every second of the recording (a second a line didn't fire counts as 0). `make pi-load` reports them over the run's own window and flags:
+- a process using 15% of a core or more;
+- the SD card busy half of any second;
+- a task stalled 10% of the time.
+
+What to look for:
+- **Unicam well under the frame rate:** frames are lost before GStreamer, at the sensor or receiver.
+- **A climbing `mmc` rate with slow frames:** a recording's writes.
+- **pigpiod's share:** the price of DMA-timed PWM. Its `-s` sample rate sets it.
+- **CMA falling over a soak:** buffers leaking.
 

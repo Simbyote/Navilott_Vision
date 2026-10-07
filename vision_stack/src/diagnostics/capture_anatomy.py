@@ -34,8 +34,9 @@ Main package:
     record(out_dir, duration_s, ...) -> dict: runs every probe, writes the
         folder, returns what it parsed.
     parse_media(text), parse_caps(text), parse_tracer(text),
-    parse_vcgencmd(text), libcamera_selected(text): the parsers, one per
-        tool's output.
+    libcamera_selected(text): the parsers, one per tool's output
+        (vcgencmd's and /proc/meminfo's are os_counters', shared with the
+        recorder).
     summary_lines(res): summary.txt.
     cli(): python3 -m src.diagnostics.capture_anatomy [--seconds S] [--out DIR]
 
@@ -63,6 +64,7 @@ import time
 from pathlib import Path
 
 from src.capture.camera import build_gst_pipeline, parse_controls
+from src.diagnostics.os_counters import parse_vcgencmd, read_cma_mb
 from src.params import CAMERA_CONTROLS, FPS, RUNS_DIR
 
 DURATION_S = 10.0           # long enough for AGC to settle and a few hundred frames at 20 FPS
@@ -255,29 +257,6 @@ def latency_stats(rows: list[dict]) -> list[dict]:
                     "median_ms": round(_pct(ms, 0.5), 3), "p95_ms": round(_pct(ms, 0.95), 3),
                     "max_ms": round(max(ms), 3),
                     "fps": round((len(rs) - 1) / span_s, 1) if span_s > 0 else None})
-    return out
-
-
-_VC_NUMBER = re.compile(r"=\s*([0-9.]+)")
-
-
-def parse_vcgencmd(text: str) -> float | None:
-    """The number after '=' in a vcgencmd reply: frequency(45)=500000000, volt=1.2000V, gpu=64M."""
-    m = _VC_NUMBER.search(text or "")
-    return float(m.group(1)) if m else None
-
-
-def read_cma_mb(path: Path = MEMINFO_PATH) -> dict:
-    """CmaTotal and CmaFree from /proc/meminfo in MB; None each where absent."""
-    out = {"cma_total_mb": None, "cma_free_mb": None}
-    try:
-        text = path.read_text()
-    except OSError:
-        return out
-    for key, name in (("CmaTotal", "cma_total_mb"), ("CmaFree", "cma_free_mb")):
-        m = re.search(rf"^{key}:\s+(\d+)\s*kB", text, re.M)
-        if m:
-            out[name] = round(int(m.group(1)) / 1024, 1)
     return out
 
 

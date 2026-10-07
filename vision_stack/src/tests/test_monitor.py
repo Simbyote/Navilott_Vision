@@ -4,8 +4,10 @@ test_monitor.py  --  src/diagnostics/monitor.py
 record() over a fake /proc on a fake clock: rows every interval, system
 rows once a second, and every way it ends (the process gone, the duration,
 a launched run exiting, Ctrl-C). The summaries: per-thread core shares,
-moves and ordering; throttle flags during the run and since boot. The run
-folder's files, find_pid(), and the command line launching a real child.
+moves and ordering; throttle flags during the run and since boot. The OS
+counters taken on the system tick into their own rows, the watched process
+left out of them. The run folder's files, find_pid(), and the command line
+launching a real child.
 
 --software  Fake /proc trees and short-lived child processes. No Pi needed.
 """
@@ -16,6 +18,7 @@ import sys
 import pytest
 
 import src.diagnostics.monitor as mon
+import src.diagnostics.os_counters as osc
 from src.diagnostics.system_monitor import read_throttled
 from src.diagnostics.threads import CORE_FIELDS, THREAD_FIELDS
 from src.tests.test_threads import write_proc
@@ -152,8 +155,44 @@ def test_the_run_folder_holds_every_file_and_the_summary_names_each_thread(tmp_p
     assert "main" in text and "sensor-hub" in text and "core 0" in text and "under_voltage" in text
     assert (tmp_path / "summary.txt").read_text().splitlines() == lines
     assert json.loads((tmp_path / "meta.json").read_text())["command"] == "python3 -m src.main"
-    for name, fields in (("threads.csv", THREAD_FIELDS), ("cores.csv", CORE_FIELDS), ("system.csv", mon.SYSTEM_COLUMNS)):
+    for name, fields in (("threads.csv", THREAD_FIELDS), ("cores.csv", CORE_FIELDS), ("system.csv", mon.SYSTEM_COLUMNS),
+                         ("irqs.csv", osc.IRQ_FIELDS), ("procs.csv", osc.PROC_FIELDS)):
         assert next(csv.reader(open(tmp_path / name))) == list(fields)
+    assert "os (the whole Pi)" in text and text.count("none recorded") == 2
+
+
+class FakeCounters:
+    """OsCounters' interface: each take one irq and one process row, and its system fields."""
+    def __init__(self):
+        self.takes = []
+
+    def take(self, elapsed, now):
+        self.takes.append((elapsed, now))
+        return {"system": {"os_dt_s": 1.0 if len(self.takes) > 1 else None, "isp_mhz": 300.0},
+                "irqs": [{"elapsed_s": elapsed, "irq": "41", "name": "unicam", "rate_hz": 40.0}],
+                "procs": [{"elapsed_s": elapsed, "pid": 7, "name": "pigpiod", "cpu_pct": 5.0}]}
+
+
+@pytest.mark.software
+def test_the_os_counters_are_taken_on_the_system_tick_into_their_own_rows(tmp_path):
+    fake = FakeCounters()
+    rec, clock = go(tmp_path, duration_s=2.0, counters=fake)
+    assert [t[0] for t in fake.takes] == [0.0, 1.0, 2.0] == [r["elapsed_s"] for r in rec["system"]]
+    assert [r["isp_mhz"] for r in rec["system"]] == [300.0] * 3 and rec["system"][1]["os_dt_s"] == 1.0
+    assert [r["elapsed_s"] for r in rec["irqs"]] == [0.0, 1.0, 2.0] and len(rec["procs"]) == 3
+    meta = {"pid": 100, "command": "x", "interval_s": 0.5, "cores": 4}
+    text = "\n".join(mon.write(str(tmp_path / "out"), meta, rec))
+    assert "unicam" in text and "pigpiod" in text
+    with open(tmp_path / "out" / "irqs.csv") as f:
+        assert [r["name"] for r in csv.DictReader(f)] == ["unicam"] * 3
+
+
+@pytest.mark.software
+def test_by_default_the_counters_leave_the_watched_process_out(tmp_path, monkeypatch):
+    made = []
+    monkeypatch.setattr(mon.osc, "OsCounters", lambda pid, proc: made.append((pid, proc)) or FakeCounters())
+    go(tmp_path, duration_s=0.5)
+    assert made == [(100, tmp_path)]
 
 
 @pytest.mark.software
