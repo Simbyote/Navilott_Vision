@@ -70,6 +70,7 @@ BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 MAX_CROSS_MS = 4000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
+ADVANCE_MS = 1000  # 1 second of forward travel into the intersection before turning
 
 # Turn duties (left, right), measured on the
 # mat (2026-10-01): left is a wide arc into the far lane, right pivots on
@@ -87,7 +88,7 @@ RIGHT_TURN_MAX_MS = 2400
 TURNS = {LEFT: (LEFT_TURN, -1, LEFT_TURN_MAX_MS),        # (duties, heading sign, time limit); + heading = right
          RIGHT: (RIGHT_TURN, +1, RIGHT_TURN_MAX_MS)}
 
-STAGE_TO_LINE, STAGE_TURN, STAGE_EXIT = "to_line", "turn", "exit"
+STAGE_TO_LINE, STAGE_ADVANCE, STAGE_TURN, STAGE_EXIT = "to_line", "advance", "turn", "exit"
 TURN_END_GYRO, TURN_END_TIME = "gyro target", "time limit"
 REASON_CROSSING, REASON_TURNING = "crossing", "turning"
 SOURCE_HEADING_HOLD, SOURCE_TURN = "heading_hold", "turn"
@@ -130,7 +131,7 @@ class IntersectionRule:
         self.stage: str | None = None
         self._maneuver = STRAIGHT
         self._heading = 0.0
-        self._turn_ms = self._driving_ms = 0
+        self._turn_ms = self._driving_ms = self._advance_ms = 0
         self._turn_end: str | None = None
         self._two_boundary = self._any_boundary = 0
         self._last_ms: int | None = None
@@ -168,7 +169,14 @@ class IntersectionRule:
         self._heading += (packet.yaw_rate - self.gyro_bias_dps) * dt_ms / 1000.0
 
         if self.stage == STAGE_TO_LINE and self.tracker.reached:
-            self.stage = STAGE_TURN if self._maneuver in TURNS else STAGE_EXIT
+            # Route through STAGE_ADVANCE if turning, otherwise go straight to EXIT
+            self.stage = STAGE_ADVANCE if self._maneuver in TURNS else STAGE_EXIT
+            
+        if self.stage == STAGE_ADVANCE:
+            if not held:
+                self._advance_ms += dt_ms
+            if self._advance_ms >= ADVANCE_MS:
+                self.stage = STAGE_TURN
         if self.stage == STAGE_TURN:
             duties, sign, max_ms = TURNS[self._maneuver]
             if not held:

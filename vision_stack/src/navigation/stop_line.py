@@ -35,7 +35,7 @@ IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
 # Braking at the moment it left stopped the robot early (2026-10-01 runs);
 # 1500 then stopped it a few cm past the line, so 500 (2026-10-05). It's a
 # time, so the stop moves with the robot's speed (the battery). Tune on the mat
-STOP_DELAY_MS = 500
+STOP_DELAY_MS = 0
 # A line last seen within this many lane-ROI rows of the bottom left by
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts
 # 22.6 rows at ~11.9 cm, 2 cm past the view bottom (~10 cm)
