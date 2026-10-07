@@ -128,7 +128,7 @@ MEASURED = PipelineConfig(
     # thick diagonal lane line passed for a stop line past an intersection
     # (2026-10-01 run; 15 then), and 5 cut the false lines further on the
     # mat (2026-10-05)
-    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 5.0)),
+    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 2.0)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,
