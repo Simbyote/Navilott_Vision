@@ -127,6 +127,12 @@ class GlowFilter:
     white_min_v: int = 230
     white_max_s: int = 60
     min_white_px: int = 2       # fewer is a glint, not a lamp
+    # A white spot's bounding box, width / height. Lit LED centers read 0.5-1.0;
+    # the glare along the board's edge 10-11 (a 2 px tall strip) and its ring
+    # picked up a red shirt below and won as red (2026-10-07). Outside these
+    # it isn't a lamp
+    min_white_aspect: float = 0.25
+    max_white_aspect: float = 3.0
     # The ring a spot is named by: pixels within ring_px of it, in a color's
     # band. Its dimmer colored rim is 1-3 px wide at the stop
     ring_px: int = 2
@@ -493,13 +499,14 @@ def _glow_candidates(
 
     Inputs:
         masks: The color bands' masks; a ring pixel counts for each band it's in.
-        reject_counts: Filled per color with seen / white / smaller /
+        reject_counts: Filled per color with seen / white / shape / smaller /
             accepted (a spot without a ring color isn't a color's and isn't
             counted).
         trace: As _blobs_to_candidates, one entry per spot: area is its
             white pixels, gate None (the candidate), "white" (under
-            min_white_px), "ring" (no color, label "none") or "smaller"
-            (another spot had more white).
+            min_white_px), "shape" (its box outside the white aspect
+            limits), "ring" (no color, label "none") or "smaller" (another
+            spot had more white).
 
     Outputs:
         At most one candidate.
@@ -509,7 +516,7 @@ def _glow_candidates(
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * glow.ring_px + 1,) * 2)
     rc = reject_counts if reject_counts is not None else {}
     for c in masks:
-        for k in ("seen", "white", "smaller", "accepted"):
+        for k in ("seen", "white", "shape", "smaller", "accepted"):
             rc.setdefault(c, {}).setdefault(k, 0)
     spots = []
     for k in range(1, n):
@@ -522,7 +529,13 @@ def _glow_candidates(
         label = max(votes, key=votes.get)
         if votes[label] < glow.min_ring_px:
             label = None
-        gate = "white" if px < glow.min_white_px else ("ring" if label is None else None)
+        aspect = w / h
+        if px < glow.min_white_px:
+            gate = "white"
+        elif not glow.min_white_aspect <= aspect <= glow.max_white_aspect:
+            gate = "shape"
+        else:
+            gate = "ring" if label is None else None
         bbox = (x0, y0, min(x1, hsv.shape[1]) - x0, min(y1, hsv.shape[0]) - y0)
         spots.append([label, bbox, gate, px])
     eligible = [sp for sp in spots if sp[2] is None]

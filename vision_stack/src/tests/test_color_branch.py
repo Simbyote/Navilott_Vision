@@ -755,7 +755,7 @@ def test_glow_finds_a_lit_led_by_its_white_center_and_names_it_by_its_ring():
     assert [(c.label, c.confidence, c.frame_id, c.timestamp_ms) for c in cands] == [("red", 1.0, 7, 70)]
     x, y, w, h = cands[0].bbox
     assert x <= 38 and x + w >= 42 and y <= 28 and y + h >= 32          # the white center and its ring
-    assert dbg["reject_counts"]["red"] == {"seen": 1, "white": 0, "smaller": 0, "accepted": 1}
+    assert dbg["reject_counts"]["red"] == {"seen": 1, "white": 0, "shape": 0, "smaller": 0, "accepted": 1}
 
 
 @pytest.mark.software
@@ -843,3 +843,23 @@ def test_glow_names_a_spot_by_its_ring_not_its_own_tinted_white():
     cv2.circle(roi, (40, 30), 3, bgr_from_hsv(28, 50, 255), -1)       # white with a yellow tint, 29 px
     cands, _ = extract_traffic_light_candidates(roi, hsv, TEST_BLOB, glow=GLOW)
     assert [c.label for c in cands] == ["red"]
+
+
+
+@pytest.mark.software
+def test_glow_a_flat_strip_of_glare_is_no_lamp_however_white_or_ringed():
+    # The board's edge glare (2026-10-07): a 2 px tall strip, ~40 white px,
+    # more than the lit LED's, whose ring picked up a red shirt below
+    roi = glow_roi()
+    cv2.rectangle(roi, (10, 48), (40, 52), PURE["red"], -1)
+    cv2.rectangle(roi, (12, 50), (38, 51), (255, 255, 255), -1)        # 27 x 2 white
+    led(roi, (80, 20), "green", white_r=2)
+    cands, dbg = glow_read(roi, trace=True)
+    assert [c.label for c in cands] == ["green"]
+    assert ("red", "shape") in [(e["label"], e["gate"]) for e in dbg["trace"]]
+    assert dbg["reject_counts"]["red"]["shape"] == 1
+    tall = glow_roi()
+    cv2.rectangle(tall, (38, 5), (42, 55), PURE["red"], -1)
+    cv2.rectangle(tall, (40, 8), (40, 52), (255, 255, 255), -1)         # 1 x 45 white
+    assert glow_read(tall)[0] == []
+    assert [c.label for c in glow_read(roi, replace(GLOW, max_white_aspect=20.0))[0]] == ["red"]
