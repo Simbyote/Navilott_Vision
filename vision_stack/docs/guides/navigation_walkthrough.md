@@ -45,7 +45,7 @@ Two things never change:
 | Priority | Rule | File | Speaks when |
 | --- | --- | --- | --- |
 | 1 | `StopSignRule` | `stop_sign.py` | At the line with a stop sign seen: stop, hold 2 s, go |
-| 2 | `TrafficLightRule` | `traffic_light.py` | At the line with the light red: wait |
+| 2 | `TrafficLightRule` | `traffic_light.py` | At the line with the light red or yellow: wait |
 | 3 | `IntersectionRule` | `intersection.py` | From the line leaving the view until the lane is back: **straight, left or right** |
 | 4 | `EndOfCourseRule` | `end_of_course.py` | The lane is lost: creep, then end the run |
 | — | `LaneKeepingNavigator` | `lane_keeping.py` | No rule spoke: follow the lane |

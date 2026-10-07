@@ -1,9 +1,9 @@
 """
 test_traffic_light.py  --  src/navigation/traffic_light.py
 
-The traffic-light rule against a real tracker: red at the line waits until
-the light has been something else for RELEASE_MS; green and caution drive
-on; red with no line, or a light that turns red after the line, says
+The traffic-light rule against a real tracker: red or yellow at the line
+waits until the light has been green or nothing for RELEASE_MS; green drives
+on; red misread as yellow keeps the wait; red with no line, or a light that turns red after the line, says
 nothing; red seen within RED_MEMORY_MS before the line counts, older red
 doesn't; a dropped frame neither runs the light nor releases the wait; reset.
 """
@@ -12,7 +12,7 @@ import pytest
 from src.navigation.navigation_contract import BRAKE
 from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
 from src.tests.navigation_checks import packet
-from src.navigation.traffic_light import (RED_MEMORY_MS, RED_STATE, REASON_RED, RELEASE_MS,
+from src.navigation.traffic_light import (RED_MEMORY_MS, RED_STATE, REASON_RED, RELEASE_MS, STOP_STATES,
                                           TrafficLightRule)
 
 MS = 50
@@ -58,16 +58,26 @@ def test_red_at_the_line_waits_until_it_has_changed_for_release_ms():
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("state", ["go", "caution"])
-def test_green_and_caution_drive_on(state):
-    _, out = drive([state] * (REACHED + 30))
+def test_green_drives_on():
+    _, out = drive(["go"] * (REACHED + 30))
     assert not braked(out)
 
 
 @pytest.mark.software
-def test_caution_after_red_releases_too():
-    _, out = drive(["stop"] * (REACHED + 5) + ["caution"] * 20)
-    assert braked(out) == list(range(REACHED, REACHED + 5 + RELEASE))
+def test_yellow_at_the_line_waits_too_and_green_releases_it():
+    green_at = REACHED + 10
+    _, out = drive(["caution"] * green_at + ["go"] * 20)
+    assert braked(out) == list(range(REACHED, green_at + RELEASE))
+    assert out[REACHED][1] == {"reason": REASON_RED}
+
+
+@pytest.mark.software
+def test_red_misread_as_yellow_keeps_the_wait():
+    # The overexposed red LED reads yellow from some angles (2026-10-07)
+    states = ["stop", "caution"] * ((REACHED + 40) // 2)
+    _, out = drive(states)
+    assert braked(out) == list(range(REACHED, len(states)))
+    assert STOP_STATES == (RED_STATE, "caution")
 
 
 @pytest.mark.software
