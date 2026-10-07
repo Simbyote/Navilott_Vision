@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`
 
 ---
 
@@ -286,4 +286,59 @@ To chase red-reads-yellow:
 4. Repeat with `--camera-control exposure-value=-1` and compare.
 
 `--save-every 5` keeps every fifth frame in `frames/`, a folder `phase2_linker --frames` and `calib-lamps` read.
+
+---
+
+## 10. I2C trace: the bus, transfer by transfer
+
+Two devices share **i2c-1** (GPIO 2/3):
+- the MPU-6050 at 0x68, read by the `sensor-hub` thread 100 times a second (one 14-byte block per read);
+- the ADS1115 at 0x48, read by the battery monitor's thread once a second.
+
+The camera has its own bus (i2c-10 or i2c-0), on which libcamera writes the exposure and gain AGC picked into the IMX290 every frame.
+
+The kernel traces every I2C transfer on every bus, from any process (the `i2c` tracepoints). `make i2c-trace` turns those on for 10 s and reads them back. It changes nothing in the robot, so start the run first in another terminal:
+
+```
+make nav-dry                         # terminal 1 (or any run)
+make i2c-trace                       # terminal 2: sudo, 10 s
+make i2c-trace ARGS="--seconds 30"
+python3 -m src.diagnostics.i2c_trace --from runs/i2c_<time>      # re-analyze anywhere, no root (draws the figure)
+```
+
+While tracing, it:
+- enlarges the trace buffer;
+- sets the trace clock to `mono`, so the times line up with the runs' `t0_monotonic`;
+- clears the buffer.
+
+Afterwards it puts every setting back, even after Ctrl-C. The folder (`runs/i2c_<time>/`, handed back to your user) holds:
+
+| File | What |
+|---|---|
+| `summary.txt` | per bus, per device, findings |
+| `transactions.csv` | one row per transfer: start (monotonic s), bus, address, device, the thread that asked, the messages (`w1 r14` = write 1 byte, read 14), bytes, wire time, how long it held the bus, the result, the first bytes written / read |
+| `i2c_trace.json` | everything computed, and each bus's clock |
+| `trace.txt` | the kernel's trace as recorded |
+| `i2c_trace.png` | a 200 ms window of transfers on a lane per device, each bus's occupancy per second, the IMU's read spacing (needs matplotlib, so on a laptop with `--from`) |
+
+What the numbers mean:
+- **Occupancy:** the share of time a transfer was in progress on the bus.
+- **Wire:** the share the bits alone need at the bus clock. Each message is a start, the address byte and each data byte at 9 bits with the ACK, plus one stop. The clock comes from the device tree, or is assumed to be 100 kHz, which the summary says.
+- **Overhead:** occupancy ÷ wire: the driver, interrupts and the controller's FIFO.
+
+Expected numbers:
+- **The IMU's read:** 156 bits, 1.56 ms at 100 kHz, so 16% of the bus at 100 Hz. At 400 kHz, 0.39 ms and 4%.
+- **The IMU's gaps:** a steady 10 ms, the sensor hub's period. Longer gaps are its ticks slipping (the GIL, or a slow read).
+- **Queued:** a device's transfers that started within 100 µs of another device's ending. The kernel serializes transfers on a bus, so those waited for it.
+
+Findings:
+- a bus busy 50% of the time;
+- transfers holding the bus 2× their wire time;
+- failed transfers, named by error (`EREMOTEIO` is a missing ACK: wiring, address, or the device busy);
+- IMU gaps over 15 ms at p95;
+- IMU reads queued behind another device;
+- i2c-1 at 100 kHz with its bits alone over 10%. `dtparam=i2c_arm_baudrate=400000` in `/boot/firmware/config.txt` cuts that 4×; both devices are rated for it;
+- a trace buffer that overflowed.
+
+Tracing needs root and a tracefs with the `i2c` events, which Raspberry Pi OS has. Without root it says so and records nothing.
 
