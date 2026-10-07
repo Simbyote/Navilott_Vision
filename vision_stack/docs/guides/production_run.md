@@ -19,8 +19,9 @@ python3 -m src.main --max-run-s 120
 
 1. The terminal prints the route: the maneuver count, each maneuver, and the finish. A bad route file stops it here with `route error: ...` (exit 2), before anything opens.
 2. It opens the motors (stopped), the display, the IMU and encoders, and the camera. Anything missing stops it with `hardware error: ...` (exit 2) and releases what did open.
-3. The display shows **`St N`**, the route's maneuver count, until the start button is pressed.
-4. Countdown 5–4–3–2–1, then GO: the clock starts and the robot drives. The display shows the elapsed **MM:SS**.
+3. **The battery, at rest** (motors idle): `battery  11.84 V ok`. Under 10.5 V it warns (`low ... charge it after this run`) and carries on; at or under 9.9 V (critical) it shows **`Lo-b`**, releases everything and exits 2 without driving. Without the battery ADC (or one that can't be read) it prints `battery  not monitored` / `unreadable` and runs without the check: a missing ADC never stops a run.
+4. The display shows **`St N`**, the route's maneuver count, until the start button is pressed.
+5. Countdown 5–4–3–2–1, then GO: the clock starts and the robot drives. The display shows the elapsed **MM:SS**.
 
 ---
 
@@ -33,6 +34,7 @@ The motors are halted first every time: a short brake for 0.3 s (`HALT_BRAKE_S`)
 | **finished** | The route's finish: the lane running out after the last maneuver (`edge`), or the finish stop line (`stop_line`) | The final time |
 | **ended early** | The lane stayed lost before the route was done: a safety stop | Alternates **`E  N`** (N = the step reached) and the time, every 2 s, until Ctrl-C |
 | **run time cap** | `--max-run-s` (300 s) passed: the end was never seen | Alternates **`E  t`** and the time until Ctrl-C |
+| **battery critical** | The pack held at or under 9.9 V for 3 readings (once a second, smoothed): the 3S pack has no protection board, so the software stops it | Alternates **`Lo-b`** and the time until Ctrl-C |
 | **Ctrl-C** | You stopped it | The time so far |
 | **error** | An exception (e.g. the camera died); the traceback is printed | **`Err `** |
 
@@ -47,6 +49,7 @@ The last screen stays up after the program exits (the display isn't blanked).
 - **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, whose gyro bias is `config.GYRO_BIAS_DPS`, the one every linker defaults to, so a production run and a default `navigation_linker --camera` run drive alike.
 - **Route:** `config.ROUTE_PATH` (`vision_stack/route.json`) unless `--route` is given.
 - **Sensors:** IMU and both encoders, on `SensorHub`'s 100 Hz thread, one sample per frame.
+- **Battery:** `diagnostics/battery.py` (`Power`, the ADS1115 on the 4:1 divider, sampled once a second on its own thread, 0.3 smoothing) through `diagnostics/battery_run.py`, which holds the start-of-run rule for here and `navigation_linker`. Thresholds and the CRITICAL latch are `Power`'s and `battery_state.py`'s. The voltage isn't on the display during a run yet; the terminal prints it at the start and the end.
 
 ---
 

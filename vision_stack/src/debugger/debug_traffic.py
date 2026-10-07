@@ -11,11 +11,22 @@ Purpose:
     branch off the view says so instead of drawing, and uncalibrated ranges
     are flagged. Coordinates are traffic-ROI-relative.
 
+    In glow mode (MEASURED's color branch, ColorConfig.glow set) the light
+    isn't a blob: it's the clipped-white spot with the most white, named by
+    the band that holds the most of its 2 px ring. So the mask column adds
+    the white mask on top, each spot is labelled with the glow gate that
+    decided it (white, shape, ring, smaller) and with its ring's winning
+    share, and the footer and report count those gates instead of area and
+    aspect. A lit LED with no box means no white was clipped (exposure); a
+    box labelled "ring" means white with no band around it (glare, or a band
+    edge); a red LED labelled yellow is a ring hue problem.
+
 Main package:
     The rendered panel: the traffic ROI with every traced blob, beside the
     red, yellow and green masks, tinted, with pixel counts, under a header
     with pass / low / rejected counts, the best candidate and whether fusion
     passed a light on, over a footer of blobs seen / accepted per color.
+    In glow mode the white mask sits above the three color masks.
 
 Flow:
     1. Pull the color debug, accepted candidates and fused light from the chain.
@@ -30,6 +41,9 @@ from src.params import GREEN, RED, TRAFFIC_LIGHT, YELLOW
 
 COLORS = (RED, YELLOW, GREEN)
 LIGHT_COLORS = {RED: (0, 0, 255), YELLOW: (0, 200, 255), GREEN: (0, 200, 0)}    # BGR mask tints
+WHITE = "white"
+WHITE_TINT = (255, 255, 255)                     # the glow white mask's tint
+GLOW_GATES = ("white", "shape", "ring", "smaller")
 # color branch gate names, shortened for labels
 GATE_SHORT = {"area": "area", "aspect": "asp"}
 
@@ -47,7 +61,8 @@ class TrafficView(dv.CandidateView):
                   "passed", "low", "best_label", "best_conf", "best_area",
                   "best_h", "best_s", "best_v", "mask_red_px",
                   "mask_yellow_px", "mask_green_px", "rej_area", "rej_aspect",
-                  "fused", "fused_label", "fused_conf")
+                  "fused", "fused_label", "fused_conf", "glow", "mask_white_px",
+                  "best_ring_share", "rej_white", "rej_shape", "rej_ring", "rej_smaller")
 
     def __init__(self, conf_threshold=None, zoom=2):
         super().__init__(conf_threshold, zoom)
@@ -61,6 +76,7 @@ class TrafficView(dv.CandidateView):
         self._fused_colors = {}
         self._best_conf = []
         self._rej = {}
+        self._glow = False
         self._coverage = {c: [] for c in COLORS}
 
     def extract(self, chain, frame=None) -> dict:
@@ -68,8 +84,8 @@ class TrafficView(dv.CandidateView):
         This frame's color data from a chain result.
 
         Reads chain.traffic, chain.traffic_debug (enabled, calibrated, roi,
-        the three masks, mask_px, reject_counts, and "trace" when the chain
-        ran with trace=True), and chain.fusion / fusion_debug when the process
+        the three masks, mask_px, reject_counts, glow and, in glow mode, the
+        white mask, and "trace" when the chain ran with trace=True), and chain.fusion / fusion_debug when the process
         callable has fusion.
         """
         dbg = getattr(chain, "traffic_debug", None) or {}
@@ -83,6 +99,8 @@ class TrafficView(dv.CandidateView):
             "timestamp_ms": chain.geometry.timestamp_ms,
             "enabled": bool(dbg.get("enabled", False)),
             "calibrated": dbg.get("calibrated", True),
+            "glow": bool(dbg.get("glow", False)),
+            "white": dbg.get("white"),
             "roi": dbg.get("roi"),
             "masks": {c: dbg.get(c) for c in COLORS},
             "mask_px": dict(dbg.get("mask_px", {})),
@@ -110,6 +128,33 @@ class TrafficView(dv.CandidateView):
                 tot[k] += rc.get(k, 0)
         return tot
 
+    @staticmethod
+    def _glow_totals(data):
+        """
+        Glow mode: spots seen and per glow gate.
+
+        From the trace when there is one, so spots with no ring color count
+        too; reject_counts holds only the spots a color claimed.
+        """
+        tot = {"seen": 0, "accepted": 0, **{g: 0 for g in GLOW_GATES}}
+        if data["trace"] is not None:
+            for e in data["trace"]:
+                tot["seen"] += 1
+                tot["accepted" if e["gate"] is None else e["gate"]] += 1
+            return tot
+        for rc in data["counts"].values():
+            for k in tot:
+                tot[k] += rc.get(k, 0)
+        return tot
+
+    @staticmethod
+    def _ring_share(e):
+        """The winning band's share of the spot's ring, or None (no ring, or not glow)."""
+        votes, ring = e.get("votes"), e.get("ring")
+        if not votes or not ring:
+            return None
+        return max(votes.values()) / ring
+
     def observe(self, data):
         self._frames += 1
         if not data["enabled"]:
@@ -129,7 +174,10 @@ class TrafficView(dv.CandidateView):
                 self._fused_frames += 1
                 lab = data["fused"][0].label_detail
                 self._fused_colors[lab] = self._fused_colors.get(lab, 0) + 1
-        for k, v in self._totals(data).items():
+        if data.get("glow"):
+            self._glow = True
+        totals = self._glow_totals(data) if data.get("glow") else self._totals(data)
+        for k, v in totals.items():
             self._rej[k] = self._rej.get(k, 0) + v
         roi = data["roi"]
         if roi is not None:
@@ -140,6 +188,10 @@ class TrafficView(dv.CandidateView):
     def row(self, data):
         sm = self._summary(data)
         b, tot = sm["best"], self._totals(data)
+        glow = data.get("glow", False)
+        gt = self._glow_totals(data) if glow else {}
+        white = data.get("white")
+        share = self._ring_share(b) if b else None
         opt = lambda v: "" if v is None else v
         hsv = (b or {}).get("hsv") or ("", "", "")
         px = data["mask_px"]
@@ -154,6 +206,9 @@ class TrafficView(dv.CandidateView):
             "" if fused is None else len(fused),
             opt(fused[0].label_detail if fused else None),
             opt(fused[0].confidence if fused else None),
+            int(glow), "" if white is None else int(np.count_nonzero(white)),
+            "" if share is None else round(share, 3),
+            *(gt.get(g, "") for g in GLOW_GATES),
         ]
 
     def report(self):
@@ -166,7 +221,8 @@ class TrafficView(dv.CandidateView):
         if self._uncalibrated:
             out.append(" WARNING: HSV ranges were not loaded with "
                        "load_hsv_ranges() (uncalibrated scaffold)")
-        out.append(f" frames with a candidate through the blob filter  "
+        stage = ("named by its ring (glow) " if self._glow else "through the blob filter  ")
+        out.append(f" frames with a candidate {stage}"
                    f"{self._with_candidate:6}  "
                    f"({100 * self._with_candidate / n:5.1f}%)")
         if self.conf_threshold is not None:
@@ -185,7 +241,11 @@ class TrafficView(dv.CandidateView):
         if cov:
             out.append(" median mask coverage of the ROI: " + "  ".join(
                 f"{c} {v[len(v) // 2]:.1f}%" for c, v in cov.items()))
-        if self._rej.get("seen"):
+        if self._glow and self._rej.get("seen"):
+            out.append(f" white spots seen {self._rej['seen']}, accepted "
+                       f"{self._rej.get('accepted', 0)}; rejected by gate: " + ", ".join(
+                           f"{g} {self._rej.get(g, 0)}" for g in GLOW_GATES))
+        elif self._rej.get("seen"):
             out.append(f" blobs seen {self._rej['seen']}, accepted "
                        f"{self._rej.get('accepted', 0)}; rejected by gate: "
                        f"area {self._rej.get('area', 0)}, "
@@ -206,24 +266,32 @@ class TrafficView(dv.CandidateView):
 
         H, W = roi.shape[:2]
         pw, ph, gap = W * s, H * s, dv.GAP_PX * s
-        mw, mh = pw // 3, ph // 3
+        glow = data.get("glow", False)
+        # glow mode stacks the white mask over the three colors: four tiles, each
+        # a quarter of the panel's height at the ROI's aspect, in the same column
+        # width as blob mode so the labels keep their room and the view its size
+        tiles = ([(WHITE, data.get("white"), WHITE_TINT)] if glow else []) + [
+            (c, data["masks"][c], LIGHT_COLORS[c]) for c in COLORS]
+        mw, mh = pw // 3, ph // len(tiles)
+        tw = min(mw, round(mh * W / H))                 # a tile's image width
         canvas = np.zeros((hh + ph + fh, pw + gap + mw, 3), np.uint8)
 
         canvas[hh:hh + ph, :pw] = cv2.resize(roi, (pw, ph),
                                              interpolation=cv2.INTER_LINEAR)
         dv.draw_text(canvas, "traffic ROI", (4, hh + lh), dv.C_GRAY, fs, th)
 
-        for i, c in enumerate(COLORS):
-            mask = data["masks"][c]
+        for i, (c, mask, color) in enumerate(tiles):
             y0 = hh + i * mh
             if mask is not None:
                 tint = np.zeros((mask.shape[0], mask.shape[1], 3), np.uint8)
-                tint[mask > 0] = LIGHT_COLORS[c]
-                canvas[y0:y0 + mh, pw + gap:pw + gap + mw] = cv2.resize(
-                    tint, (mw, mh), interpolation=cv2.INTER_NEAREST)
-            px = data["mask_px"].get(c, 0)
+                tint[mask > 0] = color
+                canvas[y0:y0 + mh, pw + gap:pw + gap + tw] = cv2.resize(
+                    tint, (tw, mh), interpolation=cv2.INTER_NEAREST)
+            px = (data["mask_px"].get(c, 0) if c != WHITE
+                  else 0 if mask is None else int(np.count_nonzero(mask)))
             dv.draw_text(canvas, f"{c} {px}px {100.0 * px / (H * W):.1f}%",
-                         (pw + gap + 4, y0 + lh), dv.C_WHITE, fs * 0.9, th)
+                         (pw + gap + 4, y0 + lh), dv.C_GRAY if c == WHITE else dv.C_WHITE,
+                         fs * 0.9, th)
             cv2.rectangle(canvas, (pw + gap, y0), (pw + gap + mw - 1, y0 + mh - 1),
                           dv.C_GRAY, 1)
 
@@ -250,12 +318,19 @@ class TrafficView(dv.CandidateView):
                          (canvas.shape[1] - int(170 * fs / 0.36), lh),   # ~170 px wide at fs 0.36
                          dv.C_RED, fs, th)
 
-        if b is not None:
+        if b is not None and glow:
+            best = f"best {b['label']} c{b['confidence']:.2f}  white {b['area']:.0f}px"
+            share = self._ring_share(b)
+            if share is not None:
+                best += f"  ring {100 * share:.0f}%"
+        elif b is not None:
             best = f"best {b['label']} c{b['confidence']:.2f}"
             if b["area"] is not None:
                 best += f"  area {b['area']:.0f}"
             if b["hsv"] is not None:
                 best += "  hsv({:.0f},{:.0f},{:.0f})".format(*b["hsv"])
+        elif glow:
+            best = "no white spot named by its ring"
         else:
             best = "no blob cleared the filter"
         if thr is not None:
@@ -275,8 +350,13 @@ class TrafficView(dv.CandidateView):
         per = "  ".join(
             f"{c} {rc.get(c, {}).get('seen', 0)}/{rc.get(c, {}).get('accepted', 0)}"
             for c in COLORS)
-        foot = (f"blobs seen/accepted  {per}   rejected: area {tot['area']} "
-                f"aspect {tot['aspect']}")
+        if glow:
+            gt = self._glow_totals(data)
+            foot = (f"spots {gt['seen']} ok {gt['accepted']}  rejected: "
+                    + " ".join(f"{g} {gt[g]}" for g in GLOW_GATES))
+        else:
+            foot = (f"blobs seen/accepted  {per}   rejected: area {tot['area']} "
+                    f"aspect {tot['aspect']}")
         if data["trace"] is None:
             foot += "   (trace off: rejected blobs not shown)"
         dv.draw_text(canvas, foot, (6, hh + ph + lh), dv.C_GRAY, fs, th)
@@ -284,6 +364,8 @@ class TrafficView(dv.CandidateView):
 
     def _label(self, e: dict, state: str) -> str:
         """Blob label: the failing gate and value when rejected, else confidence and fill."""
+        if e["gate"] in GLOW_GATES or "votes" in e:
+            return self._glow_label(e, state)
         if state == "reject":
             if e["gate"] == "aspect":
                 return f"{e['label']} asp {e['aspect']:.2f}"
@@ -293,6 +375,30 @@ class TrafficView(dv.CandidateView):
         # or slab fills more. There's no fill gate yet; this shows whether one would help.
         if e["fill"] is not None:
             label += f" f{e['fill']:.2f}"
+        if state == "low":
+            label += f"<{self.conf_threshold:.2f}"
+        return label
+
+    def _glow_label(self, e: dict, state: str) -> str:
+        """
+        Glow spot label: its ring's color and what decided it.
+
+        white: too few white px; shape: its width / height; ring: no band
+        held enough of the ring (the best share shown); smaller: another
+        spot had more white. Accepted: confidence, white px and ring share.
+        """
+        share = self._ring_share(e)
+        ring = "" if share is None else f" ring {100 * share:.0f}%"
+        gate, px = e["gate"], e["area"]
+        if gate == "white":
+            return f"white {px:.0f}px"
+        if gate == "shape":
+            return f"{e['label']} asp {e['aspect']:.2f}"
+        if gate == "ring":
+            return "no ring" + ("" if share is None else f" {100 * share:.0f}%")
+        if gate == "smaller":
+            return f"{e['label']} {px:.0f}px smaller"
+        label = f"{e['label']} c{e['confidence']:.2f} {px:.0f}px" + ring
         if state == "low":
             label += f"<{self.conf_threshold:.2f}"
         return label

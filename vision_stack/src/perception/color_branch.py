@@ -490,6 +490,11 @@ def _masks(hsv: np.ndarray, ranges: HSVRanges) -> dict:
             GREEN: _threshold_single(hsv, ranges.green)}
 
 
+def _white_mask(hsv: np.ndarray, glow: GlowFilter) -> np.ndarray:
+    """1 where a pixel is clipped white: V at or over white_min_v, S at or under white_max_s."""
+    return ((hsv[..., 2] >= glow.white_min_v) & (hsv[..., 1] <= glow.white_max_s)).astype(np.uint8)
+
+
 def _glow_candidates(
     hsv: np.ndarray,
     masks: dict,
@@ -511,12 +516,13 @@ def _glow_candidates(
             white pixels, gate None (the candidate), "white" (under
             min_white_px), "shape" (its box outside the white aspect
             limits), "ring" (no color, label "none") or "smaller" (another
-            spot had more white).
+            spot had more white). Each also holds ring (the ring's pixels)
+            and votes ({color: ring pixels in its band}).
 
     Outputs:
         At most one candidate.
     """
-    white = ((hsv[..., 2] >= glow.white_min_v) & (hsv[..., 1] <= glow.white_max_s)).astype(np.uint8)
+    white = _white_mask(hsv, glow)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(white)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * glow.ring_px + 1,) * 2)
     rc = reject_counts if reject_counts is not None else {}
@@ -542,13 +548,13 @@ def _glow_candidates(
         else:
             gate = "ring" if label is None else None
         bbox = (x0, y0, min(x1, hsv.shape[1]) - x0, min(y1, hsv.shape[0]) - y0)
-        spots.append([label, bbox, gate, px])
+        spots.append([label, bbox, gate, px, int(np.count_nonzero(ring)), votes])
     eligible = [sp for sp in spots if sp[2] is None]
     best = max(eligible, key=lambda sp: sp[3]) if eligible else None
     for sp in eligible:
         if sp is not best:
             sp[2] = "smaller"
-    for label, bbox, gate, px in spots:
+    for label, bbox, gate, px, ring_n, votes in spots:
         if label is not None:
             rc[label]["seen"] += 1
             rc[label]["accepted" if gate is None else gate] += 1
@@ -557,7 +563,7 @@ def _glow_candidates(
             trace.append({"label": label or "none", "bbox": bbox, "gate": gate, "area": float(px),
                           "aspect": round(w / h, 3) if h else None, "fill": round(px / (w * h), 3) if w * h else None,
                           "confidence": round(min(1.0, px / glow.ref_white_px), 4), "roundness": None,
-                          "core_px": px, "hsv": None})
+                          "core_px": px, "hsv": None, "ring": ring_n, "votes": votes})
     if best is None:
         return []
     return [TrafficLightCandidate(label=best[0], bbox=best[1], confidence=round(min(1.0, best[3] / glow.ref_white_px), 4),
@@ -589,8 +595,11 @@ def extract_traffic_light_candidates(
         (candidates, debug). debug is for inspection; the pipeline doesn't
         pass it on. It always holds hsv, the red / yellow / green masks, roi
         (the input), mask_px ({color: nonzero px}), reject_counts ({color:
-        {seen, area, aspect, round, core, accepted}}) and calibrated. With trace, it also
-        holds trace (see _blobs_to_candidates).
+        {seen, area, aspect, round, core, accepted}}), calibrated and glow
+        (glow mode on). In glow mode it also holds white (the clipped-white
+        mask, 0/255; reject_counts per color are then seen / white / shape
+        / smaller / accepted). With trace, it also holds trace (see
+        _blobs_to_candidates, or _glow_candidates in glow mode).
 
     Raises:
         ValueError / TypeError: If roi is None, not uint8 or not (h, w, 3),
@@ -633,7 +642,10 @@ def extract_traffic_light_candidates(
         "mask_px": {k: int(cv2.countNonZero(m)) for k, m in masks.items()},
         "reject_counts": reject_counts,
         "calibrated": hsv_ranges.is_calibrated,
+        "glow": glow is not None,
     }
+    if glow is not None:
+        debug["white"] = _white_mask(hsv, glow) * 255
     if trace:
         debug["trace"] = trace_log
 

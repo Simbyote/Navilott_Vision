@@ -39,7 +39,7 @@ Two things never change:
 
 `Navigation` (`src/navigation/navigation.py`) is a short list. Every frame:
 
-1. **`StopLineTracker`** (`stop_line.py`) updates first. It follows one stop line: seen → gone from the bottom of the view (an intersection starts, and the route moves to its next step) → **reached** 1.5 s later, when the robot is at the line.
+1. **`StopLineTracker`** (`stop_line.py`) updates first. It follows one stop line: seen → gone from the bottom of the view (an intersection starts, and the route moves to its next step) → **reached** 0.5 s later, when the robot is at the line.
 2. Then each **rule** is asked, in priority order. The **first one that returns a `Command` wins**:
 
 | Priority | Rule | File | Speaks when |
@@ -68,7 +68,7 @@ Every rule also keeps a `record` dict saying why it decided. That dict becomes t
 Everything the robot does inside an intersection is in **`src/navigation/intersection.py`**, in three stages:
 
 ```
-stop line leaves the view                    the line (1.5 s later)                         lane back
+stop line leaves the view                    the line (0.5 s later)                         lane back
         │──────────── to_line ────────────────│──────── turn ────────│──────── exit ────────│
         straight, holding heading on the gyro   left/right duties     straight on the new   lane keeping
                                                 until the gyro reads  heading               takes over

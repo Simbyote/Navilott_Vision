@@ -58,6 +58,8 @@ The motors stop first however the run ends.
 
 ---
 
+**The battery** (with `--camera` only): checked at rest before the start, as in a course run (`production_run.md`), except that on the bench (`--no-motors`) a critical pack only warns, since nothing moves. It's watched from the start: a critical pack ends the run (`ended by battery critical`), and `summary.txt` gets a line with the start, lowest and end voltage. The lowest under load, against `stop_line_cm` and where the robot stopped, shows whether a sagging pack is what moves the stop (`STOP_DELAY_MS` is a time).
+
 ## 3. Running it on the mat
 
 Place the robot in its lane, pointing along it, with clear space ahead.
@@ -95,7 +97,7 @@ Everything goes to `runs/nav_<timestamp>/`.
 
 - **Timings:** `capture_ms`, `phase2_ms`, `phase3_ms`, `nav_ms`, `latency_ms`.
 - **Packet fields the navigator used:** lane status, offset (and cm), heading, light, stop sign, stop line cm, wheel counts per second.
-- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
+- **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, `battery_v` and `battery_state` (the pack's smoothed volts and OK / WARNING / CRITICAL; empty without the ADC or on a replay), and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
 
 **`nav.avi`**: the Phase 3 video with a strip under it:
 
@@ -113,7 +115,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
-- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (1.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
+- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.

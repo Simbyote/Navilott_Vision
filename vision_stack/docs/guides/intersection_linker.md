@@ -14,7 +14,7 @@ The intersection rule drives three stages from the moment the stop line leaves t
 
 | Stage | What the robot does | Ends |
 | --- | --- | --- |
-| `to_line` | Straight to the line, holding its heading on the gyro | At the line, `STOP_DELAY_MS` (1.5 s) after the line left the view |
+| `to_line` | Straight to the line, holding its heading on the gyro | At the line, `STOP_DELAY_MS` (0.5 s) after the line left the view |
 | `turn` (left/right only) | Left: `(0.36, 0.63)`, a wide arc into the far lane. Right: `(0.45, 0.0)`, a pivot on the right wheel | The gyro reads 85° turned that way (`TURN_TARGET_DEG`), or the time limit (left 4.1 s, right 2.4 s) |
 | `exit` | Straight on the new heading | Both lane lines for 3 frames, one for 6, or 3 s; then lane keeping |
 

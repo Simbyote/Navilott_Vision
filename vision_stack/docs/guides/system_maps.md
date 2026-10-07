@@ -265,7 +265,7 @@ flowchart TB
     CAN --> S1["keep near-horizontal edges<br/>(gradient direction)"]
     S1 --> S2["split: top edges (dark to bright going down)<br/>and bottom edges"]
     S2 --> S3["fit each, pair a top with a bottom"]
-    S3 --> S4["gate: length, tilt within 15°,<br/>thickness, brightness (StopLineFilter)"]
+    S3 --> S4["gate: length, tilt within 5°,<br/>thickness, brightness (StopLineFilter)"]
     S4 --> SC["StopLineCandidate[]"]
 
     SG["sign ROI (BGR)"] --> G1["redness mask (Otsu, floored)"]

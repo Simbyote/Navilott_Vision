@@ -49,6 +49,7 @@ PURE = {"red": (0, 0, 255), "yellow": (0, 255, 255), "green": (0, 255, 0)}   # B
 BG = 20                                                                       # dark background, below every band's V floor
 GATES = ("seen", "area", "aspect", "round", "core", "accepted")
 TRACE_KEYS = {"label", "bbox", "gate", "area", "aspect", "fill", "confidence", "roundness", "core_px", "hsv"}
+GLOW_TRACE_KEYS = TRACE_KEYS | {"ring", "votes"}       # glow mode adds the ring size and its votes
 CALIB = Path(__file__).resolve().parents[2] / "calibration" / "hsv_ranges.json"
 
 
@@ -779,7 +780,7 @@ def test_glow_keeps_the_spot_with_the_most_white_over_a_reflection():
     assert [c.label for c in cands] == ["green"]
     gates = {e["label"]: e["gate"] for e in dbg["trace"]}
     assert gates == {"green": None, "yellow": "smaller"}
-    assert all(set(e) == TRACE_KEYS for e in dbg["trace"])
+    assert all(set(e) == GLOW_TRACE_KEYS for e in dbg["trace"])
 
 
 @pytest.mark.software
@@ -889,3 +890,22 @@ def test_glow_a_small_spot_still_needs_min_ring_px_of_color():
     assert glow_read(roi)[0] == []
     roi[31, 40] = PURE["green"]                                        # a third
     assert [c.label for c in glow_read(roi)[0]] == ["green"]
+
+
+@pytest.mark.software
+def test_glow_debug_holds_the_white_mask_and_each_spot_its_ring_and_votes():
+    # What debug_traffic's glow view draws (2026-10-07)
+    roi = glow_roi()
+    roi[30, 40:42] = (255, 255, 255)                                   # 2 white px
+    roi[29, 40:42] = PURE["green"]
+    roi[31, 40] = PURE["green"]                                        # 3 green px in its ring
+    _, dbg = glow_read(roi, trace=True)
+    assert dbg["glow"] is True
+    assert set(zip(*np.nonzero(dbg["white"]))) == {(30, 40), (30, 41)} and dbg["white"].max() == 255
+    (e,) = dbg["trace"]
+    assert e["votes"] == {"red": 0, "yellow": 0, "green": 3}
+    ring = cv2.dilate(np.pad(np.ones((1, 2), np.uint8), 2), cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * GLOW.ring_px + 1,) * 2))
+    assert e["ring"] == np.count_nonzero(ring) - 2
+    _, blob_dbg = extract_traffic_light_candidates(roi, TEST_HSV, TEST_BLOB)
+    assert blob_dbg["glow"] is False and "white" not in blob_dbg

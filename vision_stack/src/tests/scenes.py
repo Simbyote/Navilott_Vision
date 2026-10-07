@@ -311,7 +311,8 @@ SCENES = {
     "stop_line_thick_marks": scene(marks=(150, 330), mark_width=30, stop_line=(100, 380, 40),
                                    stop_line_thickness=12),
     "stop_line_clipped": scene(stop_line=(120, 320, 76)),
-    "stop_line_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=8.0),
+    "stop_line_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=4.0),       # inside MEASURED's 5 deg
+    "stop_line_too_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=8.0),
     "stop_line_faint": _faint_stop_line(),
     "two_stop_lines": _two_stop_lines(),
     "intersection": scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,)),

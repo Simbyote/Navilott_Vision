@@ -29,11 +29,6 @@ import threading
 import time
 from typing import Callable, List, Tuple
 
-import board
-import busio
-from adafruit_ads1x15.ads1115 import ADS1115
-from adafruit_ads1x15.analog_in import AnalogIn
-
 from src.diagnostics.battery_state import BatteryState, BatteryStateMachine
 from src.params import ADS1115_I2C_ADDRESS
 
@@ -66,10 +61,23 @@ class Power:
     CONFIRM_SAMPLES = 3    # consecutive samples needed to change state
     FAULT_AFTER = 3        # consecutive failed ADC reads before sensor fault
 
-    def __init__(self):
-        self._i2c = busio.I2C(board.SCL, board.SDA)
-        self._ads = ADS1115(self._i2c, address=ADS1115_I2C_ADDRESS)
-        self._chan = AnalogIn(self._ads, 0)  # A0 = V-Sense divider
+    def __init__(self, channel=None):
+        """
+        channel: anything with .voltage (volts at the ADC pin), to test
+        without hardware; None opens the ADS1115 (the Pi's I2C libraries are
+        imported only then, so this module imports anywhere).
+        """
+        self._i2c = None
+        if channel is None:
+            import board
+            import busio
+            from adafruit_ads1x15.ads1115 import ADS1115
+            from adafruit_ads1x15.analog_in import AnalogIn
+
+            self._i2c = busio.I2C(board.SCL, board.SDA)
+            ads = ADS1115(self._i2c, address=ADS1115_I2C_ADDRESS)
+            channel = AnalogIn(ads, 0)  # A0 = V-Sense divider
+        self._chan = channel
 
         self._voltage_ema = 0.0
         self._lock = threading.Lock()
@@ -185,7 +193,8 @@ class Power:
     def cleanup(self) -> None:
         """Stop monitoring thread, release I2C."""
         self.stop_monitoring()
-        self._i2c.deinit()
+        if self._i2c is not None:
+            self._i2c.deinit()
 
     # ── Internal ───────────────────────────────────────────────────────
 
