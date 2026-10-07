@@ -863,3 +863,29 @@ def test_glow_a_flat_strip_of_glare_is_no_lamp_however_white_or_ringed():
     cv2.rectangle(tall, (40, 8), (40, 52), (255, 255, 255), -1)         # 1 x 45 white
     assert glow_read(tall)[0] == []
     assert [c.label for c in glow_read(roi, replace(GLOW, max_white_aspect=20.0))[0]] == ["red"]
+
+
+
+@pytest.mark.software
+def test_glow_a_white_spot_needs_its_color_on_a_share_of_its_ring_not_a_few_stray_pixels():
+    # A glare (2026-10-07): a big white spot whose ring touched a few colored
+    # pixels, past min_ring_px but ~5% of the ring
+    roi = glow_roi()
+    cv2.rectangle(roi, (20, 20), (31, 31), (255, 255, 255), -1)       # 12 x 12 white, a ~56 px ring
+    roi[18, 24:28] = PURE["red"]                                       # 4 stray red px in the ring
+    cands, dbg = glow_read(roi, trace=True)
+    assert cands == [] and [(e["label"], e["gate"]) for e in dbg["trace"]] == [("none", "ring")]
+    assert [c.label for c in glow_read(roi, replace(GLOW, min_ring_share=0.0))[0]] == ["red"]
+    lit = glow_roi()
+    led(lit, (60, 30), "red", white_r=4, ring_r=6)                      # its ring colored all round
+    assert [c.label for c in glow_read(lit)[0]] == ["red"]
+
+
+@pytest.mark.software
+def test_glow_a_small_spot_still_needs_min_ring_px_of_color():
+    roi = glow_roi()
+    roi[30, 40:42] = (255, 255, 255)                                   # 2 white px, a ~14 px ring
+    roi[29, 40:42] = PURE["green"]                                     # 2 colored: over 10%, under 3 px
+    assert glow_read(roi)[0] == []
+    roi[31, 40] = PURE["green"]                                        # a third
+    assert [c.label for c in glow_read(roi)[0]] == ["green"]
