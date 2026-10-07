@@ -77,9 +77,11 @@ Views (--views a,b):
                         measured distance, lane candidates skipped as part of
                         a line, and the gradient split that feeds it
     traffic             color branch on the traffic ROI: the three HSV masks
-                        and every blob (debug_traffic). The color branch runs
-                        with calibration/hsv_ranges.json (MEASURED); --hsv
-                        swaps in other ranges
+                        and every blob (debug_traffic); in glow mode
+                        (MEASURED) also the white mask, and each white spot
+                        with its glow gate and ring share. The color branch
+                        runs with calibration/hsv_ranges.json (MEASURED);
+                        --hsv swaps in other ranges
 
 Display:
     On by default; falls back to headless if the window can't open, so the

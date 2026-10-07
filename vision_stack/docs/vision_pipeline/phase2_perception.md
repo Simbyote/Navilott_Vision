@@ -422,7 +422,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 | --- | --- |
 | lane (always on, `debug_lane`) | Every raw candidate (green usable, red with the gate that rejected it), each anchor's foot, the chosen left and right boundaries, robot and lane center, mode and offset gauge |
 | `stop` (`debug_stop`) | The color sign ROI with its red blobs colored by the gate that decided them ("smaller" for those behind the largest), with vertex count and confidence; beside it the redness image, the red mask outlined, and the threshold |
-| `traffic` (`debug_traffic`) | HSV masks and blobs against the bands |
+| `traffic` (`debug_traffic`) | HSV masks and blobs against the bands. In glow mode, also the white mask, and each white spot boxed with the glow gate that decided it (white, shape, ring, smaller) and its ring's winning share |
 | `lanegeo` (`debug_lanegeo`) | On the lane ROI: every contour the lane detector traced, red if geometry refused it (gate and measured value), amber if lane offset did, green if usable, with the chosen anchors; below it, the edges with what the horizontal-line filter removed and what closing added. Needs the chain's trace (`trace=True`, which the linker sets), which adds `lane_debug["trace"]` |
 | `stopline` (`debug_stopline`) | On the lane ROI: accepted stop lines as bands, rejected top edges with their gate, the measured distance, lane candidates skipped as part of a stop line; below it, the gradient split (all edges, kept top and bottom edges, fitted lines) |
 

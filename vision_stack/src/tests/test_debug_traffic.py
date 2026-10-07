@@ -8,7 +8,9 @@ explicit HSV bands as the color branch tests rather than the scaffold or a
 calibration.
 
 --software  extract (on and off), per-color totals, grading, mask panel,
-            labels, CSV row and summary report. No camera.
+            labels, CSV row and summary report; in glow mode the white mask
+            tile, glow gate labels with the ring share, and glow gate counts
+            in the footer, CSV and report. No camera.
 --hardware  Records the traffic view over a run (live camera or --replay) as
             video + CSV, and saves the rendered view for three sample frames.
             Uses calibration/hsv_ranges.json if present, else the scaffold.
@@ -23,7 +25,7 @@ import pytest
 
 import src.debugger.debug_video as dv
 from src.capture.camera import FrameData
-from src.debugger.debug_traffic import COLORS, LIGHT_COLORS, TrafficView
+from src.debugger.debug_traffic import COLORS, GLOW_GATES, LIGHT_COLORS, WHITE_TINT, TrafficView
 from src.params import GREEN, HSV_RANGES_PATH, RED, TRAFFIC_LIGHT, YELLOW
 from src.perception.color_branch import BlobFilter, ColorConfig, ColorRange, GlowFilter, HSVRanges, load_color_config
 from src.perception.preprocess import preprocess_frame
@@ -97,11 +99,14 @@ def test_glow_mode_frames_extract_render_and_log():
     v = TrafficView()
     data = v.extract(chain, frame)
     assert [c.label for c in data["accepted"]] == [RED] and data["trace"][0]["gate"] is None
+    assert data["glow"] and np.count_nonzero(data["white"]) > 0
     assert v.render(data).ndim == 3
-    row = v.row(data)
-    assert len(row) == len(v.CSV_FIELDS) and row[v.CSV_FIELDS.index("best_label")] == RED
+    row = dict(zip(v.CSV_FIELDS, v.row(data)))
+    assert len(row) == len(v.CSV_FIELDS) and row["best_label"] == RED
+    assert row["glow"] == 1 and row["mask_white_px"] > 0 and row["best_ring_share"] > 0.5
     v.observe(data)
-    assert "fusion passed a light on" in "\n".join(v.report())
+    report = "\n".join(v.report())
+    assert "fusion passed a light on" in report and "named by its ring (glow)" in report
 
 
 @pytest.mark.software
@@ -245,6 +250,106 @@ def test_report_counts_candidates_fused_colors_coverage_and_rejects():
     assert "fused light color: red 1" in report
     assert "median mask coverage of the ROI: red 10.0%" in report  # median of 10% and 0%, upper middle
     assert "blobs seen 3, accepted 1; rejected by gate: area 1, aspect 1" in report
+
+
+# =============================================================================
+# Glow mode
+# =============================================================================
+
+def spot(label=RED, gate=None, px=5, conf=1.0, bbox=(10, 10, 6, 6), ring=20, votes=None, aspect=1.0):
+    """One glow trace entry, as _glow_candidates records it."""
+    votes = votes if votes is not None else {RED: 5, YELLOW: 0, GREEN: 0}
+    return {"label": label, "bbox": bbox, "gate": gate, "area": float(px), "aspect": aspect,
+            "fill": None, "confidence": conf, "hsv": None, "ring": ring, "votes": votes}
+
+
+def glow_data(entries=(), white=None, **kw):
+    data = view_data(entries, **kw)
+    data["glow"] = True
+    data["white"] = white if white is not None else np.zeros(ROI_SHAPE, np.uint8)
+    return data
+
+
+@pytest.mark.software
+def test_glow_render_stacks_the_white_mask_over_the_three_color_masks():
+    v = TrafficView()
+    white = np.full(ROI_SHAPE, 255, np.uint8)
+    masks = {c: np.zeros(ROI_SHAPE, np.uint8) for c in COLORS}
+    masks[GREEN][:] = 255
+    img = v.render(glow_data(white=white, masks=masks))
+    s, _, _, _, hh, fh = v._metrics(1)
+    pw, ph = ROI_SHAPE[1] * s, ROI_SHAPE[0] * s
+    x0, mh = pw + dv.GAP_PX * s, ph // 4
+    assert img.shape == (hh + ph + fh, x0 + pw // 3, 3)                     # as wide as blob mode
+    tw = round(mh * ROI_SHAPE[1] / ROI_SHAPE[0])                             # tiles keep the ROI's aspect
+    assert tuple(img[hh + mh - 3, x0 + tw - 1]) == WHITE_TINT
+    assert tuple(img[hh + mh - 3, x0 + tw + 1]) == (0, 0, 0)
+    probe_x = x0 + tw // 2
+    assert tuple(img[hh + mh - 3, probe_x]) == WHITE_TINT                    # tile 0: white
+    assert tuple(img[hh + 4 * mh - 3, probe_x]) == LIGHT_COLORS[GREEN]       # tile 3: green
+    assert tuple(img[hh + 2 * mh - 3, probe_x]) == (0, 0, 0)                 # tile 1: red, empty
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("e, label", [
+    (spot(gate="white", px=1, label="none"), "white 1px"),
+    (spot(gate="shape", aspect=10.5), "red asp 10.50"),
+    (spot(gate="ring", label="none", ring=50, votes={RED: 3, YELLOW: 0, GREEN: 0}), "no ring 6%"),
+    (spot(gate="ring", label="none", votes={}), "no ring"),
+    (spot(YELLOW, gate="smaller", px=2), "yellow 2px smaller"),
+    (spot(conf=0.6, px=3, ring=20, votes={RED: 4, YELLOW: 1, GREEN: 0}), "red c0.60 3px ring 20%"),
+])
+def test_glow_labels_name_the_glow_gate_and_the_ring_share(e, label):
+    v = TrafficView()
+    assert v._label(e, v._state(e)) == label
+
+
+@pytest.mark.software
+def test_glow_low_label_shows_the_threshold_it_missed():
+    v = TrafficView(0.5)
+    e = spot(conf=0.4, px=2)
+    assert v._label(e, v._state(e)) == "red c0.40 2px ring 25%<0.50"
+
+
+@pytest.mark.software
+def test_glow_row_and_report_count_the_glow_gates_from_the_trace():
+    entries = [spot(conf=0.6, px=3, ring=20, votes={RED: 4, YELLOW: 0, GREEN: 0}),
+               spot(YELLOW, gate="smaller", px=2), spot("none", gate="ring", votes={}),
+               spot("none", gate="ring", votes={}), spot(gate="shape"), spot("none", gate="white", px=1)]
+    white = np.zeros(ROI_SHAPE, np.uint8)
+    white[5, 5:9] = 255
+    data = glow_data(entries, white=white, counts={RED: {"seen": 2, "shape": 1, "accepted": 1}})
+    v = TrafficView()
+    row = dict(zip(v.CSV_FIELDS, v.row(data)))
+    assert (row["glow"], row["mask_white_px"], row["best_ring_share"]) == (1, 4, 0.2)
+    assert [row[f"rej_{g}"] for g in GLOW_GATES] == [1, 1, 2, 1]
+    v.observe(data)
+    v.observe(data)
+    report = "\n".join(v.report())
+    assert "white spots seen 12, accepted 2; rejected by gate: white 2, shape 2, ring 4, smaller 2" in report
+    assert "through the blob filter" not in report
+
+
+@pytest.mark.software
+def test_glow_without_a_trace_counts_from_reject_counts_and_blob_rows_leave_glow_blank():
+    data = glow_data(trace=False, counts={RED: {"seen": 2, "white": 1, "accepted": 1}})
+    assert TrafficView._glow_totals(data) == {"seen": 2, "accepted": 1, "white": 1, "shape": 0,
+                                               "ring": 0, "smaller": 0}
+    row = dict(zip(TrafficView.CSV_FIELDS, TrafficView().row(view_data([blob()]))))
+    assert row["glow"] == 0 and [row[f"rej_{g}"] for g in GLOW_GATES] == ["", "", "", ""]
+    assert row["mask_white_px"] == "" and row["best_ring_share"] == ""
+
+
+@pytest.mark.software
+def test_glow_render_footer_and_header_differ_from_blob_mode():
+    v = TrafficView()
+    entries = [spot(conf=0.6, px=3)]
+    glow_img = v.render(glow_data(entries))
+    blob_img = v.render(view_data(entries))
+    _, _, _, _, hh, _ = v._metrics(1)
+    assert glow_img.shape == blob_img.shape                      # one size, so a run's video doesn't rescale
+    assert (glow_img[:hh, :200] != blob_img[:hh, :200]).any()    # the best line reads white px and ring
+    assert v.render(glow_data()).ndim == 3                      # no spot at all
 
 
 def _color_config():
