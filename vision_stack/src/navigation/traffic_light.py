@@ -1,12 +1,16 @@
-"""Traffic light rule: at a stop line, wait while the light is red.
+"""Traffic light rule: at a stop line, wait while the light is red or yellow.
 
 Purpose:
     A stop line stops the robot only with a stop sign (stop_sign.py) or a
     red light. When the shared StopLineTracker says the robot has reached
-    the line and Phase 3's voted drive_state was "stop" (red) within
-    RED_MEMORY_MS, this rule brakes, and keeps braking until the light has
-    read anything but red for RELEASE_MS. Green and caution (yellow) drive
-    on: only red stops (decided 2026-10-01).
+    the line and Phase 3's voted drive_state was "stop" (red) or "caution"
+    (yellow) within RED_MEMORY_MS, this rule brakes, and keeps braking until
+    the light has read green or nothing for RELEASE_MS. Only green drives on.
+
+    Yellow stops too (2026-10-07; until then only red did): from some angles
+    the overexposed red LED's ring reads orange, inside yellow's band, and
+    red read as yellow drove through. Stopping on both, a red misread as
+    yellow still stops the robot, and a real yellow turns red anyway.
 
     The light is a few small LEDs, and the detector can miss one for a
     frame. The rule used to need red on the exact frame the line was
@@ -16,32 +20,34 @@ Purpose:
 
 Main package:
     TrafficLightRule: update(packet, held) -> BRAKE while waiting at a red
-        light, None otherwise (navigation.Navigation falls through).
+        or yellow light, None otherwise (navigation.Navigation falls through).
 
 Flow:
-    1. Remember when the light last read red.
-    2. On the tracker's reached frame: red within RED_MEMORY_MS starts the wait.
-    3. Each frame while waiting: red -> BRAKE; not red for RELEASE_MS -> release.
+    1. Remember when the light last read red or yellow.
+    2. On the tracker's reached frame: one within RED_MEMORY_MS starts the wait.
+    3. Each frame while waiting: red or yellow -> BRAKE; neither for RELEASE_MS -> release.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import BRAKE, Command
 from src.navigation.stop_line import StopLineTracker
 
 RED_STATE = "stop"              # Phase 3's drive_state for a red light
+CAUTION_STATE = "caution"       # ... and for a yellow one
+STOP_STATES = (RED_STATE, CAUTION_STATE)
 REASON_RED = "red_light"
 
-# Red seen this long before the robot reaches the line still stops it: a
+# Red (or yellow) seen this long before the robot reaches the line still stops it: a
 # light dropped on the reached frame alone ran the red. ~10 frames at 20
 # FPS; a light that turned green longer ago than this drives on. Tune on the mat
 RED_MEMORY_MS = 500
-# Waiting at a red light ends once it has read anything but red this long:
+# Waiting ends once the light has read neither red nor yellow this long:
 # one dropped frame let the robot go on a red. ~5 frames at 20 FPS
 RELEASE_MS = 250
 
 
 class TrafficLightRule:
     """
-    Wait at a stop line while the light is red.
+    Wait at a stop line while the light is red or yellow.
 
     Inputs:
         tracker: The StopLineTracker navigation.Navigation updates each frame.
@@ -73,10 +79,10 @@ class TrafficLightRule:
                 The light is still watched, so a red seen at the line holds
                 the robot after the stop sign's hold ends.
         Outputs:
-            BRAKE while waiting at a red light; None otherwise.
+            BRAKE while waiting at a red or yellow light; None otherwise.
         """
         now = packet.timestamp_ms
-        red = packet.drive_state == RED_STATE
+        red = packet.drive_state in STOP_STATES
         if red:
             self._red_ms = now
         if (self.tracker.reached and self._red_ms is not None

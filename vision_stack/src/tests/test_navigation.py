@@ -204,6 +204,21 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
 
 
 @pytest.mark.software
+def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
+    from src.navigation.intersection import LEFT_TURN, STAGE_TURN
+    from src.navigation.route import Route
+    wait_ms = STOP_DELAY_MS + 1000
+    case = intersection({"drive_state": "caution"}, after_frames=0)
+    case += [{"drive_state": "caution"}] * (wait_ms // MS) + [{}] * 20
+    out = run(Navigation(route=Route(("left",))), case)
+    assert rules_over(out)[:4] == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION]
+    after_wait = next(i for i, (_, _, rec) in enumerate(out)
+                      if i > 0 and out[i - 1][2]["rule"] == RULE_TRAFFIC_LIGHT and rec["rule"] != RULE_TRAFFIC_LIGHT)
+    _, cmd, rec = out[after_wait]
+    assert rec["stage"] == STAGE_TURN and rec["maneuver"] == "left" and cmd == LEFT_TURN
+
+
+@pytest.mark.software
 def test_a_green_line_is_crossed_straight_then_lane_keeping_takes_over():
     case = intersection(after={"lane_mode": "right_only", "lane_offset": -0.9}, after_frames=40) + [{}] * 5
     out = run(Navigation(), case)
