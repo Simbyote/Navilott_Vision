@@ -181,6 +181,7 @@ class Probe(h.Routine):
 
     def trial(self, ctx, i):
         self.calls.append(f"trial {i}")
+        self.attempts = getattr(self, "attempts", []) + [ctx.attempt]
         if i == self.fail_at:
             raise RuntimeError("motor driver fault")
         return {"value": ctx.console.ask_number("Value")}
@@ -224,7 +225,9 @@ def test_redo_runs_the_trial_again_and_discard_drops_it(tmp_path):
     assert res["trials_kept"] == 3 and [x["value"] for x in json.loads(
         (tmp_path / "out" / "results.json").read_text())["rows"]] == [1.0, 2.0, 3.0]
     assert "again" in t.said() and "discarded" in t.said()
-    assert r.calls.count("trial 0") == 1 and "trial 4" in r.calls          # five attempts for three kept
+    # five attempts for three kept: the redo and the discard ran trial 0 and trial 1 again
+    assert [c for c in r.calls if c.startswith("trial")] == ["trial 0", "trial 0", "trial 1", "trial 1", "trial 2"]
+    assert r.attempts == [0, 1, 2, 3, 4]                                    # ctx.attempt counts every start
 
 
 @pytest.mark.software
@@ -302,8 +305,8 @@ def test_the_command_line_lists_runs_and_refuses(tmp_path, monkeypatch):
     assert main(["nope"], t.console()) == 2 and "no routine 'nope'" in t.said()
     monkeypatch.setattr(h, "conditions", no_conditions)
     import src.routines.__main__ as m
-    monkeypatch.setattr(m, "run_routine", lambda r, c, out, n, tester, notes: h.run_routine(
-        r, c, out, n, tester, notes, conditions_fn=no_conditions))
+    monkeypatch.setattr(m, "run_routine", lambda r, c, out, n, tester, notes, options: h.run_routine(
+        r, c, out, n, tester, notes, options, conditions_fn=no_conditions))
     t = Person("Ignacio", "pen", "15.0", "", "15.1", "", "15.0", "", "15.1", "", "15.0", "")
     assert main(["tape-check", "--out", str(tmp_path / "a")], t.console()) == 0
     assert json.loads((tmp_path / "a" / "results.json").read_text())["conditions"]["start"]["tester"] == "Ignacio"
@@ -313,3 +316,32 @@ def test_the_command_line_lists_runs_and_refuses(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "check_needs", lambda needs: ["the GPIO daemon isn't running: make pigpiod"])
     t = Person()
     assert main(["tape-check"], t.console()) == 2 and "make pigpiod" in t.said()
+
+
+@pytest.mark.software
+def test_settings_parse_as_numbers_or_text_and_only_the_routines_own():
+    from src.routines.__main__ import parse_settings
+    known = {"stage_s": "", "duty": "", "mode": ""}
+    assert parse_settings(["stage_s=30", "duty=0.35", "mode=quiet", " duty = 1e-1 "], known) == \
+        {"stage_s": 30, "duty": 0.1, "mode": "quiet"}
+    assert isinstance(parse_settings(["stage_s=30"], known)["stage_s"], int)        # a count stays a whole number
+    with pytest.raises(ValueError, match="no setting 'speed'; this routine has: duty, mode, stage_s"):
+        parse_settings(["speed=1"], known)
+    with pytest.raises(ValueError, match="expected KEY=VALUE"):
+        parse_settings(["stage_s"], known)
+
+
+@pytest.mark.software
+def test_the_command_line_passes_settings_and_lists_them(tmp_path, monkeypatch):
+    import src.routines.__main__ as m
+    seen = {}
+    monkeypatch.setattr(m, "run_routine", lambda r, c, out, n, tester, notes, options: seen.update(options=options)
+                        or {"verdict": "RECORDED"})
+    monkeypatch.setattr(m, "check_needs", lambda needs: [])
+    assert main(["power-profile", "--tester", "x", "--set", "stage_s=5", "--out", str(tmp_path)], Person().console()) == 0
+    assert seen["options"] == {"stage_s": 5}
+    p = Person()
+    assert main(["power-profile", "--tester", "x", "--set", "nope=1"], p.console()) == 2 and "no setting 'nope'" in p.said()
+    p = Person()
+    main(["--list"], p.console())
+    assert "--set stage_s=..." in p.said() and "--set max_s=..." in p.said()

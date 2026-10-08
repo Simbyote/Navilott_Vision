@@ -22,6 +22,7 @@ make routine-tape-check ARGS="--trials 10 --notes 'blinds open'"
 | `--tester NAME` | your name (otherwise it asks) |
 | `--notes TEXT` | anything worth keeping about this run: lighting, mat, what changed |
 | `--out DIR` | where the folder goes (default `runs/routine_<name>_<time>/`) |
+| `--set KEY=VALUE` | a routine's own setting (`make routines` lists each routine's) |
 
 The flow:
 1. It checks what the routine needs is running. A routine that drives says `make pigpiod` if the GPIO daemon isn't.
@@ -64,8 +65,56 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | Routine | Question | Verifies | Needs |
 |---|---|---|---|
 | `tape-check` | How much do this tester's tape readings of one fixed distance vary? | the hand measurement every accuracy routine relies on | nothing |
+| `stop-distance` | How far before a stop line does the robot stop, and how consistently? | D4, the navigation side | `pigpiod`; motors on |
+| `power-profile` | How far does the pack sag, and does the Pi stay unthrottled, under each part of the robot running? | R4's load; the battery's margin | `pigpiod`; wheels up for two stages |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
+
+**`stop-distance`** (card: `docs/routines/requests/stop-distance.md`). Each trial:
+1. The robot starts on a mark about 60 cm before an intersection with a stop sign (or the light on red).
+2. It runs the whole chain with the motors on, as `make navigate` would.
+3. The run ends once navigation has braked for the line and both wheels read stopped. This uses the stop sign rule's own `STOPPED_CPS`, and the stop sign's hold counts as stopped.
+4. The tester tapes the gap from the line's near edge to the bumper. A negative gap means past the line.
+
+Each row keeps, beside the gap:
+- `reported_cm`: the last `stop_line_cm` before braking began;
+- `speed_cps`: the wheels' speed on the last driving frame;
+- `battery_v`;
+- what it braked for, and what ended the run.
+
+Every attempt's run folder is `attempt_NN/`, so `make render RUN=...` replays any of them. PASS needs all three:
+- every trial stopped before the line;
+- the mean gap is within 2–6 cm;
+- the gaps span at most 2 cm.
+
+These are the card's first guesses, to refine after the first runs. Settings: `--set start_cm=...` records where the start mark was, and `--set max_s=...` is each approach's backstop (20 s).
+
+Someone must stand at the intersection: the motors are on.
+
+**`power-profile`** (card: `docs/routines/requests/power-profile.md`). Five stages, one per trial:
+
+| Stage | What runs |
+|---|---|
+| `rest` | only this routine: the baseline |
+| `camera` | the camera capturing |
+| `pipeline` | the whole chain with the motors off |
+| `motors` | wheels up, at base duty |
+| `full` | wheels up, the chain and the wheels together |
+
+Each stage runs for `stage_s` (60 s by default). Every 0.5 s it samples the pack's raw volts, the CPU's busy share, the temperature, and the Pi's under-voltage and throttle flags. Each stage's row has:
+- the pack's mean and lowest volts;
+- the **sag** against the rest stage, in V;
+- the **drain** in mV per minute: a fitted slope, rough over a minute, steadier with `--set stage_s=180`;
+- CPU, the hottest reading, and whether under-voltage or throttling showed.
+
+`samples.csv` holds every sample, numbered by attempt. A redo repeats the same stage, and sag is measured against the latest rest.
+
+PASS needs all three:
+- the pack stayed at or above the warning level (10.5 V) under every load;
+- no stage saw the Pi's under-voltage;
+- no stage was throttled.
+
+The robot measures voltage, not current, so there are no watts. A current sensor (INA219 or INA226 on the I2C bus) would add them. Settings: `--set stage_s=...`, `--set duty=...` (the wheels' duty, 0.4 by default).
 
 ---
 
@@ -115,7 +164,7 @@ class StopDistance(Routine):
 
     def setup(self, ctx):        # open hardware once; ctx.options, ctx.state are free to use
         ...
-    def trial(self, ctx, i):     # prompt, run, measure; return a row with the fields
+    def trial(self, ctx, i):     # i: the trial being filled (a redo repeats it); ctx.attempt counts every start
         ctx.console.wait("Robot on the start mark? Enter to drive")
         ...
         return {"gap_cm": ctx.console.ask_number("Gap from the line to the bumper", lo=-20, hi=60, unit="cm"), ...}
@@ -133,5 +182,7 @@ Building from a card:
 - **§4, ground truth:** an `ask_number()` with the range a real answer can have.
 - **§5, what the robot reports:** read it in the trial and put it in the row beside the hand measurement.
 - **§8, pass criteria:** become `judge()`. A card without numbers yet is a characterization; leave `judge()` returning `[]`.
+- **`settings`:** `{name: description}`, the routine's own `--set` options. Read them from `ctx.options`, with defaults set in `setup()`.
+- **Per-attempt files:** name them by `ctx.attempt`, so a redo doesn't overwrite them. Extra files go in `ctx.out_dir`.
 - **`needs`:** list what must be running, which `check_needs` checks before the first prompt. Add a new need to `harness.NEEDS` with the instruction to fix it.
 - **Tests:** script the tester with a fake console, as `test_routines.py` does.

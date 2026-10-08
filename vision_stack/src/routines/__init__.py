@@ -11,6 +11,8 @@ Main package:
     ROUTINES: {name: Routine class}, what make routines lists and
         make routine-<name> runs.
 """
+from src.routines.power_profile import PowerProfile
+from src.routines.stop_distance import StopDistance
 from src.routines.tape_check import TapeCheck
 
-ROUTINES = {r.name: r for r in (TapeCheck,)}
+ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile)}

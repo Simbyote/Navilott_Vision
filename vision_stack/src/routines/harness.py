@@ -162,6 +162,8 @@ class Routine:
     fields: The columns a trial's row has, in order.
     needs: What must be running first, checked by check_needs: "pigpiod".
     instructions: What the tester sets up before the first trial.
+    settings: The routine's own options ({name: description}), given as
+        --set name=value and read from ctx.options.
     """
     name = ""
     title = ""
@@ -171,12 +173,16 @@ class Routine:
     fields: tuple = ()
     needs: tuple = ()
     instructions = ""
+    settings: dict = {}             # {name: what it is}: the routine's own --set KEY=VALUE options
 
     def setup(self, ctx: "Context") -> None:
         """Before the first trial: open hardware, ask set-up questions."""
 
     def trial(self, ctx: "Context", i: int) -> dict:
-        """One trial: prompt, measure, return a row with the fields."""
+        """
+        One trial: prompt, measure, return a row with the fields. i is the
+        trial being filled (0-based): a redo runs the same i again.
+        """
         raise NotImplementedError
 
     def teardown(self, ctx: "Context") -> None:
@@ -189,11 +195,16 @@ class Routine:
 
 @dataclass
 class Context:
-    """What a routine's methods get: the console, its folder, the options and a scratch dict."""
+    """
+    What a routine's methods get: the console, its folder, the options, a
+    scratch dict, and attempt: how many trials have been started before
+    this one (redone and discarded ones too), for naming per-attempt files.
+    """
     console: Console
     out_dir: Path
     options: dict = field(default_factory=dict)
     state: dict = field(default_factory=dict)
+    attempt: int = 0
 
 
 # =============================================================================
@@ -304,15 +315,14 @@ def run_routine(routine: Routine, console: Console, out_dir, trials: int | None 
     t0 = clock()
     try:
         routine.setup(ctx)
-        i = 0
         while len(rows) < n:
             say(f"\n--- trial {len(rows) + 1} of {n} ---")
             try:
-                row = routine.trial(ctx, i)
+                row = routine.trial(ctx, len(rows))
             except (Quit, KeyboardInterrupt):
                 stopped = True
                 break
-            i += 1
+            ctx.attempt += 1
             say("  " + ", ".join(f"{k} {_fmt(row.get(k))}" for k in routine.fields))
             try:
                 choice = console.after_trial()
