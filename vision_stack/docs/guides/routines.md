@@ -2,7 +2,7 @@
 
 > Prompted hardware tests: one question about the robot, answered over repeated trials and judged PASS or FAIL against criteria agreed up front. Whoever runs one follows the console; nobody needs to know which linker or flags are behind it.
 
-**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Shared camera:** `camera_look.py` (a parked look through Phases 1-3) · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png` · **Cards:** `docs/routines/requests/`
+**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Shared camera:** `camera_look.py` (a parked look through Phases 1-3) · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png`, `35_routine_detect_range.png`, `36_routine_lane_offset.png`, `37_routine_recover_offset.png`, `38_routine_frame_budget.png`, `39_routine_course_run.png` · **Cards:** `docs/routines/requests/`
 
 ---
 
