@@ -67,6 +67,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `tape-check` | How much do this tester's tape readings of one fixed distance vary? | the hand measurement every accuracy routine relies on | nothing |
 | `stop-distance` | How far before a stop line does the robot stop, and how consistently? | D4, the navigation side | `pigpiod`; motors on |
 | `power-profile` | How far does the pack sag, and does the Pi stay unthrottled, under each part of the robot running? | R4's load; the battery's margin | `pigpiod`; wheels up for two stages |
+| `figure-eight` | Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time? | course repeatability; demo-day endurance | `pigpiod`; motors on; two blocks of track |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
 
@@ -116,6 +117,35 @@ PASS needs all three:
 
 The robot measures voltage, not current, so there are no watts. A current sensor (INA219 or INA226 on the I2C bus) would add them. Settings: `--set stage_s=...`, `--set duty=...` (the wheels' duty, 0.4 by default).
 
+**`figure-eight`** (card: `docs/routines/requests/figure-eight.md`). Four lefts loop around one block and four rights around the next: a figure 8 through the intersection the two loops share.
+- **Start:** the robot at that intersection's stop line, about to turn left.
+- **One trial:** one continuous run with the motors on, the route `left ×4, right ×4` repeated.
+- **Ends:** after `minutes` (10 by default), or earlier on Ctrl-C, a critical battery, an error, or the lane lost (off the loop).
+- **Afterwards:** the tester enters how many times they touched the robot and how many laps they saw.
+
+Each trial's row has:
+- minutes run and what ended it;
+- intersections entered;
+- laps the robot counted (eight finished turns each) and laps seen;
+- touches;
+- turns not ended on the gyro, and turns off their ±90° by more than 20°;
+- the mean left and right heading, side by side: an asymmetry shows here;
+- mean lap time, lane-lost seconds, contract brakes, frame rate;
+- the pack at the start and end.
+
+The run's folder is `attempt_NN/`, with `nav.csv` and the frames, plus:
+- `intersections.csv`: each intersection's maneuver, turn end, heading and offset, lane back, volts;
+- `laps.csv`: each lap's time and volts.
+
+PASS needs all five:
+- no touches;
+- ran the whole time;
+- the robot's laps equal the laps seen (a missed or extra intersection breaks this);
+- every finished turn ended on the gyro;
+- every finished turn within 20° of its maneuver (`intersection_linker`'s tolerance).
+
+Battery and heat are reported, not judged: power-profile judges those. Frames are recorded as in any run, about 30 MB a minute. Setting: `--set minutes=...`. Motors on: stay near the track.
+
 ---
 
 ## 3. Asking for a routine
@@ -138,7 +168,7 @@ Ideas to start from:
 | | straight-line drift over 1 m | sideways offset from a taped line |
 | | turn accuracy at an intersection (with `intersection`'s PASS / CHECK) | heading against the mat's grid; exit position in the lane |
 | | detection range: traffic light and stop sign | marked distances on the mat |
-| | course repeatability over N full runs | completion, time, interventions |
+| | course repeatability over N full runs (`figure-eight` covers the endurance side) | completion, time, interventions |
 | Power | voltage under load stages: idle, camera, the pipeline with motors off, wheels-up driving, a full run | the routine's own volts, temperature, CPU and throttle readings |
 
 **Power has one limit:** the robot measures the battery's voltage, not its current. Voltage gives the sag under each load and the time to the warning level. Watts and energy need a current sensor, e.g. an INA219 or INA226 on the existing I2C bus (address 0x40, free; the bus has room).
