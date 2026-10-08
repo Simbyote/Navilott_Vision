@@ -158,7 +158,8 @@ class Routine:
     name: The command-line name (make routine-<name>).
     title, question: What the routine is and the one question it answers.
     requirement: The requirements.md row it verifies (P3, D4...), or "".
-    trials: How many trials by default (--trials overrides).
+    trials: How many trials by default (--trials overrides); plan() can
+        work it out from the settings instead.
     fields: The columns a trial's row has, in order.
     needs: What must be running first, checked by check_needs: "pigpiod".
     instructions: What the tester sets up before the first trial.
@@ -174,6 +175,10 @@ class Routine:
     needs: tuple = ()
     instructions = ""
     settings: dict = {}             # {name: what it is}: the routine's own --set KEY=VALUE options
+
+    def plan(self, options: dict) -> int:
+        """How many trials by default for these --set options: trials, unless they change it."""
+        return self.trials
 
     def setup(self, ctx: "Context") -> None:
         """Before the first trial: open hardware, ask set-up questions."""
@@ -300,8 +305,8 @@ def run_routine(routine: Routine, console: Console, out_dir, trials: int | None 
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    n = trials or routine.trials
     ctx = Context(console, out, dict(options or {}))
+    n = trials or routine.plan(ctx.options)
     say = console.say
     say(f"\n=== {routine.title or routine.name} ===")
     say(f"Question: {routine.question}")

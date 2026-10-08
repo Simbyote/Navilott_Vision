@@ -2,7 +2,7 @@
 
 > Prompted hardware tests: one question about the robot, answered over repeated trials and judged PASS or FAIL against criteria agreed up front. Whoever runs one follows the console; nobody needs to know which linker or flags are behind it.
 
-**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png` · **Cards:** `docs/routines/requests/`
+**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Shared camera:** `camera_look.py` (a parked look through Phases 1-3) · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png` · **Cards:** `docs/routines/requests/`
 
 ---
 
@@ -68,6 +68,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `stop-distance` | How far before a stop line does the robot stop, and how consistently? | D4, the navigation side | `pigpiod`; motors on |
 | `power-profile` | How far does the pack sag, and does the Pi stay unthrottled, under each part of the robot running? | R4's load; the battery's margin | `pigpiod`; wheels up for two stages |
 | `figure-eight` | Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time? | course repeatability; demo-day endurance | `pigpiod`; motors on; two blocks of track |
+| `detect-range` | From how far before the stop line does the robot read the traffic light (or stop sign) right? | D3, D2 | nothing driving; the light or sign posted as on the course |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -168,6 +169,26 @@ The vibration noise is reported, not judged. The summary also says:
 
 Lift the robot to turn it if it doesn't slide, but keep it flat: a tilt puts some of the turn on the gyro's other axes. Settings: `--set rest_s=...`, `--set vib_s=...`, `--set duty=...` (the wheels' duty in part 10).
 
+**`detect-range`** (card: `docs/routines/requests/detect-range.md`). The robot is parked; nothing drives. At each gap before an intersection's stop line (bumper to the line's near edge: `0, 10, 20, 30, 45` cm by default) the tester sets each state in turn, and the robot looks for about 2 s through the whole chain, with fresh votes each look:
+
+| Target | States |
+|---|---|
+| `light` (default) | red, yellow, green, off (or covered) |
+| `sign` | in place, taken away |
+
+Each look is one trial, so the default is 5 gaps × 4 states = 20 trials. It reads:
+- **OK:** the vote at the end is the right one, and a lit light or a posted sign was seen in at least half the frames (a missed green votes "go" like a real one; the frames tell them apart);
+- **WRONG:** the vote names something that isn't there (red read as yellow, an off light read as any colour, a sign that isn't there), or it's wrong and most frames saw a colour that isn't there (red seen as green votes "go", as seeing nothing does);
+- **MISSED:** anything else: the vote fell back to "go" / no sign.
+
+Each row has the gap, the state, the frames, the share that saw the right thing, the frames that saw something else, the vote and what was expected. Each look's last frame is saved as `attempt_NN_<gap>cm_<state>.jpg`, so a wrong read can be looked at. The summary gives the **range**: the largest gap up to which every state read OK.
+
+PASS needs both:
+- every trial within `need_cm` (20 cm) reads OK;
+- no WRONG read at any gap. A miss farther out only limits the range; a wrong read anywhere is a hazard.
+
+These are first guesses: the course's light and sign positions are still TBD in `course.md`. Settings: `--set target=sign`, `--set gaps=5,15,25`, `--set need_cm=...`, `--set frames=...`. The trial count follows the gaps and target.
+
 ---
 
 ## 3. Asking for a routine
@@ -235,6 +256,7 @@ Building from a card:
 - **§5, what the robot reports:** read it in the trial and put it in the row beside the hand measurement.
 - **§8, pass criteria:** become `judge()`. A card without numbers yet is a characterization; leave `judge()` returning `[]`.
 - **`settings`:** `{name: description}`, the routine's own `--set` options. Read them from `ctx.options`, with defaults set in `setup()`.
+- **A trial count that follows the settings:** override `plan(options)` to return it (detect-range: gaps × states). `--trials` still overrides it.
 - **Per-attempt files:** name them by `ctx.attempt`, so a redo doesn't overwrite them. Extra files go in `ctx.out_dir`.
 - **`needs`:** list what must be running, which `check_needs` checks before the first prompt. Add a new need to `harness.NEEDS` with the instruction to fix it.
 - **Tests:** script the tester with a fake console, as `test_routines.py` does.
