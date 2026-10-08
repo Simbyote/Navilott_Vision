@@ -2,7 +2,7 @@
 
 > Prompted hardware tests: one question about the robot, answered over repeated trials and judged PASS or FAIL against criteria agreed up front. Whoever runs one follows the console; nobody needs to know which linker or flags are behind it.
 
-**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png`
+**Code:** `src/routines/` (`harness.py` the shared flow, one module per routine, `ROUTINES` in `__init__.py`) · **Tests:** `src/tests/test_routines.py` · **Requests:** `docs/routines/request_card.md` · **Infographics:** `docs/infographics/31_routines.png` (how a routine runs), `32_routine_stop_distance.png`, `33_routine_power_profile.png`, `34_routine_figure_eight.png` · **Cards:** `docs/routines/requests/`
 
 ---
 
@@ -68,6 +68,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `stop-distance` | How far before a stop line does the robot stop, and how consistently? | D4, the navigation side | `pigpiod`; motors on |
 | `power-profile` | How far does the pack sag, and does the Pi stay unthrottled, under each part of the robot running? | R4's load; the battery's margin | `pigpiod`; wheels up for two stages |
 | `figure-eight` | Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time? | course repeatability; demo-day endurance | `pigpiod`; motors on; two blocks of track |
+| `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
 
@@ -145,6 +146,27 @@ PASS needs all five:
 - every finished turn within 20° of its maneuver (`intersection_linker`'s tolerance).
 
 Battery and heat are reported, not judged: power-profile judges those. Frames are recorded as in any run, about 30 MB a minute. Setting: `--set minutes=...`. Motors on: stay near the track.
+
+**`imu-check`** (card: `docs/routines/requests/imu-check.md`). Every turn ends when the gyro's heading reaches its target, and every heading hold subtracts `GYRO_BIAS_DPS` first. This checks both against the robot itself, through the same sensor hub. Ten trials in three parts:
+
+| Trials | Part | What the tester does | What it measures |
+|---|---|---|---|
+| 1 | rest | leaves the robot still on the floor for `rest_s` (60 s) | bias (mean yaw), noise, the heading's drift with the configured bias, read rate, read time, errors, temperature |
+| 2–9 | turns | lines it up on the mat's grid, Enter, turns it 90° by hand, lines it up again, Enter; left first, then alternating | the gyro's heading net of the rest bias against −90 / +90 |
+| 10 | vibration | wheels up on a box: the motors run at base duty for `vib_s` (30 s) | the noise with the motors on, and how many times rest's it is |
+
+A redo repeats the same part (the same turn direction). PASS needs all four:
+- the measured bias within 0.2 °/s of `GYRO_BIAS_DPS` (0.2 °/s is 12° a minute of heading hold);
+- the rest drift, with the configured bias, within 2° over the minute;
+- every turn within 3° of 90 (a turn the wrong way is 180° off);
+- no read errors.
+
+The vibration noise is reported, not judged. The summary also says:
+- the measured bias, and `put GYRO_BIAS_DPS = ... in config.py` when it's off by more than the tolerance;
+- each direction's scale: what share of the real 90° the gyro read (also `scale_left` / `scale_right` in `results.json`);
+- `flip IMU_YAW_SIGN` when both directions read the wrong way.
+
+Lift the robot to turn it if it doesn't slide, but keep it flat: a tilt puts some of the turn on the gyro's other axes. Settings: `--set rest_s=...`, `--set vib_s=...`, `--set duty=...` (the wheels' duty in part 10).
 
 ---
 
