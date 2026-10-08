@@ -69,6 +69,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `power-profile` | How far does the pack sag, and does the Pi stay unthrottled, under each part of the robot running? | R4's load; the battery's margin | `pigpiod`; wheels up for two stages |
 | `figure-eight` | Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time? | course repeatability; demo-day endurance | `pigpiod`; motors on; two blocks of track |
 | `detect-range` | From how far before the stop line does the robot read the traffic light (or stop sign) right? | D3, D2 | nothing driving; the light or sign posted as on the course |
+| `lane-offset` | Does the robot's reported position in the lane match a ruler, to within 2 cm? | P3 | nothing driving; a straight lane; a ruler |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -188,6 +189,15 @@ PASS needs both:
 - no WRONG read at any gap. A miss farther out only limits the range; a wrong read anywhere is a hazard.
 
 These are first guesses: the course's light and sign positions are still TBD in `course.md`. Settings: `--set target=sign`, `--set gaps=5,15,25`, `--set need_cm=...`, `--set frames=...`. The trial count follows the gaps and target.
+
+**`lane-offset`** (card: `docs/routines/requests/lane-offset.md`). `requirements.md`'s P3 procedure, prompted. The robot is parked on a straight lane at `0, +2, −2, +4, −4` cm from its center (+ = robot right of center), and looks for 100 frames at each. Before each look the tester enters the offset they measured with the ruler, so a placement 0.3 cm off doesn't count against the robot.
+
+- **The scale:** the ground scale (cm per px) isn't configured yet, so the first, centered look measures it as the procedure's step 1 does: 14 cm ÷ the lane's median width in px. The summary says the value to set as `cm_per_px` in `MEASURED_ESTIMATION` (`config.py`).
+- **Each row:** the planned and measured offset, the reported offset in cm (the mean filtered offset over the frames on vision), the error, the spread (the centered look's is the noise floor, step 2), the share of frames on vision, the lane's width in px. Each look's last frame is saved as `attempt_NN_<offset>cm.jpg`.
+
+PASS (P3): every position within 2 cm of the ruler. A position with no frames on vision has no reading and fails. Settings: `--set positions=0,1,-1,2,-2` (the first must be 0), `--set lane_cm=...`, `--set frames=...`.
+
+Run it before `recover-offset`: once it passes, the robot's own offset reading is a trustworthy measure while it drives.
 
 ---
 

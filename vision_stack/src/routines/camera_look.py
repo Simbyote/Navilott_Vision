@@ -11,7 +11,8 @@ Purpose:
     kept to save beside the row, so a wrong answer can be looked at.
 
 Main package:
-    Eyes: open(), look(n) -> (list of Seen dicts, last frame), close().
+    Eyes: open(), look(n) -> (list of Seen dicts, last frame),
+        roi_width_px(frame), close().
     seen(res, p3): one Phase3Result as a Seen dict.
     save_frame(path, frame): the frame as a JPEG; False when it can't.
     parse_numbers(v): a --set list ("0,10,20", or one number) as floats.
@@ -111,6 +112,11 @@ class Eyes:
             out.append(seen(res, self.p3))
             last = frame
         return out, last
+
+    def roi_width_px(self, frame) -> int:
+        """The lane ROI's width in px for this frame's size: what lane_offset's [-1, 1] is half of."""
+        from src.perception.roi_crop import resolve
+        return int(resolve(self.config.roi.lane, frame.shape[:2])[2])
 
     def close(self) -> None:
         if self.source is not None:

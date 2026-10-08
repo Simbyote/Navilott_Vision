@@ -14,8 +14,9 @@ Main package:
 from src.routines.detect_range import DetectRange
 from src.routines.figure_eight import FigureEight
 from src.routines.imu_check import ImuCheck
+from src.routines.lane_offset import LaneOffset
 from src.routines.power_profile import PowerProfile
 from src.routines.stop_distance import StopDistance
 from src.routines.tape_check import TapeCheck
 
-ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange)}
+ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange, LaneOffset)}
