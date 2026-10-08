@@ -29,7 +29,7 @@ The repository root holds two more makefiles, for the Pi itself:
 
 | File | Run | What it's for |
 |---|---|---|
-| `setup.mk` | once, on a fresh Pi: `make -f setup.mk setup` | apt packages, the camera stack, I2C, pigpio as a service, the venv |
+| `setup.mk` | once, on a fresh Pi: `make -f setup.mk setup` | apt packages, the camera stack, the diagnostics' tools (`make -f setup.mk diag-deps` on a Pi set up before them), I2C, pigpio as a service, the venv |
 | `session.mk` | every boot: `make -f session.mk session TIME="..."` | set the clock (the Pi has none), start pigpiod, open a venv shell |
 | `vision_stack/Makefile` | any time | run the robot's code: the course, linkers, diagnostics, analysis, tests |
 

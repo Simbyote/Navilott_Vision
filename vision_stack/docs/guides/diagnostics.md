@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10), `sched_latency.py` (how late Linux wakes a thread, section 11) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`, `test_sched_latency.py`
 
 ---
 
@@ -39,7 +39,7 @@ python3 -m src.diagnostics.monitor --pid 1234 --duration 60
 | `--duration S` | until the run ends | Stop recording after S seconds |
 | `--out DIR` | `runs/diag_<timestamp>` | Where the files go |
 
-The recorder costs the robot almost nothing: per interval, it reads two small files per thread plus `/proc/stat`, and runs `vcgencmd` once a second, all in a separate process.
+The recorder costs the robot almost nothing. It runs in a separate process. Per interval it reads two small files per thread plus `/proc/stat`. Once a second it runs `vcgencmd` and reads `/proc/interrupts`, `diskstats`, `meminfo`, `pressure` and every process's `stat`. Every 5 s it runs two more `vcgencmd` calls, for the clocks. Its own CPU shows in `procs.csv` as `monitor (self)`.
 
 ---
 
@@ -97,6 +97,18 @@ system
   temperature max 61.2 C   clock 600-1000 MHz   memory: run max 182.0 MB, available min 210.5 MB
   throttled during the run: never
   latched since boot: under_voltage
+
+os (the whole Pi)
+  CMA free min 180 MB   clocks: ISP 300-300 MHz, core 400-400 MHz
+  SD card: write mean 210 kB/s (max 1400), read max 0 kB/s, busy max 12%
+  stalled (pressure, max of the 10 s averages): cpu 4.1%, io 0.3%, memory 0.0%
+
+interrupts per second, busiest 8 (counted by the hardware; Unicam follows the frames)
+  unicam                             (41)  mean     40.0  max     41.0
+  ...
+other processes, busiest 6 (cpu % of one core; the run itself is in threads above)
+  pigpiod                  412  mean   6.2  max   7.9
+  monitor (self)          1101  mean   3.0  max   4.1
 ```
 
 | Column | Meaning |
@@ -168,3 +180,217 @@ Keep each run's `summary.txt`. The per-thread table, the core loads and the thro
 - **`cpu %` is an average over the interval.** A 50 ms spike inside a 0.5 s interval shows as 10%. Shorten `--interval` (0.1 is fine) to see bursts.
 - **Voluntary switches mix causes.** Sleeps, I/O and GIL waits all count. `py-spy --gil` separates out the GIL.
 - **Throttle flags need `vcgencmd`** (a Pi). Elsewhere the system lines say so, and the thread and core data still record.
+
+---
+
+## 7. Capture anatomy: the camera path
+
+`make capture-anatomy` (or `python3 -m src.diagnostics.capture_anatomy [--seconds 10] [--camera-control KEY=VALUE]`) records once how a frame gets from the sensor to OpenCV on this Pi. Stop the robot's pipeline first: the camera opens in one process at a time.
+
+```
+IMX290 --CSI-2--> Unicam --DMA--> raw Bayer in CMA memory --> VideoCore ISP --> YUV 480x270
+(1920x1080 10-bit)  (/dev/video0)                            (demosaic, colour, scale)
+                                         libcamera IPA (AGC/AWB, on the ARM cores) <-- ISP statistics
+                                         --> next exposure and gain, over I2C to the sensor
+YUV --> videoconvert --> videoflip --> BGR --> appsink --> OpenCV        (ARM cores, software)
+```
+
+It runs the robot's exact pipeline string, appsink swapped for a silent fakesink, under `gst-launch-1.0 -v` with GStreamer's latency tracer and libcamera's log on, and probes the rest:
+
+| File | From | Shows |
+|---|---|---|
+| `summary.txt` | all of it | the route, the caps, ms per element, the VideoCore side, findings |
+| `media<N>.txt`, `.dot`, `.png` | `media-ctl -p`, `--print-dot` | the kernel's hardware graph: sensor -> Unicam, the ISP's input and output nodes, the format on each link |
+| `gst_launch.txt`, `gst_pipeline.dot/.png` | `gst-launch-1.0 -v`, `GST_DEBUG_DUMP_DOT_DIR` | the caps every pad settled on: what the ISP hands over decides what videoconvert does |
+| `gst_trace.log`, `latency.csv` | `GST_TRACERS=latency(flags=pipeline+element)` | per frame: how long each element held it, and source pad to sink |
+| `libcamera.log` | `LIBCAMERA_LOG_LEVELS=*:INFO` | the sensor mode and Unicam format libcamera picked, the streams it configured |
+| `vc_*.txt` | `vcgencmd` | ARM, core, ISP, 3D and H.264 clocks; core volts; the ARM / GPU memory split |
+| `anatomy.json` | | everything parsed |
+
+Also kept: `uname.txt`, `v4l2_devices.txt`, `cameras.txt` (`rpicam-hello --list-cameras`), `gst_libcamerasrc.txt` (every control the camera takes). Graphviz (`sudo apt install graphviz`) draws the `.dot` files; without it they stay text. `media-ctl` and `v4l2-ctl` come with `v4l-utils`. A missing tool is listed under "not available here" and the rest still records.
+
+Findings it reports:
+- **videoconvert + videoflip over 2 ms a frame.** That is software work on the ARM cores. The ISP can output BGR, and the IMX290 can flip in hardware, which would make both copies go away.
+- **Fewer fps than asked for.**
+- **The CMA pool under 10% free.** Camera buffers are allocated from it.
+- **No frame at all.** Usually the camera is open in another process.
+
+Limits: the ISP's own time happens inside `libcamerasrc`, before its first pad, so GStreamer can't see it. The per-frame sensor timestamps (section 9) can. The tracer adds a little time to every element it measures, so treat the figures as an upper bound.
+
+---
+
+## 8. The rest of the Pi: interrupts, other processes, SD card, pressure
+
+Around the robot's own threads, the kernel and the other processes keep working, and some of that is the robot's work done elsewhere:
+- the camera's frames arrive as **Unicam** interrupts and go to the ISP over **VCHIQ**;
+- the IMU and the ADS1115 answer over **I2C**;
+- **pigpiod** times the motor PWM by DMA in its own process;
+- a recording writes to the **SD card**.
+
+The recorder (section 1) reads all of this once a second from `/proc` and `vcgencmd` (`src/diagnostics/os_counters.py`), with no extra command:
+
+| Where | Column / file | What it is |
+|---|---|---|
+| `irqs.csv` | `irq`, `name`, `rate_hz` | Interrupts per second per `/proc/interrupts` line, summed over the cores, for each second the line fired. Unicam should sit near the frame rate (once or twice per frame); VCHIQ follows the ISP traffic; `mmc` the SD card |
+| `procs.csv` | `pid`, `name`, `cpu_pct` | Every other process's CPU (% of one core) for each second it ran. The robot's process is left out (its threads are in `threads.csv`); the recorder shows as `monitor (self)` |
+| `system.csv` | `cma_free_mb` | The contiguous memory pool camera buffers come from |
+| | `isp_mhz`, `core_mhz` | VideoCore clocks, every 5 s (blank between) |
+| | `disk_read_kbps`, `disk_write_kbps`, `disk_busy_pct` | The SD card (`mmcblk0`), from `/proc/diskstats` |
+| | `psi_cpu_some`, `psi_io_some`, `psi_memory_some` | Pressure stall information: % of the last 10 s that some task waited for CPU, I/O or memory. Blank when the kernel doesn't have PSI (Raspberry Pi OS needs `psi=1` in `cmdline.txt`) |
+| | `os_dt_s` | Seconds since the last reading; blank on the first, which has no rates |
+
+The summary's `os`, `interrupts` and `other processes` sections are these, averaged over every second of the recording (a second a line didn't fire counts as 0). `make pi-load` reports them over the run's own window and flags:
+- a process using 15% of a core or more;
+- the SD card busy half of any second;
+- a task stalled 10% of the time.
+
+What to look for:
+- **Unicam well under the frame rate:** frames are lost before GStreamer, at the sensor or receiver.
+- **A climbing `mmc` rate with slow frames:** a recording's writes.
+- **pigpiod's share:** the price of DMA-timed PWM. Its `-s` sample rate sets it.
+- **CMA falling over a soak:** buffers leaking.
+
+---
+
+## 9. Frame metadata: what auto exposure did to every frame
+
+`make frame-meta` (or `python3 -m src.diagnostics.frame_meta [--seconds 20] [--camera-control KEY=VALUE] [--save-every N] [--no-detect]`) opens the camera through Picamera2. It sets it up like the robot's capture:
+- the 1920x1080 sensor mode;
+- 480x270 output at 20 fps;
+- the 180° flip;
+- `CAMERA_CONTROLS`, plus any `--camera-control`.
+
+For every frame, it logs the metadata libcamera reports next to what the color branch (MEASURED) reads in the traffic ROI. The robot's GStreamer pipeline drops that metadata at the appsink, which is why this is a separate recorder. Stop the robot's pipeline first.
+
+Picamera2 ships with Raspberry Pi OS (`sudo apt install python3-picamera2`). A venv sees it only if it was made with `--system-site-packages`. Without Picamera2, `rpicam-hello -n -t 10000 --metadata meta.json` records the same metadata, without the detection.
+
+| Column (`frames.csv`) | From | Meaning |
+|---|---|---|
+| `exposure_us`, `analogue_gain`, `digital_gain` | AGC (libcamera's IPA, on the ARM cores) | How long and how amplified the frame was. Exposure × gain is the light gathered |
+| `colour_gain_r`, `colour_gain_b`, `colour_temp_k` | AWB | The white balance applied |
+| `lux`, `frame_duration_us`, `ae_locked` | IPA | Scene brightness estimate, the frame's length, whether AE had settled |
+| `sensor_to_python_ms` | `SensorTimestamp` vs `time.monotonic_ns()` | From the sensor starting to expose the frame to Python having it: readout, ISP, IPA and queue. Both are on the monotonic clock; a value outside 0-1000 ms is dropped as a clock mismatch |
+| `label`, `confidence`, `white_px` | the color branch on the traffic ROI | What the robot would have read |
+
+`summary.txt` gives each field's min / median / max, and per label the median light, exposure, gain and white pixels. Findings:
+- **AGC swung the light gathered more than 2×.** The lamps look different as it moves.
+- **Red and yellow frames both seen.** If yellow frames got 1.2× the light of red ones or more, overexposure is turning the red ring orange: try `--camera-control exposure-value=-1`. If not, the angle is.
+- **Frames reach Python later than one frame time (50 ms).**
+- **AE settled on under half the frames.**
+- **Fewer fps than asked for.** An exposure longer than a frame stretches the frame.
+
+To chase red-reads-yellow:
+1. Hold the light on red.
+2. Record while moving the robot through the angles where it misreads.
+3. Read the per-label lines.
+4. Repeat with `--camera-control exposure-value=-1` and compare.
+
+`--save-every 5` keeps every fifth frame in `frames/`, a folder `phase2_linker --frames` and `calib-lamps` read.
+
+---
+
+## 10. I2C trace: the bus, transfer by transfer
+
+Two devices share **i2c-1** (GPIO 2/3):
+- the MPU-6050 at 0x68, read by the `sensor-hub` thread 100 times a second (one 14-byte block per read);
+- the ADS1115 at 0x48, read by the battery monitor's thread once a second.
+
+The camera has its own bus (i2c-10 or i2c-0), on which libcamera writes the exposure and gain AGC picked into the IMX290 every frame.
+
+The kernel traces every I2C transfer on every bus, from any process (the `i2c` tracepoints). `make i2c-trace` turns those on for 10 s and reads them back. It changes nothing in the robot, so start the run first in another terminal:
+
+```
+make nav-dry                         # terminal 1 (or any run)
+make i2c-trace                       # terminal 2: sudo, 10 s
+make i2c-trace ARGS="--seconds 30"
+python3 -m src.diagnostics.i2c_trace --from runs/i2c_<time>      # re-analyze anywhere, no root (draws the figure)
+```
+
+While tracing, it:
+- enlarges the trace buffer;
+- sets the trace clock to `mono`, so the times line up with the runs' `t0_monotonic`;
+- clears the buffer.
+
+Afterwards it puts every setting back, even after Ctrl-C. The folder (`runs/i2c_<time>/`, handed back to your user) holds:
+
+| File | What |
+|---|---|
+| `summary.txt` | per bus, per device, findings |
+| `transactions.csv` | one row per transfer: start (monotonic s), bus, address, device, the thread that asked, the messages (`w1 r14` = write 1 byte, read 14), bytes, wire time, how long it held the bus, the result, the first bytes written / read |
+| `i2c_trace.json` | everything computed, and each bus's clock |
+| `trace.txt` | the kernel's trace as recorded |
+| `i2c_trace.png` | a 200 ms window of transfers on a lane per device, each bus's occupancy per second, the IMU's read spacing (needs matplotlib, so on a laptop with `--from`) |
+
+What the numbers mean:
+- **Occupancy:** the share of time a transfer was in progress on the bus.
+- **Wire:** the share the bits alone need at the bus clock. Each message is a start, the address byte and each data byte at 9 bits with the ACK, plus one stop. The clock comes from the device tree, or is assumed to be 100 kHz, which the summary says.
+- **Overhead:** occupancy ÷ wire: the driver, interrupts and the controller's FIFO.
+
+Expected numbers:
+- **The IMU's read:** 156 bits, 1.56 ms at 100 kHz, so 16% of the bus at 100 Hz. At 400 kHz, 0.39 ms and 4%.
+- **The IMU's gaps:** a steady 10 ms, the sensor hub's period. Longer gaps are its ticks slipping (the GIL, or a slow read).
+- **Queued:** a device's transfers that started within 100 µs of another device's ending. The kernel serializes transfers on a bus, so those waited for it.
+
+Findings:
+- a bus busy 50% of the time;
+- transfers holding the bus 2× their wire time;
+- failed transfers, named by error (`EREMOTEIO` is a missing ACK: wiring, address, or the device busy);
+- IMU gaps over 15 ms at p95;
+- IMU reads queued behind another device;
+- i2c-1 at 100 kHz with its bits alone over 10%. `dtparam=i2c_arm_baudrate=400000` in `/boot/firmware/config.txt` cuts that 4×; both devices are rated for it;
+- a trace buffer that overflowed.
+
+Tracing needs root and a tracefs with the `i2c` events, which Raspberry Pi OS has. Without root it says so and records nothing.
+
+**The same reads, from the threads' side.** `make nav-dry` also logs how long each read took as the Python thread lived it:
+- **The IMU:** `nav.csv`'s `imu_read_ms` is the slowest read in each frame window, `imu_reads` how many were tried (5 expected), `imu_failed` how many gave nothing. `summary.txt` has the run's p50 / p95 / max.
+- **The battery ADC:** `summary.txt`'s battery line gives its read time.
+
+For one read, the thread's time minus the trace's time holding the bus is Python's overhead plus waiting for the GIL. A thread time well over the bus time therefore points at the GIL (`pi_load`'s `sensor-hub` cadence), not at I2C. Expect:
+- **An IMU read:** about 2 ms at 100 kHz.
+- **An ADS1115 read:** about 9 ms. It's a single-shot conversion at 128 samples/s, waited for on the bus.
+
+---
+
+## 11. Scheduling latency: Linux against an RTOS
+
+The robot runs on Linux, not a real-time OS. What an RTOS guarantees is a small, bounded delay between the moment a thread should run and the moment it does. Linux's delay is usually small, with a tail. The robot's timing splits into two kinds.
+
+**Hard timing is done by hardware:**
+- the PWM peripheral;
+- pigpiod's DMA sampling of the encoders every 5 µs;
+- the sensor, Unicam and the ISP;
+- the I2C controller.
+
+**Soft deadlines are left to the OS:**
+- a 50 ms frame;
+- a 10 ms IMU tick;
+- the motor watchdog's 0.5 s.
+
+So the question is how Linux's worst case compares with those soft deadlines. `make sched-latency` measures it three ways:
+
+| Case | What runs | Stands for |
+|---|---|---|
+| `python` | a Python thread at normal priority sleeping to a 1 ms grid; each wake-up's lateness | the robot's own threads (the sensor hub, the frame loop). Needs nothing |
+| `other` | `cyclictest` at normal priority (SCHED_OTHER), on every core | the kernel's wake-up latency for an ordinary thread, without Python |
+| `fifo` | `cyclictest` at real-time priority (SCHED_FIFO 80) | the best this kernel gives an RTOS-style thread |
+
+`cyclictest` comes with `rt-tests` (`make -f setup.mk diag-deps` from the repo root) and needs root, hence `sudo`. Without them only `python` runs, and the summary says why. Run it idle, then under the robot's load, and compare:
+
+```
+make sched-latency ARGS="--label idle"                 # 30 s per case
+make nav-dry                                           # terminal 1
+make sched-latency ARGS="--label loaded"               # terminal 2
+python3 -m src.diagnostics.sched_latency --compare runs/sched_idle_<time> runs/sched_loaded_<time>
+```
+
+`summary.txt` gives each case's wake-ups and its min, p50, p99, p99.9 and max lateness in µs. It also expresses the max as a share of the 50 ms frame and of the 10 ms IMU period, notes the kernel's preemption model, and gives a microcontroller RTOS's typical figure for scale (single-digit to tens of µs). Findings:
+- a worst case of a tenth of the IMU period or more (one over the whole period means a 100 Hz loop misses a tick); otherwise, that every case stayed under a tenth;
+- real-time priority cutting the kernel's worst case 2× or more (the robot's threads run at normal priority);
+- Python adding 2× or more to the kernel's p99;
+- a kernel that isn't PREEMPT_RT (one would shorten the tail on the same hardware).
+
+`sched_latency.png` plots each case's tail: the share of wake-ups at least x µs late, on log-log axes. p99 is where a line crosses 1%, p99.9 where it crosses 0.1%; the IMU period is marked. `histogram.csv` has the counts per µs, and `sched_latency.json` everything computed.
+
+**For a design review**, read it as a deadline ratio, not a contest with an RTOS. An RTOS's worst case is far smaller; the question is whether Linux's worst case, under the robot's own load, is small against 10 ms and 50 ms. The idle-vs-loaded comparison shows how much the robot's work widens the tail. `fifo` against `python` shows what real-time priority, or a PREEMPT_RT kernel, would buy if the margin were ever too thin.
+

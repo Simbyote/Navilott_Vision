@@ -15,8 +15,11 @@ Purpose:
     the real ones only when asked for, so replays and tests never load them.
 
 Main package:
-    SensorReading: one reading: time, yaw rate, lateral accel, both counts.
-    SensorBatch: one frame window's readings, and what Phase 3 needs from them.
+    SensorReading: one reading: time, yaw rate, lateral accel, both counts,
+        and how long the IMU read took (imu_ms: I2C plus the GIL, as the
+        thread lived it; diagnostics.i2c_trace has the bus's side).
+    SensorBatch: one frame window's readings, what Phase 3 needs from them,
+        and the window's IMU reads: attempted, failed, the slowest.
     SensorHub: the sampling thread, its buffer, and drain().
     Sensors: what a frame loop uses (src/main.py and every linker): opens and
         starts a hub, then one read() / sample() per frame.
@@ -53,6 +56,7 @@ class SensorReading:
     lateral_accel: float | None     # accel Y, m/s^2, as the driver reports it
     left_count: int | None          # cumulative since the encoders' reset(), + = forward
     right_count: int | None
+    imu_ms: float | None = None     # how long the IMU read took, failed or not; None when not read
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,21 @@ class SensorBatch:
     def imu_count(self) -> int:
         """Readings that carry an IMU value."""
         return sum(r.yaw_dps is not None for r in self.readings)
+
+    @property
+    def imu_attempts(self) -> int:
+        """IMU reads tried in the window: SENSOR_RATE_HZ / FPS (5) when the hub keeps its ticks."""
+        return sum(r.imu_ms is not None for r in self.readings)
+
+    @property
+    def imu_failed(self) -> int:
+        """IMU reads tried that gave nothing (an I2C error)."""
+        return sum(r.imu_ms is not None and r.yaw_dps is None for r in self.readings)
+
+    @property
+    def imu_read_ms_max(self) -> float | None:
+        """The slowest IMU read in the window, ms; None without any."""
+        return max((r.imu_ms for r in self.readings if r.imu_ms is not None), default=None)
 
     @property
     def mean_yaw_dps(self) -> float | None:
@@ -145,6 +164,7 @@ class SensorHub:
             dropped and counted.
         clock: Seconds, time.monotonic's clock (the camera stamps with
             time.monotonic_ns, so batches line up with frames).
+        timer: Seconds, for timing each IMU read (time.perf_counter).
     """
     def __init__(
             self,
@@ -154,9 +174,10 @@ class SensorHub:
             yaw_sign: int = IMU_YAW_SIGN,
             history_s: float = SENSOR_HISTORY_S,
             clock=time.monotonic,
+            timer=time.perf_counter,
         ) -> None:
         self._imu, self._encoders = imu, encoders
-        self._rate_hz, self._yaw_sign, self._clock = rate_hz, yaw_sign, clock
+        self._rate_hz, self._yaw_sign, self._clock, self._timer = rate_hz, yaw_sign, clock, timer
         self._buf: deque[SensorReading] = deque(maxlen=max(1, int(rate_hz * history_s)))
         self._lock = threading.Lock()
         self._stop_evt = threading.Event()
@@ -226,10 +247,12 @@ class SensorHub:
 
         Outputs:
             The reading. A failed IMU read leaves its fields None and is
-            counted in read_errors, never raised.
+            counted in read_errors, never raised. Either way imu_ms holds
+            how long the read took.
         """
-        yaw = accel = None
+        yaw = accel = imu_ms = None
         if self._imu is not None:
+            r0 = self._timer()
             try:
                 raw_yaw, accel = self._imu.read()
                 yaw = self._yaw_sign * raw_yaw
@@ -237,8 +260,9 @@ class SensorHub:
                 self.read_errors += 1
                 if self.read_errors % 100 == 1:       # don't flood the log
                     log.warning("IMU read error #%d: %s", self.read_errors, exc)
+            imu_ms = round((self._timer() - r0) * 1000.0, 3)
         left, right = self._counts()
-        reading = SensorReading(self._clock(), yaw, accel, left, right)
+        reading = SensorReading(self._clock(), yaw, accel, left, right, imu_ms)
         self._keep(reading)
         return reading
 

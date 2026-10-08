@@ -68,7 +68,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
-        intersection-dry render diag-nav diag-run monitor-attach pi-load nav-report timeline timing \
+        intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
@@ -122,6 +122,14 @@ render: ## render an earlier navigation run's video (RUN=runs/nav_..., default t
 	@test -n "$(RENDER_RUN)" || (echo "no runs/nav_* folder: make render RUN=<run folder>"; exit 2)
 	$(PY) -m src.navigation_linker --render $(RENDER_RUN) $(ARGS)
 
+##@ Routines: prompted hardware tests, judged PASS / FAIL (routines.md)
+routines: ## list the routines; run one with make routine-<name> (ARGS="--trials 10 --notes ...")
+	$(PY) -m src.routines --list
+
+# make routine-<name>: one routine, by its name
+routine-%:
+	$(PY) -m src.routines $* $(ARGS)
+
 ##@ Diagnostics: how the run uses the Pi (diagnostics.md)
 diag-nav: $(HW) ## record threads, cores, heat while nav-dry runs; then: make pi-load
 	$(PY) -m src.diagnostics.monitor -- $(PY) -m src.navigation_linker --camera --no-motors --no-button \
@@ -132,6 +140,18 @@ diag-run: $(HW) ## record the course run itself (motors on, start button); then:
 
 monitor-attach: ## record a process already running (MATCH=navigation_linker); Ctrl-C to stop
 	$(PY) -m src.diagnostics.monitor --match $(strip $(MATCH)) $(ARGS)
+
+capture-anatomy: ## the camera path once: media graph, ISP caps, ms per element, VideoCore (camera free)
+	$(PY) -m src.diagnostics.capture_anatomy $(ARGS)
+
+frame-meta: ## every frame's exposure, gains, sensor-to-Python time and traffic label (camera free; Picamera2)
+	$(PY) -m src.diagnostics.frame_meta $(ARGS)
+
+i2c-trace: ## every I2C transfer from the kernel for 10 s (sudo; start a run first): bus load, IMU timing, errors
+	sudo $(PY) -m src.diagnostics.i2c_trace $(ARGS)
+
+sched-latency: ## how late Linux wakes a thread vs the 50 ms / 10 ms deadlines (sudo; ARGS="--label idle", then loaded)
+	sudo $(PY) -m src.diagnostics.sched_latency $(ARGS)
 
 ##@ Analysis: graphs and findings from a run (analysis.md); RUN= picks the run, default the newest
 pi-load: ## threads, cores, heat, memory from a diag_ recording (NAV=runs/nav_... to judge only the run)

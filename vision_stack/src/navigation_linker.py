@@ -21,7 +21,9 @@ Main package:
     rendering, nav.avi.
     NavStats: the [NAVIGATION] summary: how the run ended, which rule decided
     how many frames, time driving and braked (and why), steering, command
-    latency, and the battery (start, lowest, end) when it's monitored.
+    latency, the IMU's read times and reads per frame (nav.csv: imu_reads,
+    imu_read_ms, imu_failed), and the battery (start, lowest, end, and how
+    long its ADC reads take) when it's monitored.
 
 Flow:
     1. Open the source, sensors, motors and start button; wait for the press.
@@ -59,7 +61,7 @@ from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, o
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
-from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
+from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 
@@ -79,6 +81,7 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
+              "imu_reads", "imu_read_ms", "imu_failed",
               "battery_v", "battery_state", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
@@ -173,9 +176,24 @@ def summary_lines(report: dict) -> list[str]:
         f" command latency       p50 {lat['p50']:.1f} ms, p95 {lat['p95']:.1f} ms, max {lat['max']:.1f} ms "
         f"(frame in -> motors)",
         f" contract              {n['rejected']} commands rejected and braked",
-    ] + ([] if not report.get("battery") else [
+    ] + ([] if not report.get("sensors") or not report["sensors"]["imu_read_ms"] else [
+        " IMU reads             {p50:.2f} ms p50, {p95:.2f} p95, {max:.2f} max; ".format(**report["sensors"]["imu_read_ms"])
+        + f"{report['sensors']['imu_reads_per_frame']:g} a frame (median; expect {SENSOR_RATE_HZ / FPS:g}), "
+        f"{report['sensors']['imu_failed']} failed"
+    ]) + ([] if not report.get("battery") else [
         " battery               start {start_v} V, lowest {min_v} V, end {end_v} V; {state}".format(**report["battery"])
-        + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")])
+        + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")
+        + ("" if not report["battery"].get("read_ms") else
+           "; ADC reads {p50:.1f} ms p50, {max:.1f} max".format(**report["battery"]["read_ms"]))])
+
+
+def read_stats(ms: list[float]) -> dict | None:
+    """p50 / p95 / max of read times in ms; None without any."""
+    if not ms:
+        return None
+    a = np.array(ms, dtype=float)
+    return {"n": int(a.size), "p50": round(float(np.percentile(a, 50)), 3),
+            "p95": round(float(np.percentile(a, 95)), 3), "max": round(float(a.max()), 3)}
 
 
 # =============================================================================
@@ -257,7 +275,7 @@ def run(
             sensors.read()                          # start every sensor window at the go
         if battery is not None and not battery_run.start(battery):
             battery = None
-        volts = []
+        volts, imu_ms, imu_reads, imu_failed = [], [], [], 0
         t0 = clock()
         while True:
             if limit is not None and nav_stats.frames >= limit:
@@ -281,7 +299,7 @@ def run(
                 camera_drops += 1
                 continue
 
-            sample = None if sensors is None else sensors.read()[0]
+            sample, batch = (None, None) if sensors is None else sensors.read()
             if processor is None:
                 processor = make_processor(frame, fid, ts, config, p3_config)
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
@@ -315,11 +333,18 @@ def run(
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "imu_reads": None if batch is None else batch.imu_attempts,
+                 "imu_read_ms": None if batch is None else batch.imu_read_ms_max,
+                 "imu_failed": None if batch is None else batch.imu_failed,
                  "battery_v": None if battery is None else round(battery.voltage(), 2),
                  "battery_state": "" if battery is None else battery.state().name,
                  "event": event}
             if battery is not None:
                 volts.append(n["battery_v"])
+            if batch is not None:
+                imu_ms += [r.imu_ms for r in batch.readings if r.imu_ms is not None]
+                imu_reads.append(batch.imu_attempts)
+                imu_failed += batch.imu_failed
             if event:
                 print(f"  t={n['t']:6.2f}s  frame {fid}  {event}")
             stats.update(res)
@@ -357,13 +382,17 @@ def run(
                 system.cleanup(blank=False)          # the final time stays up
 
     wall = 0.0 if t0 is None else clock() - t0
-    battery_report = None
+    battery_report = sensors_report = None
     if battery is not None and t0 is not None and volts:
         battery_report = {"start_v": volts[0], "min_v": min(volts), "end_v": round(battery.voltage(), 2),
-                          "state": battery.state().name, "sensor_ok": battery.sensor_ok()}
+                          "state": battery.state().name, "sensor_ok": battery.sensor_ok(),
+                          "read_ms": read_stats(battery.read_ms())}
+    if t0 is not None and imu_reads:
+        sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
+                          "imu_failed": imu_failed}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
-              "nav": nav_stats.report(), "battery": battery_report,
+              "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
                       "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,

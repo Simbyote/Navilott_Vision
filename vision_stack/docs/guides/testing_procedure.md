@@ -14,6 +14,7 @@ On the Pi, set the clock first (`pytest.md`, step 1).
 | 2. Characterization | After changing tuning or a stage | See below |
 | 3. Scenarios | When tuning settles; before reviews | See below |
 | 4. Soak | Before the demo; after major changes | See below |
+| Routines | To verify a requirement with hand-measured ground truth; teammates run them | `make routines`, then `make routine-<name>` (`routines.md`) |
 | Calibration | After calibrating, or if the mount or focus changes | `test_calibration.md` |
 
 Tier 0 covers every software test, including the interpreter and debug-view tests. They need no separate runs.

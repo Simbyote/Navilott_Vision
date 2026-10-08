@@ -20,11 +20,14 @@ Flow:
        --match (waits for it to start).
     2. Every --interval: per-thread and per-core rates (threads.ThreadSampler);
        every second: temperature, clock, throttling, the run's memory
-       (system_monitor.sample).
+       (system_monitor.sample), and the rest of the Pi (os_counters):
+       interrupts per second, the ISP clock, CMA, the SD card, pressure
+       stalls, every other process's CPU.
     3. Ends when the process exits, after --duration, or on Ctrl-C (a
        launched run gets the Ctrl-C too; the recorder waits for it to stop
        its motors and exit).
-    4. Writes threads.csv, cores.csv, system.csv, meta.json and summary.txt.
+    4. Writes threads.csv, cores.csv, system.csv, irqs.csv, procs.csv,
+       meta.json and summary.txt.
 """
 import argparse
 import csv
@@ -37,6 +40,7 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
+import src.diagnostics.os_counters as osc
 from src.diagnostics.system_monitor import FIELDS as SYSTEM_FIELDS, THROTTLE_BITS, sample as system_sample
 from src.diagnostics.threads import CLK_TCK, CORE_FIELDS, PROC, THREAD_FIELDS, ThreadSampler
 from src.params import RUNS_DIR
@@ -45,8 +49,9 @@ INTERVAL_S = 0.5            # thread and core sampling; short enough to see a fr
 SYSTEM_EVERY_S = 1.0        # vcgencmd is a subprocess: once a second is plenty for heat and clock
 MATCH_WAIT_S = 30.0         # --match waits this long for the process to appear
 CHILD_EXIT_WAIT_S = 15.0    # after Ctrl-C, how long a launched run gets to halt and exit
-# system.csv: SystemMonitor's columns plus each throttle flag latched since boot
-SYSTEM_COLUMNS = (*SYSTEM_FIELDS, *(f"{k}_occurred" for k in THROTTLE_BITS))
+# system.csv: SystemMonitor's columns, each throttle flag latched since boot, and the
+# OS counters (the camera's memory pool, VideoCore clocks, SD card, pressure)
+SYSTEM_COLUMNS = (*SYSTEM_FIELDS, *(f"{k}_occurred" for k in THROTTLE_BITS), *osc.SYSTEM_FIELDS)
 
 _CLI_HELP = """\
 Record how a run uses the Pi: every thread's CPU, core and context switches,
@@ -61,10 +66,14 @@ Examples (from vision_stack/):
 
 Output (--out DIR, default <root>/runs/diag_<timestamp>):
     summary.txt   per thread: CPU mean / max, the cores it ran on, context switches;
-                  per core: load; temperature, clock, throttling and memory
+                  per core: load; temperature, clock, throttling and memory; the
+                  camera's memory pool, ISP clock, SD card, pressure stalls, the
+                  busiest interrupts and other processes
     threads.csv   one row per thread per interval
     cores.csv     one row per core per interval
     system.csv    one row a second
+    irqs.csv      interrupts per second, per /proc/interrupts line that fired
+    procs.csv     every other process's CPU, per second it ran
     meta.json     what was recorded, and on what
 """
 
@@ -101,7 +110,7 @@ def find_pid(pattern: str, proc: Path = PROC, exclude: tuple[int, ...] = ()) -> 
 
 def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = None,
            alive=None, clock=time.perf_counter, sleep=time.sleep, proc: Path = PROC,
-           system_reader=None) -> dict:
+           system_reader=None, counters=None) -> dict:
     """
     Sample pid until it ends, duration_s passes or Ctrl-C.
 
@@ -110,8 +119,11 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
             None keeps going until the process is gone.
         system_reader: () -> one system sample dict; default reads the Pi,
             with this pid's memory.
+        counters: An os_counters.OsCounters (take(elapsed, now)); default
+            reads this /proc, leaving pid out of the other processes.
     Outputs:
-        {"threads": [...], "cores": [...], "system": [...], "interrupted": bool,
+        {"threads": [...], "cores": [...], "system": [...], "irqs": [...],
+        "procs": [...], "interrupted": bool,
         "elapsed_s": float, "t0_monotonic": float}; rows in THREAD_FIELDS /
         CORE_FIELDS / SYSTEM_COLUMNS order. t0_monotonic is the clock at the
         start (time.perf_counter, the monotonic clock on Linux), which every
@@ -120,7 +132,8 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
     status = proc / str(pid) / "status"
     system_reader = system_reader or (lambda: system_sample(status_path=status))
     sampler = ThreadSampler(pid, proc=proc)
-    out = {"threads": [], "cores": [], "system": [], "interrupted": False}
+    counters = counters or osc.OsCounters(pid, proc=proc)
+    out = {"threads": [], "cores": [], "system": [], "irqs": [], "procs": [], "interrupted": False}
     t0 = prev = clock()
     out["t0_monotonic"] = round(t0, 4)
     next_system = t0
@@ -138,8 +151,11 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
             out["threads"] += threads
             out["cores"] += cores
             if now >= next_system:
-                row = {"elapsed_s": elapsed, **system_reader()}
+                extra = counters.take(elapsed, now)
+                row = {"elapsed_s": elapsed, **system_reader(), **extra["system"]}
                 out["system"].append({k: row.get(k) for k in SYSTEM_COLUMNS})
+                out["irqs"] += extra["irqs"]
+                out["procs"] += extra["procs"]
                 next_system += SYSTEM_EVERY_S
             if duration_s is not None and now - t0 >= duration_s:
                 break
@@ -233,6 +249,7 @@ def summary_lines(meta: dict, rec: dict) -> list[str]:
     else:
         lines.append(f"  throttled during the run: {', '.join(s['throttled_during']) or 'never'}")
         lines.append(f"  latched since boot: {', '.join(s['throttled_since_boot']) or 'nothing'}")
+    lines += [""] + osc.summary_lines(rec["system"], rec.get("irqs", []), rec.get("procs", []))
     return lines
 
 
@@ -241,7 +258,9 @@ def write(out_dir: str, meta: dict, rec: dict) -> list[str]:
     os.makedirs(out_dir, exist_ok=True)
     for name, fields, rows in (("threads.csv", THREAD_FIELDS, rec["threads"]),
                                ("cores.csv", CORE_FIELDS, rec["cores"]),
-                               ("system.csv", SYSTEM_COLUMNS, rec["system"])):
+                               ("system.csv", SYSTEM_COLUMNS, rec["system"]),
+                               ("irqs.csv", osc.IRQ_FIELDS, rec.get("irqs", [])),
+                               ("procs.csv", osc.PROC_FIELDS, rec.get("procs", []))):
         with open(os.path.join(out_dir, name), "w", newline="") as f:
             w = csv.DictWriter(f, fields)
             w.writeheader()

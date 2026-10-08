@@ -55,6 +55,10 @@ class FakeBattery:
         return BatteryState.CRITICAL if self.critical_at is not None and self.checks >= self.critical_at \
             else BatteryState.OK
 
+    def read_ms(self):
+        """Power.read_ms(): every monitoring read's time; an ADS1115 single-shot read is ~9 ms."""
+        return [9.1, 8.9, 9.4]
+
     def sensor_ok(self):
         return True
 

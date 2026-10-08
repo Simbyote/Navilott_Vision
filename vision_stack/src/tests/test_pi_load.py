@@ -6,7 +6,10 @@ tools can't drift apart in format. Known answers: the process's total CPU,
 main's p95 and the busiest thread's share; core loads; flags latched since
 boot; every finding on its own and none on a clean recording; lining a
 run's frames up on the monotonic clock and attributing its slow frames to a
-clock drop, a busy main thread or neither; and the command line.
+clock drop, a busy main thread or neither; the rest of the Pi (the OS
+counters: interrupts, other processes, SD card, pressure, CMA, ISP clock)
+summarized, judged over the run's window and each of its findings, and an
+older recording without them; and the command line.
 
 --software  CSV and JSON files in a temp folder. No Pi needed.
 """
@@ -38,7 +41,7 @@ def srow(t, **kw):
 
 
 def recording(tmp_path, n=20, main=50.0, hub=2.0, gst=20.0, hub_vol=100.0, main_invol=1.0, main_core=None,
-              cores=(40.0, 30.0, 20.0, 10.0), system=None, t0=1000.0):
+              cores=(40.0, 30.0, 20.0, 10.0), system=None, t0=1000.0, irqs=(), procs=()):
     """A diagnostics folder: main, sensor-hub and a GStreamer thread over n samples, written by monitor.write()."""
     threads, core_rows = [], []
     for i in range(1, n + 1):
@@ -51,6 +54,7 @@ def recording(tmp_path, n=20, main=50.0, hub=2.0, gst=20.0, hub_vol=100.0, main_
                       for c, b in enumerate(cores(i) if callable(cores) else cores)]
     rec = {"threads": threads, "cores": core_rows,
            "system": system if system is not None else [srow(float(s)) for s in range(int(n * STEP) + 1)],
+           "irqs": list(irqs), "procs": list(procs),
            "interrupted": False, "elapsed_s": n * STEP, "t0_monotonic": t0}
     folder = tmp_path / "diag"
     mon.write(str(folder), {"pid": 100, "command": "python3 -m src.main", "interval_s": STEP, "cores": 4}, rec)
@@ -59,7 +63,8 @@ def recording(tmp_path, n=20, main=50.0, hub=2.0, gst=20.0, hub_vol=100.0, main_
 
 def run(folder, **kw):
     d = pl.load(str(folder), kw.pop("run", None))
-    return pl.analyze(d["threads"], d["cores"], d["system"], d["nav"], d["meta"].get("t0_monotonic"), d["nav_t0"])
+    return pl.analyze(d["threads"], d["cores"], d["system"], d["nav"], d["meta"].get("t0_monotonic"), d["nav_t0"],
+                      d["irqs"], d["procs"])
 
 
 # =============================================================================
@@ -337,3 +342,86 @@ def test_a_run_without_t0_still_analyzes_the_recording_and_says_why_it_isnt_alig
 def test_something_other_than_a_recording_is_an_error(tmp_path):
     (tmp_path / "threads.csv").write_text("a,b\n1,2\n")
     assert pl.main([str(tmp_path)]) == 1
+
+# =============================================================================
+# The rest of the Pi (os_counters)
+# =============================================================================
+
+def os_system(n=10, **kw):
+    """System rows with the OS counters: rates from the second row on."""
+    base = {"cma_free_mb": 190.0, "isp_mhz": 300.0, "core_mhz": 400.0, "disk_read_kbps": 0.0,
+            "disk_write_kbps": 20.0, "disk_busy_pct": 2.0, "psi_cpu_some": 1.0, "psi_io_some": 0.0,
+            "psi_memory_some": 0.0}
+    return [srow(float(s), **({**base, "os_dt_s": 1.0, **kw} if s else {"cma_free_mb": 200.0}))
+            for s in range(n + 1)]
+
+
+def os_rows(n=10, pigpiod=6.0, unicam=40.0):
+    irqs = [{"elapsed_s": float(s), "irq": "41", "name": "unicam", "rate_hz": unicam} for s in range(1, n + 1)]
+    irqs += [{"elapsed_s": float(s), "irq": "54", "name": "mmc0", "rate_hz": 9.0} for s in range(1, n + 1, 2)]
+    procs = [{"elapsed_s": float(s), "pid": 7, "name": "pigpiod", "cpu_pct": pigpiod} for s in range(1, n + 1)]
+    procs += [{"elapsed_s": float(s), "pid": 9, "name": "monitor (self)", "cpu_pct": 30.0} for s in range(1, n + 1)]
+    return {"irqs": irqs, "procs": procs}
+
+
+@pytest.mark.software
+def test_the_rest_of_the_pi_is_summarized_and_reported(tmp_path):
+    res = run(recording(tmp_path, system=os_system(), **os_rows()))
+    o = res["os"]
+    assert o["intervals"] == 10 and o["cma_free_min_mb"] == 190.0 and o["isp_mhz"] == (300.0, 300.0)
+    assert [(i["name"], i["mean_hz"]) for i in o["irqs"]] == [("unicam", 40.0), ("mmc0", 4.5)]   # mmc0: half the seconds
+    assert [(p["name"], p["mean_pct"]) for p in o["procs"]] == [("monitor (self)", 30.0), ("pigpiod", 6.0)]
+    assert res["findings"] == []                                     # the recorder's own 30% is no finding
+    text = report_text(res)
+    assert "os        CMA free min 190 MB; ISP clock 300-300 MHz; SD write mean 20 kB/s, busy max 2%" in text
+    assert "irqs      unicam 40/s; mmc0 4/s" in text                    # 4.5 rounds half to even
+    assert "others    monitor (self) 30%; pigpiod 6%" in text
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("system_kw, rows_kw, words", [
+    ({}, {"pigpiod": 20.0}, "pigpiod (pid 7) used 20% of a core on average"),
+    ({"disk_busy_pct": 60.0, "disk_write_kbps": 900.0}, {}, "SD card was busy up to 60% of a second (writes up to 900"),
+    ({"psi_io_some": 15.0}, {}, "stalled waiting on io up to 15%"),
+    ({"psi_cpu_some": 25.0}, {}, "stalled waiting on cpu up to 25%"),
+])
+def test_each_os_finding_on_its_own(tmp_path, system_kw, rows_kw, words):
+    found = run(recording(tmp_path, system=os_system(**system_kw), **os_rows(**rows_kw)))["findings"]
+    assert len(found) == 1 and words in found[0], found
+
+
+@pytest.mark.software
+def test_os_findings_sit_just_at_their_thresholds(tmp_path):
+    at = run(recording(tmp_path, system=os_system(disk_busy_pct=pl.DISK_BUSY_PCT, psi_memory_some=pl.PSI_STALL_PCT),
+                       **os_rows(pigpiod=pl.OTHER_PROC_PCT)))["findings"]
+    assert len(at) == 3
+    under = run(recording(tmp_path / "u", system=os_system(disk_busy_pct=pl.DISK_BUSY_PCT - 1,
+                                                          psi_memory_some=pl.PSI_STALL_PCT - 1),
+                          **os_rows(pigpiod=pl.OTHER_PROC_PCT - 1)))["findings"]
+    assert under == []
+
+
+@pytest.mark.software
+def test_the_os_part_is_judged_over_the_runs_own_window(tmp_path):
+    n_s = int(RECORDING_N * STEP)
+    busy = {"irqs": [{"elapsed_s": float(s), "irq": "41", "name": "unicam", "rate_hz": 40.0} for s in range(1, n_s + 1)],
+            "procs": [{"elapsed_s": float(s), "pid": 7, "name": "apt", "cpu_pct": 80.0}
+                      for s in range(1, n_s + 1) if s <= STARTUP_S]}                # only during startup
+    system = [srow(float(s), cpu_mhz=1000.0, os_dt_s=1.0 if s else None,
+                   disk_busy_pct=90.0 if s <= STARTUP_S else 1.0) for s in range(n_s + 1)]
+    folder = startup_recording(tmp_path, system=system, **busy)
+    whole = run(folder)
+    assert any("apt (pid 7)" in f for f in whole["findings"]) and any("SD card" in f for f in whole["findings"])
+    res = run(folder, run=str(nav_run(tmp_path, 1000.0 + RUN_START_S, [50.0] * int(RUN_S * 20))))
+    assert res["window"]["used"]
+    assert res["os"]["procs"] == [] and res["os"]["disk_busy_max_pct"] == 1.0
+    assert res["os"]["irqs"][0]["mean_hz"] == 40.0 and res["os"]["intervals"] == pytest.approx(RUN_S, abs=1)
+    assert not any("apt" in f or "SD card" in f for f in res["findings"])
+
+
+@pytest.mark.software
+def test_a_recording_from_before_the_os_counters_has_no_os_part(tmp_path):
+    res = run(recording(tmp_path))
+    assert res["os"] is None and "os        " not in report_text(res)
+    d = pl.load(str(recording(tmp_path / "b")))
+    assert d["irqs"] is None and d["procs"] is None                   # header-only files read as absent

@@ -96,6 +96,7 @@ Everything goes to `runs/nav_<timestamp>/`.
 **`nav.csv`**, one row per frame:
 
 - **Timings:** `capture_ms`, `phase2_ms`, `phase3_ms`, `nav_ms`, `latency_ms`.
+- **The IMU's reads in the frame window:** `imu_reads` (tried: 5 at 100 Hz and 20 FPS; fewer means the sensor hub's ticks slipped), `imu_read_ms` (the slowest, as the hub's thread lived it: I2C plus waiting for the GIL), `imu_failed` (reads that gave nothing). Empty without the IMU or on a replay. `summary.txt` has the run's p50 / p95 / max read time and reads per frame; its battery line adds the ADS1115's read time (`report.json`: `sensors`, `battery.read_ms`).
 - **Packet fields the navigator used:** lane status, offset (and cm), heading, light, stop sign, stop line cm, wheel counts per second.
 - **The decision:** `rule` (which part decided), `phase` (the stop-line tracker: idle, approach, crossing), `step` and `maneuver` (the route: `2/3 right`), `stage` (inside an intersection: `to_line`, `turn`, `exit`), `turn_end` and `heading_deg` (the intersection's heading turned), `yaw_rate`, `reason` and `source`, `steer`, the command sent, `battery_v` and `battery_state` (the pack's smoothed volts and OK / WARNING / CRITICAL; empty without the ADC or on a replay), and `event` (set on a change of reason). `lane_mode` is Phase 2's lane mode, which ends a crossing at `two_boundary`.
 

@@ -15,7 +15,10 @@ Purpose:
     own time only (a recording also holds the imports, the camera opening
     and the countdown before it, and the shutdown after, which would
     otherwise pass for the run's load), and says what the slow frames
-    coincided with: a clock drop, a busy frame loop, or neither.
+    coincided with: a clock drop, a busy frame loop, or neither. The rest
+    of the Pi (os_counters: interrupts, other processes, the SD card,
+    pressure stalls, the camera's memory pool and the ISP clock) is
+    summarized over the same window.
 
 Main package:
     analyze(...) -> dict: threads, process, cores, system, window, aligned, findings.
@@ -29,7 +32,8 @@ Main package:
 
 Input:
     A runs/diag_<time> folder (threads.csv, cores.csv, system.csv,
-    meta.json). --run: the navigation_linker folder recorded, for lining
+    irqs.csv, procs.csv, meta.json; recordings from before the OS
+    counters have no os part). --run: the navigation_linker folder recorded, for lining
     up (its report.json keeps t0_monotonic).
 """
 
@@ -43,6 +47,7 @@ import numpy as np
 
 from src.analysis import common, soak
 from src.analysis.common import Table, stats
+from src.diagnostics import os_counters as osc
 from src.diagnostics.monitor import thread_summary
 from src.diagnostics.system_monitor import THROTTLE_BITS
 from src.diagnostics.threads import MAIN_THREAD
@@ -60,6 +65,9 @@ MOVES_PER_MIN = 30.0        # main changing core this often a minute
 CORE_SPREAD_PCT = 40.0      # mean busy % between the busiest and idlest core
 TEMP_WARN_C = 75.0          # the Pi's firmware throttles at 80 C
 CLOCK_DROP = 0.9            # a clock below this x its maximum is a drop
+OTHER_PROC_PCT = 15.0       # another process using this % of a core on average: work the robot pays for elsewhere
+DISK_BUSY_PCT = 50.0        # the SD card busy this % of a second: a recording's writes can hold frames up
+PSI_STALL_PCT = 10.0        # some task stalled on CPU, I/O or memory this % of a 10 s window
 LATE = 1.5                  # a frame interval over this x the frame budget is a slow frame
 MIN_WINDOW_SAMPLES = 4      # a run shorter than this many thread samples is judged over the whole recording
 MIN_LATE_FRAMES = 5         # fewer slow frames than this aren't worth attributing
@@ -221,15 +229,35 @@ def _in_window(elapsed: np.ndarray, w: dict, step: float = 0.0) -> np.ndarray:
     return (mid >= w["start_s"]) & (mid <= w["end_s"])
 
 
+def table_rows(t: Table | None) -> list[dict]:
+    """A Table as one dict per row, cells as text ("" when blank)."""
+    if t is None:
+        return []
+    cols = {c: t.text(c) for c in t.columns}
+    return [{c: cols[c][i] for c in t.columns} for i in range(len(t))]
+
+
+def os_load(system: Table | None, irqs: Table | None, procs: Table | None) -> dict | None:
+    """The rest of the Pi over these rows (os_counters' summaries); None for a recording without the OS counters."""
+    srows = table_rows(system)
+    n = osc.intervals(srows)
+    if not n:
+        return None
+    return {"intervals": n, **osc.system_extremes(srows),
+            "irqs": osc.irq_summary(table_rows(irqs), n)[:osc.TOP_IRQS],
+            "procs": osc.proc_summary(table_rows(procs), n)[:osc.TOP_PROCS]}
+
+
 def analyze(threads: Table, cores: Table | None = None, system: Table | None = None,
-            nav: Table | None = None, diag_t0: float | None = None, nav_t0: float | None = None) -> dict:
+            nav: Table | None = None, diag_t0: float | None = None, nav_t0: float | None = None,
+            irqs: Table | None = None, procs: Table | None = None) -> dict:
     missing = [c for c in ("tid", "name", "core", "cpu_pct") if not threads.has(c)]
     if missing:
         raise ValueError(f"{threads.path.name}: not a diagnostics threads.csv (no {', '.join(missing)})")
     rows = thread_rows(threads)
     alignable = nav is not None and diag_t0 is not None and nav_t0 is not None
     window = run_window(rows, diag_t0, nav, nav_t0) if alignable else None
-    judged_rows, judged_cores, judged_system = rows, cores, system
+    judged_rows, judged_cores, judged_system, judged_irqs, judged_procs = rows, cores, system, irqs, procs
     if window and window["used"]:
         keep = _in_window(np.array([r["elapsed_s"] for r in rows]), window, window["step_s"])
         judged_rows = [r for r, k in zip(rows, keep) if k]
@@ -240,10 +268,14 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
             sub = system.subset(_in_window(system.numeric("elapsed_s"), window),
                                 shift={"elapsed_s": window["start_s"]})
             judged_system = sub if len(sub) >= 2 else system
+            if judged_system is not system:      # the OS rows are once a second too, each for the second before it
+                judged_irqs, judged_procs = (t.subset(_in_window(t.numeric("elapsed_s"), window)) if t is not None
+                                             and len(t) else t for t in (irqs, procs))
     res = {"threads": thread_summary(judged_rows), "process": process_load(judged_rows),
            "cores": core_load(judged_cores),
            "system": soak.analyze(judged_system) if judged_system is not None and len(judged_system) >= 2 else None,
-           "since_boot": since_boot(system), "window": window, "aligned": None}
+           "since_boot": since_boot(system), "window": window, "aligned": None,
+           "os": os_load(judged_system, judged_irqs, judged_procs)}
     if alignable:
         res["aligned"] = align(rows, system, diag_t0, nav, nav_t0)
     res["findings"] = findings(res)
@@ -298,6 +330,19 @@ def findings(res: dict) -> list[str]:
             out.append(f"the clock dropped to {mhz['min']:.0f} MHz (max {mhz['max']:.0f}) for "
                        f"{100 * mhz['share_below_max']:.0f}% of the run")
         out += [f for f in sysres["findings"] if not f.startswith(("no throttling", "run too short"))]
+    o = res.get("os")
+    if o:
+        for p in o["procs"]:
+            if p["name"] != osc.SELF_NAME and p["mean_pct"] >= OTHER_PROC_PCT:
+                out.append(f"{p['name']} (pid {p['pid']}) used {p['mean_pct']:.0f}% of a core on average: "
+                           "work the robot pays for outside its own process")
+        if o["disk_busy_max_pct"] is not None and o["disk_busy_max_pct"] >= DISK_BUSY_PCT:
+            out.append(f"the SD card was busy up to {o['disk_busy_max_pct']:.0f}% of a second (writes up to "
+                       f"{common.fmt(o['disk_write_max_kbps'], 0)} kB/s): a recording's writes can hold frames up")
+        for kind in osc.PSI_KINDS:
+            v = o[f"psi_{kind}_max"]
+            if v is not None and v >= PSI_STALL_PCT:
+                out.append(f"some task stalled waiting on {kind} up to {v:.0f}% of the time (pressure, 10 s average)")
     latched = [k for k in res["since_boot"] if not (sysres and k in sysres["throttle"])]
     if latched:
         out.append(f"latched since boot, not during this run: {', '.join(latched)} "
@@ -314,6 +359,11 @@ def findings(res: dict) -> list[str]:
             cause = "neither a clock drop nor a busy main thread: look at the camera, I/O or other processes"
         out.append(f"{a['late']} slow frames coincide with {cause}")
     return out
+
+
+def _dash(v, digits: int) -> str:
+    """common.fmt, "--" for a value never read."""
+    return common.fmt(v, digits) or "--"
 
 
 def report_lines(res: dict) -> list[str]:
@@ -339,6 +389,15 @@ def report_lines(res: dict) -> list[str]:
                      + "; clock " + (f"{s['cpu_mhz']['min']:.0f}-{s['cpu_mhz']['max']:.0f} MHz" if s["cpu_mhz"] else "--")
                      + "; memory " + (f"{s['memory']['rss_start_mb']:.0f} -> {s['memory']['rss_end_mb']:.0f} MB"
                                       if s["memory"] else "--"))
+    o = res.get("os")
+    if o:
+        lines.append(f"os        CMA free min {_dash(o['cma_free_min_mb'], 0)} MB; ISP clock "
+                     + (f"{o['isp_mhz'][0]:.0f}-{o['isp_mhz'][1]:.0f} MHz" if o["isp_mhz"] else "--")
+                     + f"; SD write mean {_dash(o['disk_write_mean_kbps'], 0)} kB/s, busy max "
+                     f"{_dash(o['disk_busy_max_pct'], 0)}%; stalls max "
+                     + ", ".join(f"{k} {_dash(o[f'psi_{k}_max'], 1)}%" for k in osc.PSI_KINDS))
+        lines.append("irqs      " + ("; ".join(f"{i['name']} {i['mean_hz']:.0f}/s" for i in o["irqs"][:5]) or "--"))
+        lines.append("others    " + ("; ".join(f"{p['name']} {p['mean_pct']:.0f}%" for p in o["procs"][:5]) or "--"))
     a = res["aligned"]
     if a is not None:
         lines.append(f"aligned   {a['frames']} frames, {a.get('late', 0)} slow; main CPU slow {common.fmt(a.get('late_main_cpu'), 0)}%"
@@ -544,7 +603,7 @@ def load(arg, run=None) -> dict:
     meta_path = folder / "meta.json"
     meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
     out = {"folder": folder, "threads": Table(threads_path), "cores": opt("cores.csv"), "system": opt("system.csv"),
-           "meta": meta, "nav": None, "nav_t0": None}
+           "irqs": opt("irqs.csv"), "procs": opt("procs.csv"), "meta": meta, "nav": None, "nav_t0": None}
     if run:
         nav_path = common.find_csv(run, ("nav.csv",))
         rep = nav_path.parent / "report.json"
@@ -566,7 +625,7 @@ def main(argv=None) -> int:
         if args.run and (diag_t0 is None or d["nav_t0"] is None):
             print("note: can't line the run up (no t0_monotonic in meta.json or the run's report.json)",
                   file=sys.stderr)
-        res = analyze(d["threads"], d["cores"], d["system"], d["nav"], diag_t0, d["nav_t0"])
+        res = analyze(d["threads"], d["cores"], d["system"], d["nav"], diag_t0, d["nav_t0"], d["irqs"], d["procs"])
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1

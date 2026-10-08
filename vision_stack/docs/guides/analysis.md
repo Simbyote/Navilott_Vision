@@ -32,7 +32,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `soak` | `system.csv` (from `test_soak` or a diagnostics recording), `soak_frames.csv` if there is one | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
 | `compare_runs` | two runs' JSON summaries | `compare.csv` | Every value that moved by 10% or more between two runs |
-| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock, over the run's own time when given the run; what slow frames coincided with |
+| `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock, the rest of the Pi (interrupts, other processes, SD card, pressure), over the run's own time when given the run; what slow frames coincided with |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 **Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
@@ -110,6 +110,10 @@ It reports:
 - **Preemption and migration:** `main`'s involuntary switches (its core is contended) and how often it changes core (pinning it with `taskset -c` may help).
 - **Cores:** each core's load, and how uneven they are.
 - **Heat, clock, throttling, memory:** `soak`'s analysis of the same `system.csv`, plus a warning at 75 °C (the Pi throttles at 80), clock drops, and flags latched since boot but not active during the run.
+- **The rest of the Pi** (recordings with the OS counters, diagnostics.md section 8): the CMA pool, the ISP clock, SD writes and busy time, pressure stalls, the busiest interrupts and other processes, over the same window. It flags three things:
+  - another process using 15% of a core or more on average (the recorder itself excepted);
+  - the SD card busy half a second in any second;
+  - any task stalled on CPU, I/O or memory for 10% of a 10 s window.
 - **With `--run`:** each frame of the run placed in the recording's sample covering it, using the start times both keep on the monotonic clock (`t0_monotonic` in `meta.json` and the run's `report.json`). Slow frames (over 1.5 budgets) are compared with the rest: if they coincide with a clock drop, it says so; else with `main` busy; else neither, which points at the camera, I/O or another process.
 
 A memory verdict needs a run of about 6 minutes; shorter ones get a note, not a finding.
