@@ -68,7 +68,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
-        intersection-dry render diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
+        intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
         jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
@@ -121,6 +121,14 @@ intersection-dry: $(HW) ## the intersection sequences with the motors off, Enter
 render: ## render an earlier navigation run's video (RUN=runs/nav_..., default the newest)
 	@test -n "$(RENDER_RUN)" || (echo "no runs/nav_* folder: make render RUN=<run folder>"; exit 2)
 	$(PY) -m src.navigation_linker --render $(RENDER_RUN) $(ARGS)
+
+##@ Routines: prompted hardware tests, judged PASS / FAIL (routines.md)
+routines: ## list the routines; run one with make routine-<name> (ARGS="--trials 10 --notes ...")
+	$(PY) -m src.routines --list
+
+# make routine-<name>: one routine, by its name
+routine-%:
+	$(PY) -m src.routines $* $(ARGS)
 
 ##@ Diagnostics: how the run uses the Pi (diagnostics.md)
 diag-nav: $(HW) ## record threads, cores, heat while nav-dry runs; then: make pi-load
