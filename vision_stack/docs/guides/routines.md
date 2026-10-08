@@ -71,6 +71,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `detect-range` | From how far before the stop line does the robot read the traffic light (or stop sign) right? | D3, D2 | nothing driving; the light or sign posted as on the course |
 | `lane-offset` | Does the robot's reported position in the lane match a ruler, to within 2 cm? | P3 | nothing driving; a straight lane; a ruler |
 | `recover-offset` | From how far off the lane's center does the robot steer back, and how close to the center does it hold a straight? | lane keeping (IDR navigation tests) | `pigpiod`; motors on; a long straight; `lane-offset` run first |
+| `frame-budget` | Does the whole chain keep 20 FPS, answer within 50 ms, and fit in the Pi's CPU and memory? | P1, P2, R4 | nothing driving; parked in a lane |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -211,6 +212,19 @@ The 1.5 cm band is the clearance of an 11 cm robot in a 14 cm lane. PASS (first 
 - the straight run never more than 1.5 cm off the center.
 
 The summary gives the **maximum recoverable offset**: the largest start up to which every trial, left and right, recovered. Each attempt's run folder is `attempt_NN/` (`make render RUN=...` replays it). Settings: `positions`, `cm_per_px`, `band_cm`, `need_cm`, `max_s`, `straight_s`. Motors on: walk beside it.
+
+**`frame-budget`** (card: `docs/routines/requests/frame-budget.md`). The pipeline-timing and CPU tests the IDR promised. Each trial is one 60 s run of the whole chain with navigation deciding and the motors **off**, the robot parked in a lane so lane keeping has work. Three runs by default.
+- **From every frame** (nav.csv): Phases 2+3 against the 50 ms frame period (the budget), the time from a frame's arrival to its motor command (P2, from appsink: the part the code controls), and the frame rate.
+- **From a side thread** every 0.5 s: the CPU's busy share, this process's memory (the pipeline runs in it) and the temperature. It reads only `/proc` and the thermal zone, so it doesn't disturb the timing it watches; `vcgencmd`'s throttle flags are read at the start and end only, and a flag new during the run (or on at the end) counts.
+
+PASS, each run:
+- at least 20 FPS (P1);
+- at most 5% of frames over the budget (P1's "near 0", a first guess);
+- p95 arrival-to-command latency at most 50 ms (P2);
+- CPU at most 70% on average, memory at most 400 MB (R4);
+- ran the whole time (the lane was in view throughout).
+
+Heat and throttling are reported; `power-profile` judges them. P1 is known to be short today (15 FPS on the IMX290), so expect a FAIL there until the frame time comes down: this is the number to quote and track. Setting: `--set seconds=...`. Keep other programs off the Pi while it runs.
 
 ---
 

@@ -44,7 +44,7 @@ These are internal targets from the design, not PSR requirements. They're here s
 | R1 | A single dropped frame never stops the robot; a dead camera is reported within about 1 s | `test_capture` (software) | Verified in software |
 | R2 | A lost lane is held for at most about 350 ms, then reported as unusable | `test_estimation` (software) | Verified in software |
 | R3 | No single frame can flip the traffic or stop-sign state | `test_estimation` (software) | Verified in software |
-| R4 | CPU under 70% and memory under 400 MB with navigation running | Full run with navigation, observed with `top` | Not verified |
+| R4 | CPU under 70% and memory under 400 MB with navigation running | `make routine-frame-budget` (motors off; also judges P1 and P2) | Not verified |
 | R5 | The motors stop if control stops arriving | **TBD**, depends on navigation's watchdog | Not implemented |
 
 ---
