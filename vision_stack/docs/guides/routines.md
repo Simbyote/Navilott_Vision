@@ -70,6 +70,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `figure-eight` | Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time? | course repeatability; demo-day endurance | `pigpiod`; motors on; two blocks of track |
 | `detect-range` | From how far before the stop line does the robot read the traffic light (or stop sign) right? | D3, D2 | nothing driving; the light or sign posted as on the course |
 | `lane-offset` | Does the robot's reported position in the lane match a ruler, to within 2 cm? | P3 | nothing driving; a straight lane; a ruler |
+| `recover-offset` | From how far off the lane's center does the robot steer back, and how close to the center does it hold a straight? | lane keeping (IDR navigation tests) | `pigpiod`; motors on; a long straight; `lane-offset` run first |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -198,6 +199,18 @@ These are first guesses: the course's light and sign positions are still TBD in 
 PASS (P3): every position within 2 cm of the ruler. A position with no frames on vision has no reading and fails. Settings: `--set positions=0,1,-1,2,-2` (the first must be 0), `--set lane_cm=...`, `--set frames=...`.
 
 Run it before `recover-offset`: once it passes, the robot's own offset reading is a trustworthy measure while it drives.
+
+**`recover-offset`** (card: `docs/routines/requests/recover-offset.md`). Ignacio's two lane-keeping tests from the IDR, on the robot. Each trial is a short run with the motors on, on a long straight (1.5 m or more), from a start offset the tester measured: `0, ±2, ±3, ±4, ±5` cm by default.
+- **A start of 0 is the straight run:** 5 s of lane keeping; the row has the mean and largest distance from the center.
+- **Any other start** ends once the robot's own offset has stayed within 1.5 cm of the center for 1 s (or after 6 s). The tester then measures where it stopped: the **ruler** decides whether it recovered (within 1.5 cm). The robot's trace gives the time it took, how far it overshot past the center, and time off vision.
+
+It measures with the robot's own `lane_offset_cm`, so **run `lane-offset` first** and pass the scale it gives: `--set cm_per_px=...` (or set it in `config.py`). Without a scale it refuses to start.
+
+The 1.5 cm band is the clearance of an 11 cm robot in a 14 cm lane. PASS (first guesses) needs both:
+- every start up to `need_cm` (3 cm) recovered;
+- the straight run never more than 1.5 cm off the center.
+
+The summary gives the **maximum recoverable offset**: the largest start up to which every trial, left and right, recovered. Each attempt's run folder is `attempt_NN/` (`make render RUN=...` replays it). Settings: `positions`, `cm_per_px`, `band_cm`, `need_cm`, `max_s`, `straight_s`. Motors on: walk beside it.
 
 ---
 
