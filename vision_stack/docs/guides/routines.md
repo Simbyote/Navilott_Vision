@@ -72,6 +72,7 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `lane-offset` | Does the robot's reported position in the lane match a ruler, to within 2 cm? | P3 | nothing driving; a straight lane; a ruler |
 | `recover-offset` | From how far off the lane's center does the robot steer back, and how close to the center does it hold a straight? | lane keeping (IDR navigation tests) | `pigpiod`; motors on; a long straight; `lane-offset` run first |
 | `frame-budget` | Does the whole chain keep 20 FPS, answer within 50 ms, and fit in the Pi's CPU and memory? | P1, P2, R4 | nothing driving; parked in a lane |
+| `course-run` | Does the robot complete the course, in its lane and obeying the lights and signs, and how fast? | D2 (Senior Design Day) | `pigpiod`; motors on; the course as on the day |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -226,6 +227,18 @@ PASS, each run:
 
 Heat and throttling are reported; `power-profile` judges them. P1 is known to be short today (15 FPS on the IMX290), so expect a FAIL there until the frame time comes down: this is the number to quote and track. Setting: `--set seconds=...`. Keep other programs off the Pi while it runs.
 
+**`course-run`** (card: `docs/routines/requests/course-run.md`). The Design Day rehearsal: each trial is the whole course from the route file (`config.ROUTE_PATH`, or `--set route=...`), started with the robot's own start button and countdown, motors on, the battery watched, every frame recorded in `attempt_NN/`. Three runs by default; the route is checked and printed before anything opens.
+
+Afterwards the tester answers what a judge would:
+- did it complete the course as planned (every maneuver, to the finish)?
+- the phone stopwatch time from GO to the finish;
+- how many times they touched it;
+- how many stop signs or red lights it didn't stop for.
+
+The row puts beside those: how the run ended, the robot's own run time (what the display shows: the stopwatch against it checks the elapsed-time display too), the route steps reached, stop sign holds and red-light waits, time off vision, contract brakes, the frame rate, the pack at start and end.
+
+PASS, each run: completed (the tester says so **and** the robot ended on the route's finish); no touches; no stop sign or red light run. The times are the result, not judged: the summary gives the best and mean of the completed runs. Setting: `--set max_s=...` (300 s, the production run's cap). Motors on: walk beside it.
+
 ---
 
 ## 3. Asking for a routine
@@ -289,7 +302,7 @@ class StopDistance(Routine):
 Building from a card:
 - **One routine per card;** its name is the card's name.
 - **Card §3, the trial:** each step is a `console.wait()` or a run of existing code (a linker's run function, the sensors, the battery), never a subprocess the tester has to watch.
-- **§4, ground truth:** an `ask_number()` with the range a real answer can have.
+- **§4, ground truth:** an `ask_number()` with the range a real answer can have, or `ask_yes()` for a yes/no.
 - **§5, what the robot reports:** read it in the trial and put it in the row beside the hand measurement.
 - **§8, pass criteria:** become `judge()`. A card without numbers yet is a characterization; leave `judge()` returning `[]`.
 - **`settings`:** `{name: description}`, the routine's own `--set` options. Read them from `ctx.options`, with defaults set in `setup()`.

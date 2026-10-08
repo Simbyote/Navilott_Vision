@@ -11,6 +11,7 @@ Main package:
     ROUTINES: {name: Routine class}, what make routines lists and
         make routine-<name> runs.
 """
+from src.routines.course_run import CourseRun
 from src.routines.detect_range import DetectRange
 from src.routines.figure_eight import FigureEight
 from src.routines.frame_budget import FrameBudget
@@ -21,4 +22,4 @@ from src.routines.recover_offset import RecoverOffset
 from src.routines.stop_distance import StopDistance
 from src.routines.tape_check import TapeCheck
 
-ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange, LaneOffset, RecoverOffset, FrameBudget)}
+ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange, LaneOffset, RecoverOffset, FrameBudget, CourseRun)}

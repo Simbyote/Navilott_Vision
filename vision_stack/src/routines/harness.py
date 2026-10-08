@@ -98,6 +98,16 @@ class Console:
                 continue
             return value
 
+    def ask_yes(self, prompt: str) -> bool:
+        """y or n, asked again until it's one of them."""
+        while True:
+            answer = self.ask(f"{prompt} (y/n)").lower()
+            if answer in ("y", "yes"):
+                return True
+            if answer in ("n", "no"):
+                return False
+            self.say("  y or n (q stops)")
+
     def wait(self, prompt: str = "Press Enter to go on") -> None:
         """Wait for Enter; q stops the routine."""
         self.ask(prompt, default="")

@@ -77,6 +77,17 @@ def test_numbers_are_asked_again_until_they_parse_and_sit_in_range():
 
 
 @pytest.mark.software
+def test_yes_or_no_is_asked_again_until_it_is_one():
+    t = Person("maybe", "", "Y", "no", "yes", "N")
+    c = t.console()
+    assert c.ask_yes("Finished?") is True and t.prompts[0] == "Finished? (y/n): "
+    assert t.said().count("y or n") == 2
+    assert c.ask_yes("Again?") is False and c.ask_yes("x") is True and c.ask_yes("x") is False
+    with pytest.raises(h.Quit):
+        Person("q").console().ask_yes("x")
+
+
+@pytest.mark.software
 def test_after_a_trial_enter_keeps_r_redoes_d_discards_and_anything_else_is_asked_again():
     t = Person("", "k", "r", "x", "d", "q")
     c = t.console()
