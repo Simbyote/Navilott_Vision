@@ -2,7 +2,7 @@
 
 When to run which tests. How to run them is in `pytest.md`; what each covers is in `tests.md`; interpreting results is in `analysis.md`.
 
-Run pytest from `vision_stack/` and all other python files from `Navilott_Vision/`, with the environment active.
+Run everything from `vision_stack/` (pytest, `python3 -m src....` and `make`), with the environment active.
 On the Pi, set the clock first (`pytest.md`, step 1).
 
 ## Tiers

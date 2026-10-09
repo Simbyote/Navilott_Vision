@@ -10,13 +10,19 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 
 | If you want to… | Read |
 | --- | --- |
-| Understand the whole system | `architecture.md`, then `vision_stack/` in order |
+| Understand the whole system | `architecture.md`, then `vision_pipeline/` in order |
+| Look up a term (Otsu, the GIL, HSV, a homography...) | `concepts.md` |
 | Know what the system must do, and what's proven so far | `requirements.md` |
 | Know the course and camera measurements the tuning depends on | `course.md` |
-| Write Navigation: what it receives, what it returns, how the robot responds | `vision_stack/navigation_contract.md` |
-| Consume the vision output in navigation code | `vision_stack/phase3_estimation.md`, "Contract" and "Sign conventions" |
+| Know what Navigation receives, what it returns, how the robot responds | `vision_pipeline/navigation_contract.md` |
+| Consume the vision output in navigation code | `vision_pipeline/phase3_estimation.md`, "Contract" and "Sign conventions" |
 | Run anything without remembering its flags: `make` lists every command | `guides/make.md` |
 | Run the tests | `guides/pytest.md` |
+| Know which tests to run when | `guides/testing_procedure.md` |
+| Know what each test file covers | `guides/tests.md` |
+| Test the robot against a requirement, prompted, with a verdict | `guides/routines.md` (ask for one: `routines/request_card.md`) |
+| Analyze a run's recordings: nav.csv, timings, wheel balance | `guides/analysis.md` |
+| Find a command: every run, test and tool in one place | `guides/commands.md` |
 | Watch what the pipeline detects | `guides/phase2_linker.md` |
 | Check what estimation decides | `guides/phase3_linker.md` |
 | Run a drive trial: motors, encoders and IMU with vision recording | `guides/maneuver_linker.md` |
@@ -41,7 +47,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 
 ```
 docs/
-    vision_stack/
+    vision_pipeline/
         phase1_capture.md       camera → timestamped frames
         phase2_perception.md    frame → detections and lane offset
         phase3_estimation.md    detections + IMU → navigation packet
@@ -65,14 +71,25 @@ docs/
         production_run.md       the course run: python3 -m src.main
         diagnostics.md          recording threads, cores, throttling and memory during a run
         pytest.md               running the test suite
+        testing_procedure.md    which tests to run when
+        tests.md                what each test file covers
+        routines.md             prompted hardware tests with verdicts
+        analysis.md             analyzing a run's recordings
+        commands.md             every command in one place
         test_calibration.md     verifying a calibration
+    routines/
+        request_card.md         the card for asking for a routine
+        requests/               one filled card per routine
+    infographics/               numbered one-page explainers (01-40)
+    diagrams/                   diagrams of the pipeline, the linkers and each phase
     architecture.md             hardware, wiring, power, software layout, risks
+    concepts.md                 the ideas the docs use, explained once
     course.md                   course dimensions and camera geometry
     README.md                   this page
     requirements.md             requirements, how each is checked, status
 ```
 
-Navigation (driving, route logic, encoders). **TBD**
+Navigation (the rules, the route, intersections) is in `src/navigation/`; `guides/navigation_walkthrough.md` explains it and `vision_pipeline/navigation_contract.md` fixes its interface.
 
 ---
 
@@ -106,14 +123,17 @@ MPU-6050 IMU ──►  Phase 3: estimation   smoothed offset, hold/stale status
 | Lane offset | [−1, +1] of half the lane ROI width. **+ = robot right of lane center, so steer left** |
 | Lane status | Steer only on `vision` or `hold`; `stale` means don't trust the offset |
 | Constants | Shared values live in `src/params.py`; each stage's tuning lives in its config, bundled in `PipelineConfig`; `PipelineConfig` and the robot's tuning `MEASURED` live in `src/config.py` |
-| Commands | Repo commands run from `~/Navilott_Vision`; pytest runs from `~/Navilott_Vision/vision_stack` |
+| Commands | Everything (the Makefile, `python3 -m src....`, pytest) runs from `~/Navilott_Vision/vision_stack`, where `src` can be imported (`guides/commands.md`) |
 
 ---
 
 ## Current status
 
-The pipeline runs end to end and the software tests pass. Nothing has been verified on the course with the IMX290 camera yet. `requirements.md` has the per-requirement status, and each `vision_stack/` doc ends with its open items. The most important:
+The whole chain runs on the robot, from the start button to the finish: lane keeping, stop signs, traffic lights, stop lines, intersections and the route. The software tests pass. On the IMX290, no requirement is formally verified on the course yet, apart from P4 by design; the routines (`guides/routines.md`) are how each gets verified. `requirements.md` has the per-requirement status, and each `vision_pipeline/` doc ends with its open items. The most important:
 
-- Confirm the lane offset sign and the IMU yaw sign on the robot before tuning
-- Measure the ground scale, then check lane offset accuracy against ±2 cm
-- Add a motor watchdog before running at speed
+- The frame rate: about 15 FPS against the 20 FPS target (P1); `make routine-frame-budget` measures it
+- The ground scale and lane offset accuracy against ±2 cm (P3): `make routine-lane-offset`
+- The traffic light and stop sign read on the course (D2, D3): `make routine-detect-range`
+- The whole course, timed: `make routine-course-run`
+
+Done since the first list: the IMU yaw sign (2026-10-01) and the motor watchdog (`drive.py`).

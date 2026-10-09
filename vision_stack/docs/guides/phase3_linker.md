@@ -140,7 +140,7 @@ Each takes about a minute with the robot on the course.
 
 **Noise floor.** Park the robot centered and still, run `--camera --limit 300`. The `std` under "lane offset while on vision" is the measurement noise. Differences smaller than that between two settings aren't meaningful.
 
-**IMU yaw sign.** Run `--camera --imu --print-every 1`, cover the lens so vision drops to `hold`, and turn the robot right by hand. `hd` should go positive. If it goes negative, `IMU_YAW_SIGN` in `params.py` is wrong for this robot's mount; see `vision_stack/phase3_estimation.md`, "Sign conventions".
+**IMU yaw sign.** Run `--camera --imu --print-every 1`, cover the lens so vision drops to `hold`, and turn the robot right by hand. `hd` should go positive. If it goes negative, `IMU_YAW_SIGN` in `params.py` is wrong for this robot's mount; see `vision_pipeline/phase3_estimation.md`, "Sign conventions".
 
 **Gyro bias.** With the robot still and the lens covered, `hd` should stay near 0. If it drifts steadily, note how fast (degrees per second) and pass that value as `--gyro-bias`.
 

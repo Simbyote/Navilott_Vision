@@ -29,9 +29,9 @@ On P2: the pipeline stamps a frame when it reaches the application, after exposu
 | D2 | Detect a stop sign at the expected range | Recordings approaching each sign: first frame with the stop-sign flag set, and no flag on stretches with no sign. Parked at gaps: `make routine-detect-range ARGS="--set target=sign"`. Range **TBD** | Code runs; not tuned on course frames |
 | D3 | Classify a traffic light as red, yellow or green | Recordings at each light state: voted state matches the light. Parked at gaps: `make routine-detect-range`. Range **TBD** | Code runs; off until HSV ranges are calibrated |
 | D4 | Detect the stop line at an intersection, and how far ahead it is | Proposed: with `calibration/ground_homography.json` fitted (`guides/calibrate_ground.md`) or, instead, `calibration/stop_line_table.json` (`guides/calibrate_stop_line.md`, distances then from its reference point), park square to a stop line at tape-measured distances from the reference point (the floor at the bottom of the camera's view) to the line's near edge: 0 (on it), 5, 10, 15, 20 cm and the far edge of the lane ROI. 100 frames each through `phase3_linker`. Pass: at every distance the stop line is detected in ≥ 95% of frames and the median `p2_stop_line_cm` is within ±1.0 cm of the tape (±0.5 cm at 0–10 cm), with a frame-to-frame standard deviation under 0.5 cm; repeat at ±10° to the line; and no stop line on 300 frames of plain lane with dashed center line. Tolerances **TBD** with navigation's stopping needs | Implemented (geometry detection, `stop_line_distance`, Phase 3 vote, cm through the ground homography or the stop-line table); not verified on the course |
-| D5 | Detect intersections | **TBD** | Not implemented; planned as the scene state machine |
+| D5 | Detect intersections | The intersection is found by its stop line (D4): `StopLineTracker` follows the line until it leaves the view, then `IntersectionRule` crosses (`navigation/intersection.py`). `test_intersection` (software); on the course, `intersection_linker` judges each crossing PASS / CHECK, and `make routine-figure-eight` runs 8 a lap | Implemented and tested in software; not verified on the course |
 
-D5 was in earlier plans but has no code yet. Either schedule it or mark it out of scope for this semester in the PSR. D4's stop line is detected and measured; intersections as a scene state (D5) are not.
+D5 was first planned as a scene state machine, a separate detector for "the robot is in an intersection". It was built a simpler way instead: every intersection on the course has a stop line at the robot's entry, so the stop line (D4) marks it, and the route says which way to go. An intersection with no stop line wouldn't be seen; on this course there isn't one.
 
 ---
 
@@ -45,7 +45,7 @@ These are internal targets from the design, not PSR requirements. They're here s
 | R2 | A lost lane is held for at most about 350 ms, then reported as unusable | `test_estimation` (software) | Verified in software |
 | R3 | No single frame can flip the traffic or stop-sign state | `test_estimation` (software) | Verified in software |
 | R4 | CPU under 70% and memory under 400 MB with navigation running | `make routine-frame-budget` (motors off; also judges P1 and P2) | Not verified |
-| R5 | The motors stop if control stops arriving | **TBD**, depends on navigation's watchdog | Not implemented |
+| R5 | The motors stop if control stops arriving | `test_drive` (software): the watchdog in `drive.py` brakes after `MOTOR_WATCHDOG_S` (0.5 s) without a command. Hardware: `pytest --hardware -k watchdog` with the wheels up | Verified in software; the hardware test is written, not yet recorded |
 
 ---
 
@@ -65,5 +65,5 @@ Record the results, with the date and commit, in the status column above.
 | | Verified | Not yet | Not implemented |
 | --- | --- | --- | --- |
 | Performance | P4 | P1, P2, P3 | |
-| Detection | | D1, D2, D3, D4 | D5 |
-| Robustness | R1, R2, R3 | R4 | R5 |
+| Detection | | D1, D2, D3, D4, D5 | |
+| Robustness | R1, R2, R3, R5 (all in software) | R4 | |

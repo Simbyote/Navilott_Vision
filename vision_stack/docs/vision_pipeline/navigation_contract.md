@@ -2,7 +2,7 @@
 
 > What Navigation receives each frame, what it must give back, and how the robot responds, as proven on the robot by `maneuver_linker`.
 
-Navigation doesn't exist yet. This page fixes the handoff so the vision stack and Navigation build against the same thing. Everything in it was measured on the robot in the 2026-09-30 `maneuver_linker` trials, or is enforced by code. Anything not proven is listed under **Open items**, not stated as fact.
+This page fixed the handoff before Navigation existed (2026-09-30), so the vision stack and Navigation could build against the same thing. Navigation is now built against it (`src/navigation/`, "The navigation subsystem" below). Everything in it was measured on the robot in the 2026-09-30 `maneuver_linker` trials, or is enforced by code. Anything not proven is listed under **Open items**, not stated as fact.
 
 **Code:** `src/navigation/navigation_contract.py` (`Command`, `BRAKE`, `Navigator`, `command_problems`; re-exported by `src/navigation/navigation.py`) · **Packet:** `src/estimation/estimation.py` (`EstimationPacket`) · **Checks:** `src/tests/navigation_checks.py` · **Tests:** `src/tests/test_navigation_contract.py`
 
@@ -176,10 +176,10 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 - **Turns at intersections.** Built (2026-10-02); tune `TURN_TARGET_DEG` and the duties on the mat with `intersection_linker` (`guides/intersection_linker.md`).
 - **End of course.** A lost lane ends the run; measure the roll-out past the lane's end on the mat and tune `END_STALE_MS`. A final stop line, if the course gets one, is the route's `stop_line` finish.
 - **Counting intersections.** Every stop line passing under the view counts as one. A missed line (glare) or a false one shifts every later maneuver; watch the `step` column in `nav.csv`.
-- **Tuning on the mat:** `STOP_DELAY_MS` (0.5 s), `SIGN_MEMORY_MS` (5 s), `RED_MEMORY_MS` (0.5 s), `RELEASE_MS` (0.25 s), `STOPPED_CPS` (20), `MAX_CROSS_MS` (4 s), `TWO_BOUNDARY_FRAMES` (10), `ONE_BOUNDARY_FRAMES` (20). The sign and traffic-light gates are still uncalibrated.
+- **Tuning on the mat:** `STOP_DELAY_MS` (0.5 s), `SIGN_MEMORY_MS` (5 s), `RED_MEMORY_MS` (0.5 s), `RELEASE_MS` (0.25 s), `STOPPED_CPS` (20), `MAX_CROSS_MS` (4 s), `TWO_BOUNDARY_FRAMES` (10), `ONE_BOUNDARY_FRAMES` (20). The traffic light runs glow mode, tuned on the course's LEDs (2026-10-06, `phase2_perception.md`); the stop-sign gates are still untuned on course frames (`requirements.md`, D2).
 
 - **Distance.** The maneuver trial measured leg length with cumulative encoder counts. The packet carries only counts per second, so Navigation integrates `cps × dt` itself. Whether the packet should carry cumulative counts is a contract change to agree on.
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).
 - **Old packets.** What Navigation does with a packet much older than the last isn't decided (time steps are capped at 0.5 s).
-- **`caution`** has no defined behavior.
+- **`caution`** (yellow) stops the robot at the line like red, since 2026-10-07 (`traffic_light.py`): a red LED's ring can read orange, inside yellow's band, and a red misread as yellow drove through.
 - **Wheel speed in m/s.** The packet's `wheel_speed` was removed (2026-10-02): nothing set it, so it was always 0.0. Speed is `left_wheel_cps` / `right_wheel_cps`. If m/s is needed, measure the encoder counts per wheel revolution and the wheel diameter, and compute it from the counts in one place.
