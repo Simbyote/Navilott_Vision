@@ -66,7 +66,7 @@ A frame counts as a **measurement** only if:
 | `hold` | Dropout, for up to `hold_max_frames` (7, about 350 ms at 20 FPS) | The last good value |
 | `stale` | Dropout for longer than that | The last good value, which navigation must not steer by |
 
-- **EMA:** `α = 0.35`. Higher follows faster and smooths less. The first measurement seeds it directly.
+- **EMA:** `α = 0.35`. Higher follows faster and smooths less. The first measurement seeds it directly. The formula and the vote's rule are in `../concepts.md` ("Across frames").
 - **Stale resets the EMA,** so the next usable frame re-seeds the estimate. Otherwise a robot that moved during a long dropout would have every new measurement rejected by the jump gate, forever.
 - **Before the first measurement** the status is `stale` and the offset is 0.0.
 - **Centimeters:** with `cm_per_px` and `lane_roi_width_px` set, `lane_offset_cm` undoes the normalization. Until a scale is measured it's `None`. `phase3_linker --cm-per-px` sets a hand-measured value.
@@ -204,7 +204,7 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Not in Phase 3 (yet)
 
-- **Dead reckoning during a hold.** The hold repeats the last offset. Once wheel encoders are wired in, odometry plus heading could propagate it instead (the `@TODO` in `LaneFilter.update()`).
+- **Dead reckoning during a hold.** The hold repeats the last offset. The wheel encoders are wired (their counts per second ride in every packet), so odometry plus heading could propagate it instead; that isn't built yet (the `@TODO` in `LaneFilter.update()`).
 - **Scene awareness.** Stop lines are voted and measured, but intersections, turns and orientation are not modeled as states. Where the scene state machine lives (estimation or navigation) is still open.
 - **Out-of-bounds recovery** (stop, localize, correct). Deferred until basic lane keeping works.
 - **Control.** Phase 3 ends at the packet. Steering and speed are navigation's.
@@ -215,5 +215,5 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 - **Stop-sign gate.** The stop sign reaches the vote at 0.45 on untuned geometry. Keep the gate high, or have navigation ignore `stop_sign_detected`, until the sign branch is tuned on course frames.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
-- **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement.
+- **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement: `make routine-lane-offset` measures it and says the value to set.
 - **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior, the pass-through ambiguity above, and whether the packet carries cumulative encoder counts.

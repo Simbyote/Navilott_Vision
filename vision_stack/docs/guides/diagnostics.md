@@ -4,7 +4,7 @@
 
 The Pi's operating system is part of the robot, and a risk to it:
 - the kernel decides which core each thread runs on;
-- Python's GIL decides which Python thread runs Python;
+- Python's GIL decides which Python thread runs Python (what it is, and why OpenCV escapes it: `../concepts.md`, "The GIL");
 - heat or a weak supply throttles the clock;
 - memory runs short on a 512 MB Pi Zero 2 W.
 

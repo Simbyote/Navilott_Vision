@@ -10,7 +10,7 @@ Phase 2 takes one `FrameData` and answers, for that frame alone: where are the l
 
 ## Design philosophy
 
-**Classical CV, on purpose.** The course is structured: white tape on dark mats, one octagon shape, three lamp colors. Thresholds, edges and contour geometry handle that on a Pi Zero 2 W with predictable latency and low memory. Every decision can be traced to a number that can be tuned, which is the point: most failures are tuning problems, and a tunable pipeline can be fixed on the course.
+**Classical CV, on purpose.** The course is structured: white tape on dark mats, one octagon shape, three lamp colors. Thresholds, edges and contour geometry handle that on a Pi Zero 2 W with predictable latency and low memory. Every decision can be traced to a number that can be tuned, which is the point: most failures are tuning problems, and a tunable pipeline can be fixed on the course. What a learned model would have cost and what this gives up are in `../concepts.md` ("Classical computer vision"), with the operations used below: HSV, Otsu, Canny, morphological close, contours and the gates.
 
 **Each stage is a function from one frozen result to the next.** A stage takes the previous stage's result dataclass and returns its own. It can't modify its input or reach into another stage's state. That keeps each stage testable alone with hand-built input.
 
@@ -433,10 +433,10 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 ## Open items
 
 - **Undistortion** on the IMX290: cost against improvement, measured with the calibration test.
-- **HSV calibration** under course lighting, then switch the color branch on.
+- **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
 - **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
 - **`expected_half_lane_px`** from calibration instead of the hand-set 228 px.
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
 - **`distance_px` to cm:** needs a ground homography or a stop-line table, not `cm_per_px`.
-- **Offset sign on hardware:** confirm + = robot right of center on the propped-up chassis before tuning anything downstream.
+- **Offset accuracy on hardware:** the sign (+ = robot right of center) is what lane keeping steers by on every run; the accuracy against a ruler (P3) is `make routine-lane-offset`.
