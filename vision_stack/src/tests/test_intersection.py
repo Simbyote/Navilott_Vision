@@ -6,28 +6,35 @@ straight from the moment the line leaves the view, steers against the
 heading turned (net of the gyro bias), ends after the line is reached on
 both boundaries for TWO_BOUNDARY_FRAMES, at least one for
 ONE_BOUNDARY_FRAMES, or MAX_CROSS_MS of driving; held frames count toward
-none of them; active; reset. The route's turns: left and right from the
-line on their duties until the gyro reaches TURN_TARGET_DEG their way (or
-their time limit), then out on the new heading; held frames don't advance
-a turn, and lane lines seen mid-turn don't end it.
+none of them; active; reset. The route's turns: from the line they first
+advance ADVANCE_MS on the heading hold (held frames don't count; straight
+doesn't advance), then turn on their duties until the gyro reaches
+TURN_TARGET_DEG their way (or their time limit), then out on the new
+heading; held frames don't advance a turn, and lane lines seen mid-turn
+don't end it.
 """
 import pytest
 
 from src.navigation.intersection import (
-    LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING, REASON_TURNING,
-    RIGHT_TURN, RIGHT_TURN_MAX_MS, SOURCE_HEADING_HOLD, SOURCE_TURN, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN,
-    TURN_TARGET_DEG, TWO_BOUNDARY_FRAMES, IntersectionRule,
+    ADVANCE_MS, LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
+    REASON_TURNING, RIGHT_TURN, RIGHT_TURN_MAX_MS, SOURCE_HEADING_HOLD, SOURCE_TURN, STAGE_ADVANCE, STAGE_EXIT,
+    STAGE_TO_LINE, STAGE_TURN, TURN_TARGET_DEG, TWO_BOUNDARY_FRAMES, IntersectionRule,
 )
 from src.navigation.lane_keeping import BASE_SPEED, KP_HEADING, LaneKeepingNavigator
 from src.navigation.navigation_contract import Command, command_problems
 from src.navigation.route import LEFT, RIGHT, STRAIGHT, Route, RouteProgress
-from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
-from src.tests.navigation_checks import packet
+from src.navigation.stop_line import StopLineTracker
+from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
 LINE = [30.0, 15.0, 5.0]
 LOST = len(LINE)
-REACHED = LOST + STOP_DELAY_MS // MS
+# The tracker spends at least one frame in CROSSING (the rule starts on it), so
+# the line is reached the frame after it leaves even with no delay
+REACHED = LOST + reach_frames(frame_ms=MS)
+# A turn advances ADVANCE_MS from the line first; the frame its time adds up on
+# is already the turn's
+TURN_START = REACHED + ADVANCE_MS // MS - 1
 
 
 def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None):
@@ -57,6 +64,7 @@ def active(out):
 @pytest.mark.software
 def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
+    assert ADVANCE_MS == 1000         # the stop lines sit back in the street (2026-10-07)
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 
@@ -198,9 +206,14 @@ YAW_DPS = 60.0
 TURN_FRAMES = int(TURN_TARGET_DEG / YAW_DPS * 1000) // MS + 1
 
 
-def turn_case(yaw, turn_frames=TURN_FRAMES, after=None):
-    """Straight to the line, turning at yaw for turn_frames, then after (lane back by default)."""
-    return ([{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "none", "yaw_rate": yaw}] * turn_frames
+def turn_case(yaw, turn_frames=TURN_FRAMES, after=None, extra=0):
+    """
+    Straight to the line and through the advance, turning at yaw for
+    turn_frames, then after (lane back by default). extra: more straight frames
+    before the turn (held ones).
+    """
+    return ([{"lane_mode": "none"}] * (TURN_START - LOST + extra)
+            + [{"lane_mode": "none", "yaw_rate": yaw}] * turn_frames
             + (after if after is not None else [{"lane_mode": "two_boundary"}] * (TWO_BOUNDARY_FRAMES + 2)))
 
 
@@ -210,7 +223,7 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.36, 0.63), Command(0.45, 0.0))
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.46, 0.73), Command(0.55, 0.25))     # 2026-10-06
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
 
@@ -221,9 +234,10 @@ def test_a_turn_starts_at_the_line_and_ends_on_the_gyro_target(maneuver, yaw, du
     _, out = drive(turn_case(yaw), maneuver=maneuver)
     st = stages(out)
     assert set(st[LOST:REACHED]) == {STAGE_TO_LINE}                          # straight to the line
-    assert out[REACHED - 1][0] == Command(BASE_SPEED, BASE_SPEED)
+    assert set(st[REACHED:TURN_START]) == {STAGE_ADVANCE}                     # then on into the intersection
+    assert all(out[i][0] == Command(BASE_SPEED, BASE_SPEED) for i in range(LOST, TURN_START))
     turning = [i for i, s in enumerate(st) if s == STAGE_TURN]
-    assert turning[0] == REACHED and all(out[i][0] == duties for i in turning)
+    assert turning[0] == TURN_START and all(out[i][0] == duties for i in turning)
     assert out[turning[0]][1]["reason"] == REASON_TURNING and out[turning[0]][1]["source"] == SOURCE_TURN
     per_frame = YAW_DPS * MS / 1000                  # the frame reaching the target is already the exit's
     assert len(turning) * per_frame < TURN_TARGET_DEG <= (len(turning) + 1) * per_frame
@@ -236,18 +250,18 @@ def test_a_turn_starts_at_the_line_and_ends_on_the_gyro_target(maneuver, yaw, du
 def test_a_turn_the_gyro_never_sees_ends_at_its_time_limit(maneuver, max_ms):
     _, out = drive(turn_case(0.0, turn_frames=max_ms // MS + 10), maneuver=maneuver)
     turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
-    assert turning[0] == REACHED and len(turning) == max_ms // MS - 1            # the frame reaching it exits
+    assert turning[0] == TURN_START and len(turning) == max_ms // MS - 1         # the frame reaching it exits
 
 
 @pytest.mark.software
 def test_turning_the_wrong_way_does_not_end_a_turn():
     _, out = drive(turn_case(+YAW_DPS, turn_frames=40), maneuver=LEFT)          # yaw to the right on a left turn
-    assert STAGE_TURN in stages(out)[REACHED + 30:REACHED + 40]
+    assert STAGE_TURN in stages(out)[TURN_START + 30:TURN_START + 40]
 
 
 @pytest.mark.software
 def test_lane_lines_seen_mid_turn_do_not_end_it():
-    case = ([{"lane_mode": "none"}] * (REACHED - LOST)
+    case = ([{"lane_mode": "none"}] * (TURN_START - LOST)
             + [{"lane_mode": "two_boundary", "yaw_rate": -YAW_DPS}] * TURN_FRAMES + [{"lane_mode": "none"}] * 5)
     _, out = drive(case, maneuver=LEFT)
     turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
@@ -255,12 +269,30 @@ def test_lane_lines_seen_mid_turn_do_not_end_it():
 
 
 @pytest.mark.software
-def test_a_hold_at_the_line_delays_the_turn_without_using_its_time():
+def test_a_hold_at_the_line_delays_the_advance_and_the_turn_without_using_their_time():
     hold = set(range(REACHED, REACHED + 40))                                     # 2 s at a stop sign
-    case = turn_case(0.0, turn_frames=40 + LEFT_TURN_MAX_MS // MS + 5)
+    case = turn_case(0.0, turn_frames=LEFT_TURN_MAX_MS // MS + 5, extra=40)
     _, out = drive(case, held=hold, maneuver=LEFT)
-    turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
-    assert turning[0] == REACHED and len(turning) == 40 + LEFT_TURN_MAX_MS // MS - 1     # the held 2 s on top
+    st = stages(out)
+    assert set(st[REACHED:TURN_START + 40]) == {STAGE_ADVANCE}                   # the held 2 s on top
+    turning = [i for i, s in enumerate(st) if s == STAGE_TURN]
+    assert turning[0] == TURN_START + 40 and len(turning) == LEFT_TURN_MAX_MS // MS - 1
+
+
+@pytest.mark.software
+def test_a_straight_crossing_does_not_advance():
+    _, out = drive(turn_case(0.0), maneuver=STRAIGHT)
+    st = stages(out)
+    assert STAGE_ADVANCE not in st and st[REACHED] == STAGE_EXIT
+
+
+@pytest.mark.software
+def test_the_advance_holds_the_heading():
+    case = [{"lane_mode": "none"}] * (REACHED - LOST) + [{"lane_mode": "none", "yaw_rate": 10.0}] * 10
+    _, out = drive(case, maneuver=LEFT)
+    cmd, rec = out[REACHED + 9]
+    assert rec["stage"] == STAGE_ADVANCE and rec["reason"] == REASON_CROSSING
+    assert rec["source"] == SOURCE_HEADING_HOLD and cmd.left < cmd.right                # drifted right: steers left
 
 
 @pytest.mark.software

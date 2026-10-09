@@ -24,7 +24,7 @@ import pytest
 
 import src.linker_io as lio
 import src.navigation_linker as nl
-from src.navigation.stop_line import STOP_DELAY_MS
+from src.tests.navigation_checks import reach_frames
 from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
 from src.estimation.estimation import SensorSample
 from src.peripherals.sensing import SensorBatch, SensorReading
@@ -181,8 +181,8 @@ def test_a_stop_sign_line_stops_the_robot_and_the_log_says_which_rule(tmp_path):
     # The synthetic scenes can't raise a voted stop sign through Phase 3 yet (the
     # sign gate is uncalibrated), so frames 2-4 carry a stop line coming down the
     # view with a sign; from frame 5 it's gone. At 50 ms a frame the robot reaches
-    # the line STOP_DELAY_MS later and holds STOP_SIGN_HOLD_TIME_MS (no encoders:
-    # the wheels read stopped at once)
+    # the line STOP_DELAY_MS later (at least a frame) and holds
+    # STOP_SIGN_HOLD_TIME_MS (no encoders: the wheels read stopped at once)
     lines = {2: 30.0, 3: 15.0, 4: 5.0}
 
     class SignAndLine(Spy):
@@ -193,7 +193,7 @@ def test_a_stop_sign_line_stops_the_robot_and_the_log_says_which_rule(tmp_path):
     rep, out, motor, nav, _ = go(tmp_path, nav=SignAndLine(), cam={"end_at": 85})
     logged = rows(out / "nav.csv")
     braked = [int(r["frame_id"]) for r in logged if r["brake"] == "1"]
-    reached = 5 + STOP_DELAY_MS // 50
+    reached = 5 + reach_frames(frame_ms=50)
     assert braked == list(range(reached, reached + STOP_SIGN_HOLD_TIME_MS // 50))
     assert {r["reason"] for r in logged if r["brake"] == "1"} == {"stop_sign_hold"}
     assert {r["rule"] for r in logged if r["brake"] == "1"} == {"stop_sign"}

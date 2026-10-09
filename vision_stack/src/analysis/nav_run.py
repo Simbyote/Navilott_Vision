@@ -207,7 +207,8 @@ def intersections(table: Table, dt: np.ndarray, after_s: float = AFTER_S,
         if not on:
             continue
         idx = range(start, start + length)
-        stage_s = {s: round(float(sum(dt[i] for i in idx if stage[i] == s)), 2) for s in ("to_line", "turn", "exit")}
+        stage_s = {s: round(float(sum(dt[i] for i in idx if stage[i] == s)), 2)
+                   for s in ("to_line", "advance", "turn", "exit")}
         turn_rows = [i for i in idx if stage[i] == "turn" and not np.isnan(heading[i])]
         end_t = float(t[start + length - 1])
         after = np.array([end_t < t[i] <= end_t + after_s for i in range(len(t))])
@@ -347,6 +348,7 @@ def report_lines(res: dict) -> list[str]:
     for x in res["intersections"]:
         a = x["after"]
         lines.append(f"intersection  {x['step'] or '?':<12} at {x['start_s']:6.1f} s  to_line {x['stage_s']['to_line']} s,"
+                     f" advance {x['stage_s']['advance']} s,"
                      f" turn {x['stage_s']['turn']} s, exit {x['stage_s']['exit']} s, held {x['held_s']} s;"
                      f" turn end {x['turn_end'] or '-'}, gyro {x['turned_deg']:+.0f} deg")
         lines.append(f"  after {AFTER_S:.0f} s: offset mean {common.fmt(a['offset_mean'])} max |x| {common.fmt(a['offset_max_abs'])},"

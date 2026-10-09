@@ -19,6 +19,7 @@ import json
 import pytest
 
 import src.analysis.nav_run as nr
+from src.navigation.intersection import ADVANCE_MS
 from src.analysis.common import Table
 from src.navigation.route import LEFT
 from src.navigation_linker import NAV_FIELDS
@@ -115,7 +116,7 @@ def test_an_intersection_is_grouped_across_the_stop_and_measured(tmp_path):
                                                                           lane_mode="left_only") + lane(30, 60)
     (x,) = nr.analyze(table(tmp_path, rows), gyro_bias_dps=1.0)["intersections"]
     assert x["step"] == "1/1 left" and x["maneuver"] == "left" and x["start_s"] == 0.5 and x["seconds"] == 2.0
-    assert x["stage_s"] == {"to_line": 0.5, "turn": 1.0, "exit": 0.2} and x["held_s"] == 0.3
+    assert x["stage_s"] == {"to_line": 0.5, "advance": 0.0, "turn": 1.0, "exit": 0.2} and x["held_s"] == 0.3
     assert x["turn_end"] == "gyro target" and x["turn_deg"] == -60.0
     assert x["turned_deg"] == -60.0                                     # 1 s at -60, net of the 1 deg/s bias
     assert x["after"]["lane_back_s"] == 0.55                            # left_only for 10 frames first
@@ -187,6 +188,7 @@ def test_intersection_linkers_left_turn_reads_as_one_clean_gyro_turn(tmp_path):
     res = nr.analyze(Table(tmp_path / LEFT / "nav.csv"), gyro_bias_dps=0.0)
     (x,) = res["intersections"]
     assert x["maneuver"] == "left" and x["turn_end"] == "gyro target" and x["stage_s"]["turn"] > 1.0
+    assert x["stage_s"]["advance"] == pytest.approx(ADVANCE_MS / 1000, abs=0.1)        # on into it first
     assert x["turned_deg"] == pytest.approx(-90, abs=10) and x["after"]["lane_back_s"] is not None
     assert res["findings"] == []
 

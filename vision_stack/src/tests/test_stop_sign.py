@@ -9,16 +9,16 @@ encoders still start the hold; the sign is used up by one line; reset.
 import pytest
 
 from src.navigation.navigation_contract import BRAKE
-from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
+from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import (
     REASON_HOLD, REASON_STOPPING, SIGN_MEMORY_MS, STOP_SETTLE_MAX_MS, STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS,
     StopSignRule,
 )
-from src.tests.navigation_checks import packet
+from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
 LINE = [30.0, 15.0, 5.0]            # a stop line coming down the view, then gone
-REACHED = len(LINE) + STOP_DELAY_MS // MS
+REACHED = len(LINE) + reach_frames(frame_ms=MS)
 
 
 def drive(seq, rule=None):
@@ -107,7 +107,7 @@ def test_a_sign_seen_too_long_before_does_not():
 
 @pytest.mark.software
 def test_one_sign_is_used_up_by_one_line():
-    first = line(after=STOP_DELAY_MS // MS + STOP_SIGN_HOLD_TIME_MS // MS + 5)
+    first = line(after=reach_frames(frame_ms=MS) + STOP_SIGN_HOLD_TIME_MS // MS + 5)
     long_memory = StopSignRule(StopLineTracker(), sign_memory_ms=60_000)       # the sign hasn't expired
     _, out = drive(first + line(sign=False), rule=long_memory)
     stops = braked(out)
@@ -116,7 +116,7 @@ def test_one_sign_is_used_up_by_one_line():
 
 @pytest.mark.software
 def test_reset_forgets_the_sign_and_any_stop():
-    rule, out = drive(line(after=STOP_DELAY_MS // MS + 3))
+    rule, out = drive(line(after=reach_frames(frame_ms=MS) + 3))
     assert braked(out)
     rule.reset()
     assert (rule._sign_ms, rule._braking_ms, rule._hold_ms, rule.record) == (None, None, None, {})

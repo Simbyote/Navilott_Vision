@@ -31,10 +31,13 @@ from src.estimation.estimation import EstimationPacket
 
 IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
 
-# Time from the line leaving the bottom of the view to the robot being at it.
-# Braking at the moment it left stopped the robot early (2026-10-01 runs);
-# 1500 then stopped it a few cm past the line, so 500 (2026-10-05). It's a
-# time, so the stop moves with the robot's speed (the battery). Tune on the mat
+# Time from the line leaving the bottom of the view to the robot being "at"
+# it, where a stop sign or red light brakes it. 1500 stopped it a few cm past
+# the line, 500 at it (2026-10-05). 0 since 2026-10-07: the course's new
+# traffic light hangs over the center, and 500 ms of driving carried the robot
+# under it and out of view; braking as the line leaves the view keeps the
+# light in frame. Turns no longer start here either: the intersection rule
+# advances ADVANCE_MS first. It's a time, so it moves with speed (the battery)
 STOP_DELAY_MS = 0
 # A line last seen within this many lane-ROI rows of the bottom left by
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts

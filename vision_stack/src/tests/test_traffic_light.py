@@ -10,14 +10,14 @@ doesn't; a dropped frame neither runs the light nor releases the wait; reset.
 import pytest
 
 from src.navigation.navigation_contract import BRAKE
-from src.navigation.stop_line import STOP_DELAY_MS, StopLineTracker
-from src.tests.navigation_checks import packet
+from src.navigation.stop_line import StopLineTracker
+from src.tests.navigation_checks import packet, reach_frames
 from src.navigation.traffic_light import (RED_MEMORY_MS, RED_STATE, REASON_RED, RELEASE_MS, STOP_STATES,
                                           TrafficLightRule)
 
 MS = 50
 LINE = [30.0, 15.0, 5.0]
-REACHED = len(LINE) + STOP_DELAY_MS // MS
+REACHED = len(LINE) + reach_frames(frame_ms=MS)
 RELEASE = RELEASE_MS // MS          # frames after the first non-red one that still brake
 
 
@@ -91,11 +91,14 @@ def test_red_dropped_on_the_reached_frame_still_stops():
 @pytest.mark.software
 @pytest.mark.parametrize("gap_ms, waits", [(RED_MEMORY_MS, True), (RED_MEMORY_MS + MS, False)])
 def test_red_counts_only_within_red_memory_ms_of_the_line(gap_ms, waits):
-    last_red = REACHED - gap_ms // MS
-    _, out = drive(["stop"] * (last_red + 1) + ["go"] * (REACHED + 30 - last_red - 1))
+    lines = [LINE[0]] * (RED_MEMORY_MS // MS + 2) + list(LINE)          # a long approach: room for the memory
+    reached = len(lines) + reach_frames(frame_ms=MS)
+    last_red = reached - gap_ms // MS
+    assert last_red >= 0
+    _, out = drive(["stop"] * (last_red + 1) + ["go"] * (reached + 30 - last_red - 1), lines=lines)
     assert bool(braked(out)) == waits
     if waits:
-        assert braked(out) == list(range(REACHED, REACHED + RELEASE))      # then clear for RELEASE_MS
+        assert braked(out) == list(range(reached, reached + RELEASE))      # then clear for RELEASE_MS
 
 
 @pytest.mark.software
