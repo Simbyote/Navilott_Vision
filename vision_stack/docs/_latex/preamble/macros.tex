@@ -1,0 +1,37 @@
+% preamble/macros.tex --- names, writing aids, and the section loader.
+
+% --- People ----------------------------------------------------------
+\newcommand{\Ana}{Ana Carlos}
+\newcommand{\Mike}{Mike Orduna}
+\newcommand{\Ignacio}{Ignacio Rubio}
+
+% --- Writing aids ----------------------------------------------------
+% Red draft marker. To hide every one at once for a clean read:
+%   \renewcommand{\TODO}[1]{}
+\newcommand{\TODO}[1]{\textcolor{red}{\textbf{[TODO: #1]}}}
+
+% A requirement ID (P1, D3, R5 ...), typeset the same everywhere.
+\newcommand{\Req}[1]{\textsf{\textbf{#1}}}
+
+% A file or symbol from the repository.
+\newcommand{\code}[1]{\texttt{#1}}
+
+% --- Section loader --------------------------------------------------
+% \Section{name} inputs sections/name.tex; \Appendix{name} inputs
+% appendices/name.tex. Normally every one is loaded. If \Only is
+% defined before this file (latex.mk's `only' target does that), only
+% the matching file is loaded, and parts and the bibliography are
+% skipped, so one section builds on its own in a second or two.
+\ifdefined\Only\else\def\Only{}\fi
+\newcommand{\IfWanted}[2]{%
+  \ifx\Only\empty #2%
+  \else\ifnum\pdfstrcmp{\Only}{#1}=0 #2\fi\fi}
+\newcommand{\Section}[1]{\IfWanted{#1}{\input{sections/#1}}}
+\newcommand{\Appendix}[1]{\IfWanted{#1}{\input{appendices/#1}}}
+\newcommand{\Part}[1]{\ifx\Only\empty\clearpage\part{#1}\fi}
+\newcommand{\References}{%
+  \ifx\Only\empty
+    \nocite{*}% list every refs.bib entry, cited or not; remove once you cite
+    \bibliographystyle{plainnat}
+    \bibliography{refs}
+  \fi}

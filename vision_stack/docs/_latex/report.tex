@@ -1,0 +1,64 @@
+% =====================================================================
+% report.tex --- main file. Only structure lives here; content is in
+% sections/ and appendices/, setup is in preamble/.
+%
+%   make -f latex.mk                     full build  -> report.pdf
+%   make -f latex.mk only S=perception   one section -> report-perception.pdf
+% =====================================================================
+\documentclass[12pt]{article}
+
+\input{preamble/packages}
+\input{preamble/style}
+\input{preamble/macros}
+
+% Header information
+\newcommand{\ProjectName}{Senior Design Autobot Project --- Navilott}
+\newcommand{\ReportPart}{Part One}
+\title{\ProjectName: \ReportPart}
+
+\author{\Mike \\ \Ana \\ \Ignacio}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\newpage
+\tableofcontents
+\thispagestyle{empty}
+\pagestyle{fancy}
+
+\newpage
+\setcounter{page}{1}
+
+\Section{abstract}
+\Section{overview}
+\Section{problem}
+
+\Part{Design}
+\Section{architecture}
+\Section{capture}
+\Section{perception}
+\Section{estimation}
+\Section{navigation}
+
+\Part{Evidence}
+\Section{testing}
+\Section{diagnostics}
+\Section{verification}
+\Section{results}
+
+\Part{Assessment}
+\Section{limitations}
+\Section{discussion}
+\Section{conclusion}
+
+\References
+
+\appendix
+\Part{Supplements}
+\Appendix{hardware}
+\Appendix{parameters}
+\Appendix{packet}
+\Appendix{repository}
+
+\end{document}

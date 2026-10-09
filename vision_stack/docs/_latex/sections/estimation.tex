@@ -1,0 +1,25 @@
+\section{Estimation}
+\label{sec:estimation}
+
+\subsection{Role}
+\TODO{Where is the line between perception and estimation, and why draw
+it there?}
+% Evidence: docs/vision_pipeline/phase3_estimation.md ("Design philosophy")
+% Figure available: phase3_estimation.png
+
+\subsection{Lane Filter}
+\TODO{How is a raw offset smoothed, and when is a frame not trusted?
+What do vision, hold and stale mean, and why those thresholds?}
+% Evidence: src/estimation/estimation.py (LaneFilter)
+
+\subsection{Heading Tracker}
+\TODO{What does the IMU add while vision is lost? What does heading
+actually measure, and what are its limits?}
+
+\subsection{Voting}
+\TODO{Why vote across frames for traffic lights, stop signs and stop
+lines? Why a window of three?}
+
+\subsection{The Packet}
+\TODO{What does navigation receive each frame? Which fields matter most?
+(Full field list in Appendix~\ref{app:packet}.)}

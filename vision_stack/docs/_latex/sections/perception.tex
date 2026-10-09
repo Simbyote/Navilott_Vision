@@ -1,0 +1,39 @@
+\section{Perception}
+\label{sec:perception}
+
+\subsection{Approach}
+\TODO{Why classical computer vision rather than a learned model? What
+about this course made that a reasonable bet, and what did you give up?}
+
+\subsection{Stage Order}
+\TODO{What are the stages, in order, and why that order? Why is there
+no memory between frames at this phase?}
+% Evidence: docs/vision_pipeline/phase2_perception.md ("Stage order");
+%           src/phase2_linker.py (run_chain)
+% Figure available: phase2_perception.png (tall; cap its height)
+
+\subsection{Lane Boundaries and Offset}
+\TODO{How are lane lines found, and how does a set of lines become one
+steering error? What does the sign of the offset mean? What happens
+when only one line is visible?}
+% Evidence: src/perception/geometry.py, lane_offset.py
+
+\subsection{Stop Lines}
+\TODO{How is a stop line told apart from a lane line? How is its
+distance measured, and in what units?}
+% Evidence: src/perception/stop_line_distance.py, stop_line_table.py
+
+\subsection{Traffic Lights}
+\TODO{What made traffic lights hard on this course? How did the
+approach change once you found the lights were bare LEDs (glow mode)?}
+% Evidence: src/perception/color_branch.py; docs/guides/calibrate_lamps.md,
+%           sweep_lamps.md
+
+\subsection{Stop Signs}
+\TODO{How are stop signs detected, and how well tuned is the detector
+on real course frames?}
+
+\subsection{Debugging Perception}
+\TODO{How do you see why a frame failed? How do you see why a gate
+failed? Why would it be important to see this at all?}
+% Evidence: per-gate reject counters; src/debugger/ views

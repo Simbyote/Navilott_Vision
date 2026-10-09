@@ -1,0 +1,24 @@
+\section{Capture}
+\label{sec:capture}
+
+\subsection{Camera Path}
+\TODO{How does light become a frame in Python? Which stages does the
+frame pass through, and which of them did you configure?}
+% Evidence: docs/vision_pipeline/phase1_capture.md ("Hardware path");
+%           src/capture/camera.py (build_gst_pipeline)
+% Figure available: phase1_capture.png
+
+\subsection{Design Decisions}
+\TODO{Which capture decisions mattered, and what would have gone wrong
+without each? Consider the pinned sensor mode, the output size, keeping
+only the newest frame, flipping in GStreamer, and who assigns frame ids
+and timestamps.}
+
+\subsection{Failure Handling}
+\TODO{What happens when a frame is dropped, and when the camera dies?
+Which requirement does this serve, and how do you know it works?}
+
+\subsection{Open Questions}
+\TODO{What about capture is still unmeasured or uncertain? For example,
+the delay from exposure to timestamp, or exposure settings under course
+lighting.}

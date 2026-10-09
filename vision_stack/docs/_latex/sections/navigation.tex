@@ -1,0 +1,30 @@
+\section{Navigation}
+\label{sec:navigation}
+
+\subsection{Scope and Attribution}
+\TODO{What is the role of navigation, and how was the design chosen?
+What was considered and what were the tradeoffs?}
+% Evidence: git log --format='%an' -- vision_stack/src/navigation/
+%   (mixed: Ignacio, Mike, AI-assisted sessions)
+
+\subsection{The Contract}
+\TODO{What is the interface between vision and navigation? What must a
+navigator always do, and what must it never do? Why fix this before
+navigation existed?}
+% Evidence: docs/vision_pipeline/navigation_contract.md;
+%           src/navigation/navigation_contract.py; src/tests/navigation_checks.py
+
+\subsection{Driving Rules}
+\TODO{How does the robot respond to each light state, stop signs, stop
+lines and a lost lane? Do these rules match the PRD?}
+% Check: the code treats yellow as "drive on"; the PRD allows entering
+%   an intersection only on green.
+
+\subsection{Measured Robot Response}
+\TODO{How the robot actually responds to commands? How does that compare to the contract?}
+% Evidence: navigation_contract.md ("How the robot responds", 2026-09-30)
+
+\subsection{Intersections and Route}
+\TODO{How is a turn sequenced, and how does the robot know which way to
+go at each intersection?}
+% Evidence: src/navigation/intersection.py, route.py; vision_stack/route.json

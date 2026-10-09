@@ -1,0 +1,87 @@
+\section{Problem}
+\label{sec:problem}
+
+% Your notes, kept as you wrote them:
+%
+% The Main Problem:
+% Navilott is a self-driving car that can navigate through a course with obstacles and reach a destination. The car must be able to detect
+% and follow typical road rules --- follow lane lines, obey traffic lights and stop signs at intersections, and safely reach the end of a
+% course, with a stretch goal being obstacle avoidance.
+%
+% The Constraints:
+% We are constrained with a budget of \$100 for the project, where we must develop a PCB to be integrated with any of the
+% car's other hardware components. Power is limited to up to 12V. Furthermore, the car must be able to interface with a human, where a time
+% and battery life is displayed on some screen.
+%
+% The Course Requirements:
+% The course will consist of a 6 intersections on a black mat, with 4 streets coming from each intersection. Each inner street block leads to
+% another intersection any outer street block leads to the end of a course. 4 traffic lights will be positioned across different junctions on
+% the course while stop signs will fill any remaining intersections/streets.
+
+\subsection{Objective}
+\TODO{What must the robot do, in one paragraph? Which PRD rules matter
+most to vision: right-lane driving, the exact traffic-light rules
+(green to enter, yellow only once inside, never on red), the stop sign
+at the exit?}
+\TODO{Obstacle avoidance: The PRD's executive summary states it as a must. 
+Was it formally downgraded? By whom, and when?}
+% Source: PRD, Executive Summary; Product Features Requirements
+
+\subsection{Constraints}
+\TODO{Which constraints actually shaped your design decisions, and which
+were just boxes to tick? Consider: \$100 BOM, the PCB requirement,
+12~V limit, size (10 x 11 x 11~cm), local processing only, start button
+and 5~s countdown, elapsed time in tenths of a second.}
+\TODO{Battery display: the PRD asks the power system to alert
+navigation. Why was battery life moved to the display?}
+% Source: PRD, General Constraints; Power; Controller; AutoBot Characteristics
+
+\subsection{The Course}
+\TODO{Describe the course the robot was built and tested on. Where does
+it differ from the PRD's course, and does each difference make the
+vision problem easier or harder?}
+% PRD: grid of at least nine 4-way intersections; lights at >= 4;
+%      ONE stop sign, at the exit; black foam mats, 3/4" white tape,
+%      solid borders, dashed center line; bots drive on the right.
+% Your notes: six intersections; stop signs at every unlit
+%      intersection.  Repo: vision_stack/docs/course.md
+
+\begin{table}[H]
+\centering
+\caption{\TODO{caption}}
+\label{tab:course}
+\begin{tabularx}{\textwidth}{@{}lXX@{}}
+\toprule
+& PRD & Team course \\
+\midrule
+\TODO{rows} & & \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Requirements}
+\label{sec:requirements}
+\TODO{Turn the PRD's prose into requirements that can each be checked
+one way. For each: is it straight from the PRD, or derived (something
+vision needs so a PRD rule can be met)? What numbers will you hold
+yourself to, and why those numbers?}
+\TODO{The PRD's validation guidance asks for each object's detection
+field (range, angles, minimum size). Its own requirement, or part of
+the detection ones?}
+% Starting point: vision_stack/docs/requirements.md (P1-P4, D1-D5, R1-R5).
+% Note R5 (motor watchdog) is implemented in src/peripherals/drive.py
+% even though requirements.md says it isn't.
+
+\begin{table}[H]
+\centering
+\caption{\TODO{caption}}
+\label{tab:reqs}
+\small
+\begin{tabularx}{\textwidth}{@{}lXl@{}}
+\toprule
+ID & Requirement & Source \\
+\midrule
+\TODO{rows} & & \\
+\bottomrule
+\end{tabularx}
+\end{table}

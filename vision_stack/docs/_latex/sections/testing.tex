@@ -1,0 +1,23 @@
+\section{Testing}
+\label{sec:testing}
+
+\subsection{Scope}
+\TODO{What does testing check that verification doesn't, and the
+reverse? Where is the line between the two in this report?}
+
+\subsection{Testing Without the Robot}
+\TODO{How can the pipeline run with no robot attached? Which design
+choices made that possible, and when were they made?}
+% Think about: replay frame sources, synthetic scenes, estimation that
+%   imports no hardware drivers.
+% Evidence: src/tests/scenes.py, sim_robot.py; docs/guides/pytest.md
+
+\subsection{The Suite}
+\TODO{How large is the suite, what does it cover, and how long does it
+take to run? Which tests need the robot, and how are they selected?}
+% Evidence: figures/by_the_numbers.png; pytest --collect-only -q | tail -1
+
+\subsection{What Testing Proves}
+\TODO{Which requirements can software tests actually verify, and which
+can they not? Where did tests catch real bugs? Where did a passing suite
+hide a problem that only showed on the course?}

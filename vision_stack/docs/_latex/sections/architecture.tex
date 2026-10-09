@@ -1,0 +1,50 @@
+\section{Architecture}
+\label{sec:architecture}
+
+\subsection{Single-Board Design}
+% --- Single-Board Design ---
+\TODO{How was the architecture chosen --- what were some of the options considered and why were they not chosen over the final
+design?}
+% Think about: the criteria you judged by (control rate, $100 BOM, 12 V,
+%   local processing, dev time); MCU-only vs Pi+MCU vs Pi-only; the PRD
+%   recommends a microcontroller, so Pi-only departs from its guidance.
+% Evidence: vision_stack/docs/architecture.md ("Decision: Pi Zero 2 W only")
+%           MCU option and packet format: docs/archD1/
+
+\subsection{Additional Hardware}
+% --- Additional Hardware ---
+\TODO{What sort of peripherals were used and why? What were the tradeoffs considered? How does each peripheral fit into
+the overall architecture?}
+% Think about: where the camera choice lives (here or Capture?), including
+%   the IMX219 -> IMX290 swap; which parts were Ana's or Ignacio's calls.
+% Evidence: docs/architecture.md (Parts; Pin and bus map); appendices/hardware.tex
+
+\subsection{Software Language}
+% --- Software Language ---
+\TODO{What programming language was used for the software? Why was this language chosen over others? When it came to
+integration, what were the tradeoffs?}
+% Think about: Python as glue over OpenCV's C++; the bindings it gave you
+%   (OpenCV, GStreamer/libcamera, pigpio); the GIL and interpreter cost,
+%   and whether that shows up in P1.
+
+\subsection{Tooling}
+% --- Tooling ---
+\TODO{What tools were used to develop the software? What was gained and lost by using these tools? How did the tools affect
+the architecture?}
+% Think about: Make (setup.mk once per Pi, session.mk every boot,
+%   vision_stack/Makefile as the command list), pytest, git/PRs, the
+%   linkers and debug views, AI-assisted sessions.
+% Architecture shaped by tooling: one place for stage order; replayable
+%   frame sources; estimation imports no hardware; diagnostics in a
+%   separate process.
+% Evidence: docs/guides/make.md; git log for when each .mk was added
+
+\subsection{Software Architecture}
+% --- Software Architecture ---
+\TODO{After deciding on the main architecture and hardware peripherals to use, how was the software architecture designed?
+What were some of the key decisions made and why? How did the software evolve over time and what changes, if any, were made
+to the architecture?}
+% Think about: phases and data flow; threads and the 50 ms frame budget;
+%   two or three turning points, each with its reason.
+% Evidence: docs/archD1/ and archive/run_pipeline.py (the earlier design)
+% Figures available: four_phases.png, pi_threading.png

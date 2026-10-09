@@ -1,0 +1,33 @@
+\section{Diagnostics}
+\label{sec:diagnostics}
+
+\subsection{Why Instrument the Pi}
+\TODO{What can go wrong on the Pi that the pipeline's own logs can't
+show? Why did that become worth building tools for?}
+% Evidence: docs/guides/diagnostics.md (opening section)
+
+\subsection{What Is Recorded}
+\TODO{Which recorders exist, and what question does each answer? Which
+ones actually changed a decision?}
+% Evidence: src/diagnostics/ (monitor, threads, system_monitor,
+%   os_counters, capture_anatomy, frame_meta, i2c_trace, sched_latency)
+% Figure available: threads_diag.png
+
+\begin{table}[H]
+\centering
+\caption{\TODO{caption}}
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Recorder & Question it answers \\
+\midrule
+\TODO{rows} & \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Observer Effect}
+\TODO{How do you know the recorder doesn't change the run it measures?}
+
+\subsection{What It Showed}
+\TODO{What did diagnostics reveal about frame rate, load, throttling or
+scheduling? Should the numbers go here, or only in Results?}
