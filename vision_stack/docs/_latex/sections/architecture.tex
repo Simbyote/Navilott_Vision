@@ -1,6 +1,38 @@
 \section{Architecture}
 \label{sec:architecture}
 
+% 4 questions exist that need to be answered:
+%   1. How do robots usually split the system --- from frame capture to motor actuation?
+%   2. What options were considered?
+%   3. What was the final decision? Why did we opt for it?
+%   4. What are the tradeoffs?
+
+\subsection{Structure of an Autonomous Robot}
+An autonomous robot has two main goals: complete its task without human intervention and perform it efficiently. Efficiency
+as a metric depends entirely on what we are designing for --- an autonomous robot that can navigate a track on its own. For
+the case of Navilott, this means a robot that can navigate a street-style course on its own --- following a lane, stopping
+at stop signs and obeying traffic lights.
+
+In robotics, this is often called "autonomous navigation", a part of "autonomous control," where the robot controls itself 
+to perform a task, such as following a line or avoiding obstacles. A robot can have many different methods to measure and sense 
+its environment --- camera, sonar, ultrasonic, IR, etc. Subprocesses in the robots software can use these measurements to form a 
+map of the environment. The robot's estimation system can use the map to calculate the robot's position and orientation in the world. 
+The robot's navigation system can then use these estimates to determine the robot's decision about what to do next. The robots 
+control system can then actuate motors in response to these decisions. Actuation is performed in two layers: the control loop which 
+sends PWM signals, and the driver which switches battery voltages based on the PWM signals that actuate the motors. Feedback from 
+encoders on the motor can then be routed back into estimation and navigation systems to ensure that the decision was taken in the 
+right place~\citep{douglas2020autonav1}.
+
+The robot can then be divided into 6 main areas:
+\begin{itemize}
+    \item \textbf{Capture}: the robot's sensors and how they capture the environment
+    \item \textbf{Perception}: the robot's processing algorithms and how they interpret those measurements
+    \item \textbf{Estimation}: the robot's estimation system and how it generalizes those measurements
+    \item \textbf{Navigation}: the robot's navigation system and how it forms decisions about the environment based on those perceptions
+    \item \textbf{Control}: the robot's control system and how it moves the robot around those decisions
+    \item \textbf{Actuation}: the robot's actuation system and how it actually moves the robot
+\end{itemize}
+
 \subsection{Single-Board Design}
 % --- Single-Board Design ---
 \TODO{How was the architecture chosen --- what were some of the options considered and why were they not chosen over the final
