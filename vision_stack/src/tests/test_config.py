@@ -235,9 +235,9 @@ def test_the_route_file_config_points_at_loads():
 
 
 @pytest.mark.software
-def test_measured_takes_stop_lines_within_5_degrees_and_keeps_the_rest_of_the_geometry():
+def test_measured_takes_stop_lines_within_2_degrees_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, StopLineFilter
-    assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=5.0))
+    assert MEASURED.geometry == GeometryConfig(stop_line=StopLineFilter(max_tilt_deg=2.0))
 
 
 @pytest.mark.software

@@ -11,6 +11,7 @@ labelling of candidates lane_offset skipped as part of a stop line.
 """
 import re
 from dataclasses import replace
+from functools import partial
 
 import cv2
 import pytest
@@ -62,13 +63,13 @@ def test_extract_finds_the_lane_candidates_lane_offset_skipped():
 @pytest.mark.software
 def test_each_top_edge_is_graded_pass_low_or_rejected_with_its_gate():
     view = StopLineView(conf_threshold=0.62)
-    sm = view._summary(data("stop_line_tilted", view))         # 4 deg, conf 0.563: accepted but below
+    sm = view._summary(data("stop_line_tilted", view))         # 1.5 deg, conf 0.513: accepted but below
     assert (sm["passed"], sm["low"], sm["rejected"]) == (0, 1, 0)
-    sm = view._summary(data("stop_line_wide", view))           # 0.686
+    sm = view._summary(data("stop_line_wide", view))           # 0.704
     assert (sm["passed"], sm["low"], sm["rejected"]) == (1, 0, 0)
     blob = view._summary(data("horizontal_blob", view))
     assert blob["rejected"] == 1 and blob["entries"][0]["gate"] == "short"
-    steep = view._summary(data("stop_line_too_tilted", view))  # 8 deg: past MEASURED's 5
+    steep = view._summary(data("stop_line_too_tilted", view))  # 4 deg: past MEASURED's 2
     assert steep["rejected"] == 1 and steep["entries"][0]["gate"] == "tilt"
 
 
@@ -166,8 +167,11 @@ def test_live_view_runs_the_stopline_view_and_writes_its_video_csv_and_summary(t
         cv2.imwrite(str(frames / f"{i:06d}.png"), SCENES[scene])
     out = tmp_path / "out"
     assert "stopline" in lv.VIEWS
-    assert lv.cli(run_live_view, ["--frames", str(frames), "--no-display", "--views", "stopline",
-                                  "--stopline-threshold", "0.99", "--out", str(out)]) == 0
+    # The frames are drawn undistorted, so the run takes SCENE_CONFIG: MEASURED's
+    # undistortion bends their level lines past its 2 deg stop-line gate
+    runner = partial(run_live_view, config=SCENE_CONFIG)
+    assert lv.cli(runner, ["--frames", str(frames), "--no-display", "--views", "stopline",
+                           "--stopline-threshold", "0.99", "--out", str(out)]) == 0
     assert (out / "run_stopline.avi").stat().st_size > 0
     header, *rows = (out / "run_stopline.csv").read_text().splitlines()
     assert header.split(",") == list(StopLineView.CSV_FIELDS) and len(rows) == 3

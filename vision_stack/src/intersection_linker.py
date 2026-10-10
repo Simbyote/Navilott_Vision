@@ -41,7 +41,7 @@ from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.estimation.estimation import LANE_VISION, Phase3Config
 from src.linker_io import OPEN_ERRORS, open_rig
-from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO
+from src.navigation.intersection import STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO
 from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navigation
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
 from src.navigation_linker import run as navigation_run
@@ -73,7 +73,7 @@ class SequenceWatch:
     """
     def __init__(self, gyro_bias_dps: float = 0.0, settle_s: float = SETTLE_S) -> None:
         self.gyro_bias_dps, self.settle_s = gyro_bias_dps, settle_s
-        self.stage_s = {STAGE_TO_LINE: 0.0, STAGE_TURN: 0.0, STAGE_EXIT: 0.0}
+        self.stage_s = {STAGE_TO_LINE: 0.0, STAGE_ADVANCE: 0.0, STAGE_TURN: 0.0, STAGE_EXIT: 0.0}
         self.steps = 0                      # intersections the route counted
         self.turn_end = None
         self.heading = 0.0                  # deg turned since the crossing started, from the IMU
@@ -145,7 +145,8 @@ def summary_lines(findings: dict) -> list[str]:
     verdict, problems = judge(findings)
     s = findings["stage_s"]
     lines = [f"[{findings['maneuver'].upper()}] {verdict}   ended by {findings['ended_by']}",
-             f"  stages        to the line {s[STAGE_TO_LINE]:.2f} s, turn {s[STAGE_TURN]:.2f} s, exit {s[STAGE_EXIT]:.2f} s",
+             f"  stages        to the line {s[STAGE_TO_LINE]:.2f} s, advance {s[STAGE_ADVANCE]:.2f} s,"
+             f" turn {s[STAGE_TURN]:.2f} s, exit {s[STAGE_EXIT]:.2f} s",
              f"  intersections {findings['intersections']}"]
     if findings["maneuver"] != STRAIGHT:
         lines.append(f"  turn          ended on {findings['turn_end']}, at {findings['heading_at_turn_end_deg']} deg")

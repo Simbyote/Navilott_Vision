@@ -96,7 +96,9 @@ def test_render_run_writes_one_frame_per_record_at_one_size(run_dir, tmp_path):
     rep, out = run_dir
     res = render_run(str(out), SCENE_CONFIG.lane_offset, CFG, 25.0)
     n, shapes = frames_in(out / "maneuver.avi")
-    assert res["rendered"] == n == rep["run"]["frames"] and res["missing"] == 0 and len(shapes) == 1
+    # Under load the recorder drops frames (its queue full), records and all, so the
+    # count to match is what it wrote, not the run's frames
+    assert res["rendered"] == n == rep["run"]["recorder_written"] and res["missing"] == 0 and len(shapes) == 1
     # Each image is the Phase 3 view with the strip under it (checked before the codec, which
     # rounds odd heights down)
     seen = []
@@ -119,7 +121,7 @@ def test_missing_frames_are_skipped_and_counted(run_dir):
         os.remove(p)
     try:
         res = render_run(str(out), SCENE_CONFIG.lane_offset, CFG, 25.0)
-        assert res["missing"] == 3 and res["rendered"] == rep["run"]["frames"] - 3
+        assert res["missing"] == 3 and res["rendered"] == rep["run"]["recorder_written"] - 3
     finally:
         for p, data in zip(gone, saved):
             open(p, "wb").write(data)
@@ -134,7 +136,7 @@ def test_a_records_file_cut_short_by_a_crash_renders_what_it_has(run_dir, tmp_pa
     (cut / "records.pkl").write_bytes(data[: len(data) // 2])
     os.symlink(out / "frames", cut / "frames")
     res = render_run(str(cut), SCENE_CONFIG.lane_offset, CFG, 25.0)
-    assert 0 < res["rendered"] < rep["run"]["frames"]
+    assert 0 < res["rendered"] < rep["run"]["recorder_written"]
 
 
 @pytest.mark.software

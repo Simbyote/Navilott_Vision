@@ -205,17 +205,30 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
 
 @pytest.mark.software
 def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
-    from src.navigation.intersection import LEFT_TURN, STAGE_TURN
+    from src.navigation.intersection import ADVANCE_MS, LEFT_TURN, STAGE_ADVANCE, STAGE_TURN
     from src.navigation.route import Route
     wait_ms = STOP_DELAY_MS + 1000
     case = intersection({"drive_state": "caution"}, after_frames=0)
-    case += [{"drive_state": "caution"}] * (wait_ms // MS) + [{}] * 20
+    case += [{"drive_state": "caution"}] * (wait_ms // MS) + [{}] * (ADVANCE_MS // MS + 10)
     out = run(Navigation(route=Route(("left",))), case)
     assert rules_over(out)[:4] == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION]
     after_wait = next(i for i, (_, _, rec) in enumerate(out)
                       if i > 0 and out[i - 1][2]["rule"] == RULE_TRAFFIC_LIGHT and rec["rule"] != RULE_TRAFFIC_LIGHT)
-    _, cmd, rec = out[after_wait]
-    assert rec["stage"] == STAGE_TURN and rec["maneuver"] == "left" and cmd == LEFT_TURN
+    assert out[after_wait][2]["stage"] == STAGE_ADVANCE and out[after_wait][2]["maneuver"] == "left"
+    turning = [(cmd, rec) for _, cmd, rec in out[after_wait:] if rec.get("stage") == STAGE_TURN]
+    assert turning and turning[0][0] == LEFT_TURN           # the advance used none of its time while held
+
+
+@pytest.mark.software
+def test_a_line_glimpsed_again_while_crossing_counts_one_intersection():
+    # With STOP_DELAY_MS = 0 the tracker is idle again the frame after the line leaves, so
+    # only Navigation keeping it from taking a new line mid-crossing stops a double count
+    from src.navigation.route import Route
+    glimpse = {"stop_line_detected": True, "stop_line_distance_px": 3.0}
+    case = intersection(after_frames=3) + [glimpse, {}, glimpse] + [{}] * 10
+    nav = Navigation(route=Route(("straight", "left")))
+    out = run(nav, case)
+    assert nav.progress.step == 1 and {rec.get("step") for _, _, rec in out if rec.get("step")} <= {"0/2", "1/2 straight"}
 
 
 @pytest.mark.software

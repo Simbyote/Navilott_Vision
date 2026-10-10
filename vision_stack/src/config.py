@@ -124,10 +124,12 @@ MEASURED = PipelineConfig(
     color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB, glow = _TRAFFIC_LIGHT_GLOW),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
-    # Stop lines within 5 deg of horizontal (default 20): the near end of a
+    # Stop lines within 2 deg of horizontal (default 20): the near end of a
     # thick diagonal lane line passed for a stop line past an intersection
-    # (2026-10-01 run; 15 then), and 5 cut the false lines further on the
-    # mat (2026-10-05)
+    # (2026-10-01 run; 15 then); 5 cut the false lines further on the mat
+    # (2026-10-05), but still took parts of the intersection itself for stop
+    # lines, each counted as another intersection; 2 stopped that (2026-10-07).
+    # The cost: a real line approached more than 2 deg off square is missed
     geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 2.0)),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,

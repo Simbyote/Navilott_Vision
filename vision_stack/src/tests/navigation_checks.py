@@ -27,9 +27,21 @@ from dataclasses import replace
 
 from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import Command, command_problems
+from src.navigation.stop_line import STOP_DELAY_MS
 
 # Frame spacing for built packets: the ~19.8 FPS measured by maneuver_linker (2026-09-30)
 FRAME_MS = 50
+
+
+def reach_frames(delay_ms: int = STOP_DELAY_MS, frame_ms: int = FRAME_MS) -> int:
+    """
+    Frames from a stop line leaving the view to the robot reaching it: the
+    delay in frames, but at least one. The tracker spends a frame in
+    CROSSING, which the intersection rule starts on, even with no delay.
+    """
+    return max(1, -(-delay_ms // frame_ms))
+
+
 # Centered vision frames fed before each case, so the navigator has a lane
 WARMUP_FRAMES = 10
 # Frames of the case under test: long enough to pass any vote or smoothing

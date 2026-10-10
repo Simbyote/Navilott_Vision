@@ -18,14 +18,19 @@ import src.intersection_linker as il
 import src.linker_io as lio
 from src.config import GYRO_BIAS_DPS
 from src.estimation.estimation import SensorSample
-from src.navigation.intersection import STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO, TURN_END_TIME
+from src.navigation.intersection import (
+    ADVANCE_MS, LEFT_TURN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
+    TURN_END_TIME,
+)
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
-from src.navigation.stop_line import STOP_DELAY_MS
+from src.tests.navigation_checks import reach_frames
 from src.tests.scenes import SCENE_CONFIG, scene
 from src.tests.sim_robot import FakeClock
 
 DT = 0.05
 YAW_DPS = 60.0                     # a turn at 60 deg/s reaches the 85 deg target in ~1.4 s
+REACH = reach_frames(frame_ms=round(DT * 1000))     # frames from the line leaving the view to reaching it
+ADVANCE = ADVANCE_MS // round(DT * 1000)            # a turn's frames on into the intersection first
 
 
 def sequence(maneuver):
@@ -33,9 +38,10 @@ def sequence(maneuver):
     out = [(scene(), 0.0)] * 6
     for y in (10, 30, 60, 70):
         out += [(scene(stop_line=(120, 320, y)), 0.0)] * 3
-    out += [(scene(marks=()), 0.0)] * round(STOP_DELAY_MS / 1000 / DT)  # to the line
+    out += [(scene(marks=()), 0.0)] * REACH                             # to the line
     yaw = {LEFT: -YAW_DPS, RIGHT: YAW_DPS}.get(maneuver)
     if yaw:
+        out += [(scene(marks=()), 0.0)] * ADVANCE                      # on into the intersection
         out += [(scene(marks=()), yaw)] * 30                           # the turn: 90 deg on the gyro
     return out + [(scene(), 0.0)] * 60                                 # the lane back
 
@@ -100,19 +106,21 @@ def go(tmp_path, maneuver):
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, duties", [(LEFT, (0.36, 0.63)), (RIGHT, (0.45, 0.0)), (STRAIGHT, None)])
+@pytest.mark.parametrize("maneuver, duties", [(LEFT, LEFT_TURN), (RIGHT, RIGHT_TURN), (STRAIGHT, None)])
 def test_each_sequence_turns_its_way_holds_the_lane_after_and_passes(tmp_path, maneuver, duties):
     findings, motor, source = go(tmp_path, maneuver)
     assert findings["ended_by"] == il.SEQUENCE_DONE and findings["intersections"] == 1
     assert findings["verdict"] == "PASS", il.judge(findings)[1]
-    assert findings["stage_s"][STAGE_TO_LINE] == pytest.approx(STOP_DELAY_MS / 1000, abs=2 * DT)
+    assert findings["stage_s"][STAGE_TO_LINE] == pytest.approx(REACH * DT, abs=2 * DT)
     assert findings["stage_s"][STAGE_EXIT] > 0.0
     if duties:
-        assert ("drive", *duties) in motor.calls and findings["turn_end"] == TURN_END_GYRO
+        assert findings["stage_s"][STAGE_ADVANCE] == pytest.approx(ADVANCE_MS / 1000, abs=2 * DT)
+        assert ("drive", duties.left, duties.right) in motor.calls and findings["turn_end"] == TURN_END_GYRO
         assert findings["stage_s"][STAGE_TURN] > 1.0
         assert findings["heading_deg"] == pytest.approx(il.EXPECTED_DEG[maneuver], abs=10)
     else:
-        assert findings["stage_s"][STAGE_TURN] == 0.0 and findings["turn_end"] is None
+        assert findings["stage_s"][STAGE_TURN] == findings["stage_s"][STAGE_ADVANCE] == 0.0
+        assert findings["turn_end"] is None
     assert motor.calls[-1] == ("stop",) and source.closed
     assert source.i < len(source.frames)                               # it ended on the settled lane, not the source's end
 
@@ -146,7 +154,8 @@ def test_a_turn_the_gyro_never_sees_is_a_check(tmp_path):
 
 GOOD = {"maneuver": LEFT, "intersections": 1, "turn_end": TURN_END_GYRO, "ended_by": il.SEQUENCE_DONE,
         "heading_deg": -88.0, "expected_deg": -90.0, "rejected": 0,
-        "stage_s": {STAGE_TO_LINE: 1.5, STAGE_TURN: 1.4, STAGE_EXIT: 0.2}, "heading_at_turn_end_deg": -86.0}
+        "stage_s": {STAGE_TO_LINE: 1.5, STAGE_ADVANCE: 1.0, STAGE_TURN: 1.4, STAGE_EXIT: 0.2},
+        "heading_at_turn_end_deg": -86.0}
 
 
 @pytest.mark.software
@@ -186,7 +195,7 @@ def test_the_watch_times_the_stages_integrates_the_heading_and_ends_once_settled
     assert w(row(0.9)) == il.SEQUENCE_DONE
     f = w.findings(LEFT)
     assert f["intersections"] == 1 and f["turn_end"] == TURN_END_GYRO and f["lane_back"]
-    assert f["stage_s"] == pytest.approx({STAGE_TO_LINE: 0.1, STAGE_TURN: 0.1, STAGE_EXIT: 0.1})
+    assert f["stage_s"] == pytest.approx({STAGE_TO_LINE: 0.1, STAGE_ADVANCE: 0.0, STAGE_TURN: 0.1, STAGE_EXIT: 0.1})
     assert f["heading_at_turn_end_deg"] == pytest.approx(-5.0)
     assert f["heading_deg"] == pytest.approx(-5.3)                       # three rows at 0 against the 1 deg/s bias
 

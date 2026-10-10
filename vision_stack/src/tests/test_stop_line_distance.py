@@ -117,12 +117,15 @@ def test_a_nearer_line_measures_a_smaller_distance_through_the_chain():
 
 
 @pytest.mark.software
-def test_phase3_linker_logs_the_stop_line_columns(tmp_path):
+def test_phase3_linker_logs_the_stop_line_columns(tmp_path, monkeypatch):
     frames = tmp_path / "f"
     frames.mkdir()
     for i in range(4):
         cv2.imwrite(str(frames / f"{i:06d}.png"), SCENES["stop_line_wide"])
     out = tmp_path / "out"
+    # The frame is drawn undistorted; MEASURED's undistortion bends its level
+    # line past the 2 deg stop-line gate, so the run takes SCENE_CONFIG
+    monkeypatch.setattr(p3, "MEASURED", SCENE_CONFIG)
     assert p3.cli(["--frames", str(frames), "--out", str(out), "--print-every", "0"]) == 0
     header, *rows = (out / "p3.csv").read_text().splitlines()
     cols = header.split(",")
@@ -131,8 +134,7 @@ def test_phase3_linker_logs_the_stop_line_columns(tmp_path):
     # cm columns were appended after every earlier column (the wheel columns came
     # later still), so nothing before them moved; blank without a ground homography
     assert cols[cols.index("p3_log") + 1:cols.index("p3_log") + 3] == ["p2_stop_line_cm", "stop_line_distance_cm"]
-    # The CLI runs MEASURED, which undistorts the synthetic frame, so only
-    # consistency is checked: once voted, the packet reports what Phase 2 measured
+    # Only consistency is checked: once voted, the packet reports what Phase 2 measured
     last = dict(zip(cols, rows[-1].split(",")))
     assert float(last["p2_stop_line_px"]) > 0
     assert last["stop_line_detected"] == "1"

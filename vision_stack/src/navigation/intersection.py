@@ -7,22 +7,26 @@ Purpose:
     right that crosses the robot's path pulls the offset to the left
     (2026-10-01 runs). So from the moment the stop line leaves the bottom of
     the view (the shared StopLineTracker's CROSSING) this rule drives, in
-    three stages:
+    four stages:
 
         STAGE_TO_LINE  straight to the line on a gyro heading hold (base
                        duty, steering only against the heading turned).
-        STAGE_TURN     left or right only, from the line (the tracker's
-                       reached, STOP_DELAY_MS later): fixed wheel duties
-                       (measured on the mat 2026-10-01) until the
-                       gyro has turned TURN_TARGET_DEG that way, or the
-                       turn's time limit if it never does.
+        STAGE_ADVANCE  left or right only, from the line (the tracker's
+                       reached, STOP_DELAY_MS later): on into the
+                       intersection on the heading hold for ADVANCE_MS of
+                       driving, since the stop lines sit back in the street.
+        STAGE_TURN     left or right only, after the advance: fixed wheel
+                       duties (LEFT_TURN, RIGHT_TURN, with their history)
+                       until the gyro has turned TURN_TARGET_DEG that way,
+                       or the turn's time limit if it never does.
         STAGE_EXIT     straight on the new heading until the lane is back:
                        both boundaries for TWO_BOUNDARY_FRAMES frames in a
                        row, at least one for ONE_BOUNDARY_FRAMES, or
                        MAX_CROSS_MS of driving. Then lane keeping takes over.
 
-    Straight goes from STAGE_TO_LINE to STAGE_EXIT at the line. Which way
-    to go comes from the route (route.py) through the RouteProgress that
+    Straight goes from STAGE_TO_LINE to STAGE_EXIT at the line, with no
+    advance. Which way to go comes from the route (route.py) through the
+    RouteProgress that
     navigation.Navigation advances as each intersection is entered; past
     the plan, or at the finish line, it's straight. A stop sign or red light
     at the line (a higher-priority rule) holds the robot first: held frames
@@ -38,10 +42,11 @@ Main package:
 
 Flow (each frame while active):
     1. Integrate yaw (net of the gyro bias) into the heading.
-    2. At the line: STAGE_TURN for left / right, else STAGE_EXIT.
-    3. STAGE_TURN: the turn's duties until the heading reaches the target
+    2. At the line: STAGE_ADVANCE for left / right, else STAGE_EXIT.
+    3. STAGE_ADVANCE: the heading hold for ADVANCE_MS; then STAGE_TURN.
+    4. STAGE_TURN: the turn's duties until the heading reaches the target
        or the time limit; then STAGE_EXIT, holding the heading it ended on.
-    4. STAGE_EXIT: count boundary frames and driving time; end on any limit.
+    5. STAGE_EXIT: count boundary frames and driving time; end on any limit.
     Every stage before the end returns a command and a record.
 """
 from src.estimation.estimation import EstimationPacket
@@ -70,11 +75,17 @@ BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 MAX_CROSS_MS = 4000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
-ADVANCE_MS = 1000  # 1 second of forward travel into the intersection before turning
+# Driving from the line into the intersection before a turn starts, on the
+# heading hold. The course's stop lines are moving back into the street, away
+# from the intersection, and the robot now stops as the line leaves the view
+# (STOP_DELAY_MS = 0), so a turn from there would cut the corner short
+# (2026-10-07). Straight crossings don't advance: they drive on to the exit.
+# Counts only while not held, like the turn's time. Tune on the mat
+ADVANCE_MS = 1000
 
-# Turn duties (left, right), measured on the
-# mat (2026-10-01): left is a wide arc into the far lane, right pivots on
-# the right wheel
+# Turn duties (left, right): left is a wide arc into the far lane, right a
+# tight arc around the right wheel. Measured on the mat 2026-10-01 as
+# (0.36, 0.63) and (0.45, 0.0); raised 2026-10-06 (motor recalibration)
 LEFT_TURN = Command(0.46, 0.73)
 RIGHT_TURN = Command(0.55, 0.25)
 # A turn ends once the gyro reads this many degrees turned its way: 90 less
@@ -171,7 +182,7 @@ class IntersectionRule:
         if self.stage == STAGE_TO_LINE and self.tracker.reached:
             # Route through STAGE_ADVANCE if turning, otherwise go straight to EXIT
             self.stage = STAGE_ADVANCE if self._maneuver in TURNS else STAGE_EXIT
-            
+
         if self.stage == STAGE_ADVANCE:
             if not held:
                 self._advance_ms += dt_ms

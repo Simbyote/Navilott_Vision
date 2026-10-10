@@ -2,14 +2,16 @@
 test_stop_line.py  --  src/navigation/stop_line.py
 
 The stop-line tracker on hand-built packets: a line coming down the view and
-passing under it, reached exactly STOP_DELAY_MS later and only once; a line
-lost far away is flicker, not reached; a re-sighting while crossing doesn't
-restart the delay; reset.
+passing under it, reached STOP_DELAY_MS later (at least a frame: CROSSING
+lasts one) and only once; a line lost far away is flicker, not reached; a
+re-sighting while crossing doesn't restart the delay; one after the line is
+reached is a new line unless accept_new is off, as Navigation keeps it while
+crossing; reset.
 """
 import pytest
 
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, STOP_DELAY_MS, StopLineTracker
-from src.tests.navigation_checks import packet
+from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
 
@@ -26,7 +28,9 @@ def feed(tracker, seq):
 
 @pytest.mark.software
 def test_the_constants_follow_the_calibration_and_the_runs():
-    assert STOP_DELAY_MS == 500 and NEAR_BOTTOM_ROWS == 25.0
+    # 0 since 2026-10-07: braking as the line leaves keeps the hanging traffic light in view
+    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0
+
 
 
 @pytest.mark.software
@@ -36,7 +40,7 @@ def test_a_line_passing_under_the_view_is_reached_after_the_delay_once():
     assert out[0] == (IDLE, False) and out[1][0] == APPROACH and out[3][0] == APPROACH
     assert out[4] == (CROSSING, False) and t.lost_ms is None
     reached = [i for i, (_, r) in enumerate(out) if r]
-    assert reached == [4 + STOP_DELAY_MS // MS]
+    assert reached == [4 + reach_frames(frame_ms=MS)]
     assert out[reached[0]][0] == IDLE and out[reached[0] + 1] == (IDLE, False)
 
 
@@ -67,13 +71,13 @@ def test_a_line_lost_far_away_is_never_reached():
 @pytest.mark.software
 def test_a_flicker_while_crossing_does_not_restart_the_delay():
     out = feed(StopLineTracker(), [5.0, None, 3.0, None] + [None] * 40)
-    assert [i for i, (_, r) in enumerate(out) if r] == [1 + STOP_DELAY_MS // MS]
+    assert [i for i, (_, r) in enumerate(out) if r] == [1 + reach_frames(frame_ms=MS)]
 
 
 @pytest.mark.software
 def test_the_delay_and_near_bottom_are_configurable():
     out = feed(StopLineTracker(delay_ms=200, near_bottom_rows=50.0), [40.0, None, None, None, None, None])
-    assert [i for i, (_, r) in enumerate(out) if r] == [1 + 200 // MS]
+    assert [i for i, (_, r) in enumerate(out) if r] == [1 + reach_frames(200, MS)]
 
 
 @pytest.mark.software
@@ -93,12 +97,21 @@ def test_reset_forgets_the_line():
 
 @pytest.mark.software
 def test_entered_marks_the_frame_the_line_leaves_the_view_once():
-    t, entered = StopLineTracker(), []
-    for i, rows in enumerate([60.0, 30.0, 5.0, None, None, None, 3.0, None]):
-        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
-                        stop_line_distance_px=rows))
-        entered.append(t.entered)
-    assert entered == [False, False, False, True, False, False, False, False]
+    seq = [60.0, 30.0, 5.0, None, None, None, 3.0, None]          # glimpsed again at 6, after it was reached
+
+    def entered(accept_new_after_entering):
+        t, out, crossing = StopLineTracker(), [], False
+        for i, rows in enumerate(seq):
+            t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
+                            stop_line_distance_px=rows), accept_new=not crossing or accept_new_after_entering)
+            crossing = crossing or t.entered
+            out.append(t.entered)
+        return out
+    # As Navigation runs it: no new line while the intersection is being crossed
+    assert entered(False) == [False, False, False, True, False, False, False, False]
+    # The tracker alone takes the glimpse for a new line once this one is reached: with no
+    # delay (STOP_DELAY_MS = 0) nothing else stands between them, so Navigation's guard matters
+    assert entered(True) == [False, False, False, True, False, False, False, STOP_DELAY_MS < 3 * MS]
 
 
 @pytest.mark.software
