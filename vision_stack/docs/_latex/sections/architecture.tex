@@ -1,6 +1,5 @@
 \section{Architecture}
 \label{sec:architecture}
-
 % 4 questions exist that need to be answered:
 %   1. How do robots usually split the system --- from frame capture to motor actuation?
 %   2. What options were considered?
@@ -8,22 +7,30 @@
 %   4. What are the tradeoffs?
 
 \subsection{Structure of an Autonomous Robot}
-An autonomous robot has two main goals: complete its task without human intervention and perform it efficiently. Efficiency
-as a metric depends entirely on what we are designing for --- an autonomous robot that can navigate a track on its own. For
-the case of Navilott, this means a robot that can navigate a street-style course on its own --- following a lane, stopping
-at stop signs and obeying traffic lights.
+An autonomous robot has two main goals: complete its task without human
+intervention and perform it efficiently. Efficiency as a metric depends
+entirely on what we are designing for --- an autonomous robot that can navigate
+a track on its own. For the case of Navilott, this means a robot that can
+navigate a street-style course on its own --- following a lane, stopping at
+stop signs and obeying traffic lights.
 
-In robotics, this is often called "autonomous navigation", a part of "autonomous control," where the robot controls itself 
-to perform a task, such as following a line or avoiding obstacles. A robot can have many different methods to measure and sense 
-its environment --- camera, sonar, ultrasonic, IR, etc. Subprocesses in the robots software can use these measurements to form a 
-map of the environment. The robot's estimation system can use the map to calculate the robot's position and orientation in the world. 
-The robot's navigation system can then use these estimates to determine the robot's decision about what to do next. The robots 
-control system can then actuate motors in response to these decisions. Actuation is performed in two layers: the control loop which 
-sends PWM signals, and the driver which switches battery voltages based on the PWM signals that actuate the motors. Feedback from 
-encoders on the motor can then be routed back into estimation and navigation systems to ensure that the decision was taken in the 
-right place~\citep{douglas2020autonav1}.
+In robotics, this is often called "autonomous navigation", a part of
+"autonomous control," where the robot controls itself to perform a task, such
+as following a line or avoiding obstacles~\citep{douglas2020autonav1}. A robot
+can have many different methods to measure and sense its environment ---
+camera, sonar, ultrasonic, IR, etc. Subprocesses in the robots software can use
+these measurements to form a map of the environment. The robot's estimation
+system can use the map to calculate the robot's position and orientation in the
+world. The robot's navigation system can then use these estimates to determine
+the robot's decision about what to do next. The robots control system can then
+actuate motors in response to these decisions. Actuation is performed in two
+layers: the control loop which sends PWM signals, and the driver which switches
+battery voltages based on the PWM signals that actuate the motors. Feedback
+from encoders on the motor can then be routed back into estimation and
+navigation systems to ensure that the decision was taken in the right place.
 
 The robot can then be divided into 6 main areas:
+
 \begin{itemize}
     \item \textbf{Capture}: the robot's sensors and how they capture the environment
     \item \textbf{Perception}: the robot's processing algorithms and how they interpret those measurements
@@ -34,27 +41,95 @@ The robot can then be divided into 6 main areas:
 \end{itemize}
 
 \subsection{Single-Board Design}
-% --- Single-Board Design ---
-\TODO{How was the architecture chosen --- what were some of the options considered and why were they not chosen over the final
-design?}
 % Think about: the criteria you judged by (control rate, $100 BOM, 12 V,
 %   local processing, dev time); MCU-only vs Pi+MCU vs Pi-only; the PRD
 %   recommends a microcontroller, so Pi-only departs from its guidance.
 % Evidence: vision_stack/docs/architecture.md ("Decision: Pi Zero 2 W only")
 %           MCU option and packet format: docs/archD1/
+Our first concern was how the start of the stack would interact with the end of
+it --- meaning how we would connect the robot's perception system to the motor
+actuation. To achieve this, three options were considered:
+
+\begin{itemize}
+    \item \textbf{MCU-only:} An STM32 or Arduino runs the perception pipeline and
+          drives the motors directly.
+    \item \textbf{Pi-only:} The Pi runs the perception pipeline and drives the
+          motors directly via its onboard GPIO pins.
+    \item \textbf{Pi + MCU:} The Pi processes perception and sends a packet over
+          UART to an STM32 or Arduino, which executes a fast, real-time PID loop
+          and generates the PWM signals.
+\end{itemize}
+
+The Raspberry Pi was a necessary addition because of our robot's camera-centric
+design. Intense computer vision needs a lot of RAM to run efficiently, ISP and
+CSI-2 interface to capture video quickly and bypass CPU overhead, and OpenCV
+library to perform the intense image processing we would require. For instance,
+to process a frame that is $480\times270$ in color pixels would require 389 KB
+of RAM --- more than what is found in most microcontrollers.
+
+Integrating an MCU into our design would require a new protocol to transfer the
+data between the Pi and the MCU, synchronization of clocks between the two
+devices (the Pi captures and stamps frames based on its clock while encoders
+from the motors would work on the MCU's clock), and managing two separate
+codebases. These different challenges, while making the architecture more true
+to a real-world robot, would also make it more difficult to maintain.
+
+As such, a single-board design was chosen --- which sacrifices speed of a
+dedicated motor control loop for the simplicity and testability of the Pi, as
+well as accepting the overhead from the Linux scheduler. However, these
+tradeoffs were considered when developing the stack and are scattered through
+Sections~\ref{sec:software_architecture},~\ref{sec:limitations},
+and~\ref{sec:results}.
 
 \subsection{Additional Hardware}
-% --- Additional Hardware ---
-\TODO{What sort of peripherals were used and why? What were the tradeoffs considered? How does each peripheral fit into
-the overall architecture?}
 % Think about: where the camera choice lives (here or Capture?), including
 %   the IMX219 -> IMX290 swap; which parts were Ana's or Ignacio's calls.
 % Evidence: docs/architecture.md (Parts; Pin and bus map); appendices/hardware.tex
+Mapping the baseline architecture for the design introduced several new avenues
+to explore for integrating hardware components. For a robotic system, a camera
+alone would not be enough to function as a robot. How does the robot stay
+powered, how does it move, what else would it use to sense its environment, how
+can we monitor its internal state, and how does the control system communicate
+with the user? Taking in these questions, we decided to add the following
+hardware components:
+
+\begin{table}[H]
+    \centering
+    \caption{Hardware added around the Pi.}
+    \label{tab:hardware}
+    \small
+    \begin{tabularx}{\textwidth}{@{}XXXX@{}}
+        \toprule
+        \textbf{Part}                       & \textbf{Role}                                                 & \textbf{Reason}                                                                  & \textbf{Area}                    \\
+        \midrule
+        \textbf{Innomaker's Cam-MIPI290RAW} & Main vision sensor for the robot.                             & Allows the robot to visually see its environment.                                & Capture                          \\
+        \textbf{ADS1115}                    & Measures the battery voltage; Pi has no analog input.         & Allows for our team to report the battery status to the user.                    & Capture (Battery)                \\
+        \textbf{MPU6050}                    & Measures the robot's angular rate and acceleration.           & Allows us to measure the robots yaw and integrate it into our estimation system. & Capture $\rightarrow$ Estimation \\
+        \textbf{TB6612FNG}                  & The robot's motor driver; Pi GPIO can't supply motor current. & Allows for precise control of the robot's motors.                                & Actuation                        \\
+        \textbf{2 N20 Motors}               & The robot's actuation system.                                 & Allows for the robot to move.                                                    & Actuation                        \\
+        \textbf{Encoders}                   & Measures the robot's wheel speeds.                            & Allows us to estimate the robot's actual speed.                                  & Estimation                       \\
+        \textbf{TM1637}                     & The robot's run-time interface.                               & Allows us to display information about the robot's state to the user.            & Interface                        \\
+        \textbf{Start Button}               & The robot's start button.                                     & Allows us to physically start the robot.                                         & Interface                        \\
+        \bottomrule
+    \end{tabularx}
+\end{table}
+
+Originally, we were using a Raspberry Pi Cam V2 module as our camera, which
+featured an IMX219 sensor. However, its field of view is cropped by the mode
+selection of the Pi. This added a heavy blindspot of 22 cm to the robot's
+vision and made it incapable of viewing both the lane lines and the traffic
+light in one frame while at a stop line. Details can be found in
+Section~\ref{sec:capture}. In response, we opted for another type of camera:
+the Innomaker's Cam-MIPI290RAW, a wide-angle camera that is compatible with the
+Raspberry Pi's CSI-2 interface. This allowed us to achieve a fuller field of
+view and reduced our blindspot down to 10 cm, but at the cost of the lens
+producing a distortion effect which would require software to correct
+(Section~\ref{sec:capture}).
 
 \subsection{Software Language}
 % --- Software Language ---
 \TODO{What programming language was used for the software? Why was this language chosen over others? When it came to
-integration, what were the tradeoffs?}
+    integration, what were the tradeoffs?}
 % Think about: Python as glue over OpenCV's C++; the bindings it gave you
 %   (OpenCV, GStreamer/libcamera, pigpio); the GIL and interpreter cost,
 %   and whether that shows up in P1.
@@ -62,7 +137,7 @@ integration, what were the tradeoffs?}
 \subsection{Tooling}
 % --- Tooling ---
 \TODO{What tools were used to develop the software? What was gained and lost by using these tools? How did the tools affect
-the architecture?}
+    the architecture?}
 % Think about: Make (setup.mk once per Pi, session.mk every boot,
 %   vision_stack/Makefile as the command list), pytest, git/PRs, the
 %   linkers and debug views, AI-assisted sessions.
@@ -71,11 +146,11 @@ the architecture?}
 %   separate process.
 % Evidence: docs/guides/make.md; git log for when each .mk was added
 
-\subsection{Software Architecture}
+\subsection{Software Architecture}\label{sec:software_architecture}
 % --- Software Architecture ---
 \TODO{After deciding on the main architecture and hardware peripherals to use, how was the software architecture designed?
-What were some of the key decisions made and why? How did the software evolve over time and what changes, if any, were made
-to the architecture?}
+    What were some of the key decisions made and why? How did the software evolve over time and what changes, if any, were made
+    to the architecture?}
 % Think about: phases and data flow; threads and the 50 ms frame budget;
 %   two or three turning points, each with its reason.
 % Evidence: docs/archD1/ and archive/run_pipeline.py (the earlier design)
