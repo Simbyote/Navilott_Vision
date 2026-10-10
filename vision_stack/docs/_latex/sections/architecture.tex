@@ -25,8 +25,8 @@ world. The robot's navigation system can then use these estimates to determine
 the robot's decision about what to do next. The robots control system can then
 actuate motors in response to these decisions. Actuation is performed in two
 layers: the control loop which sends PWM signals, and the driver which switches
-battery voltages based on the PWM signals that actuate the motors. Feedback
-from encoders on the motor can then be routed back into estimation and
+battery voltages based on the PWM signals that actuate the motors via current.
+Feedback from encoders on the motor can then be routed back into estimation and
 navigation systems to ensure that the decision was taken in the right place.
 
 The robot can then be divided into 6 main areas:
@@ -54,7 +54,7 @@ actuation. To achieve this, three options were considered:
     \item \textbf{MCU-only:} An STM32 or Arduino runs the perception pipeline and
           drives the motors directly.
     \item \textbf{Pi-only:} The Pi runs the perception pipeline and drives the
-          motors directly via its onboard GPIO pins.
+          motors directly via PWM signals to a motor driver.
     \item \textbf{Pi + MCU:} The Pi processes perception and sends a packet over
           UART to an STM32 or Arduino, which executes a fast, real-time PID loop
           and generates the PWM signals.
@@ -110,6 +110,8 @@ hardware components:
         \textbf{Encoders}                   & Measures the robot's wheel speeds.                            & Allows us to estimate the robot's actual speed.                                  & Estimation                       \\
         \textbf{TM1637}                     & The robot's run-time interface.                               & Allows us to display information about the robot's state to the user.            & Interface                        \\
         \textbf{Start Button}               & The robot's start button.                                     & Allows us to physically start the robot.                                         & Interface                        \\
+        \textbf{DC-DC Buck Converter}       & The Pi's battery converter.                                   & Allows a steady 5V power supply.                                                 & Power                            \\
+        \textbf{3S 18650 Battery Cells}     & The robot's battery pack.                                     & Allows us to power the robot's hardware.                                         & Power                            \\
         \bottomrule
     \end{tabularx}
 \end{table}
@@ -125,6 +127,50 @@ Raspberry Pi's CSI-2 interface. This allowed us to achieve a fuller field of
 view and reduced our blindspot down to 10 cm, but at the cost of the lens
 producing a distortion effect which would require software to correct
 (Section~\ref{sec:capture}).
+
+Intrinsically, the Pi does not have an analog input and thus does not have a
+way to capture any voltage running through it --- it requires some external
+component to monitor it --- the batteries feature no Battery Management System
+(BMS). That is where the ADS1115 comes into play. As per
+Section~\ref{sec:problem}, we are to stop navigation after the robot falls
+under a low battery voltage ($10.5\text{V} <$).
+
+Our robot will need a way to measure and verify its angular turns during
+intersection logic and lane keeping. The Pi has no internal gyroscope that can
+measure its angular velocity, nor its acceleration. The MPU6050 fills this gap,
+supplying the Estimation system with additional information about the robot's
+yaw. Details can be found in Section~\ref{sec:estimation}.
+
+The robot will need some way to actually move around the course as well as a
+way to accurately control how current is sent to the motors. The Pi features a
+3.3V and 5V power pins that are routed through its GPIO pins. However, these
+pins cannot supply a voltage large enough to move the motors, lest the Pi
+becomes damaged. In this, the TB6612FNG motor driver switches battery power to
+the N20 motors via an H-Bridge. Details can be found in
+Section~\ref{sec:software_architecture}.
+
+Finally, a way to communicate with the user about the robots state, time
+limits, and a way to physically start the robot are required
+(Section~\ref{sec:problem}). In this, the TM1637 7-segment display and a small
+button are used. The display is used to show navigation information and the
+time while the robot runs through a course (and to display its final time)
+while the button doesn't allow for the motor to actually process software
+commands until it is pressed. Details can be found in
+Section~\ref{sec:software_architecture}.
+
+To power on all of these different peripherals, the robot uses 3S 18650 battery
+cells, 12.6 V full, 11.1 V nominal, 9.0 V empty. The buck converter is used to
+normalize and distributea 5V power rails --- it is used to power the pi while
+the batteries are directly routed to the motor driver. The Pi powers the
+remaining components via its 3.3V power pin.
+
+The PRD requires the integration of the main SBC and its hardware components to
+be mounted via a printed circuit board (PCB). All of the hardware components
+(except the camera) are routed through the PCB, with the chassis serving as
+mounting points for motors, the camera, the display, the button, and the
+batteries. The PCB uses headers that are soldered to the PCB to connect to each
+component --- each component has a place on the board it sits and cables that
+route power and data to any of the externally seated components listed earlier.
 
 \subsection{Software Language}
 % --- Software Language ---

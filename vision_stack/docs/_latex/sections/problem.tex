@@ -20,26 +20,26 @@
 
 \subsection{Objective}
 \TODO{What must the robot do, in one paragraph? Which PRD rules matter
-most to vision: right-lane driving, the exact traffic-light rules
-(green to enter, yellow only once inside, never on red), the stop sign
-at the exit?}
-\TODO{Obstacle avoidance: The PRD's executive summary states it as a must. 
-Was it formally downgraded? By whom, and when?}
+    most to vision: right-lane driving, the exact traffic-light rules
+    (green to enter, yellow only once inside, never on red), the stop sign
+    at the exit?}
+\TODO{Obstacle avoidance: The PRD's executive summary states it as a must.
+    Was it formally downgraded? By whom, and when?}
 % Source: PRD, Executive Summary; Product Features Requirements
 
 \subsection{Constraints}
 \TODO{Which constraints actually shaped your design decisions, and which
-were just boxes to tick? Consider: \$100 BOM, the PCB requirement,
-12~V limit, size (10 x 11 x 11~cm), local processing only, start button
-and 5~s countdown, elapsed time in tenths of a second.}
+    were just boxes to tick? Consider: \$100 BOM, the PCB requirement,
+    12~V limit, size (10 x 11 x 11~cm), local processing only, start button
+    and 5~s countdown, elapsed time in tenths of a second.}
 \TODO{Battery display: the PRD asks the power system to alert
-navigation. Why was battery life moved to the display?}
+    navigation. Why was battery life moved to the display?}
 % Source: PRD, General Constraints; Power; Controller; AutoBot Characteristics
 
 \subsection{The Course}
 \TODO{Describe the course the robot was built and tested on. Where does
-it differ from the PRD's course, and does each difference make the
-vision problem easier or harder?}
+    it differ from the PRD's course, and does each difference make the
+    vision problem easier or harder?}
 % PRD: grid of at least nine 4-way intersections; lights at >= 4;
 %      ONE stop sign, at the exit; black foam mats, 3/4" white tape,
 %      solid borders, dashed center line; bots drive on the right.
@@ -47,41 +47,41 @@ vision problem easier or harder?}
 %      intersection.  Repo: vision_stack/docs/course.md
 
 \begin{table}[H]
-\centering
-\caption{\TODO{caption}}
-\label{tab:course}
-\begin{tabularx}{\textwidth}{@{}lXX@{}}
-\toprule
-& PRD & Team course \\
-\midrule
-\TODO{rows} & & \\
-\bottomrule
-\end{tabularx}
+    \centering
+    \caption{\TODO{caption}}
+    \label{tab:course}
+    \begin{tabularx}{\textwidth}{@{}lXX@{}}
+        \toprule
+                    & PRD & Team course \\
+        \midrule
+        \TODO{rows} &     &             \\
+        \bottomrule
+    \end{tabularx}
 \end{table}
 
 \subsection{Requirements}
 \label{sec:requirements}
 \TODO{Turn the PRD's prose into requirements that can each be checked
-one way. For each: is it straight from the PRD, or derived (something
-vision needs so a PRD rule can be met)? What numbers will you hold
-yourself to, and why those numbers?}
+    one way. For each: is it straight from the PRD, or derived (something
+    vision needs so a PRD rule can be met)? What numbers will you hold
+    yourself to, and why those numbers?}
 \TODO{The PRD's validation guidance asks for each object's detection
-field (range, angles, minimum size). Its own requirement, or part of
-the detection ones?}
+    field (range, angles, minimum size). Its own requirement, or part of
+    the detection ones?}
 % Starting point: vision_stack/docs/requirements.md (P1-P4, D1-D5, R1-R5).
 % Note R5 (motor watchdog) is implemented in src/peripherals/drive.py
 % even though requirements.md says it isn't.
 
 \begin{table}[H]
-\centering
-\caption{\TODO{caption}}
-\label{tab:reqs}
-\small
-\begin{tabularx}{\textwidth}{@{}lXl@{}}
-\toprule
-ID & Requirement & Source \\
-\midrule
-\TODO{rows} & & \\
-\bottomrule
-\end{tabularx}
+    \centering
+    \caption{\TODO{caption}}
+    \label{tab:reqs}
+    \small
+    \begin{tabularx}{\textwidth}{@{}lXl@{}}
+        \toprule
+        ID          & Requirement & Source \\
+        \midrule
+        \TODO{rows} &             &        \\
+        \bottomrule
+    \end{tabularx}
 \end{table}
