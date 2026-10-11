@@ -51,11 +51,11 @@ it --- meaning how we would connect the robot's perception system to the motor
 actuation. To achieve this, three options were considered:
 
 \begin{itemize}
-    \item \textbf{MCU-only:} An STM32 or Arduino runs the perception pipeline and
+    \item \textbf{MCU-only}: An STM32 or Arduino runs the perception pipeline and
           drives the motors directly.
-    \item \textbf{Pi-only:} The Pi runs the perception pipeline and drives the
+    \item \textbf{Pi-only}: The Pi runs the perception pipeline and drives the
           motors directly via PWM signals to a motor driver.
-    \item \textbf{Pi + MCU:} The Pi processes perception and sends a packet over
+    \item \textbf{Pi + MCU}: The Pi processes perception and sends a packet over
           UART to an STM32 or Arduino, which executes a fast, real-time PID loop
           and generates the PWM signals.
 \end{itemize}
@@ -74,16 +74,15 @@ from the motors would work on the MCU's clock), and managing two separate
 codebases. These different challenges, while making the architecture more true
 to a real-world robot, would also make it more difficult to maintain.
 
-As such, a single-board design was chosen --- which sacrifices speed of a
-dedicated motor control loop for the simplicity and testability of the Pi, as
-well as accepting the overhead from the Linux scheduler. However, these
-tradeoffs were considered when developing the stack and are scattered through
-Sections~\ref{sec:software_architecture},~\ref{sec:limitations},
-and~\ref{sec:results}.
+As such, a single-board design was chosen (The Raspberry Pi Zero 2 W) --- which
+sacrifices speed of a dedicated motor control loop for the simplicity and
+testability of the Pi, as well as accepting the overhead from the Linux
+scheduler. However, these tradeoffs were considered when developing the stack
+and are discussed in Section~\ref{sec:linux_scheduler}.
 
 \subsection{Additional Hardware}
 % Think about: where the camera choice lives (here or Capture?), including
-%   the IMX219 -> IMX290 swap; which parts were Ana's or Ignacio's calls.
+%   the IMX219 -> IMX290 swap.
 % Evidence: docs/architecture.md (Parts; Pin and bus map); appendices/hardware.tex
 Mapping the baseline architecture for the design introduced several new avenues
 to explore for integrating hardware components. For a robotic system, a camera
@@ -132,8 +131,9 @@ Intrinsically, the Pi does not have an analog input and thus does not have a
 way to capture any voltage running through it --- it requires some external
 component to monitor it --- the batteries feature no Battery Management System
 (BMS). That is where the ADS1115 comes into play. As per
-Section~\ref{sec:problem}, we are to stop navigation after the robot falls
-under a low battery voltage ($10.5\text{V} <$).
+Section~\ref{sec:problem}, we are to warn the system after falling beneath
+$10.5\,\text{V}$ and stop navigation after the robot falls under
+$9.9\,\text{V}$.
 
 Our robot will need a way to measure and verify its angular turns during
 intersection logic and lane keeping. The Pi has no internal gyroscope that can
@@ -142,9 +142,9 @@ supplying the Estimation system with additional information about the robot's
 yaw. Details can be found in Section~\ref{sec:estimation}.
 
 The robot will need some way to actually move around the course as well as a
-way to accurately control how current is sent to the motors. The Pi features a
-3.3V and 5V power pins that are routed through its GPIO pins. However, these
-pins cannot supply a voltage large enough to move the motors, lest the Pi
+way to accurately control how current is sent to the motors. The Pi's GPIO pins
+can only supply a few milliamps for other peripherals connected to it. However,
+these pins cannot supply a current large enough to move the motors, lest the Pi
 becomes damaged. In this, the TB6612FNG motor driver switches battery power to
 the N20 motors via an H-Bridge. Details can be found in
 Section~\ref{sec:software_architecture}.
@@ -160,9 +160,9 @@ Section~\ref{sec:software_architecture}.
 
 To power on all of these different peripherals, the robot uses 3S 18650 battery
 cells, 12.6 V full, 11.1 V nominal, 9.0 V empty. The buck converter is used to
-normalize and distributea 5V power rails --- it is used to power the pi while
+normalize and distribute 5V power rails --- it is used to power the pi while
 the batteries are directly routed to the motor driver. The Pi powers the
-remaining components via its 3.3V power pin.
+remaining components via its 3.3V pin.
 
 The PRD requires the integration of the main SBC and its hardware components to
 be mounted via a printed circuit board (PCB). All of the hardware components
@@ -173,12 +173,102 @@ component --- each component has a place on the board it sits and cables that
 route power and data to any of the externally seated components listed earlier.
 
 \subsection{Software Language}
-% --- Software Language ---
-\TODO{What programming language was used for the software? Why was this language chosen over others? When it came to
-    integration, what were the tradeoffs?}
 % Think about: Python as glue over OpenCV's C++; the bindings it gave you
 %   (OpenCV, GStreamer/libcamera, pigpio); the GIL and interpreter cost,
 %   and whether that shows up in P1.
+Due to the complexity of the problem, we required a language that had access to
+complex computer vision algorithms, data visualization, and iteration speed.
+Because of these needs, we chose Python because it featured 3 main solutions to
+our problem:
+
+\begin{itemize}
+    \item \textbf{GStreamer}: Python's bindings for OpenCV allows it to access
+          GStreamer from its backend, which is an open-source multimedia framework.
+          It provides access to the camera, and allowed us to interface with the camera
+          and process the frame data from it.
+    \item \textbf{OpenCV}: Python's bindings for OpenCV, a computer vision
+          library, provided access to the complex algorithms that we needed to
+          perform our computer vision tasks.
+    \item \textbf{Testing}: Python allows us to abstract away the complexities
+          of the different algorithms and libraries that we needed to use. Because
+          of this, we were able to take advantage of different techniques to test,
+          such as duck-typing and mocking, to verify that our system performed as
+          expected.
+\end{itemize}
+
+For interfacing with the camera, Python had access to the GStreamer library, an
+open-source mutlimedia framework written in C. It works on multiple threads,
+chaining together elements --- data flows from a source element, through
+various filter/transform elements, and finally ends at a sink element.
+
+For computer vision, Python has access to the OpenCV library, an open-source
+computer vision library written in C++. It contains a wide range of algorithms
+for image processing, object recognition, and more.
+
+However, accepting Python as our language was not without its tradeoffs. Python
+runs in an interpreter, and because its types are only checked at runtime, each
+operation costs far more than the equivalent in C. Python also has a Global
+Interpreter Lock (GIL), a lock that the interpreter holds while it runs Python
+code. It prevents multiple threads of Python bytecode to run in parallel across
+different cores --- only a single thread can run Python bytecode at a time, on
+whichever core Linux gives it.
+
+Although Python's cost per operation is higher than C's, Python's overhead is
+acceptable because the per-pixel work never runs in Python --- it is handled by
+C/C++ code.
+
+\subsection{Background Threads}
+The codebase splits up its processes across 5 different kinds of threads:
+
+\begin{itemize}
+    \item \textbf{Main Loop}: This is the main thread that runs the main
+          loop of the program. It handles the 4-phase pipeline and the
+          communication between the main loop and the other threads.
+    \item \textbf{SensorHub}: This thread is responsible for reading from
+          the IMU and the encoders every 10 ms, loading into a buffer until
+          its drained. It remains asleep for most of the robot's life.
+    \item \textbf{Motor Watchdog}: This thread is responsible for braking
+          the motors if it does not receive a command from the main pipeline
+          for 0.5 seconds. But if Linux kills the Python process, the watchdog
+          dies with it, while pigpio keeps the PWM at its last duty.
+    \item \textbf{Pigpio Callbacks}: This thread reads and delivers encoder edges
+          to the total encoder counter.
+    \item \textbf{GStreamer/libcamera}: GStreamer backend interfaces with the Pi's
+          libcamera software to feed the main loop (OpenCV's VideoCapture) with the
+          camera's video stream.
+\end{itemize}
+
+The pigpio daemon is its own process that runs in the background of the Pi. It
+is initialized during the systems startup and remains running while it is on.
+It timestamps the encoder edges and owns the pins controlling the motors,
+keeping their PWM signals online --- even if the main loop stalls.
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=\textwidth]{pi_load.png}
+    \caption{Pi load during a live run with the diagnostics recorder in a
+        separate process (2026-10-07). Top to bottom: CPU per thread;
+        Python threads against native threads; the core each thread
+        ran on; per-core load; temperature and clock; memory.}
+    \label{fig:pi-load}
+\end{figure}
+
+When the main process is started, it holds the GIL. Once Python's OpenCV
+section is started, the main loop releases control of the GIL to another thread
+like the SensorHub, Motor Watchdog, and Pigpio Callbacks. Another thread can
+request the GIL after a thread uses it for 5 ms (SensorHub can slip while the
+main loop performs a heavy calculation, for example). Navilott gets around the
+timers --- specifically for the IMU. The I2C bus runs at 400 kHz, which
+shortens each IMU read and so the time the sensor-hub thread spends holding and
+retaking the GIL. Furthermore, it timestamps at every interval, so once a late
+read would arrive, it doesn't turn into a heading error once it is drained by
+the main thread.
+
+The GStreamer pipeline runs a C thread and is separate from the GIL, allowing
+it to perform its own tasks without interrupting the main loop. However, it
+spends a lot of its time waiting for the next frame.
+
+\subsection{Linux Scheduler}\label{sec:linux_scheduler}
 
 \subsection{Tooling}
 % --- Tooling ---
