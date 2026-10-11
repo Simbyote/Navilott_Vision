@@ -387,8 +387,9 @@ def figure(table: Table, res: dict, title: str, out_path) -> Path | None:
                 ax.axvspan(t[start], t[min(start + length, len(t) - 1)], color=colors[v], linewidth=0)
         ax.set_yticks([])
         ax.set_ylabel(col, rotation=0, ha="right", va="center", fontsize=8)
-        ax.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in colors.values()], list(colors), fontsize=7,
-                  frameon=False, ncol=min(len(colors), 6), loc="center left", bbox_to_anchor=(1.01, 0.5))
+        if colors:                      # a column blank all run (no intersection: no stage) has no legend
+            ax.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in colors.values()], list(colors), fontsize=7,
+                      frameon=False, ncol=min(len(colors), 6), loc="center left", bbox_to_anchor=(1.01, 0.5))
     for ax, (col, label) in zip(axes[len(strips):], lines):
         if table.has(col):
             ax.plot(t, table.numeric(col), lw=0.8)

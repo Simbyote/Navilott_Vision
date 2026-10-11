@@ -69,7 +69,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates stability soak-report compare test test-hw soak lint calib-camera calib-stopline \
+        jitter gates stability soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -177,6 +177,9 @@ stability: ## offset noise and lane-mode flicker on a still scene (record parked
 
 soak-report: ## heat, throttling, memory trend and loop time of a soak (RUN=artifacts/<time>)
 	$(PY) -m src.analysis.soak $(strip $(RUN)) $(ARGS)
+
+routine-report: ## a routine run as figures: criteria, its own plot, every trial; nav_run per attempt (RUN=runs/routine_...)
+	$(PY) -m src.analysis.routine_report $(strip $(RUN)) $(ARGS)
 
 compare: ## every number that moved between two runs (BASE=... NEW=...)
 	@test -n "$(strip $(BASE))" -a -n "$(strip $(NEW))" || (echo "usage: make compare BASE=<older run> NEW=<newer run>"; exit 2)
