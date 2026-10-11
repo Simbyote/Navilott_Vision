@@ -202,3 +202,10 @@ def test_the_command_line_writes_its_summary_next_to_the_run(tmp_path, capsys):
     assert json.loads((tmp_path / "nav_run.json").read_text())["intersections"][0]["step"] == "1/1 left"
     (tmp_path / "p3.csv").write_text("frame_id,lane_offset\n0,0.1\n")
     assert nr.main([str(tmp_path / "p3.csv")]) == 1                     # not a nav.csv
+
+
+@pytest.mark.software
+def test_a_run_with_no_intersection_still_draws(tmp_path):
+    pytest.importorskip("matplotlib")
+    t = table(tmp_path, lane(20))                    # stage blank all run: a straight, frame-budget's parked run
+    assert nr.figure(t, nr.analyze(t), "straight", tmp_path / "nav_run.png").stat().st_size > 0

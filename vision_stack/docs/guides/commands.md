@@ -246,6 +246,7 @@ python3 -m src.analysis.<tool> --help
 | `detection_range` | `distances.csv` (`distance_cm,run`) | how far out detection holds |
 | `soak` | `artifacts/<run>` or `runs/diag_<run>` | drift over a long run |
 | `pi_load` | `runs/diag_<run>` (`--run runs/nav_<run>` to line it up) | how the run used the Pi; what slow frames coincided with |
+| `routine_report` | `runs/routine_<name>_<time>` (`make routine-report`) | a routine's verdict, each criterion against its limit, its own plot, every trial; `nav_run` on each attempt |
 | `nav_run` | `runs/nav_<run>` or `runs/intersection_<run>/left` | what decided each frame, lane keeping, each intersection and the 2 s after, wheel balance, latency |
 
 ---

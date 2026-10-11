@@ -56,6 +56,17 @@ The flow:
 | `trials.csv` | one row per kept trial: trial number, seconds since the start, the routine's fields |
 | `results.json` | all of it, plus the routine's own extra state |
 
+**Graphs:** `make routine-report RUN=runs/routine_<name>_<time>` (newest without `RUN`) draws the folder as `routine_report.png`. It shows each criterion as a gauge with its pass region shaded, then the routine's own plot, then every field that changed across the trials:
+- stop-distance: each stop's gap, inside the band;
+- lane-offset: reported against the ruler;
+- detect-range: seen against the gap, per state;
+- recover-offset: recover time against the start offset;
+- power-profile: the pack's volts through each stage;
+- imu-check: each turn's error;
+- tape-check: its readings.
+
+Every `attempt_NN/` with a `nav.csv` (the driving routines) also gets `nav_run`'s report (`analysis.md`).
+
 Results are compared run to run by the commit and conditions recorded in each. A run with uncommitted changes says so.
 
 ---
