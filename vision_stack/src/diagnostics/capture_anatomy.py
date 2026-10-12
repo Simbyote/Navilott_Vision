@@ -56,6 +56,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -359,7 +360,9 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
            "GST_DEBUG_FILE": str(out / "gst_trace.log"), "GST_DEBUG_NO_COLOR": "1",
            "GST_DEBUG_DUMP_DOT_DIR": str(dot_dir),
            "LIBCAMERA_LOG_FILE": str(out / "libcamera.log"), "LIBCAMERA_LOG_LEVELS": LIBCAMERA_LOG_LEVELS}
-    code, text = launch(["gst-launch-1.0", "-v", "-e", pipeline], env, duration_s)
+    # one argv word per token, as a shell would split it: gst-launch escapes the spaces
+    # inside a single argument, so the whole pipeline as one word is a syntax error
+    code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s)
     _save(out, "gst_launch.txt", text)
     res["gst_code"] = code
     if code is None:

@@ -353,6 +353,9 @@ def _hold(motor, left, right, seconds, sleep, period=0.05):
         sleep(period)
 
 
+CROSSTALK = 0.05    # idle side may count up to 5% of the driven side in a one-wheel leg
+
+
 def _motors_respond(enc, motor, sleep, duty=0.4, seconds=0.3):
     """
     Presence probe: a short nudge forward. True if either encoder counted.
@@ -448,9 +451,14 @@ def test_drive_characterization(artifacts):
                         "mismatch_pct": 100 * abs(straight.left_count - straight.right_count) / total},
         "cps_at_half_duty": {"left": forward["left"] / forward["s"], "right": forward["right"] / forward["s"]},
     })
-    # wiring and sign convention first: every later number depends on them
-    assert left_only["left"] > 20 and abs(left_only["right"]) <= 2, "left motor moved the right encoder: pairing crossed"
-    assert right_only["right"] > 20 and abs(right_only["left"]) <= 2, "right motor moved the left encoder: pairing crossed"
+    # wiring and sign convention first: every later number depends on them.
+    # A crossed pairing puts the driven motor's counts on the OTHER encoder, so
+    # compare the two sides rather than demand zero: driving one wheel pivots
+    # the chassis and nudges the idle one (2026-10-12: 24 counts against 1770)
+    assert left_only["left"] > 20 and abs(left_only["right"]) <= CROSSTALK * left_only["left"], \
+        "left motor moved the right encoder: pairing crossed"
+    assert right_only["right"] > 20 and abs(right_only["left"]) <= CROSSTALK * right_only["right"], \
+        "right motor moved the left encoder: pairing crossed"
     assert forward["left"] > 20 and forward["right"] > 20, "forward: a wheel has no counts or counts backward"
     assert reverse["left"] < -20 and reverse["right"] < -20, "reverse: a wheel has no counts or counts forward"
     assert spin["left"] > 20 and spin["right"] < -20, "spin: sides don't turn opposite ways"

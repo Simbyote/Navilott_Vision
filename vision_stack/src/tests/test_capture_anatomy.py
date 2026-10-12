@@ -12,6 +12,7 @@ summary; a laptop with no tools at all; the command line.
 """
 import csv
 import json
+import shlex
 import shutil
 from pathlib import Path
 
@@ -268,8 +269,9 @@ def test_record_runs_every_probe_and_the_pipeline_with_the_tracer_and_logs_on(tm
     res = ca.record(out, 7.0, {"exposure-value": -1}, run=pi.run, launch=pi.launch,
                     media_glob=media_devs(tmp_path), meminfo=meminfo(tmp_path))
     argv, env, dur = pi.launched
-    assert argv[:3] == ["gst-launch-1.0", "-v", "-e"] and argv[3] == res["pipeline"] and dur == 7.0
-    assert "exposure-value=-1" in argv[3]
+    assert argv[:3] == ["gst-launch-1.0", "-v", "-e"] and argv[3:] == shlex.split(res["pipeline"]) and dur == 7.0
+    assert all(" " not in a for a in argv[3:]), "a space inside one argument: gst-launch reads it as a syntax error"
+    assert "exposure-value=-1" in argv[3:]
     assert env["GST_TRACERS"] == ca.GST_TRACERS and env["GST_DEBUG"] == "GST_TRACER:7"
     assert env["LIBCAMERA_LOG_LEVELS"] == ca.LIBCAMERA_LOG_LEVELS
     assert ["vcgencmd", "measure_clock", "isp"] in pi.calls and ["v4l2-ctl", "--list-devices"] in pi.calls
