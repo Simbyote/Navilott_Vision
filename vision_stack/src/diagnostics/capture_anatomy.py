@@ -70,6 +70,12 @@ from src.params import CAMERA_CONTROLS, FPS, RUNS_DIR
 
 DURATION_S = 10.0           # long enough for AGC to settle and a few hundred frames at 20 FPS
 STOP_WAIT_S = 5.0           # after Ctrl-C, how long gst-launch gets to send EOS and exit
+# The sink takes duration_s x FPS buffers and ends the run itself (EOS); this
+# is the extra time allowed before it's interrupted. Ending on Ctrl-C lost
+# gst-launch's buffered output and left no way to tell a camera that never
+# started from one that ran (2026-10-12: by hand, 100 frames in 5.2 s)
+STARTUP_S = 10.0
+INTERRUPTED = "[capture_anatomy] interrupted:"   # appended to gst_launch.txt when the run had to be stopped
 # GStreamer's built-in latency tracer (1.18+): per-element time ("element-latency")
 # and source-to-sink time ("latency") for every buffer
 GST_TRACERS = "latency(flags=pipeline+element)"
@@ -121,8 +127,9 @@ def run_tool(argv: list[str], timeout: float = 10.0) -> tuple[int | None, str]:
 
 def launch_for(argv: list[str], env: dict, duration_s: float) -> tuple[int | None, str]:
     """
-    Run argv for duration_s, then Ctrl-C it; (exit code, stdout + stderr).
-    (None, why) when it can't start. A run that ends early keeps its own code.
+    Run argv until it ends or duration_s passes, then Ctrl-C it (then kill
+    it); (exit code, stdout + stderr, with an INTERRUPTED line when it had
+    to be stopped). (None, why) when it can't start.
     """
     try:
         p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -132,17 +139,21 @@ def launch_for(argv: list[str], env: dict, duration_s: float) -> tuple[int | Non
         out, _ = p.communicate(timeout=duration_s)
     except subprocess.TimeoutExpired:
         p.send_signal(signal.SIGINT)
+        how = "Ctrl-C"
         try:
             out, _ = p.communicate(timeout=STOP_WAIT_S)
         except subprocess.TimeoutExpired:
             p.kill()
             out, _ = p.communicate()
+            how = "killed"
+        out = f"{out}\n{INTERRUPTED} {how} after {duration_s:.0f} s\n"
     return p.returncode, out
 
 
-def anatomy_pipeline(controls: dict | None = None) -> str:
-    """The robot's capture pipeline string with its appsink swapped for SINK."""
-    return build_gst_pipeline(controls=controls).rsplit(" ! ", 1)[0] + " ! " + SINK
+def anatomy_pipeline(controls: dict | None = None, num_buffers: int | None = None) -> str:
+    """The robot's capture pipeline string with its appsink swapped for SINK, ending itself after num_buffers."""
+    sink = SINK if num_buffers is None else f"{SINK} num-buffers={int(num_buffers)}"
+    return build_gst_pipeline(controls=controls).rsplit(" ! ", 1)[0] + " ! " + sink
 
 
 # =============================================================================
@@ -352,7 +363,7 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
             if png := _draw(out / f"media{n}.dot", run):
                 res["pngs"].append(png)
 
-    pipeline = anatomy_pipeline(controls)
+    pipeline = anatomy_pipeline(controls, num_buffers=max(1, int(round(duration_s * FPS))))
     res["pipeline"] = pipeline
     dot_dir = out / "gst_dot"
     dot_dir.mkdir(exist_ok=True)
@@ -362,11 +373,14 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
            "LIBCAMERA_LOG_FILE": str(out / "libcamera.log"), "LIBCAMERA_LOG_LEVELS": LIBCAMERA_LOG_LEVELS}
     # one argv word per token, as a shell would split it: gst-launch escapes the spaces
     # inside a single argument, so the whole pipeline as one word is a syntax error
-    code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s)
+    code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s + STARTUP_S)
     _save(out, "gst_launch.txt", text)
     res["gst_code"] = code
     res["gst_errors"] = gst_errors(text)
     res["gst_playing"] = "Setting pipeline to PLAYING" in text
+    res["gst_interrupted"] = INTERRUPTED in text
+    # Ending on its own at EOS means the sink took every buffer it asked for
+    res["gst_eos"] = "Got EOS from element" in text and not res["gst_interrupted"]
     if code is None:
         res["missing"].append("gst-launch-1.0")
     res["caps"] = parse_caps(text)
@@ -419,8 +433,11 @@ def gst_errors(text: str) -> list[str]:
 
 
 def frames_flowed(res: dict) -> bool:
-    """The tracer saw buffers: a source-to-sink latency, or any element holding one."""
-    return bool(res["latency"])
+    """
+    Buffers reached the sink: the tracer saw some, or gst-launch ended on its
+    own at EOS (the sink's num-buffers) with no error.
+    """
+    return bool(res["latency"]) or bool(res.get("gst_eos") and not res.get("gst_errors"))
 
 
 def _no_pipeline_latency(res: dict) -> str:
@@ -432,14 +449,16 @@ def _no_pipeline_latency(res: dict) -> str:
         busy = any(w in errors[0].lower() for w in _BUSY)
         hint = ": the camera is open in another process (the robot's pipeline, or a test before this one)" if busy else ""
         return f"gst-launch stopped with {errors[0]}{hint}. See gst_launch.txt"
+    if frames_flowed(res) and not res["latency"]:
+        return ("frames reached the sink (gst-launch ended on its own at EOS), but the latency tracer logged "
+                "nothing: is it here (gst-inspect-1.0 coretracers), and does gst_trace.log have GST_TRACER lines?")
     if frames_flowed(res):
         n = sum(s["frames"] for s in res["latency"])
         return (f"frames flowed ({n} element-latency entries), but the latency tracer logged no source-to-sink "
                 "time: it needs a source flagged as one, which libcamerasrc may not be on this GStreamer")
     if res.get("gst_playing") and not res["caps"]:
-        return (f"gst-launch reached PLAYING but the camera never negotiated its caps in {res['duration_s']:.0f} s: "
-                "libcamera may still have been starting (run longer, --seconds 10), or the camera is held by "
-                "another process. See libcamera.log")
+        return (f"gst-launch reached PLAYING but the camera never negotiated its caps in "
+                f"{res['duration_s'] + STARTUP_S:.0f} s: the camera may be held by another process. See libcamera.log")
     if res["caps"]:
         return ("the pipeline negotiated its caps but no buffer was traced: either no frame reached the sink, or "
                 "the latency tracer isn't here (gst-inspect-1.0 coretracers). See gst_launch.txt and gst_trace.log")
