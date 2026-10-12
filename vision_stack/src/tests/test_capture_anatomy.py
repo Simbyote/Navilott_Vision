@@ -320,9 +320,36 @@ def test_no_frames_says_the_camera_may_be_busy(tmp_path):
     pi = FakePi(trace="", dot=False)
     res = ca.record(tmp_path / "a", 1.0, run=pi.run, launch=pi.launch, media_glob=media_devs(tmp_path),
                     meminfo=meminfo(tmp_path))
-    assert res["findings"] == ["no frame reached the sink: is the camera open in another process (the robot's "
-                               "pipeline)? See gst_launch.txt"]
+    assert res["findings"] == ["the pipeline negotiated its caps but no buffer was traced: either no frame reached "
+                               "the sink, or the latency tracer isn't here (gst-inspect-1.0 coretracers). See "
+                               "gst_launch.txt and gst_trace.log"]
     assert "gst_pipeline.png" not in res["pngs"]
+
+
+@pytest.mark.software
+def test_a_gst_launch_error_is_quoted_and_a_busy_camera_named():
+    res = {"missing": [], "latency": [], "caps": [], "vc": {},
+           "gst_errors": ca.gst_errors("Setting pipeline to PAUSED ...\n"
+                                       "ERROR: from element /GstPipeline:pipeline0/GstLibcameraSrc:libcamerasrc0: "
+                                       "Failed to acquire camera.\nAdditional debug info:\nx\n")}
+    (f,) = ca.findings(res)
+    assert f.startswith("gst-launch stopped with ERROR: from element") and "Failed to acquire camera" in f
+    assert "open in another process" in f
+    res["gst_errors"] = ["ERROR: from element x: Internal data stream error. Additional debug info:"]
+    assert "another process" not in ca.findings(res)[0]
+
+
+@pytest.mark.software
+def test_element_times_without_a_pipeline_time_still_mean_frames_flowed():
+    res = {"missing": [], "caps": [], "vc": {}, "gst_errors": [],
+           "latency": [{"kind": "element", "element": "videoconvert0", "frames": 40, "median_ms": 3.0}]}
+    assert ca.frames_flowed(res) and "frames flowed (40 element-latency entries)" in ca.findings(res)[0]
+    res["latency"], res["caps"] = [], [{"element": "libcamerasrc0"}]
+    assert "negotiated its caps but no buffer was traced" in ca.findings(res)[0]
+    res["caps"] = []
+    assert ca.findings(res)[0].startswith("no frame reached the sink and gst-launch reported no error")
+    res.update(duration_s=3.0, gst_playing=True)
+    assert ca.findings(res)[0].startswith("gst-launch reached PLAYING but the camera never negotiated its caps in 3 s")
 
 
 @pytest.mark.software
@@ -398,10 +425,17 @@ def test_cli_adds_camera_controls_to_the_configured_ones_and_rejects_unknown(mon
 # On the Pi
 # =============================================================================
 
+PI_SECONDS = 8.0
+
+
 @pytest.mark.hardware
 def test_capture_anatomy_on_the_pi(artifacts):
     if not shutil.which("gst-launch-1.0") or not Path("/dev/media0").exists():
         pytest.skip("no GStreamer or no media device: not the robot")
-    res = ca.record(artifacts.path / "anatomy", 3.0)                 # summary.txt and the rest land in there
+    # summary.txt and the rest land in there. 8 s: 3 ended the run while the
+    # camera was still starting (PLAYING, no caps, no frame; 2026-10-12)
+    res = ca.record(artifacts.path / "anatomy", PI_SECONDS)
     assert res["media"], "media-ctl found no media device"
-    assert any(s["kind"] == "pipeline" for s in res["latency"]), res["findings"]
+    # Frames through the pipeline is the pass; a missing source-to-sink time
+    # (libcamerasrc not flagged as a source) is a finding, not a failure
+    assert ca.frames_flowed(res) and not res["gst_errors"], res["findings"]
