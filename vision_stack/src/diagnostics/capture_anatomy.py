@@ -366,6 +366,7 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     _save(out, "gst_launch.txt", text)
     res["gst_code"] = code
     res["gst_errors"] = gst_errors(text)
+    res["gst_playing"] = "Setting pipeline to PLAYING" in text
     if code is None:
         res["missing"].append("gst-launch-1.0")
     res["caps"] = parse_caps(text)
@@ -435,6 +436,10 @@ def _no_pipeline_latency(res: dict) -> str:
         n = sum(s["frames"] for s in res["latency"])
         return (f"frames flowed ({n} element-latency entries), but the latency tracer logged no source-to-sink "
                 "time: it needs a source flagged as one, which libcamerasrc may not be on this GStreamer")
+    if res.get("gst_playing") and not res["caps"]:
+        return (f"gst-launch reached PLAYING but the camera never negotiated its caps in {res['duration_s']:.0f} s: "
+                "libcamera may still have been starting (run longer, --seconds 10), or the camera is held by "
+                "another process. See libcamera.log")
     if res["caps"]:
         return ("the pipeline negotiated its caps but no buffer was traced: either no frame reached the sink, or "
                 "the latency tracer isn't here (gst-inspect-1.0 coretracers). See gst_launch.txt and gst_trace.log")

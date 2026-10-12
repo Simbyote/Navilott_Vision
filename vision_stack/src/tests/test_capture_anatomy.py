@@ -348,6 +348,8 @@ def test_element_times_without_a_pipeline_time_still_mean_frames_flowed():
     assert "negotiated its caps but no buffer was traced" in ca.findings(res)[0]
     res["caps"] = []
     assert ca.findings(res)[0].startswith("no frame reached the sink and gst-launch reported no error")
+    res.update(duration_s=3.0, gst_playing=True)
+    assert ca.findings(res)[0].startswith("gst-launch reached PLAYING but the camera never negotiated its caps in 3 s")
 
 
 @pytest.mark.software
@@ -423,11 +425,16 @@ def test_cli_adds_camera_controls_to_the_configured_ones_and_rejects_unknown(mon
 # On the Pi
 # =============================================================================
 
+PI_SECONDS = 8.0
+
+
 @pytest.mark.hardware
 def test_capture_anatomy_on_the_pi(artifacts):
     if not shutil.which("gst-launch-1.0") or not Path("/dev/media0").exists():
         pytest.skip("no GStreamer or no media device: not the robot")
-    res = ca.record(artifacts.path / "anatomy", 3.0)                 # summary.txt and the rest land in there
+    # summary.txt and the rest land in there. 8 s: 3 ended the run while the
+    # camera was still starting (PLAYING, no caps, no frame; 2026-10-12)
+    res = ca.record(artifacts.path / "anatomy", PI_SECONDS)
     assert res["media"], "media-ctl found no media device"
     # Frames through the pipeline is the pass; a missing source-to-sink time
     # (libcamerasrc not flagged as a source) is a finding, not a failure
