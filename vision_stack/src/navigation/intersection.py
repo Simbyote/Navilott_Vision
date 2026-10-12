@@ -86,8 +86,8 @@ ADVANCE_MS = 0
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as
 # (0.36, 0.63) and (0.45, 0.0); raised 2026-10-06 (motor recalibration)
-LEFT_TURN = Command(0.46, 0.73)
-RIGHT_TURN = Command(0.55, 0.25)
+LEFT_TURN = Command(0.50, 0.73)
+RIGHT_TURN = Command(0.50, 0.25)
 # A turn ends once the gyro reads this many degrees turned its way: 90 less
 # the drive's coast after the turn stops (maneuver_linker's 180 turn aims
 # at 171). Tune on the mat: overshoot -> lower, short -> raise
