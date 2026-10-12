@@ -367,10 +367,13 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     res["pipeline"] = pipeline
     dot_dir = out / "gst_dot"
     dot_dir.mkdir(exist_ok=True)
-    env = {**os.environ, "GST_TRACERS": GST_TRACERS, "GST_DEBUG": "GST_TRACER:7",
-           "GST_DEBUG_FILE": str(out / "gst_trace.log"), "GST_DEBUG_NO_COLOR": "1",
-           "GST_DEBUG_DUMP_DOT_DIR": str(dot_dir),
-           "LIBCAMERA_LOG_FILE": str(out / "libcamera.log"), "LIBCAMERA_LOG_LEVELS": LIBCAMERA_LOG_LEVELS}
+    groups = {
+        "latency tracer": {"GST_TRACERS": GST_TRACERS, "GST_DEBUG": "GST_TRACER:7",
+                           "GST_DEBUG_FILE": str(out / "gst_trace.log"), "GST_DEBUG_NO_COLOR": "1"},
+        "dot dumps": {"GST_DEBUG_DUMP_DOT_DIR": str(dot_dir)},
+        "libcamera log": {"LIBCAMERA_LOG_FILE": str(out / "libcamera.log"), "LIBCAMERA_LOG_LEVELS": LIBCAMERA_LOG_LEVELS},
+    }
+    env = {**os.environ, **{k: v for g in groups.values() for k, v in g.items()}}
     # one argv word per token, as a shell would split it: gst-launch escapes the spaces
     # inside a single argument, so the whole pipeline as one word is a syntax error
     code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s + STARTUP_S)
@@ -381,6 +384,8 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     res["gst_interrupted"] = INTERRUPTED in text
     # Ending on its own at EOS means the sink took every buffer it asked for
     res["gst_eos"] = "Got EOS from element" in text and not res["gst_interrupted"]
+    res["stall_bisect"] = (bisect_stall(controls, groups, out, launch)
+                           if res["gst_interrupted"] and not res["gst_eos"] else {})
     if code is None:
         res["missing"].append("gst-launch-1.0")
     res["caps"] = parse_caps(text)
@@ -420,6 +425,35 @@ def _element_ms(res: dict, factory: str) -> float:
 
 
 _BUSY = ("busy", "acquire", "in use")
+BISECT_BUFFERS = 40         # 2 s at 20 FPS: enough to show the camera runs
+
+
+def _ran(text: str) -> bool:
+    return "Got EOS from element" in text and INTERRUPTED not in text and not gst_errors(text)
+
+
+def bisect_stall(controls, groups: dict, out: Path, launch) -> dict:
+    """
+    When the recording stalled: which of the tool's settings stalls it.
+
+    Runs the pipeline for BISECT_BUFFERS with none of them ("none"), then
+    with each group alone. By hand, with none, it ran (2026-10-12), so a
+    group that stalls it alone is the cause. Each run's output is saved as
+    gst_bisect_<group>.txt.
+
+    Outputs:
+        {"none": ran, group: ran, ...}; True = it reached EOS on its own.
+    """
+    argv = ["gst-launch-1.0", "-v", "-e", *shlex.split(anatomy_pipeline(controls, num_buffers=BISECT_BUFFERS))]
+    timeout = BISECT_BUFFERS / FPS + STARTUP_S
+    found = {}
+    for name, extra in (("none", {}), *groups.items()):
+        _, text = launch(argv, {**os.environ, **extra}, timeout)
+        _save(out, f"gst_bisect_{name.replace(' ', '_')}.txt", text)
+        found[name] = _ran(text)
+        if name == "none" and not found[name]:
+            break                           # stalls with nothing added: the settings aren't it
+    return found
 
 
 def gst_errors(text: str) -> list[str]:
@@ -437,7 +471,8 @@ def frames_flowed(res: dict) -> bool:
     Buffers reached the sink: the tracer saw some, or gst-launch ended on its
     own at EOS (the sink's num-buffers) with no error.
     """
-    return bool(res["latency"]) or bool(res.get("gst_eos") and not res.get("gst_errors"))
+    return (bool(res["latency"]) or bool(res.get("gst_eos") and not res.get("gst_errors"))
+            or bool((res.get("stall_bisect") or {}).get("none")))
 
 
 def _no_pipeline_latency(res: dict) -> str:
@@ -449,6 +484,18 @@ def _no_pipeline_latency(res: dict) -> str:
         busy = any(w in errors[0].lower() for w in _BUSY)
         hint = ": the camera is open in another process (the robot's pipeline, or a test before this one)" if busy else ""
         return f"gst-launch stopped with {errors[0]}{hint}. See gst_launch.txt"
+    bisect = res.get("stall_bisect") or {}
+    if bisect:
+        culprits = [g for g, ok in bisect.items() if g != "none" and not ok]
+        if bisect.get("none") and culprits:
+            return (f"gst-launch stalled with the tool's {', '.join(culprits)} set, and runs without "
+                    f"({BISECT_BUFFERS} frames to EOS): the recording can't use {' or '.join(culprits)} on this "
+                    "Pi. See gst_bisect_*.txt")
+        if bisect.get("none"):
+            return ("gst-launch stalled with all the tool's settings together, but runs with none and with each "
+                    "alone. See gst_bisect_*.txt")
+        return ("gst-launch stalls in this process even with none of the tool's settings, though it runs by "
+                "hand: what differs is the launch itself (output to a pipe, under pytest). See gst_bisect_none.txt")
     if frames_flowed(res) and not res["latency"]:
         return ("frames reached the sink (gst-launch ended on its own at EOS), but the latency tracer logged "
                 "nothing: is it here (gst-inspect-1.0 coretracers), and does gst_trace.log have GST_TRACER lines?")
