@@ -318,7 +318,29 @@ it to perform its own tasks without interrupting the main loop. However, it
 spends a lot of its time waiting for the next frame.
 
 \subsection{Linux Scheduler}\label{sec:linux_scheduler}
-The Linux
+The Linux scheduler is the internal control system of the Pi's OS (the kernel).
+It is responsible for managing hundreds of processes and threads and decides
+which running thread runs on which core. Navilott chooses not to control the
+scheduler and prevent its blocking; instead we need to tolerate some level of
+blocking within the softwares architecture (see
+Section~\ref{sec:software_architecture}).
+
+Navilott has several means of mitigating blocking:
+
+\begin{itemize}
+    \item \textbf{Buffering}: Every frame is buffered in memory until it is
+          consumed by the main loop.
+    \item \textbf{Timestamping}: Every captured frame is timestamped at the time it
+          is \textit{received}, not \textit{captured}. A late frame produces a larger
+          dt instead of an error.
+    \item \textbf{Estimation Clamping}: Estimation clamps the dt to a maximum
+          value of 0.5\,s --- a large enough stall (dt) fails the system.
+    \item \textbf{Motor Watchdog}: The watchdog short circuits the motor driver if
+          it does not receive a command for 0.5\,s.
+    \item \textbf{Max OpenCV Threads}: Navilott clamps the number of OpenCV processes
+          across only 2/4 cores. Setting the core count any higher would hurt other
+          running as well (GStreamer and pigpio).
+\end{itemize}
 
 \subsection{Tooling}
 % Think about: Make (setup.mk once per Pi, session.mk every boot,
