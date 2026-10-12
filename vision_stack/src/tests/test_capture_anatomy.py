@@ -455,3 +455,36 @@ def test_launch_for_marks_a_run_it_had_to_stop_and_not_one_that_ended(tmp_path):
     assert code == 0 and "done" in text and ca.INTERRUPTED not in text
     code, text = ca.launch_for([sys.executable, "-c", "import time; print('up', flush=True); time.sleep(30)"], {}, 0.5)
     assert "up" in text and f"{ca.INTERRUPTED} Ctrl-C" in text
+
+
+@pytest.mark.software
+def test_a_stalled_recording_is_bisected_to_the_setting_that_stalls_it(tmp_path):
+    """The 2026-10-12 Pi: the traced run stuck in PAUSED; by hand, with none of the tool's settings, it ran."""
+    pi = FakePi(trace="")
+    runs = []
+
+    def launch(argv, env, duration_s):
+        runs.append(sorted(k for k in ("GST_TRACERS", "GST_DEBUG_DUMP_DOT_DIR", "LIBCAMERA_LOG_FILE") if k in env))
+        if "GST_TRACERS" in env:
+            if "GST_DEBUG_FILE" in env:
+                Path(env["GST_DEBUG_FILE"]).write_text("")
+            return 130, f"Setting pipeline to PAUSED ...\n{ca.INTERRUPTED} Ctrl-C after {duration_s:.0f} s\n"
+        return 0, "Setting pipeline to PLAYING ...\nGot EOS from element \"pipeline0\".\n"
+    res = ca.record(tmp_path / "a", 2.0, run=pi.run, launch=launch, media_glob=media_devs(tmp_path),
+                    meminfo=meminfo(tmp_path))
+    assert res["stall_bisect"] == {"none": True, "latency tracer": False, "dot dumps": True, "libcamera log": True}
+    assert runs[1:] == [[], ["GST_TRACERS"], ["GST_DEBUG_DUMP_DOT_DIR"], ["LIBCAMERA_LOG_FILE"]]
+    assert res["findings"][0].startswith("gst-launch stalled with the tool's latency tracer set, and runs without")
+    assert ca.frames_flowed(res) and (tmp_path / "a" / "gst_bisect_latency_tracer.txt").exists()
+
+
+@pytest.mark.software
+def test_a_stall_even_with_nothing_set_says_the_launch_itself_differs(tmp_path):
+    pi = FakePi(trace="")
+
+    def launch(argv, env, duration_s):
+        return 130, f"Setting pipeline to PAUSED ...\n{ca.INTERRUPTED} Ctrl-C after {duration_s:.0f} s\n"
+    res = ca.record(tmp_path / "a", 2.0, run=pi.run, launch=launch, media_glob=media_devs(tmp_path),
+                    meminfo=meminfo(tmp_path))
+    assert res["stall_bisect"] == {"none": False}
+    assert "even with none of the tool's settings" in res["findings"][0] and not ca.frames_flowed(res)
