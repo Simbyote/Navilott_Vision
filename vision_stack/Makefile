@@ -69,7 +69,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates stability soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline \
+        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -174,6 +174,9 @@ gates: ## which detector gate refuses the most candidates
 
 stability: ## offset noise and lane-mode flicker on a still scene (record parked and centered)
 	$(PY) -m src.analysis.stability $(strip $(RUN)) $(ARGS)
+
+hw-report: ## every analysis a pytest --hardware run feeds, figures next to each CSV (RUN=artifacts/<time>)
+	$(PY) -m src.analysis.hw_report $(strip $(RUN)) $(ARGS)
 
 soak-report: ## heat, throttling, memory trend and loop time of a soak (RUN=artifacts/<time>)
 	$(PY) -m src.analysis.soak $(strip $(RUN)) $(ARGS)
