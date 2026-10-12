@@ -32,6 +32,13 @@ navigation systems to ensure that the decision was taken in the right place.
 
 The robot can then be divided into 6 main areas:
 
+\begin{figure}[H]
+    \centering
+    \input{figures/tikz/robot_loop}
+    \caption{The six areas as a closed loop.}
+    \label{fig:robot-loop}
+\end{figure}
+
 \begin{itemize}
     \item \textbf{Capture}: the robot's sensors and how they capture the environment
     \item \textbf{Perception}: the robot's processing algorithms and how they interpret those measurements
@@ -50,6 +57,13 @@ The robot can then be divided into 6 main areas:
 Our first concern was how the start of the stack would interact with the end of
 it --- meaning how we would connect the robot's perception system to the motor
 actuation. To achieve this, three options were considered:
+
+\begin{figure}[H]
+    \centering
+    \input{figures/tikz/board_options}
+    \caption{Where each area runs under the three options.}
+    \label{fig:board-options}
+\end{figure}
 
 \begin{itemize}
     \item \textbf{MCU-only}: An STM32 or Arduino runs the perception pipeline and
@@ -95,6 +109,13 @@ powered, how does it move, what else would it use to sense its environment, how
 can we monitor its internal state, and how does the control system communicate
 with the user? Taking in these questions, we decided to add the following
 hardware components:
+
+\begin{figure}[H]
+    \centering
+    \input{figures/tikz/hardware_blocks}
+    \caption{Hardware added around the Pi.}
+    \label{fig:hardware-blocks}
+\end{figure}
 
 \begin{table}[H]
     \centering
@@ -299,9 +320,6 @@ spends a lot of its time waiting for the next frame.
 \subsection{Linux Scheduler}\label{sec:linux_scheduler}
 
 \subsection{Tooling}
-% --- Tooling ---
-\TODO{What tools were used to develop the software? What was gained and lost by using these tools? How did the tools affect
-    the architecture?}
 % Think about: Make (setup.mk once per Pi, session.mk every boot,
 %   vision_stack/Makefile as the command list), pytest, git/PRs, the
 %   linkers and debug views, AI-assisted sessions.

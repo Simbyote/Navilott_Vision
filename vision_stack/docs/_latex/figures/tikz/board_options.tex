@@ -1,0 +1,36 @@
+% figures/tikz/board_options.tex --- where each area runs under the three options.
+% \input{figures/tikz/board_options} inside a figure environment.
+\begin{tikzpicture}[
+    area/.style = {draw, minimum width=26mm, minimum height=6.5mm, font=\small},
+    pi/.style   = {area, fill=blue!12},
+    mcu/.style  = {area, fill=orange!22},
+    hw/.style   = {area, fill=black!6, dashed},
+    chip/.style = {font=\footnotesize\bfseries},
+    head/.style = {font=\small\bfseries},
+    link/.style = {{Latex[length=1.6mm]}-{Latex[length=1.6mm]}, thick},
+  ]
+  % Each column: five software areas stacked top to bottom, then the hardware.
+  % #1 column x, #2..#6 style per area (pi or mcu)
+  \newcommand{\optioncolumn}[7]{%
+    \node[head] at (#1, 0.9) {#7};
+    \node[#2] (c#1-1) at (#1, 0)    {Capture};
+    \node[#3] (c#1-2) at (#1,-0.65) {Perception};
+    \node[#4] (c#1-3) at (#1,-1.30) {Estimation};
+    \node[#5] (c#1-4) at (#1,-1.95) {Navigation};
+    \node[#6] (c#1-5) at (#1,-2.60) {Control};
+    \node[hw] (c#1-6) at (#1,-3.45) {Actuation};
+  }
+
+  \optioncolumn{0}{mcu}{mcu}{mcu}{mcu}{mcu}{MCU-only}
+  \optioncolumn{5}{pi}{pi}{pi}{pi}{mcu}{Pi + MCU}
+  \optioncolumn{10}{pi}{pi}{pi}{pi}{pi}{Pi-only (chosen)}
+
+  % The Pi + MCU boundary: the UART link between the two chips
+  \draw[very thick, red!65!black, dashed] ([xshift=-3mm]c5-5.north west) -- ([xshift=3mm]c5-5.north east)
+      node[right, font=\footnotesize, align=left, text=red!65!black] {UART\\link};
+
+  % Legend
+  \node[pi,  minimum width=6mm, label={[font=\footnotesize]right:Raspberry Pi}] at (1.6,-4.55) {};
+  \node[mcu, minimum width=6mm, label={[font=\footnotesize]right:Microcontroller}] at (5.0,-4.55) {};
+  \node[hw,  minimum width=6mm, label={[font=\footnotesize]right:Driver and motors}] at (8.6,-4.55) {};
+\end{tikzpicture}

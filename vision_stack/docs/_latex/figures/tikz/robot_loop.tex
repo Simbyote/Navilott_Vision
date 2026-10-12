@@ -1,0 +1,31 @@
+% figures/tikz/robot_loop.tex --- the six areas as a closed loop.
+% \input{figures/tikz/robot_loop} inside a figure environment.
+\begin{tikzpicture}[
+    area/.style  = {draw, rounded corners=2pt, fill=black!4, text width=38mm,
+                    minimum height=11mm, align=center, font=\small},
+    flow/.style  = {-{Latex[length=2mm]}, thick},
+    note/.style  = {font=\footnotesize\itshape, align=center},
+  ]
+  % Top row: sensing and understanding, left to right
+  \node[area] (cap) at (0,0)    {\textbf{Capture}\\{\footnotesize camera, IMU, encoders}};
+  \node[area] (per) at (5.2,0)  {\textbf{Perception}\\{\footnotesize what is in the frame}};
+  \node[area] (est) at (10.4,0)  {\textbf{Estimation}\\{\footnotesize what is true over time}};
+
+  % Bottom row: deciding and acting, right to left (columns aligned with the top)
+  \node[area] (nav) at (10.4,-2.2) {\textbf{Navigation}\\{\footnotesize what to do next}};
+  \node[area] (con) at (5.2,-2.2) {\textbf{Control}\\{\footnotesize duty per wheel}};
+  \node[area] (act) at (0,-2.2)   {\textbf{Actuation}\\{\footnotesize driver and motors}};
+
+  \draw[flow] (cap) -- (per);
+  \draw[flow] (per) -- (est);
+  \draw[flow] (est) -- (nav);
+  \draw[flow] (nav) -- (con);
+  \draw[flow] (con) -- (act);
+
+  % Feedback closes the loop
+  \draw[flow, dashed] (act) -- node[note, right=1mm] {feedback: the\\robot's own motion} (cap);
+
+  % The world enters and leaves
+  \draw[flow, gray] ([xshift=-12mm]cap.west) -- node[note, above=1mm, black, pos=0.35] {the course} (cap.west);
+  \draw[flow, gray] (act.west) -- node[note, below=1mm, black, pos=0.65] {motion} ([xshift=-12mm]act.west);
+\end{tikzpicture}
