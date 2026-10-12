@@ -107,6 +107,10 @@ class ROICropResult:
     obstacle_roi: np.ndarray | None = None          # (h, w) uint8 view of the gray frame
     obstacle_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect
     obstacle_rect: tuple[int, int, int, int] | None = None     # (x, y, w, h) in source-frame px
+    # The whole color frame, read-only: the obstacle detector's reference for
+    # the scene's color cast (an object near the robot can fill a ROI, but
+    # not the frame)
+    color_frame: np.ndarray | None = None           # (H, W, 3) uint8 BGR view
 
 
 def _validate(
@@ -200,6 +204,7 @@ def crop_rois(
     traffic_roi, traffic_rect = crop(pre.color, config.traffic)
     obstacle_roi, obstacle_rect = crop(pre.gray, config.obstacle)
     obstacle_color_roi, _ = crop(pre.color, config.obstacle)
+    color_frame, _ = crop(pre.color, ROIBounds(0.0, 0.0, 1.0, 1.0))
 
     return ROICropResult(
         lane_roi = lane_roi,
@@ -215,6 +220,7 @@ def crop_rois(
         obstacle_roi = obstacle_roi,
         obstacle_color_roi = obstacle_color_roi,
         obstacle_rect = obstacle_rect,
+        color_frame = color_frame,
     )
 
 

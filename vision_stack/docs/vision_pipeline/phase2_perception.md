@@ -346,12 +346,13 @@ The board-free alternative for the stop line. Tape strips laid at measured dista
 Is something solid standing in the robot's path, and how far ahead is its base? The course is dark mats and white tape, and neither has color, so in the obstacle ROI a pixel much brighter than the floor, or clearly colored, is "not floor". Tape is bright too, but thin: an opening with a square wider than any tape removes lane lines, dashes and stop lines, and what survives is something large and solid.
 
 ```
-every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gray ≥ floor + 60, or S ≥ 80 with V ≥ 50
+every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gray ≥ floor + 60, or Lab color ≥ 15 from the frame's neutral with max(B,G,R) ≥ 50
              → opening, 47 px square → blobs → gates: area ≥ 2500, width ≥ 60, height ≥ 60, base ≤ 90 rows ahead
              → nearest (lowest base) → distance_px, distance_cm
 ```
 
 - **Every second pixel** each way (`step`): the loop already runs at its budget on the Pi; an obstacle is tens of pixels across. Sizes and rows stay in full-resolution px.
+- **Color is relative too:** |a − a_ref| + |b − b_ref| in Lab against the whole frame's median (a, b), the scene's neutral. A saturation threshold read the whole floor as colored under the warm light by the windows; the lane ROI's own median was the can itself once it filled the view. Over the 2026-10-12 runs (1001 clear frames, 199 with the can within ~20 cm), 15 gave no false alarm and every can frame.
 - **The floor level** is measured each frame on the lane ROI, which is wider than the path, so a box in the path leaves floor beside it. The course's floor runs from dark mats to light gray (95–130 at the 2026-10-12 run's intersections): a fixed level (a cap at 70, the first version) called the light floor an obstacle, 376 of 537 frames on that run against 131 once measured (the can's, by eye).
 - **`open_px` (47)** is wider than any lane tape (MEASURED's lane gate allows 45 px, the widest seen 41.7) and taller than any stop line (`max_thickness_px` 40; near the view bottom 1 cm of floor is ~10 rows). Tape wider than it would survive.
 - **`distance_px`** is the rows from the blob's lowest row (where an upright object meets the floor) to the lane ROI bottom, as for the stop line. **`distance_cm`** is the floor there: through the ground homography at the base's center, else the stop-line table, whose curve maps any floor row to cm. The table's reference is the robot's front edge, and its row 0 is ~10.2 cm ahead of it, so a blob running off the ROI bottom is **`clipped`**: its base isn't in view, "this near or nearer".

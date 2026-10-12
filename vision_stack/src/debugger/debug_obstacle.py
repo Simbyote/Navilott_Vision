@@ -9,7 +9,7 @@ Purpose:
     bottom and its distance. The bottom panel is the two masks: gray is not
     floor, white is what survived the opening. A missed obstacle shows in
     the bottom panel as never not-floor (too dark, no color: lower
-    min_contrast or min_saturation) or as removed by the opening (narrower
+    min_contrast or min_chroma) or as removed by the opening (narrower
     than open_px); a false one shows in the top panel with what it really
     was. The lane ROI's top edge is drawn across both, since distances are
     counted from the lane ROI's bottom.

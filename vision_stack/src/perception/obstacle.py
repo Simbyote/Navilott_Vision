@@ -2,9 +2,12 @@
 
 Purpose:
     The course is floor (dark mats to light gray) and white tape, and neither
-    has any color. So in the obstacle ROI (roi_crop.OBSTACLE, the middle of the frame from the
-    bottom of the view up past the lane ROI), a pixel that is much brighter
-    than the floor, or clearly colored, is "not floor". Tape is bright too,
+    has a color of its own. So in the obstacle ROI (roi_crop.OBSTACLE, the
+    middle of the frame from the bottom of the view up past the lane ROI), a
+    pixel much brighter than the floor, or a color clearly unlike the
+    floor's, is "not floor". Both are measured against the floor in the
+    same frame (the lane ROI), so a light floor or a warm light cast moves
+    the reference with it. Tape is bright too,
     but thin: a morphological opening with a square wider than any tape
     (lane lines, dashes, stop lines) removes it, and what survives is
     something solid and large. Each surviving blob is gated on size and on
@@ -48,8 +51,9 @@ Flow:
     1. Take every step-th pixel of the ROI, gray and color.
     2. Floor level: a low percentile of the lane ROI's gray (from its
        histogram); wider than the path, so an obstacle in it leaves floor beside it.
-    3. Not floor: gray >= floor + min_contrast, or HSV S >= min_saturation
-       with V >= min_value.
+    3. Not floor: gray >= floor + min_contrast, or a Lab color at least
+       min_chroma from the scene's neutral (the whole frame's median), with
+       its brightest channel >= min_value.
     4. Opening with an open_px square: tape and specks go.
     5. Connected blobs, scaled back to full-resolution px; each gated: area,
        width, height, then how far ahead its base is.
@@ -88,8 +92,16 @@ class ObstacleConfig:
     # no fixed level holds (a cap at 70 called the light floor an obstacle)
     floor_percentile: float = 25.0
     min_contrast: float = 60.0      # gray levels above the floor that make a pixel not floor
-    min_saturation: int = 80        # HSV S (0-255) that makes a pixel colored; mats and tape are gray
-    min_value: int = 50             # HSV V a colored pixel needs: hue and saturation are noise in the dark
+    # Color away from the scene's neutral that makes a pixel colored:
+    # |a - a_ref| + |b - b_ref| in 8-bit Lab, the reference the whole frame's
+    # median. Relative, not a saturation threshold: under the warm light by
+    # the windows (2026-10-12) the whole floor read saturated and the empty
+    # lane was an obstacle for a second after the can was lifted. Over that
+    # day's three runs (1001 clear frames, 199 with the can within ~20 cm):
+    # 10 and 15 both gave no false alarm and every can frame; 20 lost 33 can
+    # frames, 30 lost 99
+    min_chroma: float = 15.0
+    min_value: int = 50             # brightest channel (HSV V) a colored pixel needs: color is noise in the dark
     # Side of the opening square. Wider than any tape in the lane ROI (lane
     # lines measure up to ~42 px, LaneOffsetConfig.max_width_px 45 in
     # MEASURED) and taller than any stop line (StopLineFilter max_thickness_px
@@ -140,6 +152,34 @@ def _percentile(gray: np.ndarray, pct: float) -> float:
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).ravel()
     return float(np.searchsorted(np.cumsum(hist), pct / 100.0 * gray.size))
 
+def _floor_ab(roi: ROICropResult, k: int) -> tuple[float, float]:
+    """
+    The scene's neutral: the median Lab (a, b) of the whole frame, every
+    4k-th pixel (~2,000 at 480x270; the obstacle ROI's own without a frame). The floor, the
+    tape and most of a room have no color of their own, so their median is
+    the light's cast; an object close enough to fill the lane ROI (a can at
+    the view bottom, 2026-10-12) became the reference there and hid itself.
+    """
+    ref, s = (roi.color_frame, 4 * k) if roi.color_frame is not None else (roi.obstacle_color_roi, k)
+    lab = cv2.cvtColor(np.ascontiguousarray(ref[::s, ::s]), cv2.COLOR_BGR2Lab)
+    return (_percentile(np.ascontiguousarray(lab[..., 1]), 50.0),
+            _percentile(np.ascontiguousarray(lab[..., 2]), 50.0))
+
+def _colored(roi: ROICropResult, color: np.ndarray, k: int, cfg: ObstacleConfig) -> np.ndarray:
+    """uint8 0 / 255: |a - a_ref| + |b - b_ref| >= min_chroma, with max(B, G, R) >= min_value."""
+    a_f, b_f = _floor_ab(roi, k)
+    bgr = np.ascontiguousarray(color[::k, ::k])
+    _, a, b = cv2.split(cv2.cvtColor(bgr, cv2.COLOR_BGR2Lab))
+    chroma = cv2.add(cv2.absdiff(a, np.full_like(a, int(round(a_f)))),
+                     cv2.absdiff(b, np.full_like(b, int(round(b_f)))))
+    _, far = cv2.threshold(chroma, float(np.ceil(cfg.min_chroma)) - 1.0, 255, cv2.THRESH_BINARY)
+    # Lit by the brightest channel, as HSV's V, not by Lab's L: a dark blue
+    # can is bright in blue alone, and its L fell under the gate
+    ch = cv2.split(bgr)
+    _, lit = cv2.threshold(cv2.max(cv2.max(ch[0], ch[1]), ch[2]), float(cfg.min_value) - 1.0, 255,
+                           cv2.THRESH_BINARY)
+    return cv2.bitwise_and(far, lit)
+
 def _masks(roi: ROICropResult, cfg: ObstacleConfig) -> tuple[float, np.ndarray, np.ndarray]:
     """
     (floor level, not-floor mask, mask after the opening), at 1 / step
@@ -151,12 +191,10 @@ def _masks(roi: ROICropResult, cfg: ObstacleConfig) -> tuple[float, np.ndarray, 
     k = max(1, int(cfg.step))
     gray = np.ascontiguousarray(gray[::k, ::k])
     floor = _percentile(np.ascontiguousarray(roi.lane_roi[::k, ::k]), cfg.floor_percentile)
-    hsv = cv2.cvtColor(np.ascontiguousarray(color[::k, ::k]), cv2.COLOR_BGR2HSV)
     # Whole-array OpenCV calls rather than numpy boolean algebra: this runs
     # every frame on the Pi. A pixel is bright at gray >= floor + min_contrast
     _, bright = cv2.threshold(gray, float(np.ceil(floor + cfg.min_contrast)) - 1.0, 255, cv2.THRESH_BINARY)
-    colored = cv2.inRange(hsv, (0, cfg.min_saturation, cfg.min_value), (255, 255, 255))
-    mask = cv2.bitwise_or(bright, colored)
+    mask = cv2.bitwise_or(bright, _colored(roi, color, k, cfg))
     side = int(round(cfg.open_px / k))
     side += 1 - side % 2                    # odd, so the square is centered on its pixel and the opening doesn't shift edges
     opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _kernel(side)) if side > 1 else mask

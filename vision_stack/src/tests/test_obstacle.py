@@ -111,6 +111,26 @@ def test_a_box_off_the_robots_path_is_not_its_obstacle():
 
 
 @pytest.mark.software
+def test_a_warm_light_over_everything_is_not_an_obstacle_but_a_can_under_it_is():
+    """
+    Under the warm light by the windows (2026-10-12) the whole floor read
+    saturated. The color test is against the frame's own neutral, so a cast
+    over everything moves the reference with it.
+    """
+    warm = lambda f: cv2.add(f, np.full(f.shape, (0, 25, 70), np.uint8))       # BGR: toward orange
+    assert not both(warm(scene()))[0].detected
+    r, _, _ = both(warm(with_obstacle(scene(), 200, 280, 150, 250, (140, 50, 20))))
+    assert r.detected
+
+
+@pytest.mark.software
+def test_a_dark_blue_can_filling_the_lane_roi_is_found_by_its_color():
+    """Dark, so not bright; its brightest channel (blue) clears min_value though its luminance doesn't."""
+    r, d, _ = both(with_obstacle(scene(), 20, 460, 120, FRAME_H, (110, 35, 15)))
+    assert r.detected and r.clipped
+
+
+@pytest.mark.software
 def test_a_box_filling_the_path_is_still_found():
     """The floor level comes from the lane ROI, wider than the path: floor stays beside the box."""
     frame = with_obstacle(scene(), 120, 360, 100, FRAME_H, WHITE_BOX)
@@ -181,8 +201,8 @@ def test_each_config_field_moves_the_answer():
     """Without this, parity under ALT_CONFIG couldn't catch a twin ignoring a field."""
     base = both(SCENES["obstacle_near"])[0]
     moved = {
-        "min_contrast": (replace(CFG, min_contrast=200.0, min_saturation=255), SCENES["obstacle_near"]),
-        "min_saturation": (replace(CFG, min_saturation=255), SCENES["obstacle_near"]),
+        "min_contrast": (replace(CFG, min_contrast=200.0, min_chroma=500.0), SCENES["obstacle_near"]),
+        "min_chroma": (replace(CFG, min_chroma=500.0), SCENES["obstacle_near"]),
         "min_value": (replace(CFG, min_value=255, min_contrast=250.0), SCENES["obstacle_near"]),
         "open_px": (replace(CFG, open_px=101), SCENES["obstacle_near"]),
         "min_area_px": (replace(CFG, min_area_px=9000), SCENES["obstacle_near"]),

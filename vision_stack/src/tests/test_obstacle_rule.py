@@ -193,3 +193,5 @@ def test_a_slow_frame_is_named_with_its_slowest_stage():
     assert nl.slow_frame(res(45.0, {"geometry": 20.0})) == ""
     assert nl.slow_frame(res(1500.0, {"geometry": 20.0, "obstacle": 1470.0})) == \
         "slow frame 1503 ms: obstacle 1470 ms"
+    assert nl.slow_frame(res(900.0, {"geometry": 870.0}), gc_ms=845.3, gc_gen=2) == \
+        "slow frame 903 ms: geometry 870 ms, gc gen2 845 ms"

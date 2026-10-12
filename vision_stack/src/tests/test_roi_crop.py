@@ -79,7 +79,8 @@ def assert_roi_contract(res, pre):
              ("sign", res.sign_rect, res.sign_roi, pre.gray),
              ("traffic", res.traffic_rect, res.traffic_roi, pre.color),
              ("obstacle", res.obstacle_rect, res.obstacle_roi, pre.gray),
-             ("obstacle color", res.obstacle_rect, res.obstacle_color_roi, pre.color))
+             ("obstacle color", res.obstacle_rect, res.obstacle_color_roi, pre.color),
+             ("color frame", (0, 0, w_src, h_src), res.color_frame, pre.color))
     for name, (x, y, w, h), roi, src in parts:
         assert x >= 0 and y >= 0 and w >= 1 and h >= 1, f"{name}: degenerate rect"
         assert x + w <= w_src and y + h <= h_src, f"{name}: rect leaves the frame"
