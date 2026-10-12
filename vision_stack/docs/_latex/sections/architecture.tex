@@ -14,15 +14,16 @@ a track on its own. For the case of Navilott, this means a robot that can
 navigate a street-style course on its own --- following a lane, stopping at
 stop signs and obeying traffic lights.
 
+\paragraph{A robot's architecture.}
 In robotics, this is often called "autonomous navigation", a part of
 "autonomous control," where the robot controls itself to perform a task, such
 as following a line or avoiding obstacles~\citep{douglas2020autonav1}. A robot
 can have many different methods to measure and sense its environment ---
-camera, sonar, ultrasonic, IR, etc. Subprocesses in the robots software can use
-these measurements to form a map of the environment. The robot's estimation
+camera, sonar, ultrasonic, IR, etc. Subprocesses in the robot's software can
+use these measurements to form a map of the environment. The robot's estimation
 system can use the map to calculate the robot's position and orientation in the
 world. The robot's navigation system can then use these estimates to determine
-the robot's decision about what to do next. The robots control system can then
+the robot's decision about what to do next. The robot's control system can then
 actuate motors in response to these decisions. Actuation is performed in two
 layers: the control loop which sends PWM signals, and the driver which switches
 battery voltages based on the PWM signals that actuate the motors via current.
@@ -60,6 +61,7 @@ actuation. To achieve this, three options were considered:
           and generates the PWM signals.
 \end{itemize}
 
+\paragraph{Why not MCU-only?}
 The Raspberry Pi was a necessary addition because of our robot's camera-centric
 design. Intense computer vision needs a lot of RAM to run efficiently, ISP and
 CSI-2 interface to capture video quickly and bypass CPU overhead, and OpenCV
@@ -67,6 +69,7 @@ library to perform the intense image processing we would require. For instance,
 to process a frame that is $480\times270$ in color pixels would require 389 KB
 of RAM --- more than what is found in most microcontrollers.
 
+\paragraph{How a Pi + MCU would affect architecture.}
 Integrating an MCU into our design would require a new protocol to transfer the
 data between the Pi and the MCU, synchronization of clocks between the two
 devices (the Pi captures and stamps frames based on its clock while encoders
@@ -74,6 +77,7 @@ from the motors would work on the MCU's clock), and managing two separate
 codebases. These different challenges, while making the architecture more true
 to a real-world robot, would also make it more difficult to maintain.
 
+\paragraph{Decision: Pi-only.}
 As such, a single-board design was chosen (The Raspberry Pi Zero 2 W) --- which
 sacrifices speed of a dedicated motor control loop for the simplicity and
 testability of the Pi, as well as accepting the overhead from the Linux
@@ -115,6 +119,7 @@ hardware components:
     \end{tabularx}
 \end{table}
 
+\paragraph{Camera.}
 Originally, we were using a Raspberry Pi Cam V2 module as our camera, which
 featured an IMX219 sensor. However, its field of view is cropped by the mode
 selection of the Pi. This added a heavy blindspot of 22 cm to the robot's
@@ -127,6 +132,7 @@ view and reduced our blindspot down to 10 cm, but at the cost of the lens
 producing a distortion effect which would require software to correct
 (Section~\ref{sec:capture}).
 
+\paragraph{Battery monitoring.}
 Intrinsically, the Pi does not have an analog input and thus does not have a
 way to capture any voltage running through it --- it requires some external
 component to monitor it --- the batteries feature no Battery Management System
@@ -135,20 +141,29 @@ Section~\ref{sec:problem}, we are to warn the system after falling beneath
 $10.5\,\text{V}$ and stop navigation after the robot falls under
 $9.9\,\text{V}$.
 
+\paragraph{IMU.}
 Our robot will need a way to measure and verify its angular turns during
 intersection logic and lane keeping. The Pi has no internal gyroscope that can
 measure its angular velocity, nor its acceleration. The MPU6050 fills this gap,
 supplying the Estimation system with additional information about the robot's
 yaw. Details can be found in Section~\ref{sec:estimation}.
 
+\paragraph{Actuation.}
 The robot will need some way to actually move around the course as well as a
-way to accurately control how current is sent to the motors. The Pi's GPIO pins
-can only supply a few milliamps for other peripherals connected to it. However,
-these pins cannot supply a current large enough to move the motors, lest the Pi
-becomes damaged. In this, the TB6612FNG motor driver switches battery power to
-the N20 motors via an H-Bridge. Details can be found in
+way to accurately control how current is sent to the motors. The Pi's power
+pins can only supply a few milliamps for other peripherals connected to it.
+However, these pins cannot supply a current large enough to move the motors,
+lest the Pi becomes damaged. In this, the TB6612FNG motor driver switches
+battery power to the N20 motors via an H-Bridge. Details can be found in
 Section~\ref{sec:software_architecture}.
 
+\paragraph{Encoder.}
+To measure the robot's speed, we need a way to measure the speed of the wheels.
+The Pi has no internal encoder that can measure the speed of the wheels. The
+Encoders are used to measure the speed of the wheels. Details can be found in
+Section~\ref{sec:estimation}.
+
+\paragraph{Interface.}
 Finally, a way to communicate with the user about the robots state, time
 limits, and a way to physically start the robot are required
 (Section~\ref{sec:problem}). In this, the TM1637 7-segment display and a small
@@ -158,12 +173,14 @@ while the button doesn't allow for the motor to actually process software
 commands until it is pressed. Details can be found in
 Section~\ref{sec:software_architecture}.
 
+\paragraph{Power.}
 To power on all of these different peripherals, the robot uses 3S 18650 battery
 cells, 12.6 V full, 11.1 V nominal, 9.0 V empty. The buck converter is used to
-normalize and distribute 5V power rails --- it is used to power the pi while
+normalize and distribute 5V power rails --- it is used to power the Pi while
 the batteries are directly routed to the motor driver. The Pi powers the
 remaining components via its 3.3V pin.
 
+\paragraph{PCB.}
 The PRD requires the integration of the main SBC and its hardware components to
 be mounted via a printed circuit board (PCB). All of the hardware components
 (except the camera) are routed through the PCB, with the chassis serving as
@@ -196,15 +213,18 @@ our problem:
           expected.
 \end{itemize}
 
+\paragraph{GStreamer.}
 For interfacing with the camera, Python had access to the GStreamer library, an
-open-source mutlimedia framework written in C. It works on multiple threads,
+open-source multimedia framework written in C. It works on multiple threads,
 chaining together elements --- data flows from a source element, through
 various filter/transform elements, and finally ends at a sink element.
 
+\paragraph{OpenCV.}
 For computer vision, Python has access to the OpenCV library, an open-source
 computer vision library written in C++. It contains a wide range of algorithms
 for image processing, object recognition, and more.
 
+\paragraph{Global interpreter lock.}
 However, accepting Python as our language was not without its tradeoffs. Python
 runs in an interpreter, and because its types are only checked at runtime, each
 operation costs far more than the equivalent in C. Python also has a Global
@@ -213,6 +233,7 @@ code. It prevents multiple threads of Python bytecode to run in parallel across
 different cores --- only a single thread can run Python bytecode at a time, on
 whichever core Linux gives it.
 
+\paragraph{Python as an acceptable tradeoff.}
 Although Python's cost per operation is higher than C's, Python's overhead is
 acceptable because the per-pixel work never runs in Python --- it is handled by
 C/C++ code.
@@ -225,8 +246,8 @@ The codebase splits up its processes across 5 different kinds of threads:
           loop of the program. It handles the 4-phase pipeline and the
           communication between the main loop and the other threads.
     \item \textbf{SensorHub}: This thread is responsible for reading from
-          the IMU and the encoders every 10 ms, loading into a buffer until
-          its drained. It remains asleep for most of the robot's life.
+          the IMU and the encoders every 10\,ms, loading into a buffer until
+          it's drained. It remains asleep for most of the robot's life.
     \item \textbf{Motor Watchdog}: This thread is responsible for braking
           the motors if it does not receive a command from the main pipeline
           for 0.5 seconds. But if Linux kills the Python process, the watchdog
@@ -238,8 +259,9 @@ The codebase splits up its processes across 5 different kinds of threads:
           camera's video stream.
 \end{itemize}
 
+\paragraph{Pigpio.}
 The pigpio daemon is its own process that runs in the background of the Pi. It
-is initialized during the systems startup and remains running while it is on.
+is initialized during the system's startup and remains running while it is on.
 It timestamps the encoder edges and owns the pins controlling the motors,
 keeping their PWM signals online --- even if the main loop stalls.
 
@@ -253,17 +275,23 @@ keeping their PWM signals online --- even if the main loop stalls.
     \label{fig:pi-load}
 \end{figure}
 
-When the main process is started, it holds the GIL. Once Python's OpenCV
-section is started, the main loop releases control of the GIL to another thread
-like the SensorHub, Motor Watchdog, and Pigpio Callbacks. Another thread can
-request the GIL after a thread uses it for 5 ms (SensorHub can slip while the
-main loop performs a heavy calculation, for example). Navilott gets around the
-timers --- specifically for the IMU. The I2C bus runs at 400 kHz, which
-shortens each IMU read and so the time the sensor-hub thread spends holding and
-retaking the GIL. Furthermore, it timestamps at every interval, so once a late
-read would arrive, it doesn't turn into a heading error once it is drained by
-the main thread.
+\paragraph{How the GIL splits work with OpenCV.}
+When the program starts, the main loop holds the GIL. Whenever it calls into
+OpenCV it releases the lock, and a waiting thread --- the sensor hub, the motor
+watchdog or the pigpio callbacks --- can take it. While the main loop runs
+Python code instead, a waiting thread must wait: only after 5\,ms does Python
+ask the holder to release the lock, unless the thread lets it go.
 
+\paragraph{How the sensor hub works with the GIL.}
+For the sensor hub, which reads the IMU every 10\,ms, a wait of up to 5\,ms is
+a large share of its period. Two changes shorten how long each reading needs
+the lock. Each reading fetches the IMU's 14-byte sample block in a single
+I\textsuperscript{2}C transfer and then releases the GIL once it's done. The
+I\textsuperscript{2}C bus runs at 400\,kHz so each transfer finishes sooner.
+Every reading is also timestamped when it is taken, so a late read is recorded
+at its true time and does not become a heading error.
+
+\paragraph{Where does GStreamer fit?}
 The GStreamer pipeline runs a C thread and is separate from the GIL, allowing
 it to perform its own tasks without interrupting the main loop. However, it
 spends a lot of its time waiting for the next frame.
@@ -281,6 +309,60 @@ spends a lot of its time waiting for the next frame.
 %   frame sources; estimation imports no hardware; diagnostics in a
 %   separate process.
 % Evidence: docs/guides/make.md; git log for when each .mk was added
+
+The tooling of the Pi was actually an afterthought when it came to developing
+the software --- how to reproduce the same environment across multiple Pis and
+how to manage daily friction. As problems arose, we designed tooling to address
+them.
+
+\paragraph{Consistency and reproducibility.}
+During the early stages of development, many of the components were wired up on
+a breadboard. We had a few issues with power management which caused some
+components to pull more current than expected, damaging them --- the Pi being
+one of them. Instead of manually reinstalling each dependency, possibly missing
+some dependencies in the environment, we decided to use a Makefile script to
+install them --- which would exclude the ones that we would not keep in the
+final design. This was a direct countermeasure to avoid cluttering the Pi with
+failed and dropped packages and to make the Pi more reproducible. This was the
+purpose of our first tool, the \texttt{setup.mk} file.
+
+\paragraph{Daily friction.}
+However, additional initialization was needed on every boot: the clock on the
+Pi always started unsynchronized and was a major source of frustration ---
+preventing updates to the system and causing naming conflicts. The school's
+network would block the Pi's connection to the NTP server and since the Pi has
+no battery-backed clock, it could not keep time while the Pi was powered off.
+Furthermore, the Pi utilized a virtual environment to run the robot's Python
+code. On every boot, we had to set the clock by hand, activate the environment,
+and launch pigpio. To make the process easier, we implemented a script which
+did all three. This was our second tool, the \texttt{session.mk} file.
+
+\paragraph{Python virtual environment.}
+The virtual environment we used was set up to mitigate OS conflicts between
+installed libraries and packages:
+
+\begin{itemize}
+    \item Many of our drivers --- Adafruit and TM1637 libraries --- come from pip. We
+          often ran into issues in the terminal installing them because the OS would
+          refuse their installation to protect its Python environment.
+    \item The robot packages could conflict with some of the OS packages.
+    \item A broken package could be easily removed and reinstalled.
+    \item We also needed to expose the virtual environment to packages installed with
+          \texttt{apt} --- such as Picamera2 --- which binds to the system's libcamera.
+\end{itemize}
+
+The virtual environment sees the foundation of the camera stack and holds the
+robot's own pip packages.
+
+\paragraph{Making an installable package.}
+With the virtual environment initialized, the code needed to be set up as an
+installable package. A lack of organization across the codebase made it
+difficult to run and test after each iterative change. Python projects often
+describe themselves in a \texttt{pyproject.toml} file, which describes the
+project's metadata and dependencies. After calling \texttt{pip install -e .},
+the project is now an installable package --- it installs the package as a link
+to the source folder so any changes are reflected and don't need to be
+reinstalled. \texttt{setup.mk} runs this command automatically.
 
 \subsection{Software Architecture}\label{sec:software_architecture}
 % --- Software Architecture ---
