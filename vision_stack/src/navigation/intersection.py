@@ -81,7 +81,7 @@ MAX_DT_MS = 500
 # (STOP_DELAY_MS = 0), so a turn from there would cut the corner short
 # (2026-10-07). Straight crossings don't advance: they drive on to the exit.
 # Counts only while not held, like the turn's time. Tune on the mat
-ADVANCE_MS = 1000
+ADVANCE_MS = 0
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as

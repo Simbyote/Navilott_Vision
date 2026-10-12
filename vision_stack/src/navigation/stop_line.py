@@ -38,7 +38,7 @@ IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
 # under it and out of view; braking as the line leaves the view keeps the
 # light in frame. Turns no longer start here either: the intersection rule
 # advances ADVANCE_MS first. It's a time, so it moves with speed (the battery)
-STOP_DELAY_MS = 0
+STOP_DELAY_MS = 500
 # A line last seen within this many lane-ROI rows of the bottom left by
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts
 # 22.6 rows at ~11.9 cm, 2 cm past the view bottom (~10 cm)
