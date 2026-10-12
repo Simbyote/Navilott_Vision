@@ -209,6 +209,7 @@ def test_the_pipeline_is_the_robots_with_a_silent_fakesink():
     pipe = ca.anatomy_pipeline({"exposure-value": -1})
     assert pipe.startswith("libcamerasrc ") and "exposure-value=-1" in pipe
     assert pipe.endswith(" ! videoflip method=rotate-180 ! video/x-raw,format=BGR ! fakesink sync=false silent=true")
+    assert ca.anatomy_pipeline(num_buffers=60).endswith("fakesink sync=false silent=true num-buffers=60")
     assert "appsink" not in pipe
 
 
@@ -269,7 +270,8 @@ def test_record_runs_every_probe_and_the_pipeline_with_the_tracer_and_logs_on(tm
     res = ca.record(out, 7.0, {"exposure-value": -1}, run=pi.run, launch=pi.launch,
                     media_glob=media_devs(tmp_path), meminfo=meminfo(tmp_path))
     argv, env, dur = pi.launched
-    assert argv[:3] == ["gst-launch-1.0", "-v", "-e"] and argv[3:] == shlex.split(res["pipeline"]) and dur == 7.0
+    assert argv[:3] == ["gst-launch-1.0", "-v", "-e"] and argv[3:] == shlex.split(res["pipeline"])
+    assert dur == 7.0 + ca.STARTUP_S and argv[-1] == f"num-buffers={7 * FPS}"
     assert all(" " not in a for a in argv[3:]), "a space inside one argument: gst-launch reads it as a syntax error"
     assert "exposure-value=-1" in argv[3:]
     assert env["GST_TRACERS"] == ca.GST_TRACERS and env["GST_DEBUG"] == "GST_TRACER:7"
@@ -349,7 +351,12 @@ def test_element_times_without_a_pipeline_time_still_mean_frames_flowed():
     res["caps"] = []
     assert ca.findings(res)[0].startswith("no frame reached the sink and gst-launch reported no error")
     res.update(duration_s=3.0, gst_playing=True)
-    assert ca.findings(res)[0].startswith("gst-launch reached PLAYING but the camera never negotiated its caps in 3 s")
+    assert ca.findings(res)[0].startswith(f"gst-launch reached PLAYING but the camera never negotiated its caps in "
+                                          f"{3 + ca.STARTUP_S:.0f} s")
+    res.update(gst_eos=True, caps=[{"element": "libcamerasrc0"}])
+    assert ca.frames_flowed(res) and ca.findings(res)[0].startswith("frames reached the sink (gst-launch ended on its own")
+    res["gst_errors"] = ["ERROR: x"]
+    assert not ca.frames_flowed(res)
 
 
 @pytest.mark.software
@@ -403,7 +410,7 @@ def test_run_tool_and_launch_for_report_a_missing_tool_and_capture_output():
     assert ca.run_tool(["sleep", "5"], timeout=0.1) == (None, "timed out after 0 s")
     assert ca.launch_for(["no-such-tool-xyz"], {}, 0.1)[0] is None
     code, out = ca.launch_for(["sh", "-c", "echo up; exec sleep 5"], {"PATH": "/usr/bin:/bin"}, 0.3)
-    assert out == "up\n" and code != 0                                              # Ctrl-C'd
+    assert out.startswith("up\n") and ca.INTERRUPTED in out and code != 0           # Ctrl-C'd, and says so
     assert ca.launch_for(["sh", "-c", "echo done"], {"PATH": "/usr/bin:/bin"}, 5.0) == (0, "done\n")
 
 
@@ -439,3 +446,12 @@ def test_capture_anatomy_on_the_pi(artifacts):
     # Frames through the pipeline is the pass; a missing source-to-sink time
     # (libcamerasrc not flagged as a source) is a finding, not a failure
     assert ca.frames_flowed(res) and not res["gst_errors"], res["findings"]
+
+
+@pytest.mark.software
+def test_launch_for_marks_a_run_it_had_to_stop_and_not_one_that_ended(tmp_path):
+    import sys
+    code, text = ca.launch_for([sys.executable, "-c", "print('done')"], {}, 5.0)
+    assert code == 0 and "done" in text and ca.INTERRUPTED not in text
+    code, text = ca.launch_for([sys.executable, "-c", "import time; print('up', flush=True); time.sleep(30)"], {}, 0.5)
+    assert "up" in text and f"{ca.INTERRUPTED} Ctrl-C" in text
