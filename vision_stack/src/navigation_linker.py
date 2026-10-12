@@ -79,7 +79,7 @@ REASON_CONTRACT = "contract"        # the linker braked: the navigator's command
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
-              "stop_sign", "stop_line_cm", "reason", "source", "steer",
+              "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
               "imu_reads", "imu_read_ms", "imu_failed",
               "battery_v", "battery_state", "event")
@@ -87,8 +87,8 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
-navigation (stop sign, red light, intersection and end-of-course rules over
-lane keeping) -> motors. The video is rendered after the run, so recording
+navigation (obstacle, stop sign, red light, intersection and end-of-course
+rules over lane keeping) -> motors. The video is rendered after the run, so recording
 never slows the steering.
 
 SAFETY: with --camera the robot moves. Ctrl-C stops the motors. A run ends
@@ -117,6 +117,13 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
 # =============================================================================
 # Findings
 # =============================================================================
+
+def obstacle_cm(pkt) -> float | str | None:
+    """nav.csv's obstacle_cm: the voted obstacle's cm, "view bottom" when clipped, None when there's none (or no cm)."""
+    if not pkt.obstacle_detected:
+        return None
+    return "view bottom" if pkt.obstacle_clipped else pkt.obstacle_distance_cm
+
 
 class NavStats:
     """Per-frame navigation outcomes, summarized for summary.txt and report.json."""
@@ -330,6 +337,7 @@ def run(
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
                  "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
+                 "obstacle_cm": obstacle_cm(pkt),
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,

@@ -92,7 +92,7 @@ run: $(HW) ## the course: route, St N, button, countdown, time on the display; n
 	$(PY) -m src.main --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
 
 ##@ Linkers: the chain up to one point, recorded (phase2_linker.md ... intersection_linker.md)
-phase2: ## Phases 1-2 live with video (VIDEO= / FRAMES= to replay, VIEWS=lanegeo,stop,traffic,stopline)
+phase2: ## Phases 1-2 live with video (VIDEO= / FRAMES= to replay, VIEWS=lanegeo,stop,traffic,stopline,obstacle)
 	$(PY) -m src.phase2_linker $(SOURCE) $(if $(strip $(VIEWS)),--views $(strip $(VIEWS))) $(ARGS)
 
 phase3: $(HW) ## Phases 1-3 with the IMU and encoders: is the packet right across frames?

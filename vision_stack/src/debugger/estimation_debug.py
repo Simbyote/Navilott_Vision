@@ -15,17 +15,17 @@ Main package:
     TracedPhase3Processor.process(phase2, sensors) -> (packet, debug)
         debug holds Phase3Processor's fields (frame_id, timestamp_ms, dt,
         log), one record per stage (lane, heading, traffic, stop_sign,
-        stop_line; see each Traced* class) and timings_ms per stage.
+        stop_line, obstacle; see each Traced* class) and timings_ms per stage.
 
 Flow:
-    dt -> lane -> heading -> traffic -> stop sign -> stop line -> packet,
+    dt -> lane -> heading -> traffic -> stop sign -> stop line -> obstacle -> packet,
     as Phase3Processor.process(), with a lap after each.
 """
 import time
 
 from src.estimation.estimation import (
     LANE_VISION, USABLE_LANE_MODES, EstimationPacket, HeadingTracker, LaneFilter, lane_mode_of,
-    Phase3Config, Phase3Processor, SensorSample, StopLineClassifier,
+    ObstacleClassifier, Phase3Config, Phase3Processor, SensorSample, StopLineClassifier,
     StopSignClassifier, TrafficClassifier,
 )
 from src.params import STOP_SIGN, TRAFFIC_LIGHT
@@ -170,13 +170,41 @@ class TracedStopLineClassifier(StopLineClassifier):
         return flag, px, cm
 
 
+class TracedObstacleClassifier(ObstacleClassifier):
+    """
+    ObstacleClassifier that records seen vs held.
+
+    record: raw_vote, buffer, window, state as the other votes; seen (a
+        result this frame was detected), measured_px / measured_cm (this
+        frame's, None when not seen), held (the vote stands on an earlier
+        frame's measurement), reported_px / reported_cm / clipped (what the
+        packet carries).
+    """
+    record: dict | None = None         # set by every update()
+
+    def update(self, results, log):
+        seen = next((r for r in results if r.detected), None)
+        flag, px, cm, clipped = super().update(results, log)
+        self.record = {
+            **_vote_record(self._vote),
+            "seen": seen is not None,
+            "measured_px": None if seen is None else seen.distance_px,
+            "measured_cm": None if seen is None else seen.distance_cm,
+            "held": flag and seen is None,
+            "reported_px": px,
+            "reported_cm": cm,
+            "clipped": clipped,
+        }
+        return flag, px, cm, clipped
+
+
 class TracedPhase3Processor(Phase3Processor):
     """
     Phase3Processor with the traced stages and per-stage timing. Create once;
     call process() on every frame in order.
     """
     STAGES = ("p3_dt", "p3_lane", "p3_heading", "p3_traffic", "p3_stop_sign",
-              "p3_stop_line", "p3_package")
+              "p3_stop_line", "p3_obstacle", "p3_package")
 
     def __init__(self, config: Phase3Config | None = None) -> None:
         super().__init__(config)
@@ -185,6 +213,7 @@ class TracedPhase3Processor(Phase3Processor):
         self.traffic = TracedTrafficClassifier(self._cfg)
         self.stop_sign = TracedStopSignClassifier(self._cfg)
         self.stop_line = TracedStopLineClassifier(self._cfg)
+        self.obstacle = TracedObstacleClassifier(self._cfg)
 
     def process(
             self,
@@ -201,7 +230,7 @@ class TracedPhase3Processor(Phase3Processor):
         Outputs:
             (packet, debug). packet is what Phase3Processor would return.
             debug holds its frame_id, timestamp_ms, dt and log, plus lane,
-            heading, traffic, stop_sign and stop_line (each stage's record)
+            heading, traffic, stop_sign, stop_line and obstacle (each stage's record)
             and timings_ms (wall ms per STAGES name).
 
         Raises:
@@ -230,6 +259,8 @@ class TracedPhase3Processor(Phase3Processor):
         lap("p3_stop_sign")
         stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
         lap("p3_stop_line")
+        obstacle, obstacle_px, obstacle_cm, obstacle_clipped = self.obstacle.update(phase2.obstacle_results, log)
+        lap("p3_obstacle")
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -248,6 +279,10 @@ class TracedPhase3Processor(Phase3Processor):
             left_wheel_cps = sensors.left_wheel_cps or 0.0,
             right_wheel_cps = sensors.right_wheel_cps or 0.0,
             lane_mode = lane_mode_of(phase2),
+            obstacle_detected = obstacle,
+            obstacle_distance_px = obstacle_px,
+            obstacle_distance_cm = obstacle_cm,
+            obstacle_clipped = obstacle_clipped,
         )
         lap("p3_package")
         return packet, {
@@ -260,5 +295,6 @@ class TracedPhase3Processor(Phase3Processor):
             "traffic": self.traffic.record,
             "stop_sign": self.stop_sign.record,
             "stop_line": self.stop_line.record,
+            "obstacle": self.obstacle.record,
             "timings_ms": timings,
         }

@@ -12,7 +12,8 @@ import pytest
 import src.navigation.navigation as navigation
 import src.navigation.navigation_contract as contract
 from src.navigation.navigation import (
-    RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, Navigation,
+    RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_OBSTACLE, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
+    Navigation,
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
@@ -59,8 +60,8 @@ def run(nav, case):
 
 @pytest.mark.software
 def test_the_rules_in_priority_order():
-    assert [name for name, _ in Navigation().rules] == [RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION,
-                                                        RULE_END_OF_COURSE]
+    assert [name for name, _ in Navigation().rules] == [RULE_OBSTACLE, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
+                                                        RULE_INTERSECTION, RULE_END_OF_COURSE]
 
 
 @pytest.mark.software

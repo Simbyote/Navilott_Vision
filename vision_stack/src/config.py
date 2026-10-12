@@ -12,9 +12,9 @@ Purpose:
     reads it; PipelineConfig only bundles them.
 
 Main package:
-    PipelineConfig: preprocess, ROI, geometry, color, lane-offset and
-        stop-line distance tuning, and the ground homography (frame px ->
-        floor cm) the cm outputs project through.
+    PipelineConfig: preprocess, ROI, geometry, color, lane-offset,
+        stop-line distance and obstacle tuning, and the ground homography
+        (frame px -> floor cm) the cm outputs project through.
         Its defaults are each stage's own defaults: no undistortion, color
         branch off.
     MEASURED: the robot's Phase 2 tuning. Undistorts with the lens
@@ -46,6 +46,7 @@ from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, loa
 from src.perception.geometry import GeometryConfig, StopLineFilter
 from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
+from src.perception.obstacle import ObstacleConfig
 from src.perception.preprocess import PreprocessParams
 from src.perception.roi_crop import ROIConfig
 from src.perception.stop_line_distance import StopLineDistanceConfig
@@ -66,8 +67,10 @@ class PipelineConfig:
     lane_offset: LaneOffsetConfig = field(default_factory=LaneOffsetConfig)
     stop_line: StopLineDistanceConfig = field(default_factory=StopLineDistanceConfig)
     ground: GroundHomography | None = None      # frame px -> floor cm; None turns the cm outputs off
-    # Stop-line rows -> cm from tape marks; used for the stop line's cm when ground is None
+    # Stop-line rows -> cm from tape marks; used for the stop line's and the
+    # obstacle's cm when ground is None
     stop_line_table: StopLineTable | None = None
+    obstacle: ObstacleConfig = field(default_factory=ObstacleConfig)
 
 
 # =============================================================================

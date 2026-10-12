@@ -15,7 +15,8 @@ Main package:
 Flow:
     FrameData -> preprocess_frame -> crop_rois -> run_geometry_stage
               -> run_color_stage -> compute_lane_offset
-              -> compute_stop_line_distance -> fuse_detections -> package_phase2
+              -> compute_stop_line_distance -> compute_obstacle
+              -> fuse_detections -> package_phase2
 
 Command line (options from live_view.cli):
     python3 phase2_linker.py --video clip.mp4 --no-display
@@ -35,6 +36,7 @@ from src.perception.lane_offset import compute_lane_offset, LaneOffsetResult
 from src.perception.feature_fusion import fuse_detections, FusionResult
 from src.perception.phase2_out import package_phase2, Phase2Output
 from src.perception.stop_line_distance import compute_stop_line_distance, StopLineResult
+from src.perception.obstacle import compute_obstacle, ObstacleResult
 import src.debugger.live_view as live_view
 from src.config import MEASURED, PipelineConfig      # re-exported: older imports read them from here
 
@@ -56,11 +58,13 @@ class ChainResult:
     fusion: FusionResult | None = None
     fusion_debug: dict = field(default_factory=dict)
     phase2: Phase2Output | None = None      # the Phase 3 handoff
-    timings_ms: dict = field(default_factory=dict)      # wall ms per stage: preprocess, roi, geometry, color, lane_offset, stop_line, fusion, package
+    timings_ms: dict = field(default_factory=dict)      # wall ms per stage: preprocess, roi, geometry, color, lane_offset, stop_line, obstacle, fusion, package
     traffic: list = field(default_factory=list)         # TrafficLightCandidates; [] when the color branch is off
     traffic_debug: dict = field(default_factory=dict)   # masks, counts and trace; just {"enabled": False} when off
     stop_line: StopLineResult | None = None             # nearest stop line; its candidates are in geometry, their debug in lane_debug["stop_line"]
     stop_line_debug: dict = field(default_factory=dict) # compute_stop_line_distance's debug summary
+    obstacle: ObstacleResult | None = None              # nearest obstacle in the robot's path
+    obstacle_debug: dict = field(default_factory=dict)  # compute_obstacle's debug summary: masks, every blob's fate
 
 
 def run_chain(
@@ -117,15 +121,19 @@ def run_chain(
                                                             config.stop_line_table)
     lap("stop_line")
 
+    obstacle, obstacle_debug = compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)
+    lap("obstacle")
+
     fusion, fusion_debug = fuse_detections(geo, traffic, roi)
     lap("fusion")
 
-    phase2 = package_phase2(fusion, offset, stop_line)
+    phase2 = package_phase2(fusion, offset, stop_line, obstacle)
     lap("package")
 
     return ChainResult(fd, pre, roi, geo, offset, lane_debug, offset_debug,
                        sign_debug, fusion, fusion_debug, phase2, timings,
-                       traffic, traffic_debug, stop_line, stop_line_debug)
+                       traffic, traffic_debug, stop_line, stop_line_debug,
+                       obstacle, obstacle_debug)
 
 
 def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,

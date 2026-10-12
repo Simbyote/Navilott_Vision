@@ -44,6 +44,9 @@ StopSignClassifier  confidence gate → 3-frame vote        → stop_sign_detect
 StopLineClassifier  3-frame vote → hold distance          → stop_line_detected, stop_line_distance_px
    │
    ▼
+ObstacleClassifier  3-frame vote → hold measurement       → obstacle_detected, obstacle_distance_px / _cm, obstacle_clipped
+   │
+   ▼
 EstimationPacket    → Navigation
 ```
 
@@ -114,6 +117,10 @@ The traffic light path runs with `calibration/hsv_ranges.json`. Its bands were s
 
 The hold lasts only as long as the vote: with a window of 3, one missed frame keeps the line and its last distance; two in a row drop it. The distance is in lane-ROI px from the bottom of the lane ROI (0 = on the line).
 
+## Obstacle
+
+`ObstacleClassifier` is the stop line's vote again, on Phase 2's `obstacle_results`: the same `vote_window`, no gate of its own (`perception/obstacle.py`'s gates already decided), and while the vote stands a missed frame repeats the last measurement (px, cm and `clipped`, from one frame; logged as `[OBSTACLE]`). Whenever the vote says there's none, all four packet fields are `False` / `None`.
+
 ---
 
 ## Sensors
@@ -156,6 +163,10 @@ Using the encoder readings (checking that a steering correction actually turned 
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
 | `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts, not converted to distance (the packet has no m/s speed: it needs the counts per wheel revolution and the wheel diameter). 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
+| `obstacle_detected` | `bool` | Voted: something solid in the robot's path |
+| `obstacle_distance_px` | `float \| None` | Rows from the obstacle's base to the view bottom, held through a missed frame; 0 when clipped; `None` unless `obstacle_detected` |
+| `obstacle_distance_cm` | `float \| None` | Floor cm at its base, from the ground homography or the stop-line table (the robot's front edge); with `clipped`, the cm at the view bottom (~10.2): "this near or nearer". `None` with neither |
+| `obstacle_clipped` | `bool` | Its base is at or past the view bottom |
 | `lane_mode` | `str` | Pass-through: this frame's Phase 2 lane offset mode (`two_boundary`, `left_only`, `right_only`, `single_uncalibrated`, `none`), unfiltered; `none` when Phase 2 gave no lane result. Navigation ends an intersection crossing on `two_boundary` |
 
 What Navigation must do with each field, and what it returns, is `navigation_contract.md`.

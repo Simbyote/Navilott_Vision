@@ -16,10 +16,11 @@ import pytest
 from src.estimation.estimation import (
     CAUTION, GO, LANE_HOLD, LANE_STALE, LANE_VISION, STOP,
     HeadingTracker, LaneFilter, Phase3Config, Phase3Processor, SensorSample,
-    StopLineClassifier, StopSignClassifier, TrafficClassifier, with_lane_roi_width,
+    ObstacleClassifier, StopLineClassifier, StopSignClassifier, TrafficClassifier, with_lane_roi_width,
 )
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
+from src.perception.obstacle import ObstacleResult
 from src.perception.phase2_out import Phase2Output
 from src.perception.stop_line_distance import StopLineResult
 
@@ -318,6 +319,66 @@ def test_packet_carries_the_stop_line_vote_and_distances():
     assert [(p.stop_line_detected, p.stop_line_distance_px, p.stop_line_distance_cm) for p in packets] == \
         [(False, None, None), (True, 45.0, 22.5), (True, 45.0, 22.5)]
 
+
+
+# =============================================================================
+# Obstacles
+# =============================================================================
+
+def obstacle(distance, frame_id=FID, ts=TS, cm="half", clipped=False):
+    """
+    This frame's obstacle result: one at distance px, or none when distance is None.
+    cm defaults to half the px value plus 10, so px and cm can be told apart; None means no calibration.
+    """
+    if distance is None:
+        return [ObstacleResult(False, None, None, False, None, 0, 0, frame_id, ts)]
+    cm = distance / 2.0 + 10.0 if cm == "half" else cm
+    return [ObstacleResult(True, distance, cm, clipped, (80, 30, 80, 100), 8000, 1, frame_id, ts)]
+
+
+@pytest.mark.software
+def test_obstacle_needs_a_majority_of_the_window():
+    out = feed(ObstacleClassifier(Phase3Config(vote_window=3)), [obstacle(40.0), obstacle(30.0), obstacle(20.0)])
+    assert out == [(False, None, None, False), (True, 30.0, 25.0, False), (True, 20.0, 20.0, False)]
+
+
+@pytest.mark.software
+def test_obstacle_holds_its_measurement_from_one_frame_through_a_missed_frame():
+    stage, log = ObstacleClassifier(Phase3Config(vote_window=3)), []
+    stage.update(obstacle(30.0), log)
+    stage.update(obstacle(0.0, clipped=True), log)
+    assert stage.update(obstacle(None), log) == (True, 0.0, 10.0, True)
+    assert any(e.startswith("[OBSTACLE]") and "holding 0.0px" in e for e in log)
+
+
+@pytest.mark.software
+def test_obstacle_is_all_none_once_the_vote_drops():
+    out = feed(ObstacleClassifier(Phase3Config(vote_window=3)),
+               [obstacle(10.0), obstacle(5.0, clipped=True), obstacle(None), obstacle(None), []])
+    assert out[1:] == [(True, 5.0, 12.5, True), (True, 5.0, 12.5, True),
+                       (False, None, None, False), (False, None, None, False)]
+
+
+@pytest.mark.software
+def test_obstacle_without_a_calibration_reports_px_and_no_cm():
+    assert feed(ObstacleClassifier(Phase3Config(vote_window=1)), [obstacle(20.0, cm=None)]) == \
+        [(True, 20.0, None, False)]
+
+
+@pytest.mark.software
+def test_packet_carries_the_obstacle_vote_and_measurement():
+    proc = Phase3Processor(Phase3Config(vote_window=3))
+    packets = [proc.process(Phase2Output([], [lane()], FID, TS, obstacle_results=obstacle(d)))[0]
+               for d in (50.0, 40.0, None)]
+    assert [(p.obstacle_detected, p.obstacle_distance_px, p.obstacle_distance_cm, p.obstacle_clipped)
+            for p in packets] == [(False, None, None, False), (True, 40.0, 30.0, False), (True, 40.0, 30.0, False)]
+
+
+@pytest.mark.software
+def test_a_packet_built_without_the_obstacle_fields_has_none():
+    pkt, _ = Phase3Processor().process(p2())
+    assert (pkt.obstacle_detected, pkt.obstacle_distance_px, pkt.obstacle_distance_cm, pkt.obstacle_clipped) == \
+        (False, None, None, False)
 
 
 @pytest.mark.software

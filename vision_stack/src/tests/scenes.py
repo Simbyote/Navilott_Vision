@@ -18,6 +18,7 @@ Purpose:
 Main package:
     synthetic_frame(): lane marks at known lane-ROI x on a plain road.
     scene(): synthetic_frame plus a stop line, a stop sign, lamps and noise.
+    with_obstacle(): a solid box standing in the frame, for the obstacle detector.
     SCENES: named scenes covering every detection type and lane mode.
     SWEEP, sweep_frame(): mark brightness x width x noise across the lane gates.
     drive_sequence(): a stamped frame-and-sensor sequence long enough to move
@@ -45,6 +46,7 @@ from src.params import FRAME_H, FRAME_W
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
 from src.perception.ground import GroundHomography
+from src.perception.obstacle import ObstacleConfig
 from src.perception.stop_line_table import StopLineTable
 from src.perception.roi_crop import LANE, ROIBounds, resolve
 from src.perception.stop_line_distance import StopLineDistanceConfig
@@ -118,6 +120,12 @@ ALT_CONFIG = replace(
     ),
     stop_line = StopLineDistanceConfig(min_confidence = 0.7),
     ground = SYNTHETIC_GROUND,
+    # Nearer reach and higher thresholds: the far box (SCENES "obstacle_far")
+    # is out of reach, while the course's near box is still found. Full
+    # resolution, where the robot samples every second pixel
+    obstacle = ObstacleConfig(floor_percentile = 10.0, floor_cap = 60.0, min_contrast = 70.0,
+                              min_saturation = 100, min_value = 60, open_px = 41, min_area_px = 3000,
+                              min_width_px = 70, min_height_px = 50, max_rows_ahead = 40.0, step = 1),
 )
 
 # Every Phase 3 field moved off MEASURED_ESTIMATION's, chosen so that each one
@@ -258,6 +266,25 @@ def scene(
     return frame
 
 
+# An orange block and a white one: the detector finds the first by color, the second by brightness
+ORANGE_BOX, WHITE_BOX, DARK_BOX = (0, 140, 255), (215, 215, 215), (45, 45, 45)
+
+def with_obstacle(frame: np.ndarray, x_left: int, x_right: int, y_top: int, y_base: int,
+                  bgr=ORANGE_BOX) -> np.ndarray:
+    """
+    frame with a solid box standing in it, on a copy.
+
+    Inputs:
+        x_left, x_right, y_top: The box in frame px.
+        y_base: The frame row just below the box, where it meets the floor;
+            FRAME_H runs it off the bottom of the view. Its rows ahead of the
+            lane ROI bottom are FRAME_H - y_base.
+    """
+    out = frame.copy()
+    cv2.rectangle(out, (x_left, y_top), (x_right - 1, y_base - 1), bgr, -1)
+    return out
+
+
 # BGR. Green is the course lamp's measured hue, 88 (H 86-91 on camera, calibrate_lamps 2026-10-04):
 # a pure (0, 200, 0) green is hue 60, outside the calibrated green band
 RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (233, 250, 0)
@@ -319,6 +346,19 @@ SCENES = {
     # Not a stop line: shorter than any stop line, so no stop-line gate
     # accepts it, yet it passes the lane gates and still moves the offset
     "horizontal_blob": scene(stop_line=(200, 240, 50)),
+    # Obstacles, in frame px. The obstacle ROI is the middle half of the frame
+    # (x 120-360) from row 122 down. Near: base 20 rows above the view
+    # bottom; far: 70 rows; clipped: off the bottom
+    "obstacle_near": with_obstacle(scene(), 200, 280, 150, 250),
+    "obstacle_far": with_obstacle(scene(), 205, 275, 130, 200, WHITE_BOX),
+    "obstacle_clipped": with_obstacle(scene(), 190, 290, 160, 270),
+    "obstacle_at_stop_line": with_obstacle(scene(stop_line=(170, 270, 50)), 210, 290, 140, 236, WHITE_BOX),
+    # Not obstacles: off the robot's path, too dark to tell from the mats,
+    # too narrow, too thin to survive the opening
+    "obstacle_off_path": with_obstacle(scene(), 10, 110, 150, 250),
+    "obstacle_dark": with_obstacle(scene(), 200, 280, 150, 250, DARK_BOX),
+    "obstacle_narrow": with_obstacle(scene(), 230, 280, 130, 250),
+    "obstacle_thin": with_obstacle(scene(), 160, 320, 200, 240),
 }
 
 
@@ -384,6 +424,13 @@ def drive_sequence() -> list[SequenceFrame]:
         ("stop_line_past", scene(), 4, steady),
         ("intersection", scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,), **strong), 6, steady),
         ("noise", scene(sign=True, lights=(GREEN_LAMP,), noise_seed=3, **strong), 4, steady),
+        # Something in the path: far, missed for a frame, near, past the
+        # view bottom, then lifted away
+        ("obstacle_far", with_obstacle(scene(), 205, 275, 130, 200, WHITE_BOX), 3, steady),
+        ("obstacle_missed", scene(), 1, steady),
+        ("obstacle_near", with_obstacle(scene(), 200, 280, 150, 250), 3, steady),
+        ("obstacle_clipped", with_obstacle(scene(), 190, 290, 160, 270), 3, steady),
+        ("obstacle_gone", scene(), 4, steady),
     ]
     out, fid, ts = [], 100, 10_000
     for segment, frame, count, sensors in segments:
@@ -397,7 +444,8 @@ def drive_sequence() -> list[SequenceFrame]:
 
 def course_sequence() -> list[SequenceFrame]:
     """
-    A short course that moves every navigation rule: lane keeping, a stop
+    A short course that moves every navigation rule: lane keeping, a box
+    in the lane (braked for, waited out once it's lifted away), a stop
     line coming down the view with a stop sign and a red light, leaving the
     view near the bottom so the robot reaches it; the crossing to it; the
     stop there (the sign's stop and hold, then the light's wait while it's
@@ -419,6 +467,10 @@ def course_sequence() -> list[SequenceFrame]:
     segments = [
         # (segment, frame, count, sensors)
         ("cruise", scene(), 6, moving),
+        # A box set down in the lane, then lifted away: brake, wait out the
+        # obstacle rule's clear time, drive on
+        ("obstacle", with_obstacle(scene(), 200, 280, 150, 250), 6, moving),
+        ("obstacle_lifted", scene(), 24, stopped),
         ("drift", scene(marks=(170, 310)), 4, moving),
         # The line coming down the view, leaving it near the bottom
         ("line_far", scene(stop_line=(120, 320, 10), sign=True, **red), 3, moving),

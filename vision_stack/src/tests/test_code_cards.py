@@ -294,7 +294,8 @@ def test_an_unknown_module_is_exit_2_and_draws_nothing(project, tmp_path):
 def test_navigation_card_shows_the_rules_in_order_and_the_call_through_the_loop():
     mods = cc.scan(PIPELINE_ROOT)
     nav = next(c for c in mods["src.navigation.navigation"].classes if c.name == "Navigation")
-    assert nav.holds["rules"] == ["StopSignRule", "TrafficLightRule", "IntersectionRule", "EndOfCourseRule"]
+    assert nav.holds["rules"] == ["ObstacleRule", "StopSignRule", "TrafficLightRule", "IntersectionRule",
+                                  "EndOfCourseRule"]
     update = next(m for m in nav.methods if m.name == "update")
     assert "rule.update" in update.calls and "tracker.update" in update.calls
 

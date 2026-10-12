@@ -198,10 +198,11 @@ def chain_record(res) -> dict:
         res: run_phase3_chain()'s result for this frame.
     Outputs:
         frame_id, timestamp_ms, geometry, offset, offset_debug, lane_rect,
-        packet, p3_debug, timings.
+        obstacle, obstacle_rect, packet, p3_debug, timings.
     """
     chain = res.chain
     return {"frame_id": res.packet.frame_id, "timestamp_ms": res.packet.timestamp_ms,
             "geometry": chain.geometry, "offset": chain.offset, "offset_debug": chain.offset_debug,
-            "lane_rect": chain.roi.lane_rect, "packet": res.packet, "p3_debug": res.p3_debug,
+            "lane_rect": chain.roi.lane_rect, "obstacle": chain.obstacle, "obstacle_rect": chain.roi.obstacle_rect,
+            "packet": res.packet, "p3_debug": res.p3_debug,
             "timings": dict(res.timings_ms)}

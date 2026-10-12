@@ -9,6 +9,8 @@ budget and the total, and Ctrl-C still leaves a playable video.
 --software  cli() / run() on a frame directory. No camera.
 """
 
+import csv
+
 import cv2
 import pytest
 
@@ -133,11 +135,38 @@ def test_encoders_flag_writes_the_wheel_columns(frames, tmp_path, fake_encoders,
 
     out = tmp_path / "out"
     assert cli(frames, out, "--encoders", "--no-video") == 0
-    header, *rows = (out / "p3.csv").read_text().splitlines()
-    cols = header.split(",")
-    assert cols[-2:] == ["left_wheel_cps", "right_wheel_cps"]
-    wheels = [[float(v) for v in r.split(",")[-2:]] for r in rows]
+    def wheel_columns(path):
+        with open(path, newline="") as f:
+            rows = list(csv.DictReader(f))
+        return [[r["left_wheel_cps"], r["right_wheel_cps"]] for r in rows]
+
+    assert p3.CSV_COLUMNS.index("right_wheel_cps") == p3.CSV_COLUMNS.index("left_wheel_cps") + 1
+    wheels = [[float(v) for v in r] for r in wheel_columns(out / "p3.csv")]
     assert len(wheels) == len(NAMES) and all(left > right > 0.0 for left, right in wheels)
     without = tmp_path / "without"
     cli(frames, without, "--no-video")
-    assert [r.split(",")[-2:] for r in (without / "p3.csv").read_text().splitlines()[1:]] == [["0.0", "0.0"]] * len(NAMES)
+    assert wheel_columns(without / "p3.csv") == [["0.0", "0.0"]] * len(NAMES)
+
+
+# =============================================================================
+# The obstacle in the text outputs
+# =============================================================================
+
+@pytest.mark.software
+def test_the_obstacle_reaches_the_status_line_the_events_and_p3_csv(tmp_path):
+    proc, events, log = TracedPhase3Processor(), p3.EventTracker(), p3.CsvLog(str(tmp_path / "p3.csv"))
+    names = ("two_boundary", "obstacle_near", "obstacle_near", "obstacle_clipped", "obstacle_clipped")
+    lines, said = [], []
+    for i, name in enumerate(names):
+        res = p3.run_phase3_chain(SCENES[name], i, i * 50, proc, None, SCENE_CONFIG)
+        log.write(res)
+        lines.append(p3.status_line(res))
+        said += events.update(res)
+    log.close()
+    assert lines[0].endswith("obs=--") and "obs=bottom" in lines[-1]
+    assert any("obstacle: F -> T" in s for s in said) and events.counts["obstacle"] == 1
+    with open(tmp_path / "p3.csv", newline="") as f:
+        rows = list(csv.DictReader(f))
+    assert [r["obstacle_detected"] for r in rows] == ["0", "0", "1", "1", "1"]
+    assert rows[1]["p2_obstacle_px"] != "" and rows[0]["p2_obstacle_px"] == ""
+    assert rows[-1]["obstacle_clipped"] == "1" and rows[-1]["obstacle_distance_px"] == "0.0"
