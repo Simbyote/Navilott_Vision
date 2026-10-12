@@ -123,7 +123,7 @@ ALT_CONFIG = replace(
     # Nearer reach and higher thresholds: the far box (SCENES "obstacle_far")
     # is out of reach, while the course's near box is still found. Full
     # resolution, where the robot samples every second pixel
-    obstacle = ObstacleConfig(floor_percentile = 10.0, floor_cap = 60.0, min_contrast = 70.0,
+    obstacle = ObstacleConfig(floor_percentile = 10.0, min_contrast = 70.0,
                               min_saturation = 100, min_value = 60, open_px = 41, min_area_px = 3000,
                               min_width_px = 70, min_height_px = 50, max_rows_ahead = 40.0, step = 1),
 )

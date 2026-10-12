@@ -1,8 +1,8 @@
 """Obstacle detection: is something standing in the robot's path, and how far ahead is its base?
 
 Purpose:
-    The course is dark mats and white tape, and neither has any color. So in
-    the obstacle ROI (roi_crop.OBSTACLE, the middle of the frame from the
+    The course is floor (dark mats to light gray) and white tape, and neither
+    has any color. So in the obstacle ROI (roi_crop.OBSTACLE, the middle of the frame from the
     bottom of the view up past the lane ROI), a pixel that is much brighter
     than the floor, or clearly colored, is "not floor". Tape is bright too,
     but thin: a morphological opening with a square wider than any tape
@@ -26,9 +26,10 @@ Purpose:
     obstacle is tens of pixels across, so nothing it needs is lost; every
     size and row in the config and the result stays in full-resolution px.
 
-    What it can't see: an object no brighter than the mats and with no
-    color (black or dark gray), and an object wholly outside the middle of
-    the frame. What it may mistake for one: a bright or colored patch on
+    What it can't see: an object no brighter than the floor and with no
+    color (black or gray), an object wholly outside the middle of the
+    frame, and, by brightness, a light one so wide it covers the whole lane
+    ROI (it becomes the floor level; by color it is still seen). What it may mistake for one: a bright or colored patch on
     the floor at least open_px across (glare, a light-colored floor past the
     mat's edge, a stop sign low in the corridor). The gates are a first
     guess; tune them on the course with the obstacle view
@@ -45,8 +46,8 @@ Main package:
 
 Flow:
     1. Take every step-th pixel of the ROI, gray and color.
-    2. Floor level: a low percentile of the gray (from its histogram),
-       capped at floor_cap so an object filling the view can't become "the floor".
+    2. Floor level: a low percentile of the lane ROI's gray (from its
+       histogram); wider than the path, so an obstacle in it leaves floor beside it.
     3. Not floor: gray >= floor + min_contrast, or HSV S >= min_saturation
        with V >= min_value.
     4. Opening with an open_px square: tape and specks go.
@@ -80,10 +81,12 @@ class ObstacleConfig:
     480x270, whatever step is; first guesses from the course's dimensions,
     not yet tuned on course frames.
     """
-    floor_percentile: float = 25.0  # the floor's gray level: this percentile of the ROI
-    # Cap on that level: mats are dark, so a "floor" brighter than this is
-    # an object filling the ROI, and measuring contrast from it would lose it
-    floor_cap: float = 70.0
+    # The floor's gray level: this percentile of the lane ROI, which is wider
+    # than the robot's path, so an obstacle in the path leaves floor on both
+    # sides of it. Measured every frame: the course's floor runs from dark
+    # mats to light gray (95-130 at the 2026-10-12 run's intersections), so
+    # no fixed level holds (a cap at 70 called the light floor an obstacle)
+    floor_percentile: float = 25.0
     min_contrast: float = 60.0      # gray levels above the floor that make a pixel not floor
     min_saturation: int = 80        # HSV S (0-255) that makes a pixel colored; mats and tape are gray
     min_value: int = 50             # HSV V a colored pixel needs: hue and saturation are noise in the dark
@@ -147,7 +150,7 @@ def _masks(roi: ROICropResult, cfg: ObstacleConfig) -> tuple[float, np.ndarray, 
         raise ValueError("obstacle: the ROI crop has no obstacle ROI (crop_rois always cuts one)")
     k = max(1, int(cfg.step))
     gray = np.ascontiguousarray(gray[::k, ::k])
-    floor = min(_percentile(gray, cfg.floor_percentile), cfg.floor_cap)
+    floor = _percentile(np.ascontiguousarray(roi.lane_roi[::k, ::k]), cfg.floor_percentile)
     hsv = cv2.cvtColor(np.ascontiguousarray(color[::k, ::k]), cv2.COLOR_BGR2HSV)
     # Whole-array OpenCV calls rather than numpy boolean algebra: this runs
     # every frame on the Pi. A pixel is bright at gray >= floor + min_contrast

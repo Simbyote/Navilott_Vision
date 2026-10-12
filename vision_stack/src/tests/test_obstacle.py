@@ -33,10 +33,10 @@ from src.perception.obstacle import (
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIBounds, crop_rois
 from src.phase2_linker import run_chain
-from src.params import FRAME_H, FRAME_W
+from src.params import FRAME_H
 from src.tests.scenes import (
     ALT_CONFIG, DARK_BOX, ORANGE_BOX, SCENE_CONFIG, SCENES, SYNTHETIC_GROUND, SYNTHETIC_STOP_LINE_TABLE,
-    WHITE_BOX, same, scene, with_obstacle,
+    WHITE_BOX, same, scene, synthetic_frame, with_obstacle,
 )
 
 CFG = ObstacleConfig()
@@ -111,11 +111,26 @@ def test_a_box_off_the_robots_path_is_not_its_obstacle():
 
 
 @pytest.mark.software
-def test_a_box_filling_the_view_is_still_found():
-    """The floor level is capped: a percentile taken on the box itself would call it floor."""
-    frame = with_obstacle(scene(), 0, FRAME_W, 100, FRAME_H, WHITE_BOX)
-    r, d, _ = both(frame)
-    assert d["floor_level"] == CFG.floor_cap and r.detected and r.clipped
+def test_a_box_filling_the_path_is_still_found():
+    """The floor level comes from the lane ROI, wider than the path: floor stays beside the box."""
+    frame = with_obstacle(scene(), 120, 360, 100, FRAME_H, WHITE_BOX)
+    r, d, roi = both(frame)
+    assert d["floor_level"] < 100 and r.detected and r.clipped
+    assert r.bbox[2] >= roi.obstacle_rect[2] - EDGE_PX
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("floor", [60, 110, 135])
+def test_the_floor_level_follows_the_floor_dark_or_light(floor):
+    """
+    The course's floor runs from dark mats to light gray (95-130 at the
+    2026-10-12 run's intersections). A fixed floor level called the light
+    floor an obstacle; measured each frame, only the box stands out.
+    """
+    plain = synthetic_frame((150, 290), road=floor, surround=floor)
+    assert not both(plain)[0].detected
+    r, d, _ = both(with_obstacle(plain, 200, 280, 150, 250, WHITE_BOX))
+    assert r.detected and abs(d["floor_level"] - floor) <= 2
 
 
 # =============================================================================
@@ -166,7 +181,6 @@ def test_each_config_field_moves_the_answer():
     """Without this, parity under ALT_CONFIG couldn't catch a twin ignoring a field."""
     base = both(SCENES["obstacle_near"])[0]
     moved = {
-        "floor_cap": (replace(CFG, floor_cap=10.0, min_saturation=255), with_obstacle(scene(), 200, 280, 150, 250, (90, 90, 90))),
         "min_contrast": (replace(CFG, min_contrast=200.0, min_saturation=255), SCENES["obstacle_near"]),
         "min_saturation": (replace(CFG, min_saturation=255), SCENES["obstacle_near"]),
         "min_value": (replace(CFG, min_value=255, min_contrast=250.0), SCENES["obstacle_near"]),
