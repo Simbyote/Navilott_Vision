@@ -44,6 +44,7 @@ STATUS_FG = {LANE_VISION: dv.C_USABLE, LANE_HOLD: dv.C_AMBER, LANE_STALE: dv.C_R
 DRIVE_COLORS = {GO: dv.C_USABLE, CAUTION: dv.C_AMBER, STOP: dv.C_RED}
 C_DARK = (70, 70, 70)
 TIMELINE_S = 5.0
+C_OBSTACLE = (255, 120, 0)      # blue, as the obstacle view tints "not floor"
 
 
 def _raw_measured(lane: dict) -> bool:
@@ -56,6 +57,8 @@ def _cell_color(kind: str, value) -> tuple[int, int, int]:
         return DRIVE_COLORS.get(value, dv.C_GRAY)
     if kind == "stop_sign":
         return dv.C_RED if value else C_DARK
+    if kind == "obstacle":
+        return C_OBSTACLE if value else C_DARK
     return dv.C_WHITE if value else C_DARK         # stop line: white like tape
 
 
@@ -79,6 +82,9 @@ class Phase3View:
         "sign_detections", "sign_raw", "sign_buffer", "stop_sign",
         "line_seen", "line_measured_px", "line_held", "line_buffer", "line_state",
         "line_reported_px", "line_reported_cm",
+        # Appended, so no earlier column moves
+        "obstacle_seen", "obstacle_measured_px", "obstacle_held", "obstacle_buffer", "obstacle_state",
+        "obstacle_reported_px", "obstacle_reported_cm", "obstacle_clipped",
     )
 
     def __init__(self, lane_config=None, fps: float = dv.DEFAULT_FPS) -> None:
@@ -91,6 +97,8 @@ class Phase3View:
         self._held_moving = 0
         self._gated = Counter()
         self._line_held = 0
+        self._obstacle_frames = 0
+        self._obstacle_held = 0
 
     # -------------------------------------------------------------------------
     # Data
@@ -130,6 +138,7 @@ class Phase3View:
             "drive": pk.drive_state,
             "sign": pk.stop_sign_detected,
             "line": pk.stop_line_detected,
+            "obstacle": pk.obstacle_detected,
         })
         self._frames += 1
         self._status[pk.lane_status] += 1
@@ -140,6 +149,8 @@ class Phase3View:
         for kind in ("traffic", "stop_sign"):
             self._gated[kind] += sum(not d["passed"] for d in dbg[kind]["detections"])
         self._line_held += bool(dbg["stop_line"]["held"])
+        self._obstacle_frames += bool(pk.obstacle_detected)
+        self._obstacle_held += bool((dbg.get("obstacle") or {}).get("held"))
 
     def row(self, data) -> list:
         """One CSV row, in CSV_FIELDS order."""
@@ -159,7 +170,16 @@ class Phase3View:
             dets(sg), int(sg["raw_vote"]), buf(sg), int(sg["state"]),
             int(sl["seen"]), opt(sl["measured_px"]), int(sl["held"]), buf(sl), int(sl["state"]),
             opt(sl["reported_px"]), opt(sl["reported_cm"]),
+            *self._obstacle_row(d.get("obstacle"), opt, buf),
         ]
+
+    @staticmethod
+    def _obstacle_row(ob, opt, buf) -> list:
+        """The obstacle columns; blank for a record from before the obstacle vote existed."""
+        if ob is None:
+            return [""] * 8
+        return [int(ob["seen"]), opt(ob["measured_px"]), int(ob["held"]), buf(ob), int(ob["state"]),
+                opt(ob["reported_px"]), opt(ob["reported_cm"]), int(ob["clipped"])]
 
     def report(self) -> list[str]:
         """summary.txt's [PHASE 3] section."""
@@ -175,6 +195,7 @@ class Phase3View:
         out.append(f" detections below the gate               traffic {self._gated['traffic']}  "
                    f"stop sign {self._gated['stop_sign']}")
         out.append(f" frames with a held stop-line distance   {self._line_held}")
+        out.append(f" frames with an obstacle in the path     {self._obstacle_frames}  (held {self._obstacle_held})")
         return out
 
     # -------------------------------------------------------------------------
@@ -210,6 +231,18 @@ class Phase3View:
                 cv2.rectangle(img, p0, p1, color, th + 1)
                 label = f"{d['label'] or kind} {d['confidence']:.2f} {'>=' if d['passed'] else '<'} {d['gate']:.2f}"
                 dv.draw_text(img, label, (p0[0], p1[1] + lh - 3 * s), color, fs, th)
+
+        # This frame's obstacle, as Phase 2 measured it (a run recorded before
+        # the obstacle detector has none)
+        ob, rect = getattr(chain, "obstacle", None), getattr(chain.roi, "obstacle_rect", None)
+        if ob is not None and ob.detected and rect is not None:
+            (rx, ry), (bx, by, bw, bh) = rect[:2], ob.bbox
+            ry += pad
+            p0, p1 = ((rx + bx) * s, (ry + by) * s), ((rx + bx + bw) * s, (ry + by + bh) * s)
+            cv2.rectangle(img, p0, p1, C_OBSTACLE, th + 1)
+            where = "view bottom" if ob.clipped else f"{ob.distance_px:.0f}px"
+            cm = "" if ob.distance_cm is None else f" {ob.distance_cm:.1f}cm"
+            dv.draw_text(img, f"obstacle {where}{cm}", (p0[0], p0[1] + lh - 3 * s), C_OBSTACLE, fs, th)
 
         pk, t = data["packet"], data["timings"]
         ms = lambda k: f"{t[k]:.1f}" if k in t else "--"
@@ -251,7 +284,8 @@ class Phase3View:
     def _votes(self, data, W, s, fs, th, lh) -> np.ndarray:
         """One row per vote: its buffer as cells, oldest left, then the raw vote and the state."""
         d = data["dbg"]
-        rows = (("traffic", "traffic"), ("stop_sign", "sign"), ("stop_line", "line"))
+        rows = (("traffic", "traffic"), ("stop_sign", "sign"), ("stop_line", "line"), ("obstacle", "obst"))
+        rows = tuple(r for r in rows if r[0] in d)        # records from before the obstacle vote have none
         rh = lh + 4 * s
         img = np.zeros((rh * len(rows) + 4 * s, W, 3), np.uint8)
         cw, ch, gap, label_w = 14 * s, 11 * s, 3 * s, 52 * s
@@ -269,7 +303,14 @@ class Phase3View:
             x = label_w + rec["window"] * (cw + gap) + 8 * s
             state = rec["state"]
             text = f"raw {rec['raw_vote']}  -> {state}"
-            if kind == "stop_line":
+            if kind == "obstacle":
+                if rec["reported_px"] is not None:
+                    where = "at the view bottom" if rec["clipped"] else f"{rec['reported_px']:.0f}px"
+                    text += f"   {'held' if rec['held'] else 'seen'} {where}"
+                if rec["reported_cm"] is not None:
+                    text += f" / {rec['reported_cm']:.1f}cm"
+                color = dv.C_AMBER if rec["held"] else (C_OBSTACLE if state else dv.C_GRAY)
+            elif kind == "stop_line":
                 if rec["held"]:
                     text += f"   held {rec['reported_px']:.0f}px"
                 elif rec["reported_px"] is not None:
@@ -288,7 +329,7 @@ class Phase3View:
     def _timeline(self, W, s, fs, th, lh) -> np.ndarray:
         """The last TIMELINE_S: status band with raw and filtered offset, then the three state tracks."""
         bh, tk = 64 * s, 7 * s
-        H = bh + 3 * (tk + 2 * s) + lh
+        H = bh + 4 * (tk + 2 * s) + lh                    # four state tracks
         img = np.zeros((H, W, 3), np.uint8)
         hist = list(self.history)
         n = self.history.maxlen
@@ -314,7 +355,8 @@ class Phase3View:
 
         tracks = (("drive", lambda h: DRIVE_COLORS.get(h["drive"], dv.C_GRAY)),
                   ("sign", lambda h: dv.C_RED if h["sign"] else None),
-                  ("line", lambda h: dv.C_WHITE if h["line"] else None))
+                  ("line", lambda h: dv.C_WHITE if h["line"] else None),
+                  ("obst", lambda h: C_OBSTACLE if h.get("obstacle") else None))
         for r, (label, color_of) in enumerate(tracks):
             y = bh + 2 * s + r * (tk + 2 * s)
             for i, h in enumerate(hist):

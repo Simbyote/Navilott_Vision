@@ -64,6 +64,7 @@ from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
+from src.utils import GcWatch
 
 # The run's backstop: brake and end after this long, whatever the navigator
 # does. The only linker-level safety stop (decided 2026-09-30); a run that
@@ -76,19 +77,23 @@ END_COURSE = "end of course"                    # the navigator finished the rou
 END_EARLY = "ended early (lane lost before the route was done)"
 END_BATTERY = "battery critical"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
+# A frame whose Phases 1-3 took this long is named in nav.csv's event column
+# with its slowest stage: past the motor watchdog's 0.5 s the robot stops on
+# its own. The 2026-10-12 runs had 0.6-1.6 s frames mid-run, which braked it
+SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
-              "stop_sign", "stop_line_cm", "reason", "source", "steer",
+              "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
-              "imu_reads", "imu_read_ms", "imu_failed",
+              "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
-navigation (stop sign, red light, intersection and end-of-course rules over
-lane keeping) -> motors. The video is rendered after the run, so recording
+navigation (obstacle, stop sign, red light, intersection and end-of-course
+rules over lane keeping) -> motors. The video is rendered after the run, so recording
 never slows the steering.
 
 SAFETY: with --camera the robot moves. Ctrl-C stops the motors. A run ends
@@ -117,6 +122,30 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
 # =============================================================================
 # Findings
 # =============================================================================
+
+def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen: int = -1) -> str:
+    """
+    nav.csv's event for a frame whose capture + Phases 2-3 took limit_ms or
+    more, naming its slowest stage and, if it ran, the garbage collector's
+    time (it stops every thread, so it shows up in whatever stage was
+    running); "" otherwise.
+    """
+    t = res.timings_ms
+    total = t.get("capture", 0.0) + t.get("phase2", 0.0) + t.get("phase3", 0.0)
+    if total < limit_ms:
+        return ""
+    stages = {**{k: t[k] for k in ("capture", "phase3") if k in t}, **res.chain.timings_ms}
+    name, ms = max(stages.items(), key=lambda kv: kv[1])
+    gc = f", gc gen{gc_gen} {gc_ms:.0f} ms" if gc_ms > 0 else ""
+    return f"slow frame {total:.0f} ms: {name} {ms:.0f} ms{gc}"
+
+
+def obstacle_cm(pkt) -> float | str | None:
+    """nav.csv's obstacle_cm: the voted obstacle's cm, "view bottom" when clipped, None when there's none (or no cm)."""
+    if not pkt.obstacle_detected:
+        return None
+    return "view bottom" if pkt.obstacle_clipped else pkt.obstacle_distance_cm
+
 
 class NavStats:
     """Per-frame navigation outcomes, summarized for summary.txt and report.json."""
@@ -266,6 +295,7 @@ def run(
     ended_by, error = END_SOURCE, None
     last_reason = None
     t0 = None
+    gc_watch = GcWatch()
 
     try:
         if system is not None:
@@ -275,6 +305,7 @@ def run(
             sensors.read()                          # start every sensor window at the go
         if battery is not None and not battery_run.start(battery):
             battery = None
+        gc_watch.start()                            # after the setup's garbage, before the first frame
         volts, imu_ms, imu_reads, imu_failed = [], [], [], 0
         t0 = clock()
         while True:
@@ -319,6 +350,10 @@ def run(
 
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
+            gc_ms, gc_gen = gc_watch.take()
+            slow = slow_frame(res, gc_ms=gc_ms, gc_gen=gc_gen)
+            if slow:
+                event = f"{event}; {slow}" if event else slow
             last_reason = reason
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
@@ -330,12 +365,14 @@ def run(
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
                  "stop_line_cm": pkt.stop_line_distance_cm if pkt.stop_line_detected else None,
+                 "obstacle_cm": obstacle_cm(pkt),
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
                  "imu_reads": None if batch is None else batch.imu_attempts,
                  "imu_read_ms": None if batch is None else batch.imu_read_ms_max,
                  "imu_failed": None if batch is None else batch.imu_failed,
+                 "gc_ms": gc_ms or None,
                  "battery_v": None if battery is None else round(battery.voltage(), 2),
                  "battery_state": "" if battery is None else battery.state().name,
                  "event": event}
@@ -369,6 +406,7 @@ def run(
             traceback.print_exc(file=f)
     finally:
         motor.stop()                                # first, whatever happened
+        gc_watch.stop()
         try:
             recorder.close()
         finally:

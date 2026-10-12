@@ -57,6 +57,7 @@ from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W
 from src.pipeline import Pipeline
+from src.utils import GcWatch
 
 # The run's backstop: brake and end after this long, whatever Navigation
 # does (decided 2026-10-01: a generous cap, in case the end of the course is
@@ -154,6 +155,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         sensors.sample()                                # start the first window at GO
         if battery is not None and not battery_run.start(battery):
             battery = None
+        GcWatch().start()                               # freeze the setup's objects: a full collection stopped the loop ~1 s
         t0 = clock()
         while True:
             if clock() - t0 >= max_run_s:

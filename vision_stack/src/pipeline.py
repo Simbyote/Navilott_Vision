@@ -22,7 +22,7 @@ Main package:
 Flow:
     FrameData -> preprocess_frame -> crop_rois -> detect_geometry
               -> detect_color -> estimate_lane_offset
-              -> estimate_stop_line_distance -> fuse
+              -> estimate_stop_line_distance -> estimate_obstacle -> fuse
               -> package_phase2 -> Phase2Output
               -> Phase3Processor.process -> EstimationPacket
               -> Navigation.update -> enforce -> Command
@@ -46,6 +46,7 @@ from src.perception.color_branch import detect_color
 from src.perception.feature_fusion import fuse
 from src.perception.geometry import detect_geometry
 from src.perception.lane_offset import estimate_lane_offset
+from src.perception.obstacle import estimate_obstacle
 from src.perception.phase2_out import Phase2Output, package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
@@ -85,7 +86,7 @@ class Pipeline:
         last_estimation_debug: Phase 3's debug summary for the latest
             estimate() (frame_id, timestamp_ms, dt, log); None before the first.
         last_timings_ms: With timing on, the latest frame's stage times
-            (preprocess, roi, geometry, color, lane_offset, stop_line, fusion, package,
+            (preprocess, roi, geometry, color, lane_offset, stop_line, obstacle, fusion, package,
             then phase3 and navigation once run); {} with timing off. A fresh
             dict per frame, so a caller may keep it.
     """
@@ -130,8 +131,8 @@ class Pipeline:
                 every output; never re-derived.
 
         Outputs:
-            Phase2Output: fused detections, the lane offset result and the
-            frame stamp. Identical, field by field, to run_chain(...).phase2
+            Phase2Output: fused detections, the lane offset, stop-line and
+            obstacle results, and the frame stamp. Identical, field by field, to run_chain(...).phase2
             under the same config.
 
         Raises:
@@ -169,11 +170,15 @@ class Pipeline:
         if laps:
             laps.lap("stop_line")
 
+        obstacle = estimate_obstacle(roi, cfg.obstacle, cfg.ground, cfg.stop_line_table)
+        if laps:
+            laps.lap("obstacle")
+
         fusion = fuse(geo, traffic, roi)
         if laps:
             laps.lap("fusion")
 
-        phase2 = package_phase2(fusion, offset, stop_line)
+        phase2 = package_phase2(fusion, offset, stop_line, obstacle)
         if laps:
             laps.lap("package")
             self.last_timings_ms = laps.times

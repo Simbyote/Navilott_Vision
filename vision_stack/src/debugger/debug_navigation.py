@@ -97,8 +97,9 @@ def draw_strip(n: dict, width: int, scale: int = 1) -> np.ndarray:
     _duty_bar(img, "L", n.get("cmd_left"), 2 * lh + 2 * s, 3 * lh - 2 * s, x0, xm - 6 * s, s, fs, th)
     _duty_bar(img, "R", n.get("cmd_right"), 2 * lh + 2 * s, 3 * lh - 2 * s, xm + 6 * s, x1, s, fs, th)
 
-    line = n.get("stop_line_cm")
-    dv.draw_text(img, (f"stop line {'--' if line in ('', None) else format(line, '.1f') + ' cm'}  "
+    line, ob = n.get("stop_line_cm"), n.get("obstacle_cm")
+    ob = "--" if ob in ("", None) else (ob if isinstance(ob, str) else f"{ob:.1f} cm")
+    dv.draw_text(img, (f"stop line {'--' if line in ('', None) else format(line, '.1f') + ' cm'}  obstacle {ob}  "
                        f"light {n.get('drive_state') or '--'}  sign {'YES' if n.get('stop_sign') else 'no'}  "
                        f"cps {_fmt(n.get('left_cps'), '.0f')}/{_fmt(n.get('right_cps'), '.0f')}  "
                        f"latency {_fmt(n.get('latency_ms'), '.0f')} ms"),

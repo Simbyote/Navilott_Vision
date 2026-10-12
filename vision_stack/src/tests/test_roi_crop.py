@@ -37,11 +37,13 @@ CONFIGS = {
     "narrow": ROIConfig(
         lane=ROIBounds(0.40, 0.60, 0.60, 0.90),
         traffic=ROIBounds(0.45, 0.05, 0.55, 0.30),
-        sign=ROIBounds(0.60, 0.10, 0.90, 0.40)),
+        sign=ROIBounds(0.60, 0.10, 0.90, 0.40),
+        obstacle=ROIBounds(0.45, 0.70, 0.55, 0.95)),
     "full_frame": ROIConfig(
         lane=ROIBounds(0.0, 0.0, 1.0, 1.0),
         traffic=ROIBounds(0.0, 0.0, 1.0, 1.0),
-        sign=ROIBounds(0.0, 0.0, 1.0, 1.0)),
+        sign=ROIBounds(0.0, 0.0, 1.0, 1.0),
+        obstacle=ROIBounds(0.0, 0.0, 1.0, 1.0)),
 }
 
 # Non-overlapping, so each overlay rectangle can be checked independently
@@ -75,7 +77,10 @@ def assert_roi_contract(res, pre):
     assert (res.frame_id, res.timestamp_ms) == (pre.frame_id, pre.timestamp_ms)
     parts = (("lane", res.lane_rect, res.lane_roi, pre.gray),
              ("sign", res.sign_rect, res.sign_roi, pre.gray),
-             ("traffic", res.traffic_rect, res.traffic_roi, pre.color))
+             ("traffic", res.traffic_rect, res.traffic_roi, pre.color),
+             ("obstacle", res.obstacle_rect, res.obstacle_roi, pre.gray),
+             ("obstacle color", res.obstacle_rect, res.obstacle_color_roi, pre.color),
+             ("color frame", (0, 0, w_src, h_src), res.color_frame, pre.color))
     for name, (x, y, w, h), roi, src in parts:
         assert x >= 0 and y >= 0 and w >= 1 and h >= 1, f"{name}: degenerate rect"
         assert x + w <= w_src and y + h <= h_src, f"{name}: rect leaves the frame"
@@ -140,10 +145,11 @@ def test_rois_are_views_of_the_right_sources():
     assert np.shares_memory(res.sign_roi, pre.gray)
     assert np.shares_memory(res.traffic_roi, pre.color)
     assert not np.shares_memory(res.traffic_roi, pre.gray)
+    assert np.shares_memory(res.obstacle_roi, pre.gray) and np.shares_memory(res.obstacle_color_roi, pre.color)
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("name", ["lane_roi", "traffic_roi", "sign_roi"])
+@pytest.mark.parametrize("name", ["lane_roi", "traffic_roi", "sign_roi", "obstacle_roi", "obstacle_color_roi"])
 def test_rois_are_read_only(name):
     # Lane and sign share the gray frame; a write through one would corrupt the other
     roi = getattr(crop_rois(hand_pre()), name)

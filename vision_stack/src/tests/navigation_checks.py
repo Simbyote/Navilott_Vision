@@ -18,6 +18,8 @@ Main package:
     check_stops_at_a_red_line, check_crosses_a_green_line,
     check_ignores_a_red_light_without_a_line,
     check_stops_at_a_stop_sign_line_then_goes, check_goes_when_the_light_turns_green.
+    check_brakes_for_an_obstacle_then_goes (decided 2026-10-12: brake for
+    something in the path within reach, wait until it's gone, drive on).
 
 Flow:
     Each check resets the navigator, warms it on centered vision frames so
@@ -244,6 +246,34 @@ def check_goes_when_the_light_turns_green(nav, red_frames: int = 70) -> list[str
     return problems
 
 
+# An obstacle coming toward the robot, its base this many rows above the view
+# bottom then off it; the cm the stop-line table would give (10.2 at row 0)
+OBSTACLE_APPROACH = ((80.0, 28.0), (60.0, 21.0), (40.0, 15.0), (20.0, 11.6), (10.0, 10.9))
+# Frames it stays, then frames after it's lifted away: room for the clear time
+OBSTACLE_STAYS, OBSTACLE_GONE = 40, 60
+
+
+def check_brakes_for_an_obstacle_then_goes(nav) -> list[str]:
+    """
+    Something in the path (decided 2026-10-12): drive while it's far, brake
+    once it's within reach (by OBSTACLE_APPROACH's last frames, which are
+    under 12 cm), keep braking while it stays, and drive on after it's lifted.
+    """
+    approach = [{"obstacle_detected": True, "obstacle_distance_px": px, "obstacle_distance_cm": cm}
+                for px, cm in OBSTACLE_APPROACH]
+    stays = [{"obstacle_detected": True, "obstacle_distance_px": 0.0, "obstacle_distance_cm": 10.2,
+              "obstacle_clipped": True, "lane_status": "stale", "lane_mode": "none"}] * OBSTACLE_STAYS
+    results = _run(nav, approach + stays + [{}] * OBSTACLE_GONE)
+    n = len(approach)
+    problems = [f"frame {p.frame_id}: brakes for an obstacle {p.obstacle_distance_cm} cm away"
+                for p, cmd in results[:2] if not forward(cmd)]
+    if any(forward(cmd) for _, cmd in results[n - 1:n + OBSTACLE_STAYS]):
+        problems.append("drove toward an obstacle within reach")
+    if not any(forward(cmd) for _, cmd in results[n + OBSTACLE_STAYS:]):
+        problems.append("never drove on after the obstacle was lifted away")
+    return problems
+
+
 INTERSECTION_CHECKS = (check_stops_at_a_red_line, check_crosses_a_green_line,
                        check_ignores_a_red_light_without_a_line, check_stops_at_a_stop_sign_line_then_goes,
                        check_goes_when_the_light_turns_green)
@@ -255,4 +285,4 @@ def contract_problems(nav) -> list[str]:
                     for s in ("vision", "hold", "stale") for o in (-1.0, -0.2, 0.0, 0.2, 1.0)
                     for d in ("go", "caution", "stop")] + [{"lane_status": "stale"}] * STALE_FRAMES)
     return (check_commands(nav, mixed) + check_stale_lane_slows_then_stops(nav) + check_steers_toward_center(nav)
-            + [p for check in INTERSECTION_CHECKS for p in check(nav)])
+            + [p for check in INTERSECTION_CHECKS for p in check(nav)] + check_brakes_for_an_obstacle_then_goes(nav))

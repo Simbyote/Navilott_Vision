@@ -21,6 +21,7 @@ from src.debugger.estimation_debug import (
     JUMP_GATE, NO_RESULT, UNUSABLE_MODE, TracedPhase3Processor,
 )
 from src.perception.phase2_out import Phase2Output
+from src.perception.obstacle import ObstacleResult
 from src.perception.stop_line_distance import StopLineResult
 from src.phase2_linker import run_chain
 from src.tests.scenes import SCENE_CONFIG, drive_sequence, same
@@ -104,7 +105,7 @@ def test_every_stage_is_timed_and_the_record_keys_are_present():
     _, dbg = run(frames(([], None, None)))[0]
     assert tuple(dbg["timings_ms"]) == TracedPhase3Processor.STAGES
     assert all(v >= 0.0 for v in dbg["timings_ms"].values())
-    for stage in ("lane", "heading", "traffic", "stop_sign", "stop_line"):
+    for stage in ("lane", "heading", "traffic", "stop_sign", "stop_line", "obstacle"):
         assert isinstance(dbg[stage], dict)
 
 
@@ -194,6 +195,29 @@ def test_a_stop_line_distance_is_held_through_a_missed_frame():
     assert recs[3]["reported_px"] is None
     assert [r["buffer"] for r in recs][-1] == (True, False, False)
     assert recs[0]["raw_vote"] is True and recs[2]["raw_vote"] is False
+
+
+# =============================================================================
+# Obstacle: seen vs held
+# =============================================================================
+
+def blocking(px, fid, ts, cm=None, clipped=False):
+    """Phase2Output at (fid, ts) with one obstacle at px rows (None: none seen)."""
+    r = (ObstacleResult(False, None, None, False, None, 0, 0, fid, ts) if px is None
+         else ObstacleResult(True, px, cm, clipped, (80, 30, 80, 100), 8000, 1, fid, ts))
+    return replace(phase2(fid, ts), obstacle_results=[r])
+
+
+@pytest.mark.software
+def test_an_obstacle_measurement_is_held_through_a_missed_frame():
+    stream = [blocking(30.0, 0, 0, cm=14.0), blocking(0.0, 1, 50, cm=10.2, clipped=True),
+              blocking(None, 2, 100), blocking(None, 3, 150)]
+    recs = [dbg["obstacle"] for _, dbg in run(stream)]
+    assert [(r["seen"], r["held"], r["state"]) for r in recs] == [
+        (True, False, False), (True, False, True), (False, True, True), (False, False, False)]
+    assert (recs[1]["measured_px"], recs[1]["reported_cm"], recs[1]["clipped"]) == (0.0, 10.2, True)
+    assert (recs[2]["measured_cm"], recs[2]["reported_px"], recs[2]["clipped"]) == (None, 0.0, True)
+    assert (recs[3]["reported_px"], recs[3]["clipped"]) == (None, False)
 
 
 # =============================================================================

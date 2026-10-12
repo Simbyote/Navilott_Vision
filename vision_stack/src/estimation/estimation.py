@@ -11,8 +11,9 @@ Purpose:
 
 Main package:
     EstimationPacket: smoothed lane offset and its status, heading change
-    since vision was lost, the voted drive state, stop-sign flag and
-    stop-line flag with its distance, sensor pass-throughs (IMU yaw rate and
+    since vision was lost, the voted drive state, stop-sign flag,
+    stop-line flag with its distance, obstacle flag with its distance,
+    sensor pass-throughs (IMU yaw rate and
     lateral accel, each wheel's encoder counts per second), and the frame
     identity carried from Phase2Output.
     with_lane_roi_width(): the lane ROI width the cm scale needs, from Phase
@@ -25,7 +26,8 @@ Flow (Phase3Processor.process() is the only place the order is written):
     4. StopSignClassifier: confidence gate and majority vote -> bool.
     5. StopLineClassifier: majority vote -> bool, with the distance held
        through frames that miss the line while the vote stands.
-    6. Assemble the EstimationPacket.
+    6. ObstacleClassifier: the same for the obstacle in the robot's path.
+    7. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
 from dataclasses import dataclass, replace
@@ -37,6 +39,7 @@ from src.params import (
 from src.utils import clamp
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
+from src.perception.obstacle import ObstacleResult
 from src.perception.phase2_out import Phase2Output
 from src.perception.roi_crop import ROIConfig, resolve
 from src.perception.stop_line_distance import StopLineResult
@@ -157,6 +160,16 @@ class EstimationPacket:
     # any filtering; MODE_TWO_BOUNDARY means both lane boundaries were seen.
     # Navigation's intersection crossing ends on it
     lane_mode: str = MODE_NONE
+    # From the obstacle vote (perception/obstacle.py): something solid in the
+    # robot's path. Its distances are held like the stop line's: rows from its
+    # base to the lane ROI bottom, and floor cm (None without a ground
+    # homography or stop-line table); clipped: its base is at or past the
+    # view bottom, so it is as near as the view shows or nearer. All four
+    # are False / None whenever the vote says there's none
+    obstacle_detected: bool = False
+    obstacle_distance_px: float | None = None
+    obstacle_distance_cm: float | None = None
+    obstacle_clipped: bool = False
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
@@ -408,6 +421,36 @@ class StopLineClassifier:
         return True, *self._last
 
 
+class ObstacleClassifier:
+    """
+    Obstacle results -> voted bool and the measurement to report.
+
+    As StopLineClassifier: Phase 2's gates decide what counts, the vote
+    decides whether it's there, and while it is, a frame that misses it
+    repeats the last measurement (px, cm and clipped, from one frame). All
+    are None / False whenever the vote says there's none.
+    """
+    def __init__(self, cfg: Phase3Config) -> None:
+        self._cfg = cfg
+        self._vote = _Vote(cfg.vote_window, False)
+        self._last: tuple[float | None, float | None, bool] = (None, None, False)
+
+    def update(
+            self,
+            results: list[ObstacleResult],
+            log: list[str],
+        ) -> tuple[bool, float | None, float | None, bool]:
+        """(voted flag, distance_px, distance_cm, clipped) after this frame. Logs a held measurement."""
+        seen = next((r for r in results if r.detected), None)
+        if seen is not None:
+            self._last = (seen.distance_px, seen.distance_cm, seen.clipped)
+        if not self._vote.update(seen is not None):
+            return False, None, None, False
+        if seen is None:
+            log.append(f"[OBSTACLE] missed this frame; holding {self._last[0]:.1f}px")
+        return True, *self._last
+
+
 class Phase3Processor:
     """
     Runs every Phase 3 stage for one frame. Create once; call process() on
@@ -420,6 +463,7 @@ class Phase3Processor:
         self.traffic = TrafficClassifier(self._cfg)
         self.stop_sign = StopSignClassifier(self._cfg)
         self.stop_line = StopLineClassifier(self._cfg)
+        self.obstacle = ObstacleClassifier(self._cfg)
         self._last_ts: int | None = None
 
     def _dt(self, timestamp_ms: int, log: list[str]) -> float:
@@ -462,6 +506,7 @@ class Phase3Processor:
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
         stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
+        obstacle, obstacle_px, obstacle_cm, obstacle_clipped = self.obstacle.update(phase2.obstacle_results, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -480,6 +525,10 @@ class Phase3Processor:
             left_wheel_cps = sensors.left_wheel_cps or 0.0,
             right_wheel_cps = sensors.right_wheel_cps or 0.0,
             lane_mode = lane_mode_of(phase2),
+            obstacle_detected = obstacle,
+            obstacle_distance_px = obstacle_px,
+            obstacle_distance_cm = obstacle_cm,
+            obstacle_clipped = obstacle_clipped,
         )
         return packet, {
             "frame_id": phase2.frame_id,

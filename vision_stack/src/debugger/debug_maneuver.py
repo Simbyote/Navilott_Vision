@@ -66,7 +66,8 @@ def as_result(rec: dict, frame: np.ndarray) -> SimpleNamespace:
     """A record in the shape Phase3View.extract() reads from a Phase3Result."""
     chain = SimpleNamespace(frame=SimpleNamespace(frame=frame), geometry=rec["geometry"],
                             offset=rec["offset"], offset_debug=rec["offset_debug"],
-                            roi=SimpleNamespace(lane_rect=rec["lane_rect"]))
+                            obstacle=rec.get("obstacle"),       # recordings from before the obstacle detector have none
+                            roi=SimpleNamespace(lane_rect=rec["lane_rect"], obstacle_rect=rec.get("obstacle_rect")))
     return SimpleNamespace(chain=chain, packet=rec["packet"], p3_debug=rec["p3_debug"],
                            timings_ms=rec["timings"])
 

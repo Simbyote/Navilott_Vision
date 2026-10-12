@@ -35,7 +35,7 @@ FrameData
 preprocess_frame()        blurred gray + blurred BGR
    │
    ▼
-crop_rois()               lane + sign ROIs (gray), traffic + sign ROIs (BGR), their rects
+crop_rois()               lane + sign ROIs (gray), traffic + sign ROIs (BGR), obstacle ROI (both), their rects
    │
    ├────────────────────────────┐
    ▼                            ▼
@@ -52,9 +52,11 @@ compute_lane_offset() compute_stop_line_distance() fuse_detections()   (all read
                      package_phase2()  →  Phase2Output  →  Phase 3
 ```
 
+compute_obstacle() runs beside them on the obstacle ROI alone (no geometry), between the stop line and fusion.
+
 Lane offset, stop-line distance and fusion are siblings. Lane offset reads the geometry candidates directly, not fusion's output, because fusion keeps only a centroid and a confidence, and the offset needs each contour's foot position, width, length and brightness. Stop-line distance reads geometry's stop-line candidates the same way. Geometry only detects; the two measurement stages turn detections into numbers.
 
-`run_chain()` runs them in this order: preprocess, roi, geometry, color, lane_offset, stop_line, fusion, package. Each one's wall time goes in `ChainResult.timings_ms` under those names. The main pipeline (`src/pipeline.py`) runs the same order through the production versions.
+`run_chain()` runs them in this order: preprocess, roi, geometry, color, lane_offset, stop_line, obstacle, fusion, package. Each one's wall time goes in `ChainResult.timings_ms` under those names. The main pipeline (`src/pipeline.py`) runs the same order through the production versions.
 
 ---
 
@@ -93,13 +95,14 @@ Whether undistortion runs on the robot is still open. It was removed to save pre
 
 **File:** `roi_crop.py` · **Config:** `ROIConfig` · **Output:** `ROICropResult`
 
-Cuts three regions so each branch only processes the part of the frame where its target can appear. Less area means less time and fewer false positives before any threshold runs.
+Cuts four regions so each branch only processes the part of the frame where its target can appear. Less area means less time and fewer false positives before any threshold runs.
 
 | ROI | Bounds (fraction of frame) | At 480×270 (x, y, w, h) | Source | Why there |
 | --- | --- | --- | --- | --- |
 | lane | x 0.05–0.95, y 0.70–1.00 | (24, 189, 432, 81) | gray | Near-field road just ahead of the robot |
 | traffic | x 0.25–0.75, y 0.00–0.50 | (120, 0, 240, 135) | BGR | Where a light sits when the robot is square to an intersection |
 | sign | x 0.50–1.00, y 0.00–0.55 | (240, 0, 240, 148) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane |
+| obstacle | x 0.25–0.75, y 0.45–1.00 | (120, 122, 240, 148) | gray and BGR (`obstacle_roi`, `obstacle_color_roi`) | The robot's own path, from the view bottom up past the lane ROI: an upright object rises above its base. Not drawn by `draw_roi_overlay`; the obstacle view draws it |
 
 ```
 x:  0       120      240      360      480
@@ -296,7 +299,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. The current value (228 px) is hand-set, not calibrated.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 
@@ -332,7 +335,30 @@ One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+,
 
 The board-free alternative for the stop line. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C`, is then fit through them by linear least squares. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
-**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the hand-set `expected_half_lane_px` (228) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
+**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (178) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
+
+---
+
+## Stage 4C: Obstacle
+
+**File:** `obstacle.py` · **Config:** `ObstacleConfig` (`PipelineConfig.obstacle`) · **Output:** `ObstacleResult`
+
+Is something solid standing in the robot's path, and how far ahead is its base? The course is dark mats and white tape, and neither has color, so in the obstacle ROI a pixel much brighter than the floor, or clearly colored, is "not floor". Tape is bright too, but thin: an opening with a square wider than any tape removes lane lines, dashes and stop lines, and what survives is something large and solid.
+
+```
+every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gray ≥ floor + 60, or Lab color ≥ 15 from the frame's neutral with max(B,G,R) ≥ 50
+             → opening, 47 px square → blobs → gates: area ≥ 2500, width ≥ 60, height ≥ 60, base ≤ 90 rows ahead
+             → nearest (lowest base) → distance_px, distance_cm
+```
+
+- **Every second pixel** each way (`step`): the loop already runs at its budget on the Pi; an obstacle is tens of pixels across. Sizes and rows stay in full-resolution px.
+- **Color is relative too:** |a − a_ref| + |b − b_ref| in Lab against the whole frame's median (a, b), the scene's neutral. A saturation threshold read the whole floor as colored under the warm light by the windows; the lane ROI's own median was the can itself once it filled the view. Over the 2026-10-12 runs (1001 clear frames, 199 with the can within ~20 cm), 15 gave no false alarm and every can frame.
+- **The floor level** is measured each frame on the lane ROI, which is wider than the path, so a box in the path leaves floor beside it. The course's floor runs from dark mats to light gray (95–130 at the 2026-10-12 run's intersections): a fixed level (a cap at 70, the first version) called the light floor an obstacle, 376 of 537 frames on that run against 131 once measured (the can's, by eye).
+- **`open_px` (47)** is wider than any lane tape (MEASURED's lane gate allows 45 px, the widest seen 41.7) and taller than any stop line (`max_thickness_px` 40; near the view bottom 1 cm of floor is ~10 rows). Tape wider than it would survive.
+- **`distance_px`** is the rows from the blob's lowest row (where an upright object meets the floor) to the lane ROI bottom, as for the stop line. **`distance_cm`** is the floor there: through the ground homography at the base's center, else the stop-line table, whose curve maps any floor row to cm. The table's reference is the robot's front edge, and its row 0 is ~10.2 cm ahead of it, so a blob running off the ROI bottom is **`clipped`**: its base isn't in view, "this near or nearer".
+- **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess.
+
+Phase 3 votes on it and holds the measurement through a missed frame, as for the stop line; Navigation's `ObstacleRule` brakes for one within 12 cm (or 24 rows with no cm, or clipped) and waits until it has been gone 1 s.
 
 ---
 
@@ -382,13 +408,14 @@ Phase2Output
     timestamp_ms         int
     detection_count      int                     always len(detections)
     stop_line_results    list[StopLineResult]    one per frame (detected False when none); [] if none
+    obstacle_results     list[ObstacleResult]    one per frame (detected False when none); [] if none
 ```
 
-Stop lines travel beside the detections, like the lane offset, because they are a measurement rather than a detection to fuse. The same packaging rules apply to them.
+Stop lines and the obstacle travel beside the detections, like the lane offset, because they are a measurement rather than a detection to fuse. The same packaging rules apply to them.
 
 Checked on construction, so a malformed handoff fails loudly instead of reaching navigation:
 
-- All three lists must be lists; pass `[]` for none
+- All four lists must be lists; pass `[]` for none
 - Every item has its required fields
 - Every item's stamp matches the container's
 - `frame_id` and `timestamp_ms` have no default, since a silent 0 would make every frame look like the same instant
@@ -412,7 +439,7 @@ Each stage's test writes a timing CSV and histogram. The old tables (24–48 ms 
 ## Seeing inside it
 
 ```
-python3 -m src.phase2_linker --camera --views stop,traffic,stopline,lanegeo
+python3 -m src.phase2_linker --camera --views stop,traffic,stopline,lanegeo,obstacle
 python3 -m src.phase2_linker --video run.avi --no-display
 ```
 
@@ -425,6 +452,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 | `traffic` (`debug_traffic`) | HSV masks and blobs against the bands. In glow mode, also the white mask, and each white spot boxed with the glow gate that decided it (white, shape, ring, smaller) and its ring's winning share |
 | `lanegeo` (`debug_lanegeo`) | On the lane ROI: every contour the lane detector traced, red if geometry refused it (gate and measured value), amber if lane offset did, green if usable, with the chosen anchors; below it, the edges with what the horizontal-line filter removed and what closing added. Needs the chain's trace (`trace=True`, which the linker sets), which adds `lane_debug["trace"]` |
 | `stopline` (`debug_stopline`) | On the lane ROI: accepted stop lines as bands, rejected top edges with their gate, the measured distance, lane candidates skipped as part of a stop line; below it, the gradient split (all edges, kept top and bottom edges, fitted lines) |
+| `obstacle` (`debug_obstacle`) | On the obstacle ROI: not-floor pixels tinted, every blob that survived the opening boxed green (passed) or red (with its gate), the measured one in white with its distance to the view bottom; below it, the masks (gray not floor, white after the opening) |
 
 `pytest --hardware -k debug_lane` saves every stage's images for 3 sample frames plus an annotated video, which is the place to start when tuning a detector by eye.
 
@@ -435,8 +463,9 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 - **Undistortion** on the IMX290: cost against improvement, measured with the calibration test.
 - **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
 - **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
-- **`expected_half_lane_px`** from calibration instead of the hand-set 228 px.
+- **`expected_half_lane_px`** re-measured whenever the mount moves (178 px from the 2026-10-12 runs' two-boundary widths).
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
+- **Obstacle gates on real frames:** the not-floor thresholds against the mats under the venue's light, `open_px` against the widest tape, the false-alarm rate on a clear course, and what a stop sign low in the corridor does (`make phase2 VIEWS=obstacle`, then `test_obstacle --hardware --obstacle-cm`).
 - **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
 - **`distance_px` to cm:** needs a ground homography or a stop-line table, not `cm_per_px`.
 - **Offset accuracy on hardware:** the sign (+ = robot right of center) is what lane keeping steers by on every run; the accuracy against a ruler (P3) is `make routine-lane-offset`.

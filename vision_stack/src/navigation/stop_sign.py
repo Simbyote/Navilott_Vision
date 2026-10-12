@@ -70,8 +70,9 @@ class StopSignRule:
 
         Inputs:
             packet: This frame's packet; the tracker has already seen it.
-            held: A higher-priority rule decided this frame (unused: this is
-                the first rule).
+            held: A higher-priority rule (the obstacle) decided this frame.
+                Unused: a stop in progress keeps its timing, and it brakes
+                either way.
         Outputs:
             BRAKE while stopping or holding; None otherwise.
         """
