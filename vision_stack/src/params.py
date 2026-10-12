@@ -95,6 +95,7 @@ MOTOR_WATCHDOG_S = 0.5
 
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"
+ROI_OBSTACLE = "obstacle"        # the robot's path ahead; perception/obstacle.py
 
 # --- Detection types (candidate labels, DetectionObject.type) ---
 LANE_BOUNDARY = "lane_boundary"

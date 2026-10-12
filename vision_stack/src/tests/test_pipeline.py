@@ -34,8 +34,8 @@ from src.perception.color_branch import ColorConfig
 from src.phase2_linker import run_chain
 import src.navigation_linker as nl
 from src.navigation.navigation import (
-    BRAKE, RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
-    Command, Navigation,
+    BRAKE, RULE_END_OF_COURSE, RULE_INTERSECTION, RULE_LANE_KEEPING, RULE_OBSTACLE, RULE_STOP_SIGN,
+    RULE_TRAFFIC_LIGHT, Command, Navigation,
 )
 from src.navigation.route import Route
 from src.phase3_linker import make_processor, run_phase3_chain
@@ -54,7 +54,7 @@ CONFIGS = {
     "alt": ALT_CONFIG,
     "measured": MEASURED,
 }
-GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line", "ground")
+GROUPS = ("preprocess", "roi", "geometry", "color", "lane_offset", "stop_line", "ground", "obstacle")
 
 
 def _stamp(i: int) -> tuple[int, int]:
@@ -100,6 +100,9 @@ def test_scenes_reach_every_output_through_the_pipeline():
     assert {LANE_BOUNDARY, STOP_SIGN, TRAFFIC_LIGHT} <= types
     assert {"two_boundary", "none"} <= modes and len(modes) >= 3
     assert any(Pipeline(SCENE_CONFIG).perceive(f, 1, 50).stop_line_results[0].detected for f in SCENES.values())
+    obstacles = {(r.detected, r.clipped) for f in SCENES.values()
+                 for r in Pipeline(SCENE_CONFIG).perceive(f, 1, 50).obstacle_results}
+    assert obstacles == {(False, False), (True, False), (True, True)}
 
 
 # =============================================================================
@@ -296,7 +299,7 @@ def test_each_scene_lamp_is_seen_as_its_color_under_the_calibrated_bands(lamp, c
 @pytest.mark.software
 def test_drive_sequence_moves_every_phase3_output():
     """Guards the packet parity test: the drive must change every vote, status and integrator."""
-    seen = {k: set() for k in ("drive", "stop", "lane", "log", "line")}
+    seen = {k: set() for k in ("drive", "stop", "lane", "log", "line", "obstacle")}
     headings, cm, line_px = [], [], []
     for case in PACKET_CASES.values():
         for (packet, debug), sf in zip(_packets(Pipeline(*case)), DRIVE):
@@ -304,6 +307,7 @@ def test_drive_sequence_moves_every_phase3_output():
             seen["drive"].add(packet.drive_state)
             seen["stop"].add(packet.stop_sign_detected)
             seen["line"].add(packet.stop_line_detected)
+            seen["obstacle"].add((packet.obstacle_detected, packet.obstacle_clipped))
             line_px.append(packet.stop_line_distance_px)
             seen["lane"].add(packet.lane_status)
             seen["log"] |= {entry.split("]")[0] + "]" for entry in debug["log"]}
@@ -312,8 +316,9 @@ def test_drive_sequence_moves_every_phase3_output():
     assert seen["drive"] == {"go", "caution", "stop"}
     assert seen["stop"] == {True, False}
     assert seen["lane"] == {LANE_VISION, LANE_HOLD, LANE_STALE}
-    assert {"[TRAFFIC]", "[SIGN]", "[LANE]", "[DT]", "[HEADING]", "[STOPLINE]"} <= seen["log"]
+    assert {"[TRAFFIC]", "[SIGN]", "[LANE]", "[DT]", "[HEADING]", "[STOPLINE]", "[OBSTACLE]"} <= seen["log"]
     assert seen["line"] == {True, False}
+    assert seen["obstacle"] == {(False, False), (True, False), (True, True)}
     assert 0.0 in line_px and len({d for d in line_px if d is not None}) >= 3
     assert max(abs(h) for h in headings) > 10.0
     assert any(c is not None for c in cm) and any(c is None for c in cm)
@@ -402,7 +407,8 @@ def test_each_stage_time_leaves_out_the_wait_between_stages():
 COURSE = course_sequence()
 COURSE_ROUTE = Route(("left",))
 COURSE_CONFIGS = {"scene": SCENE_CONFIG, "alt": ALT_CONFIG}     # alt also sees the synthetic stop sign
-ALL_RULES = {RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_END_OF_COURSE}
+ALL_RULES = {RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_END_OF_COURSE,
+             RULE_OBSTACLE}
 
 
 class _CourseSource:

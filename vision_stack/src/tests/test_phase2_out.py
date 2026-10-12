@@ -28,8 +28,9 @@ from src.perception.feature_fusion import DetectionObject, FusionResult, fuse_de
 from src.perception.geometry import GeometryConfig, run_geometry_stage
 from src.perception.lane_offset import LaneOffsetConfig, LaneOffsetResult, compute_lane_offset
 from src.perception.phase2_out import (
-    DETECTION_FIELDS, LANE_OFFSET_FIELDS, STOP_LINE_FIELDS, Phase2Output, package_phase2,
+    DETECTION_FIELDS, LANE_OFFSET_FIELDS, OBSTACLE_FIELDS, STOP_LINE_FIELDS, Phase2Output, package_phase2,
 )
+from src.perception.obstacle import ObstacleResult
 from src.perception.stop_line_distance import StopLineResult
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
@@ -419,3 +420,50 @@ def test_phase2_out_characterization(request, frames, artifacts):
                         "package_phase2 latency", "microseconds")
     for fid, out in samples.items():
         artifacts.json(f"{fid:06d}_phase2_output.json", _jsonable(out))
+
+
+# =============================================================================
+# Obstacle results: the same rules again
+# =============================================================================
+
+def obstacle_result(frame_id=1, ts=2, detected=True, distance=20.0):
+    return ObstacleResult(detected, distance if detected else None, 11.5 if detected else None, False,
+                          (80, 30, 80, 100) if detected else None, 8000 if detected else 0, 1, frame_id, ts)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("bad", [None, (), "x"])
+def test_f1_non_list_obstacle_results_raises_typeerror_naming_the_field(bad):
+    with pytest.raises(TypeError, match="obstacle_results"):
+        Phase2Output([], [], 1, 2, obstacle_results=bad)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("missing", OBSTACLE_FIELDS)
+def test_f2_a_missing_obstacle_field_raises_attributeerror_naming_it(missing):
+    item = SimpleNamespace(**{k: getattr(obstacle_result(), k) for k in OBSTACLE_FIELDS if k != missing})
+    with pytest.raises(AttributeError, match=missing):
+        Phase2Output([], [], 1, 2, obstacle_results=[item])
+
+
+@pytest.mark.software
+def test_f5_an_obstacle_result_from_a_different_frame_is_rejected():
+    with pytest.raises(ValueError, match="obstacle result"):
+        Phase2Output([], [], 1, 2, obstacle_results=[obstacle_result(ts=9)])
+
+
+@pytest.mark.software
+def test_obstacle_results_default_to_empty_and_are_kept_as_is():
+    assert Phase2Output([], [], 1, 2).obstacle_results == []
+    items = [obstacle_result(), obstacle_result(detected=False)]
+    assert Phase2Output([], [], 1, 2, obstacle_results=items).obstacle_results == items
+
+
+@pytest.mark.software
+def test_package_wraps_the_obstacle_result_and_accepts_none():
+    fusion = FusionResult(detections=[], frame_id=1, timestamp_ms=2)
+    r = obstacle_result()
+    assert package_phase2(fusion, offset_result(), None, r).obstacle_results == [r]
+    assert package_phase2(fusion, offset_result(), stop_result()).obstacle_results == []
+    with pytest.raises(ValueError):
+        package_phase2(fusion, offset_result(), None, obstacle_result(frame_id=3))

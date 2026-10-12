@@ -36,6 +36,7 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
 import src.debugger.debug_video as dv
 import src.debugger.debug_lane as debug_lane
 import src.debugger.debug_lanegeo as debug_lanegeo
+import src.debugger.debug_obstacle as debug_obstacle
 import src.debugger.debug_stop as debug_stop
 import src.debugger.debug_stopline as debug_stopline
 import src.debugger.debug_traffic as debug_traffic
@@ -45,7 +46,8 @@ IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp")
 # Extra views selectable with --views. Each is built with conf_threshold=. The
 # lane view isn't here: it always runs, and needs the lane config.
 VIEWS = {"stop": debug_stop.StopView, "traffic": debug_traffic.TrafficView,
-         "stopline": debug_stopline.StopLineView, "lanegeo": debug_lanegeo.LaneGeometryView}
+         "stopline": debug_stopline.StopLineView, "lanegeo": debug_lanegeo.LaneGeometryView,
+         "obstacle": debug_obstacle.ObstacleView}
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -82,6 +84,10 @@ Views (--views a,b):
                         with its glow gate and ring share. The color branch
                         runs with calibration/hsv_ranges.json (MEASURED);
                         --hsv swaps in other ranges
+    obstacle            obstacle detector on the obstacle ROI (debug_obstacle):
+                        what it took for not floor, what survived the opening,
+                        every blob with the gate that stopped it, and the
+                        measured obstacle's distance to the view bottom
 
 Display:
     On by default; falls back to headless if the window can't open, so the
@@ -265,7 +271,7 @@ class StageLog:
     FIELDS = ("frame_id", "timestamp_ms", "preprocess_ms", "roi_ms",
               "geometry_ms", "fusion_ms", "lane_offset_ms", "total_ms",
               "accepted", "usable", "mode", "offset", "detections", "color_ms",
-              "stop_line_ms")
+              "stop_line_ms", "obstacle_ms")
 
     def __init__(self, path: str) -> None:
         self._f = open(path, "w", newline="")
@@ -283,7 +289,7 @@ class StageLog:
             dbg.get("raw_count", 0), result.boundary_count,
             result.mode, result.offset,
             "" if n_detections is None else n_detections,
-            ms("color"), ms("stop_line"),
+            ms("color"), ms("stop_line"), ms("obstacle"),
         ])
 
     def close(self) -> None:

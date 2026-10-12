@@ -21,15 +21,17 @@ Flow, every frame:
     1. StopLineTracker.update(packet): has the robot reached a stop line?
        A line leaving the view is the next intersection: RouteProgress.enter().
        While an intersection is being crossed, no new line is taken up.
-    2. StopSignRule      stop sign at the line: stop, hold, go
-    3. TrafficLightRule  red light at the line: wait for it
-    4. IntersectionRule  from the line leaving the view: straight to the line,
+    2. ObstacleRule      something in the path within reach: brake, wait
+                         until it's gone, go on
+    3. StopSignRule      stop sign at the line: stop, hold, go
+    4. TrafficLightRule  red light at the line: wait for it
+    5. IntersectionRule  from the line leaving the view: straight to the line,
                          the route's turn there (left / right), then out on
                          the new heading until the lane is back
-    5. EndOfCourseRule   lane stale: creep; stale too long: brake, finished
+    6. EndOfCourseRule   lane stale: creep; stale too long: brake, finished
                          (or ended early, before the route is done); the
                          route's finish line: brake, finished
-    6. LaneKeepingNavigator, when none of them spoke.
+    7. LaneKeepingNavigator, when none of them spoke.
     Once finished, every frame is BRAKE and the run's loop ends on it.
     Every rule sees every frame (held = a higher rule already decided it),
     so each keeps its own state current whether or not it's the one heard.
@@ -39,17 +41,19 @@ from src.navigation.end_of_course import EndOfCourseRule
 from src.navigation.intersection import IntersectionRule
 from src.navigation.lane_keeping import LaneKeepingNavigator
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems, enforce
+from src.navigation.obstacle import ObstacleRule
 from src.navigation.route import Route, RouteProgress
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
-           "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
+           "RULE_OBSTACLE", "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
            "RULE_LANE_KEEPING"]
 
 RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION, RULE_END_OF_COURSE, RULE_LANE_KEEPING = (
     "stop_sign", "traffic_light", "intersection", "end_of_course", "lane_keeping")
+RULE_OBSTACLE = "obstacle"
 
 
 class Navigation:
@@ -63,24 +67,27 @@ class Navigation:
             yaw_rate is raw); the run's Phase 3 gyro bias.
         route: The course plan (route.py); Route() (no maneuvers, finish at
             the edge: every intersection straight, a lost lane the finish) by default.
+        obstacle: The obstacle rule; ObstacleRule() (its constants) by default.
 
     record: Why the last update() returned what it did:
         {"rule": RULE_*, "phase": the tracker's phase, plus the deciding
         part's own record ("reason", and "source" / "steer" when steering)}.
     """
     def __init__(self, lane: LaneKeepingNavigator | None = None, tracker: StopLineTracker | None = None,
-                 gyro_bias_dps: float = 0.0, route: Route | None = None) -> None:
+                 gyro_bias_dps: float = 0.0, route: Route | None = None,
+                 obstacle: ObstacleRule | None = None) -> None:
         self.lane = lane or LaneKeepingNavigator()
         self.tracker = tracker or StopLineTracker()
         self.progress = RouteProgress(route)
         self.rules = [
+            (RULE_OBSTACLE, obstacle or ObstacleRule()),
             (RULE_STOP_SIGN, StopSignRule(self.tracker)),
             (RULE_TRAFFIC_LIGHT, TrafficLightRule(self.tracker)),
             (RULE_INTERSECTION, IntersectionRule(self.tracker, self.lane, gyro_bias_dps=gyro_bias_dps,
                                                  progress=self.progress)),
             (RULE_END_OF_COURSE, EndOfCourseRule(self.lane, self.progress, self.tracker)),
         ]
-        self._crossing = self.rules[2][1]
+        self._crossing = self.rules[3][1]
         self._end = self.rules[-1][1]
         self.record: dict = {}
 

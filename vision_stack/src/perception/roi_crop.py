@@ -1,7 +1,7 @@
 """Region-of-interest cropping that splits each frame into per-branch inputs.
 
 Purpose:
-    Partitions the preprocessed frame into three regions before the pipeline
+    Partitions the preprocessed frame into four regions before the pipeline
     splits into parallel branches. Cropping shrinks the pixel area each
     branch processes and removes irrelevant scenery, which lowers the
     false-positive rate before any threshold is applied.
@@ -9,7 +9,8 @@ Purpose:
 Main package:
     ROICropResult: lane and sign ROIs cut from the gray frame, a traffic ROI
     and a second sign ROI (sign_color_roi, same rect) cut from the color
-    frame (HSV thresholding and the sign's redness mask need chroma), and
+    frame (HSV thresholding and the sign's redness mask need chroma), the
+    obstacle ROI (the path ahead) from both, and
     each ROI's rect in source pixels so
     ROI-space detections can be mapped back to the frame. ROIs are read-only
     views, not copies.
@@ -61,14 +62,23 @@ LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
 TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
 # Upper-right: signs are posted right of the lane
 SIGN = ROIBounds(x0=0.55, y0=0.20, x1=1.00, y1=0.85)
+# The robot's path ahead (perception/obstacle.py): the middle half of the
+# frame, where the robot's own body will go, from the bottom of the view up
+# past the lane ROI. Upright objects rise above their base, so the extra
+# rows let one be measured before its base reaches the lane ROI. Inside the
+# lane lines at the bottom (the lane is ~456 px wide there); the lines
+# converge into it higher up, but tape is too thin to survive the
+# detector's opening
+OBSTACLE = ROIBounds(x0=0.25, y0=0.45, x1=0.75, y1=1.00)
 
 
 @dataclass(frozen=True)
 class ROIConfig:
-    """Bounds for each ROI. Lane and sign are cut from the gray frame, traffic from the color frame."""
+    """Bounds for each ROI. Lane and sign are cut from the gray frame, traffic from the color frame, obstacle from both."""
     lane: ROIBounds = LANE
     traffic: ROIBounds = TRAFFIC
     sign: ROIBounds = SIGN
+    obstacle: ROIBounds = OBSTACLE
 
 
 @dataclass(frozen=True)
@@ -92,6 +102,15 @@ class ROICropResult:
     # The sign ROI again, from the color frame: the stop sign is found by color.
     # The gray sign_roi is no longer read by any stage; a view costs nothing to keep
     sign_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect as sign_rect
+    # The path ahead, from both frames: brightness from gray, saturation from
+    # color (perception/obstacle.py). crop_rois always fills all three
+    obstacle_roi: np.ndarray | None = None          # (h, w) uint8 view of the gray frame
+    obstacle_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect
+    obstacle_rect: tuple[int, int, int, int] | None = None     # (x, y, w, h) in source-frame px
+    # The whole color frame, read-only: the obstacle detector's reference for
+    # the scene's color cast (an object near the robot can fill a ROI, but
+    # not the frame)
+    color_frame: np.ndarray | None = None           # (H, W, 3) uint8 BGR view
 
 
 def _validate(
@@ -158,7 +177,7 @@ def crop_rois(
     ) -> ROICropResult:
     """
     Cut the branch ROIs from one preprocessed frame: lane and sign from gray,
-    traffic and the sign again from color.
+    traffic and the sign again from color, the obstacle ROI from both.
 
     Inputs:
         config: ROI bounds. Defaults to LANE, TRAFFIC and SIGN.
@@ -183,6 +202,9 @@ def crop_rois(
     sign_roi, sign_rect = crop(pre.gray, config.sign)
     sign_color_roi, _ = crop(pre.color, config.sign)
     traffic_roi, traffic_rect = crop(pre.color, config.traffic)
+    obstacle_roi, obstacle_rect = crop(pre.gray, config.obstacle)
+    obstacle_color_roi, _ = crop(pre.color, config.obstacle)
+    color_frame, _ = crop(pre.color, ROIBounds(0.0, 0.0, 1.0, 1.0))
 
     return ROICropResult(
         lane_roi = lane_roi,
@@ -195,6 +217,10 @@ def crop_rois(
         timestamp_ms = pre.timestamp_ms,
         source_shape = pre.gray.shape[:2],
         sign_color_roi = sign_color_roi,
+        obstacle_roi = obstacle_roi,
+        obstacle_color_roi = obstacle_color_roi,
+        obstacle_rect = obstacle_rect,
+        color_frame = color_frame,
     )
 
 

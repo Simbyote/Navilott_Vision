@@ -75,17 +75,18 @@ Sensors:
 
 Output (--out DIR, default <root>/runs/p3_<timestamp>):
     console      one status line every --print-every frames, plus an event
-                 line on every lane_status, drive_state, stop_sign or
-                 stop_line change
-    p3.csv       every frame: timings, the Phase 2 lane and stop-line input,
+                 line on every lane_status, drive_state, stop_sign,
+                 stop_line or obstacle change
+    p3.csv       every frame: timings, the Phase 2 lane, stop-line and obstacle input,
                  the packet, and Phase 3's debug log
     p3_debug.avi the Phase 3 video, every frame (--no-video turns it off):
                  the Phase 2 lane overlay with traffic lights and stop signs
                  green if they passed Phase 3's gate, amber if not; the lane
                  filter's raw vs filtered offset, status, hold counter and
-                 rejection reason; the three vote buffers; and a 5 s timeline
+                 rejection reason; the obstacle Phase 2 measured, boxed; the
+                 four vote buffers; and a 5 s timeline
     p3_debug.csv every frame's Phase 3 decisions: lane reason, EMA before and
-                 after, vote buffers, stop line seen or held
+                 after, vote buffers, stop line and obstacle seen or held
     summary.txt  timing percentiles, lane status and mode histograms, longest
                  hold and stale runs, offset statistics while on vision, the
                  [PHASE 3] decision counts, and [TIMING] per stage (Phase 2
@@ -171,7 +172,7 @@ def status_line(res: Phase3Result) -> str:
 
     Example:
         f0412 t=20.61s P1=6.1 P2=31.8 P3=0.9ms | two_boundary L=150 R=290 n=2
-        c=.82 raw=+0.045 | off=+0.031 vision hd=+0.0 | go stop=F
+        c=.82 raw=+0.045 | off=+0.031 vision hd=+0.0 | go stop=F line=-- obs=--
     """
     pk, off, t = res.packet, res.chain.offset, res.timings_ms
     cm = f" ({pk.lane_offset_cm:+.1f}cm)" if pk.lane_offset_cm is not None else ""
@@ -184,14 +185,16 @@ def status_line(res: Phase3Result) -> str:
         f"{pk.drive_state} stop={'T' if pk.stop_sign_detected else 'F'} "
         f"line={_fmt(pk.stop_line_distance_px, '.0f')}"
         + (f"/{pk.stop_line_distance_cm:.1f}cm" if pk.stop_line_distance_cm is not None else "")
+        + f" obs={'bottom' if pk.obstacle_clipped else _fmt(pk.obstacle_distance_px, '.0f')}"
+        + (f"/{pk.obstacle_distance_cm:.1f}cm" if pk.obstacle_distance_cm is not None else "")
     )
 
 
 class EventTracker:
     """
     Reports changes in the packet fields Navigation acts on: lane_status,
-    drive_state, stop_sign_detected and stop_line_detected. counts holds
-    transitions per field.
+    drive_state, stop_sign_detected, stop_line_detected and
+    obstacle_detected. counts holds transitions per field.
     """
     def __init__(self) -> None:
         self._prev = None
@@ -210,6 +213,7 @@ class EventTracker:
             "drive": pk.drive_state,
             "stop_sign": "T" if pk.stop_sign_detected else "F",
             "stop_line": "T" if pk.stop_line_detected else "F",
+            "obstacle": "T" if pk.obstacle_detected else "F",
         }
         lines = []
         if self._prev is not None:
@@ -236,6 +240,8 @@ CSV_COLUMNS = (
     # Appended, so no earlier column moves
     "p2_stop_line_cm", "stop_line_distance_cm",
     "left_wheel_cps", "right_wheel_cps",
+    "p2_obstacle_px", "p2_obstacle_cm",
+    "obstacle_detected", "obstacle_distance_px", "obstacle_distance_cm", "obstacle_clipped",
 )
 
 class CsvLog:
@@ -265,6 +271,8 @@ class CsvLog:
             " | ".join(res.p3_debug.get("log", [])),
             res.chain.stop_line.distance_cm, pk.stop_line_distance_cm,     # blank without a ground homography
             pk.left_wheel_cps, pk.right_wheel_cps,
+            res.chain.obstacle.distance_px, res.chain.obstacle.distance_cm,      # blank when Phase 2 saw none
+            int(pk.obstacle_detected), pk.obstacle_distance_px, pk.obstacle_distance_cm, int(pk.obstacle_clipped),
         ))
 
     def close(self) -> None:
@@ -483,7 +491,8 @@ def run(
     summary += ["", f"transitions      lane {events.counts['lane']}  "
                     f"drive {events.counts['drive']}  "
                     f"stop_sign {events.counts['stop_sign']}  "
-                    f"stop_line {events.counts['stop_line']}"]
+                    f"stop_line {events.counts['stop_line']}  "
+                    f"obstacle {events.counts['obstacle']}"]
     with open(os.path.join(out_dir, "summary.txt"), "w") as f:
         f.write(f"source {source.label}\n\n" + "\n".join(summary) + "\n")
     print("\n" + "\n".join(summary))

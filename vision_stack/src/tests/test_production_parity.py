@@ -17,6 +17,7 @@ a debug-free twin next to every function that does debug work:
                     compute_lane_offset      -> estimate_lane_offset
     feature_fusion  _best_candidate          -> _pick_best
                     fuse_detections          -> fuse
+    obstacle        compute_obstacle         -> estimate_obstacle
 
 The twins repeat the gate logic, so they are only correct while they agree
 with the debug path. Every test here pins that agreement.
@@ -34,6 +35,7 @@ from src.perception import color_branch as cb
 from src.perception import feature_fusion as ff
 from src.perception import geometry as geo
 from src.perception import lane_offset as lo
+from src.perception import obstacle as ob
 from src.perception import stop_line_distance as sld
 from src.perception.phase2_out import package_phase2
 from src.perception.preprocess import preprocess_frame
@@ -56,8 +58,9 @@ def _run_debug(roi, config, color):
     traffic, _ = cb.run_color_stage(roi, color)
     offset, _ = lo.compute_lane_offset(g, roi, config.lane_offset)
     stop_line, _ = sld.compute_stop_line_distance(g, roi, config.stop_line, config.ground)
+    obstacle, _ = ob.compute_obstacle(roi, config.obstacle, config.ground, SYNTHETIC_STOP_LINE_TABLE)
     fusion, _ = ff.fuse_detections(g, traffic, roi)
-    return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
+    return g, traffic, offset, stop_line, obstacle, fusion, package_phase2(fusion, offset, stop_line, obstacle)
 
 def _run_production(roi, config, color):
     """The same chain through the production twins."""
@@ -65,10 +68,11 @@ def _run_production(roi, config, color):
     traffic = cb.detect_color(roi, color)
     offset = lo.estimate_lane_offset(g, roi, config.lane_offset)
     stop_line = sld.estimate_stop_line_distance(g, roi, config.stop_line, config.ground)
+    obstacle = ob.estimate_obstacle(roi, config.obstacle, config.ground, SYNTHETIC_STOP_LINE_TABLE)
     fusion = ff.fuse(g, traffic, roi)
-    return g, traffic, offset, stop_line, fusion, package_phase2(fusion, offset, stop_line)
+    return g, traffic, offset, stop_line, obstacle, fusion, package_phase2(fusion, offset, stop_line, obstacle)
 
-STAGES = ("geometry", "traffic", "offset", "stop_line", "fusion", "phase2")
+STAGES = ("geometry", "traffic", "offset", "stop_line", "obstacle", "fusion", "phase2")
 
 
 @pytest.mark.software
@@ -91,14 +95,16 @@ def test_chain_parity(scene, color_on, config_name):
 def test_scenes_exercise_every_output():
     """Guards the parity test itself: the scene set must reach every detection type and offset mode."""
     color = cb.ColorConfig(cb.load_hsv_ranges(str(HSV_RANGES_PATH)))
-    types, modes = set(), set()
+    types, modes, obstacles = set(), set(), set()
     for frame in SCENES.values():
         for config in CONFIGS.values():
-            _, _, offset, _, fusion, _ = _run_debug(_roi(frame, config), config, color)
+            _, _, offset, _, obstacle, fusion, _ = _run_debug(_roi(frame, config), config, color)
             types |= {d.type for d in fusion.detections}
             modes.add(offset.mode)
+            obstacles.add((obstacle.detected, obstacle.clipped))
     assert {"lane_boundary", "stop_sign", "traffic_light"} <= types
     assert {"two_boundary", "none"} <= modes and len(modes) >= 3
+    assert obstacles == {(False, False), (True, False), (True, True)}
 
 
 @pytest.mark.software

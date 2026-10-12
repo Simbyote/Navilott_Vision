@@ -46,6 +46,7 @@ class Navigator(Protocol):
 | `drive_state` | `stop` (red) **stops the robot at a stop line**, not before it and not without one; `go` and `caution` drive on (decided 2026-10-01) |
 | `stop_line_detected`, `stop_line_distance_px` | A stop line says an intersection is coming. It stops the robot only with a stop sign or a red light, once the robot reaches it: 1.5 s after it leaves the bottom of the view |
 | `lane_mode` | Phase 2's mode this frame; `two_boundary` = both lane boundaries seen |
+| `obstacle_detected`, `obstacle_distance_cm` / `_px`, `obstacle_clipped` | Something in the path within reach (12 cm from the front edge, or 24 rows with no cm, or clipped) **brakes the robot, and it stays braked until nothing has been seen for 1 s**; then it drives on (decided 2026-10-12). Ahead of every other rule. The lane it hides doesn't count toward the end of the course |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
 | `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders. The packet's only wheel speed: there is no m/s field (see "Open questions") |
 | `stop_sign_detected` | The sign gate is untuned (see `phase3_estimation.md`, "Open items"). Don't rely on it yet |
@@ -93,7 +94,7 @@ This robot's IMU is mounted upside down, so its raw gyro Z reads **+ when the ro
 | --- | --- |
 | One packet per frame, stamped at capture | One `Command` per packet |
 | Says how much to trust the lane (`lane_status`) | Decides what to do on `hold` and `stale` |
-| Votes `drive_state`, stop sign, stop line | Decides at each stop line: stop, wait, cross |
+| Votes `drive_state`, stop sign, stop line, obstacle | Decides at each stop line: stop, wait, cross; and for an obstacle: brake, wait, go |
 | Passes IMU and encoder readings through | Uses them: speed control, turns, distance |
 | Never drives the motors | Never reads the camera or the sensors directly |
 

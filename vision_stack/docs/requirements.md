@@ -31,6 +31,8 @@ On P2: the pipeline stamps a frame when it reaches the application, after exposu
 | D4 | Detect the stop line at an intersection, and how far ahead it is | Proposed: with `calibration/ground_homography.json` fitted (`guides/calibrate_ground.md`) or, instead, `calibration/stop_line_table.json` (`guides/calibrate_stop_line.md`, distances then from its reference point), park square to a stop line at tape-measured distances from the reference point (the floor at the bottom of the camera's view) to the line's near edge: 0 (on it), 5, 10, 15, 20 cm and the far edge of the lane ROI. 100 frames each through `phase3_linker`. Pass: at every distance the stop line is detected in ≥ 95% of frames and the median `p2_stop_line_cm` is within ±1.0 cm of the tape (±0.5 cm at 0–10 cm), with a frame-to-frame standard deviation under 0.5 cm; repeat at ±10° to the line; and no stop line on 300 frames of plain lane with dashed center line. Tolerances **TBD** with navigation's stopping needs | Implemented (geometry detection, `stop_line_distance`, Phase 3 vote, cm through the ground homography or the stop-line table); not verified on the course |
 | D5 | Detect intersections | The intersection is found by its stop line (D4): `StopLineTracker` follows the line until it leaves the view, then `IntersectionRule` crosses (`navigation/intersection.py`). `test_intersection` (software); on the course, `intersection_linker` judges each crossing PASS / CHECK, and `make routine-figure-eight` runs 8 a lap | Implemented and tested in software; not verified on the course |
 
+| D6 | Detect an obstacle in the robot's path, how far ahead its base is, and stop for it within about 10 cm until it's removed | `test_obstacle`, `test_obstacle_rule` (software). On the robot: `make test-hw ARGS="src/tests/test_obstacle.py --obstacle-cm X"` with a box placed in the path, its base X cm from the robot's front edge (the stop-line table's reference): pass at ≥ 90% of frames detected and the median within ±1.5 cm; `--obstacle-cm 0` with the path clear: under 2% of frames fire. Also the stage's median time under 5 ms. Then a box set down in the lane on a run: the robot brakes, waits while it's there and drives on once it's lifted (`navigation_linker`, rule `obstacle`). Distances and the dark-object limit **TBD** on the course | Implemented (`perception/obstacle.py`, the Phase 3 vote, `navigation/obstacle.py`); gates untuned; not verified on the course |
+
 D5 was first planned as a scene state machine, a separate detector for "the robot is in an intersection". It was built a simpler way instead: every intersection on the course has a stop line at the robot's entry, so the stop line (D4) marks it, and the route says which way to go. An intersection with no stop line wouldn't be seen; on this course there isn't one.
 
 ---
@@ -65,5 +67,5 @@ Record the results, with the date and commit, in the status column above.
 | | Verified | Not yet | Not implemented |
 | --- | --- | --- | --- |
 | Performance | P4 | P1, P2, P3 | |
-| Detection | | D1, D2, D3, D4, D5 | |
+| Detection | | D1, D2, D3, D4, D5, D6 | |
 | Robustness | R1, R2, R3, R5 (all in software) | R4 | |

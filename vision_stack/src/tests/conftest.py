@@ -54,6 +54,9 @@ def pytest_addoption(parser):
     g.addoption("--soak-minutes", type=float, default=None,
                 help="run the soak test for this long; it is skipped without it")
     g.addoption("--interactive", action="store_true", help="run tests that need a person at the robot")
+    g.addoption("--obstacle-cm", type=float, default=None, metavar="CM",
+                help="test_obstacle: a box is in the path, its base CM from the robot's front edge "
+                     "(0: the path is clear); without it the run is only recorded")
 
 
 def pytest_configure(config):
