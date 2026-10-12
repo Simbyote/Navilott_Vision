@@ -86,8 +86,21 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
+              "target_left_cps", "target_right_cps", "gain_left", "gain_right",
               "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
+
+def wheel_columns(rec: dict, wheels) -> dict:
+    """
+    nav.csv's wheel-speed columns: the turn's target counts/s (blank off a
+    turn) and each wheel's learned counts/s per duty (blank without a
+    WheelSpeed). The gains falling as the pack drains is the voltage the
+    turns no longer feel.
+    """
+    target = (rec.get("wheels") or {}).get("target", (None, None))
+    gains = (None, None) if wheels is None else tuple(round(g, 1) for g in wheels.gains)
+    return {"target_left_cps": target[0], "target_right_cps": target[1], "gain_left": gains[0], "gain_right": gains[1]}
+
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -369,6 +382,7 @@ def run(
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 **wheel_columns(rec, getattr(navigator, "wheels", None)),
                  "imu_reads": None if batch is None else batch.imu_attempts,
                  "imu_read_ms": None if batch is None else batch.imu_read_ms_max,
                  "imu_failed": None if batch is None else batch.imu_failed,

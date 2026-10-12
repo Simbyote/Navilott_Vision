@@ -24,6 +24,7 @@ from src.navigation.lane_keeping import BASE_SPEED, KP_HEADING, LaneKeepingNavig
 from src.navigation.navigation_contract import Command, command_problems
 from src.navigation.route import LEFT, RIGHT, STRAIGHT, Route, RouteProgress
 from src.navigation.stop_line import StopLineTracker
+from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
@@ -32,20 +33,24 @@ LOST = len(LINE)
 # The tracker spends at least one frame in CROSSING (the rule starts on it), so
 # the line is reached the frame after it leaves even with no delay
 REACHED = LOST + reach_frames(frame_ms=MS)
-# A turn advances ADVANCE_MS from the line first; the frame its time adds up on
-# is already the turn's
-TURN_START = REACHED + ADVANCE_MS // MS - 1
+# The advance these tests drive with: the robot runs with ADVANCE_MS 0 since
+# 2026-10-12, which would skip the stage they check
+TEST_ADVANCE_MS = 1000
+# A turn advances TEST_ADVANCE_MS from the line first; the frame its time adds
+# up on is already the turn's
+TURN_START = REACHED + TEST_ADVANCE_MS // MS - 1
 
 
-def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None):
+def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None, advance_ms=TEST_ADVANCE_MS, wheels=None):
     """
     The line, then one dict of fields per frame after it. held: frame indexes
     a higher rule holds. maneuver: a one-step route taking it at this line;
-    None, no route (straight).
+    None, no route (straight). wheels: a WheelSpeed for the turn; None, its duties.
     """
     tracker = StopLineTracker()
     progress = RouteProgress(Route((maneuver,)) if maneuver else None)
-    rule = IntersectionRule(tracker, LaneKeepingNavigator(), gyro_bias_dps=bias, progress=progress)
+    rule = IntersectionRule(tracker, LaneKeepingNavigator(), gyro_bias_dps=bias, progress=progress,
+                            advance_ms=advance_ms, wheels=wheels)
     seq = [{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "right_only"} for r in line] + after
     out = []
     for i, fields in enumerate(seq):
@@ -64,7 +69,7 @@ def active(out):
 @pytest.mark.software
 def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
-    assert ADVANCE_MS == 1000         # the stop lines sit back in the street (2026-10-07)
+    assert ADVANCE_MS == 0            # 2026-10-12: STOP_DELAY_MS (500) carries the robot in instead
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 
@@ -223,7 +228,7 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.46, 0.73), Command(0.55, 0.25))     # 2026-10-06
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.50, 0.25))     # 2026-10-12
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
 
@@ -251,6 +256,24 @@ def test_a_turn_the_gyro_never_sees_ends_at_its_time_limit(maneuver, max_ms):
     _, out = drive(turn_case(0.0, turn_frames=max_ms // MS + 10), maneuver=maneuver)
     turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
     assert turning[0] == TURN_START and len(turning) == max_ms // MS - 1         # the frame reaching it exits
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN), (RIGHT, YAW_DPS, RIGHT_TURN)])
+def test_with_wheel_speed_a_turn_runs_its_duties_without_encoders_and_more_on_slow_wheels(maneuver, yaw, duties):
+    _, out = drive(turn_case(yaw), maneuver=maneuver, wheels=WheelSpeed())
+    turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
+    assert turning and all(out[i][0] == duties for i in turning)             # no encoders: the tuned duties
+    assert out[turning[0]][1]["wheels"]["closed"] is False
+    wheels = WheelSpeed()
+    wheels.encoders = True
+    slow = [dict(f, left_wheel_cps=0.6 * duties.left * CPS_PER_DUTY, right_wheel_cps=0.6 * duties.right * CPS_PER_DUTY)
+            for f in turn_case(yaw)]                                         # a tired pack: 60% of the speed
+    _, out = drive(slow, maneuver=maneuver, wheels=wheels)
+    turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
+    last = out[turning[-1]][0]
+    assert last.left > duties.left and last.right > duties.right
+    assert all(command_problems(out[i][0]) == [] for i in turning)
 
 
 @pytest.mark.software
