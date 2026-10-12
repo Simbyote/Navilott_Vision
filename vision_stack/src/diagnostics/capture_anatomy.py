@@ -365,6 +365,7 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s)
     _save(out, "gst_launch.txt", text)
     res["gst_code"] = code
+    res["gst_errors"] = gst_errors(text)
     if code is None:
         res["missing"].append("gst-launch-1.0")
     res["caps"] = parse_caps(text)
@@ -403,17 +404,50 @@ def _element_ms(res: dict, factory: str) -> float:
     return sum(s["median_ms"] for s in res["latency"] if s["kind"] == "element" and s["element"].startswith(factory))
 
 
+_BUSY = ("busy", "acquire", "in use")
+
+
+def gst_errors(text: str) -> list[str]:
+    """gst-launch's ERROR lines, each with the debug-info line under it, in order."""
+    lines, out = text.splitlines(), []
+    for i, line in enumerate(lines):
+        if line.startswith("ERROR"):
+            more = lines[i + 1].strip() if i + 1 < len(lines) and lines[i + 1].startswith("Additional") else ""
+            out.append(f"{line.strip()} {more}".strip())
+    return out
+
+
+def frames_flowed(res: dict) -> bool:
+    """The tracer saw buffers: a source-to-sink latency, or any element holding one."""
+    return bool(res["latency"])
+
+
+def _no_pipeline_latency(res: dict) -> str:
+    """Why there's no source-to-sink latency, as far as the recording can tell."""
+    if "gst-launch-1.0" in res["missing"]:
+        return "no GStreamer here: only the static probes ran"
+    errors = res.get("gst_errors") or []
+    if errors:
+        busy = any(w in errors[0].lower() for w in _BUSY)
+        hint = ": the camera is open in another process (the robot's pipeline, or a test before this one)" if busy else ""
+        return f"gst-launch stopped with {errors[0]}{hint}. See gst_launch.txt"
+    if frames_flowed(res):
+        n = sum(s["frames"] for s in res["latency"])
+        return (f"frames flowed ({n} element-latency entries), but the latency tracer logged no source-to-sink "
+                "time: it needs a source flagged as one, which libcamerasrc may not be on this GStreamer")
+    if res["caps"]:
+        return ("the pipeline negotiated its caps but no buffer was traced: either no frame reached the sink, or "
+                "the latency tracer isn't here (gst-inspect-1.0 coretracers). See gst_launch.txt and gst_trace.log")
+    return ("no frame reached the sink and gst-launch reported no error: is the camera open in another process "
+            "(the robot's pipeline)? See gst_launch.txt and libcamera.log")
+
+
 def findings(res: dict) -> list[str]:
     """What the recording says, in words."""
     out = []
     pipe = [s for s in res["latency"] if s["kind"] == "pipeline"]
     if not pipe:
-        if "gst-launch-1.0" in res["missing"]:
-            out.append("no GStreamer here: only the static probes ran")
-        else:
-            out.append("no frame reached the sink: is the camera open in another process (the robot's "
-                       "pipeline)? See gst_launch.txt")
-        return out
+        return [_no_pipeline_latency(res)]
     p = pipe[0]
     if p["fps"] is not None and p["fps"] < 0.9 * FPS:
         out.append(f"the pipeline delivered {p['fps']:.1f} fps, under the {FPS} asked for")
