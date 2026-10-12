@@ -76,6 +76,10 @@ END_COURSE = "end of course"                    # the navigator finished the rou
 END_EARLY = "ended early (lane lost before the route was done)"
 END_BATTERY = "battery critical"
 REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
+# A frame whose Phases 1-3 took this long is named in nav.csv's event column
+# with its slowest stage: past the motor watchdog's 0.5 s the robot stops on
+# its own. The 2026-10-12 runs had 0.6-1.6 s frames mid-run, which braked it
+SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
               "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
@@ -117,6 +121,17 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
 # =============================================================================
 # Findings
 # =============================================================================
+
+def slow_frame(res, limit_ms: float = SLOW_FRAME_MS) -> str:
+    """nav.csv's event for a frame whose capture + Phases 2-3 took limit_ms or more, naming its slowest stage; "" otherwise."""
+    t = res.timings_ms
+    total = t.get("capture", 0.0) + t.get("phase2", 0.0) + t.get("phase3", 0.0)
+    if total < limit_ms:
+        return ""
+    stages = {**{k: t[k] for k in ("capture", "phase3") if k in t}, **res.chain.timings_ms}
+    name, ms = max(stages.items(), key=lambda kv: kv[1])
+    return f"slow frame {total:.0f} ms: {name} {ms:.0f} ms"
+
 
 def obstacle_cm(pkt) -> float | str | None:
     """nav.csv's obstacle_cm: the voted obstacle's cm, "view bottom" when clipped, None when there's none (or no cm)."""
@@ -326,6 +341,9 @@ def run(
 
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
+            slow = slow_frame(res)
+            if slow:
+                event = f"{event}; {slow}" if event else slow
             last_reason = reason
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),

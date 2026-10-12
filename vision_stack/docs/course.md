@@ -69,9 +69,9 @@ Moving the mount changes the height, tilt or position, which invalidates the len
 | Lane ROI | Bottom 30% of the frame, 5–95% across | The rows showing the road just ahead of the robot at this height and tilt |
 | Minimum plausible lane width | 60 px | Well under one lane width in px |
 | Maximum plausible lane width | 400 px | Between one lane and a full street, in px |
-| Lane center from one visible line | 228 px, hand-set | Half the lane width in px, measured |
+| Lane center from one visible line | 178 px (MEASURED; 228 hand-set until 2026-10-12) | Half the lane width in px: the median two-boundary width over the 2026-10-12 runs, 350–357 px |
 | Ground scale | Not set | 14 cm ÷ lane width in px, measured at the bottom of the lane ROI |
 
-Once the ground scale is measured, the three px values above can be checked against it. For example, at a scale of 0.05 cm/px, one lane (14 cm) is about 280 px and a full street (29–30 cm) is about 590 px. The 400 px maximum would sit correctly between them, and the 228 px half-lane value would be too high (140 px expected). The numbers are only an example; use the measured scale.
+Once the ground scale is measured, the three px values above can be checked against it. For example, at a scale of 0.05 cm/px, one lane (14 cm) is about 280 px and a full street (29–30 cm) is about 590 px. The 400 px maximum would sit correctly between them, and a 228 px half-lane value would be too high (140 px expected). The numbers are only an example; use the measured scale.
 
 Perspective makes the scale depend on the row: the road near the bottom of the frame is closer and spans more pixels per cm than the road near the top of the lane ROI. Measure the scale at the rows where the lane lines are read, which is the bottom of the lane ROI.

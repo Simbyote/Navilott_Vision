@@ -299,7 +299,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. The current value (228 px) is hand-set, not calibrated.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 
@@ -335,7 +335,7 @@ One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+,
 
 The board-free alternative for the stop line. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C`, is then fit through them by linear least squares. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
-**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the hand-set `expected_half_lane_px` (228) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
+**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (178) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
 ---
 
@@ -346,13 +346,13 @@ The board-free alternative for the stop line. Tape strips laid at measured dista
 Is something solid standing in the robot's path, and how far ahead is its base? The course is dark mats and white tape, and neither has color, so in the obstacle ROI a pixel much brighter than the floor, or clearly colored, is "not floor". Tape is bright too, but thin: an opening with a square wider than any tape removes lane lines, dashes and stop lines, and what survives is something large and solid.
 
 ```
-every 2nd px → floor level (25th percentile, capped at 70) → not floor: gray ≥ floor + 60, or S ≥ 80 with V ≥ 50
+every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gray ≥ floor + 60, or S ≥ 80 with V ≥ 50
              → opening, 47 px square → blobs → gates: area ≥ 2500, width ≥ 60, height ≥ 60, base ≤ 90 rows ahead
              → nearest (lowest base) → distance_px, distance_cm
 ```
 
 - **Every second pixel** each way (`step`): the loop already runs at its budget on the Pi; an obstacle is tens of pixels across. Sizes and rows stay in full-resolution px.
-- **The floor cap** keeps a box that fills the view from becoming "the floor" its contrast is measured from.
+- **The floor level** is measured each frame on the lane ROI, which is wider than the path, so a box in the path leaves floor beside it. The course's floor runs from dark mats to light gray (95–130 at the 2026-10-12 run's intersections): a fixed level (a cap at 70, the first version) called the light floor an obstacle, 376 of 537 frames on that run against 131 once measured (the can's, by eye).
 - **`open_px` (47)** is wider than any lane tape (MEASURED's lane gate allows 45 px, the widest seen 41.7) and taller than any stop line (`max_thickness_px` 40; near the view bottom 1 cm of floor is ~10 rows). Tape wider than it would survive.
 - **`distance_px`** is the rows from the blob's lowest row (where an upright object meets the floor) to the lane ROI bottom, as for the stop line. **`distance_cm`** is the floor there: through the ground homography at the base's center, else the stop-line table, whose curve maps any floor row to cm. The table's reference is the robot's front edge, and its row 0 is ~10.2 cm ahead of it, so a blob running off the ROI bottom is **`clipped`**: its base isn't in view, "this near or nearer".
 - **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess.
@@ -462,7 +462,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 - **Undistortion** on the IMX290: cost against improvement, measured with the calibration test.
 - **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
 - **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
-- **`expected_half_lane_px`** from calibration instead of the hand-set 228 px.
+- **`expected_half_lane_px`** re-measured whenever the mount moves (178 px from the 2026-10-12 runs' two-boundary widths).
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Obstacle gates on real frames:** the not-floor thresholds against the mats under the venue's light, `open_px` against the widest tape, the false-alarm rate on a clear course, and what a stop sign low in the corridor does (`make phase2 VIEWS=obstacle`, then `test_obstacle --hardware --obstacle-cm`).
 - **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).

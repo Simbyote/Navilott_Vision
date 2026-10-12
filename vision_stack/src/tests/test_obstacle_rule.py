@@ -182,3 +182,14 @@ def test_the_strip_draws_any_obstacle_record(ob):
     from src.debugger.debug_navigation import draw_strip
     img = draw_strip({"rule": RULE_OBSTACLE, "brake": 1, "reason": REASON_OBSTACLE, "obstacle_cm": ob}, 480)
     assert img.shape[1] == 480 and img.any()
+
+
+@pytest.mark.software
+def test_a_slow_frame_is_named_with_its_slowest_stage():
+    from types import SimpleNamespace
+    import src.navigation_linker as nl
+    res = lambda p2, stages: SimpleNamespace(timings_ms={"capture": 2.0, "phase2": p2, "phase3": 0.6},
+                                             chain=SimpleNamespace(timings_ms=stages))
+    assert nl.slow_frame(res(45.0, {"geometry": 20.0})) == ""
+    assert nl.slow_frame(res(1500.0, {"geometry": 20.0, "obstacle": 1470.0})) == \
+        "slow frame 1503 ms: obstacle 1470 ms"

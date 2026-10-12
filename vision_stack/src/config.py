@@ -141,6 +141,13 @@ MEASURED = PipelineConfig(
         # 130 from the candidate sweep; 90 since one darker stretch of the
         # course dimmed the tape enough that lane_offset refused it (2026-10-05)
         min_intensity = 90.0,
+        # Half the lane, for the single-line projection. 228 was hand-set; the
+        # 2026-10-12 runs measured the lane at 350 / 357 px (two-boundary
+        # median, 515 frames), so half is ~178. At 228 every left_only /
+        # right_only frame was off by ~0.23-0.26 against the two-boundary
+        # frames around it (one dash seen: a hard swerve, then the jump gate
+        # dropped the lane to hold and stale); at 178, ~0.04-0.08
+        expected_half_lane_px = 178.0,
     ),
 )
 
