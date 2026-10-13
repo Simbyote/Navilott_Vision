@@ -80,7 +80,7 @@ docs/
     routines/
         request_card.md         the card for asking for a routine
         requests/               one filled card per routine
-    infographics/               numbered one-page explainers (01-40)
+    infographics/               numbered one-page explainers (01-42)
     diagrams/                   diagrams of the pipeline, the linkers and each phase
     architecture.md             hardware, wiring, power, software layout, risks
     concepts.md                 the ideas the docs use, explained once
