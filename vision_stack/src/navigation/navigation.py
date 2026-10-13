@@ -46,6 +46,7 @@ from src.navigation.route import Route, RouteProgress
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
+from src.navigation.wheel_speed import WheelSpeed
 
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
            "RULE_OBSTACLE", "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
@@ -69,6 +70,10 @@ class Navigation:
             the edge: every intersection straight, a lost lane the finish) by default.
         obstacle: The obstacle rule; ObstacleRule() (its constants) by default.
 
+    wheels: The run's WheelSpeed: it learns the duty-to-speed gain from every
+        frame's command and wheel speeds, and the intersection's turns drive
+        through it, so a turn's arc holds as the battery drains.
+
     record: Why the last update() returned what it did:
         {"rule": RULE_*, "phase": the tracker's phase, plus the deciding
         part's own record ("reason", and "source" / "steer" when steering)}.
@@ -79,12 +84,14 @@ class Navigation:
         self.lane = lane or LaneKeepingNavigator()
         self.tracker = tracker or StopLineTracker()
         self.progress = RouteProgress(route)
+        self.wheels = WheelSpeed()
+        self._last_cmd: Command | None = None
         self.rules = [
             (RULE_OBSTACLE, obstacle or ObstacleRule()),
             (RULE_STOP_SIGN, StopSignRule(self.tracker)),
             (RULE_TRAFFIC_LIGHT, TrafficLightRule(self.tracker)),
             (RULE_INTERSECTION, IntersectionRule(self.tracker, self.lane, gyro_bias_dps=gyro_bias_dps,
-                                                 progress=self.progress)),
+                                                 progress=self.progress, wheels=self.wheels)),
             (RULE_END_OF_COURSE, EndOfCourseRule(self.lane, self.progress, self.tracker)),
         ]
         self._crossing = self.rules[3][1]
@@ -95,6 +102,8 @@ class Navigation:
         """Forget everything: tracker, route progress, every rule, lane keeping."""
         self.tracker.reset()
         self.progress.reset()
+        self.wheels.reset()
+        self._last_cmd = None
         for _, rule in self.rules:
             rule.reset()
         self.lane.reset()
@@ -117,8 +126,11 @@ class Navigation:
 
     def update(self, packet: EstimationPacket) -> Command:
         """This frame's command: BRAKE once finished, else the first rule that speaks, else lane keeping."""
+        # This packet's wheel speeds answer the last command: the gain learns from them
+        self.wheels.observe(self._last_cmd, packet)
         if self.finished:
             self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, **self._end.record}
+            self._last_cmd = BRAKE
             return BRAKE
         # No new stop line while crossing: marks inside an intersection (the
         # far side's lines) restarted the crossing and counted as intersections
@@ -136,4 +148,5 @@ class Navigation:
             decided = (RULE_END_OF_COURSE, self._end, BRAKE)
         name, part, cmd = decided
         self.record = {"rule": name, "phase": self.tracker.phase, "step": self.progress.label(), **part.record}
+        self._last_cmd = cmd
         return cmd

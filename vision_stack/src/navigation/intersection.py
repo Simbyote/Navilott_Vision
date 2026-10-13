@@ -55,6 +55,7 @@ from src.navigation.navigation_contract import Command
 from src.params import MODE_LEFT_ONLY, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY
 from src.navigation.route import LEFT, RIGHT, STRAIGHT, RouteProgress
 from src.navigation.stop_line import CROSSING, StopLineTracker
+from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 
 # Both boundaries this many frames in a row ends the crossing (~0.5 s at
 # 20 FPS). 3 ended it as soon as the far side's lane lines showed, and the
@@ -85,7 +86,11 @@ ADVANCE_MS = 0
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as
-# (0.36, 0.63) and (0.45, 0.0); raised 2026-10-06 (motor recalibration)
+# (0.36, 0.63) and (0.45, 0.0); raised 2026-10-06 (motor recalibration).
+# They're the arcs as tuned, at ~11.7 V: with the wheel-speed control
+# (wheel_speed.py) the turn asks for these duties' wheel speeds at that
+# voltage (x CPS_PER_DUTY), and finds whatever duty gets them on the day's
+# battery; without encoders it drives these duties as they are
 LEFT_TURN = Command(0.50, 0.73)
 RIGHT_TURN = Command(0.50, 0.25)
 # A turn ends once the gyro reads this many degrees turned its way: 90 less
@@ -105,6 +110,11 @@ REASON_CROSSING, REASON_TURNING = "crossing", "turning"
 SOURCE_HEADING_HOLD, SOURCE_TURN = "heading_hold", "turn"
 
 
+def turn_cps(duties: Command) -> tuple[float, float]:
+    """A turn's wheel speeds (counts/s): its duties at the voltage they were tuned at."""
+    return duties.left * CPS_PER_DUTY, duties.right * CPS_PER_DUTY
+
+
 class IntersectionRule:
     """
     Across an intersection the way the route says: to the line, the turn if
@@ -118,18 +128,25 @@ class IntersectionRule:
             (Phase 3 subtracts its bias only inside heading_error).
         progress: The run's RouteProgress, for this intersection's maneuver;
             RouteProgress() (no plan: straight) by default.
+        wheels: The WheelSpeed the turn drives through (navigation.Navigation
+            shares its own); None drives the turn's duties as they are.
+        advance_ms: See ADVANCE_MS.
 
     active: True while crossing. stage: STAGE_* while active, None otherwise.
     record: {"reason": REASON_CROSSING or REASON_TURNING, "source", "steer",
         "heading_deg", "stage", "step" (progress.label()), "maneuver",
         "turn_end" (how this crossing's turn ended: TURN_END_GYRO,
-        TURN_END_TIME; None before it does, or with no turn)} while crossing;
+        TURN_END_TIME; None before it does, or with no turn), and while
+        turning with wheels, "wheels" (WheelSpeed.record)} while crossing;
         {} otherwise.
     """
     def __init__(self, tracker: StopLineTracker, lane: LaneKeepingNavigator,
                  kp_heading: float = KP_HEADING, gyro_bias_dps: float = 0.0,
-                 progress: RouteProgress | None = None) -> None:
+                 progress: RouteProgress | None = None, wheels: WheelSpeed | None = None,
+                 advance_ms: int = ADVANCE_MS) -> None:
         self.tracker = tracker
+        self.wheels = wheels
+        self.advance_ms = advance_ms
         self.progress = progress or RouteProgress()
         self.lane = lane
         self.kp_heading = kp_heading
@@ -186,8 +203,10 @@ class IntersectionRule:
         if self.stage == STAGE_ADVANCE:
             if not held:
                 self._advance_ms += dt_ms
-            if self._advance_ms >= ADVANCE_MS:
+            if self._advance_ms >= self.advance_ms:
                 self.stage = STAGE_TURN
+                if self.wheels is not None:
+                    self.wheels.start()
         if self.stage == STAGE_TURN:
             duties, sign, max_ms = TURNS[self._maneuver]
             if not held:
@@ -204,8 +223,13 @@ class IntersectionRule:
                 self.reset()
                 return None
 
+        wheels = None
         if self.stage == STAGE_TURN:
-            cmd = duties
+            if self.wheels is None:
+                cmd = duties
+            else:
+                cmd = self.wheels.drive(*turn_cps(duties), packet)
+                wheels = dict(self.wheels.record)
             reason, source, steer = REASON_TURNING, SOURCE_TURN, round((cmd.right - cmd.left) / 2.0, 3)
         else:
             # + heading = turned right, so steer left: + steering
@@ -214,4 +238,6 @@ class IntersectionRule:
         self.record = {"reason": reason, "source": source, "steer": steer,
                        "heading_deg": round(self._heading, 2), "stage": self.stage,
                        "step": self.progress.label(), "maneuver": self._maneuver, "turn_end": self._turn_end}
+        if wheels is not None:
+            self.record["wheels"] = wheels
         return cmd

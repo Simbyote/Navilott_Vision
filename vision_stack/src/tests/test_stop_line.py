@@ -28,8 +28,9 @@ def feed(tracker, seq):
 
 @pytest.mark.software
 def test_the_constants_follow_the_calibration_and_the_runs():
-    # 0 since 2026-10-07: braking as the line leaves keeps the hanging traffic light in view
-    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0
+    # 500 since 2026-10-12 (0 from 2026-10-07): it carries the robot into the
+    # intersection, where the turn now starts without an advance
+    assert STOP_DELAY_MS == 500 and NEAR_BOTTOM_ROWS == 25.0
 
 
 

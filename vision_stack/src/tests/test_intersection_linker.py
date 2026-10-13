@@ -71,8 +71,10 @@ class Sensors:
         self.source, self.stopped = source, False
 
     def read(self):
+        # No encoder speed: the turn runs its tuned duties open loop, which the
+        # test checks for (a fixed reading would be a motor that ignores its duty)
         yaw = 0.0 if self.source.current is None else self.source.current[1]
-        return SensorSample(yaw_rate_dps=yaw, lateral_accel_mps2=0.0, left_wheel_cps=300.0, right_wheel_cps=300.0), None
+        return SensorSample(yaw_rate_dps=yaw, lateral_accel_mps2=0.0, left_wheel_cps=0.0, right_wheel_cps=0.0), None
 
     def stop(self):
         self.stopped = True

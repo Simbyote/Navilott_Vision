@@ -511,7 +511,9 @@ def test_the_course_moves_every_navigation_rule_and_finishes():
         assert pipeline.finished and (pipeline.navigation.outcome, pipeline.navigation.end_step) == ("finished", 1)
         assert len(cmds) < len(COURSE)                       # it ended on the course, not at the sequence's end
     assert seen == ALL_RULES
-    assert stages == {"to_line", "advance", "turn", "exit"}                    # the route's left turn is driven on the gyro
+    from src.navigation.intersection import ADVANCE_MS
+    # the route's left turn is driven on the gyro; with ADVANCE_MS 0 it starts at the line, no advance
+    assert stages == {"to_line", "turn", "exit"} | ({"advance"} if ADVANCE_MS else set())
 
 
 @pytest.mark.software

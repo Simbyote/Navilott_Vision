@@ -215,7 +215,9 @@ def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
     assert rules_over(out)[:4] == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION]
     after_wait = next(i for i, (_, _, rec) in enumerate(out)
                       if i > 0 and out[i - 1][2]["rule"] == RULE_TRAFFIC_LIGHT and rec["rule"] != RULE_TRAFFIC_LIGHT)
-    assert out[after_wait][2]["stage"] == STAGE_ADVANCE and out[after_wait][2]["maneuver"] == "left"
+    # With no advance (ADVANCE_MS 0) the turn starts the frame the robot is let go
+    assert out[after_wait][2]["stage"] == (STAGE_ADVANCE if ADVANCE_MS else STAGE_TURN)
+    assert out[after_wait][2]["maneuver"] == "left"
     turning = [(cmd, rec) for _, cmd, rec in out[after_wait:] if rec.get("stage") == STAGE_TURN]
     assert turning and turning[0][0] == LEFT_TURN           # the advance used none of its time while held
 
