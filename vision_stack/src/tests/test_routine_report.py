@@ -75,6 +75,24 @@ ROWS = {
                       "right_mean_deg": 91.0, "lap_s_mean": 58.0, "lane_lost_s": 0.0, "contract": 0, "fps": 15.0,
                       "battery_start_v": 11.9, "battery_end_v": 11.4}],
 }
+ROWS["obstacle-check"] = (
+    [{"gap_cm": 10.0, "state": "present", "frames": 40, "seen_pct": 100.0, "voted": True, "reported_cm": None,
+      "error_cm": None, "clipped_pct": 100.0, "would_brake": True, "result": "ok"}]
+    + [{"gap_cm": g, "state": "present", "frames": 40, "seen_pct": 100.0, "voted": True, "reported_cm": g + e,
+        "error_cm": e, "clipped_pct": 0.0, "would_brake": False, "result": "ok" if abs(e) <= 3 else "off"}
+       for g, e in ((15.0, 0.5), (20.0, 1.5), (30.0, 4.0))]
+    + [{"gap_cm": None, "state": "clear", "frames": 40, "seen_pct": 0.0, "voted": False, "reported_cm": None,
+        "error_cm": None, "clipped_pct": 0.0, "would_brake": False, "result": "ok"}])
+ROWS["obstacle-stop"] = (
+    [{"state": "object", "gap_cm": g, "reported_cm": 14.0, "clipped": False, "brakes": 1, "stopped": True,
+      "resume_s": 1.05, "speed_cps": 1200.0, "battery_v": 11.8, "ended_by": "drove on"} for g in (9.5, 11.0)]
+    + [{"state": "clear", "gap_cm": None, "reported_cm": None, "clipped": False, "brakes": 0, "stopped": False,
+        "resume_s": None, "speed_cps": 1210.0, "battery_v": 11.7, "ended_by": "clear lane driven"}])
+ROWS["stop-sign"] = (
+    [{"sign": "present", "sign_seen": True, "stops": 1, "hold_s": h_, "resumed": True, "across": True,
+      "battery_v": 11.8, "ended_by": "across the intersection"} for h_ in (2.0, 2.1)]
+    + [{"sign": "absent", "sign_seen": False, "stops": 0, "hold_s": None, "resumed": False, "across": True,
+        "battery_v": 11.7, "ended_by": "across the intersection"}])
 OPTIONS = {"detect-range": {"target": "light", "gaps": "0,30", "need_cm": 20.0, "frames": 60}}
 
 

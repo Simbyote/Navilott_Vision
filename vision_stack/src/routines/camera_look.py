@@ -45,6 +45,11 @@ def seen(res, p3) -> dict:
     lane_offset, lane_status: the filtered offset ([-1, 1] of half the lane
         ROI, + = robot right of center) and its status.
     p2_offset, lane_mode, lane_width_px: Phase 2's raw lane measurement.
+    obstacle: Phase 2 saw an obstacle in the path this frame; obstacle_cm,
+        obstacle_clipped: its base's distance (None without cm) and whether
+        the base is below the view.
+    obstacle_voted, obstacle_voted_cm, obstacle_voted_clipped: the vote
+        after this frame, and the measurement it reports.
     total_ms: Phases 2 and 3's time on the frame.
     """
     light = sign = None
@@ -54,9 +59,15 @@ def seen(res, p3) -> dict:
         elif d.type == STOP_SIGN and d.confidence >= p3.min_confidence_sign:
             sign = True
     pk, off = res.packet, res.chain.offset
+    ob = next((r for r in getattr(res.chain.phase2, "obstacle_results", []) if r.detected), None)
     return {"light": light, "sign": bool(sign), "drive_state": pk.drive_state, "stop_sign": pk.stop_sign_detected,
             "lane_offset": pk.lane_offset, "lane_status": pk.lane_status, "p2_offset": off.offset,
             "lane_mode": off.mode, "lane_width_px": off.lane_width_px,
+            "obstacle": ob is not None, "obstacle_cm": None if ob is None else ob.distance_cm,
+            "obstacle_clipped": ob is not None and ob.clipped,
+            "obstacle_voted": bool(getattr(pk, "obstacle_detected", False)),
+            "obstacle_voted_cm": getattr(pk, "obstacle_distance_cm", None),
+            "obstacle_voted_clipped": bool(getattr(pk, "obstacle_clipped", False)),
             "total_ms": res.timings_ms["phase2"] + res.timings_ms["phase3"]}
 
 

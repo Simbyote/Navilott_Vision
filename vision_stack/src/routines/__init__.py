@@ -17,9 +17,13 @@ from src.routines.figure_eight import FigureEight
 from src.routines.frame_budget import FrameBudget
 from src.routines.imu_check import ImuCheck
 from src.routines.lane_offset import LaneOffset
+from src.routines.obstacle_check import ObstacleCheck
+from src.routines.obstacle_stop import ObstacleStop
 from src.routines.power_profile import PowerProfile
 from src.routines.recover_offset import RecoverOffset
 from src.routines.stop_distance import StopDistance
+from src.routines.stop_sign import StopSign
 from src.routines.tape_check import TapeCheck
 
-ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange, LaneOffset, RecoverOffset, FrameBudget, CourseRun)}
+ROUTINES = {r.name: r for r in (TapeCheck, StopDistance, PowerProfile, FigureEight, ImuCheck, DetectRange, LaneOffset, RecoverOffset, FrameBudget, CourseRun,
+                                       ObstacleCheck, ObstacleStop, StopSign)}
