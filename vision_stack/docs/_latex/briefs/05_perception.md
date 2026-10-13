@@ -6,11 +6,11 @@ single frame and how. It does not cover smoothing across frames
 
 ## The section's main idea
 
-Perception answers four questions about one frame, with no memory of the
+Perception answers five questions about one frame, with no memory of the
 frame before. Where are the lane lines? Is there a stop line, and how far
 ahead? Is there a lit traffic light, and what color? Is there a stop sign?
-It uses classical computer vision (thresholds, edges, shapes, color bands),
-not a learned model.
+Is something in the way? It uses classical computer vision (thresholds,
+edges, shapes, color bands), not a learned model.
 
 ## Why classical vision
 
@@ -27,8 +27,9 @@ needs a new rule.
   shape. Then contours are traced and gated by area, shape and brightness.
   The lane is the nearest line on each side of the image center.
   - **Offset:** + means the robot is right of center, so steer left.
-  - **One line visible:** the lane center is projected from it, using a
-    hand-set half-lane width.
+  - **One line visible:** the lane center is projected from it, half a
+    lane away: 178 px since 2026-10-12, measured from runs (228 before,
+    hand-set, put one-line frames about 0.25 off their neighbors).
 - **Stop lines:** edges whose brightness gradient points up or down (a
   lane line's sides point left or right). The top and bottom edges of the
   tape are paired into one line. Gates: length at least 60 px; tilt, at
@@ -45,6 +46,13 @@ needs a new rule.
 - **Stop signs:** a "redness" image (red minus the larger of green and
   blue), thresholded, then the largest red blob is checked for 8 or 9
   corners and solidity. Not yet tuned on real course frames.
+
+- **Obstacles** (since 2026-10-12): anything in the middle of the frame
+  that isn't floor. A pixel counts if it's much brighter than the floor (60
+  gray levels above it, with the floor measured in every frame), or clearly
+  colored against the frame's own neutral. Tape is bright but thin, so an
+  opening with a 47 px square erases it. What survives and is large enough
+  is an obstacle, and its base gives its distance.
 
 ## Seeing why a frame failed
 

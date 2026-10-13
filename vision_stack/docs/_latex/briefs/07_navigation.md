@@ -9,7 +9,7 @@ detected (Perception) or smoothed (Estimation).**
 Navigation turns the per-frame packet into a wheel command. The hand-off
 between vision and navigation was written down as a contract on 2026-09-30,
 before navigation existed, so both sides could be built and tested apart.
-Navigation is a short list of rules in priority order. The first rule with
+Navigation is a short list of six rules in priority order. The first rule with
 something to say wins, but every rule sees every frame, so its timers stay
 current.
 
@@ -27,28 +27,31 @@ current.
 
 ## The rules, highest first
 
-1. **Stop sign:** at the line, with a sign seen in the last 5 s, it brakes
+1. **Obstacle:** anything in the path whose base is within 12 cm (or
+   already below the view): brake, then wait until nothing has been seen for
+   1 s before going on.
+2. **Stop sign:** at the line, with a sign seen in the last 5 s, it brakes
    until the wheels read stopped (or 1 s passes), holds 2 s, then goes.
-2. **Traffic light:** at the line, with red or yellow seen in the last
+3. **Traffic light:** at the line, with red or yellow seen in the last
    0.5 s, it brakes until it has read green (or nothing) for 0.25 s.
    - **Yellow stops too** (since 2026-10-07): the overexposed red LED can
-     read yellow, and a real yellow turns red anyway. The PRD allows entering
-     an intersection only on green.
-3. **Intersection:** takes over from the moment the stop line leaves the
+     read yellow, and a real yellow turns red anyway. The PRD allows
+     entering an intersection only on green.
+4. **Intersection:** takes over from the moment the stop line leaves the
    view. Lane keeping would be pulled off course by the crossing street's
-   lines. It runs four stages, on a gyro heading hold:
-   - **to the line;**
-   - **advance**, turns only: 1 s (ADVANCE_MS) further into the
-     intersection, because the course's stop lines are moving back into the
-     street;
-   - **turn:** fixed wheel duties until the gyro reads 85°. Left is
-     (0.46, 0.73), a wide arc into the far lane; right is (0.55, 0.25), a
-     tight arc. A time limit applies if the gyro never gets there;
+   lines. Its stages:
+   - **to the line,** on a gyro heading hold;
+   - **turn** (left or right only): until the gyro reads 85°, or a time
+     limit if it never does. Left is a wide arc into the far lane, (0.50,
+     0.73) as duties; right is a tight arc, (0.50, 0.25). Since 2026-10-12
+     the turn asks for the wheel speeds those duties gave at about 11.7 V,
+     using the encoders, and finds the duty that gets them on today's
+     battery;
    - **exit:** straight until the lane lines are back.
-4. **End of course:** a lane lost for more than 1 s at slow speed ends the
+5. **End of course:** a lane lost for more than 1 s at slow speed ends the
    run. That's the finish if the route is done; otherwise it's a safety
    stop.
-5. **Lane keeping:** when no rule speaks, it steers by the lane offset.
+6. **Lane keeping:** when no rule speaks, it steers by the lane offset.
    - **Base duty** is 0.40, steering at most ±0.40.
    - **Gain** grows with the offset.
    - **When vision is lost,** it steers by the heading turned instead.
@@ -62,9 +65,11 @@ reached. The delay after it leaves view (STOP_DELAY_MS) has changed:
 
 - 1500 ms stopped the robot past the line;
 - 500 ms stopped it at the line (2026-10-05);
-- 0 since 2026-10-07: the course's new traffic light hangs over the center
-  of the intersection, and 500 ms of driving carried the robot under it and
-  out of view. Turns now get their distance from the advance stage instead.
+- 0 on 2026-10-07: the course's new traffic light hangs over the center of
+  the intersection, and 500 ms of driving carried the robot under it and
+  out of view. Turns then drove 1 s further first (an "advance" stage);
+- 500 ms again on 2026-10-12, with the advance set to 0. The commit gives
+  no reason, and the code's comment still describes the 0.
 
 ## The route
 

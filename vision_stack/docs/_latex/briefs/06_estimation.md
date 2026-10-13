@@ -30,8 +30,8 @@ says so and how long it has been.
   - The result is how far the robot has turned since the last good frame,
     not an absolute heading. Integration drifts with any bias error.
 - **Voting:**
-  - Each traffic-light state, stop sign and stop line must win 2 of the last
-    3 frames to change state. One bad frame can't flip a decision; that's
+  - Each traffic-light state, stop sign, stop line and obstacle must win 2 of
+    the last 3 frames to change state. One bad frame can't flip a decision; that's
     requirement R3.
   - Confidence gates come first: 0.40 for lights, 0.45 for signs.
   - The cost is about one frame (50 ms) of delay.
