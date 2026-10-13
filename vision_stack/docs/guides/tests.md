@@ -1,6 +1,6 @@
 # What the Tests Cover
 
-A catalog of `src/tests/`: what each test file targets, what its software tests check, and what its hardware test records. How to run them is in `pytest.md`; how to interpret recorded runs is in `analysis.md`.
+A catalog of `src/tests/`: what each test file targets, what its software tests check, and what its hardware test records. How to run them is in `pytest.md`; how to interpret recorded runs is in `analysis.md`. Software tests, hardware characterization and routines side by side, on one page: `../infographics/44_testing.png`.
 
 ## How the suite is organized
 
