@@ -63,7 +63,10 @@ The flow:
 - recover-offset: recover time against the start offset;
 - power-profile: the pack's volts through each stage;
 - imu-check: each turn's error;
-- tape-check: its readings.
+- tape-check: its readings;
+- obstacle-check: the reported distance against the tape;
+- obstacle-stop: each stop's gap;
+- stop-sign: each hold against 2 s.
 
 Every `attempt_NN/` with a `nav.csv` (the driving routines) also gets `nav_run`'s report (`analysis.md`).
 
@@ -84,6 +87,9 @@ Results are compared run to run by the commit and conditions recorded in each. A
 | `recover-offset` | From how far off the lane's center does the robot steer back, and how close to the center does it hold a straight? | lane keeping (IDR navigation tests) | `pigpiod`; motors on; a long straight; `lane-offset` run first |
 | `frame-budget` | Does the whole chain keep 20 FPS, answer within 50 ms, and fit in the Pi's CPU and memory? | P1, P2, R4 | nothing driving; parked in a lane |
 | `course-run` | Does the robot complete the course, in its lane and obeying the lights and signs, and how fast? | D2 (Senior Design Day) | `pigpiod`; motors on; the course as on the day |
+| `obstacle-check` | Does the parked robot see an object in its lane, how far away does it say it is, and nothing when the lane is clear? | obstacle detection | nothing driving; a straight lane; the object; a tape |
+| `obstacle-stop` | Does the robot stop for an object in its lane, where, and drive on once it's taken away? | obstacle detection, the navigation side | `pigpiod`; motors on; a straight lane; the object |
+| `stop-sign` | Does the robot stop at a stop sign's line, hold, drive on, and not stop when there's no sign? | D2, the navigation side | `pigpiod`; motors on; an intersection with its sign |
 | `imu-check` | Is the gyro's bias still the configured one, does a real 90° read 90, and what do the motors add? | the heading behind every turn and hold (`GYRO_BIAS_DPS`, `IMU_YAW_SIGN`) | `pigpiod`; the mat's grid; a box for wheels up |
 
 **`tape-check`.** Measure one fixed distance five times, taking the tape away in between. PASS: a spread (max − min) of 0.5 cm or less, the tightest tolerance in `requirements.md`. Run it once per tester before any accuracy routine: a routine can't judge the robot more finely than the hand measurement it's compared with. It also rehearses the prompts with no hardware.
@@ -247,6 +253,35 @@ Afterwards the tester answers what a judge would:
 - how many stop signs or red lights it didn't stop for.
 
 The row puts beside those: how the run ended, the robot's own run time (what the display shows: the stopwatch against it checks the elapsed-time display too), the route steps reached, stop sign holds and red-light waits, time off vision, contract brakes, the frame rate, the pack at start and end.
+
+**`obstacle-check`.** The robot parked in a straight lane and left there; the object (a can, a box) moved to taped gaps from the robot's front edge to its nearest point, nearest first (`--set gaps=10,15,20,25,30`), then `--set clear=3` looks with the lane clear. Each trial is one ~2 s look through Phases 1-3 with a fresh processor, as in `detect-range`:
+- how many frames saw the object;
+- the vote at the end;
+- the reported distance (the median over the frames that measured one) against the tape;
+- whether the obstacle rule would brake there.
+
+Gaps under ~10 cm sit below the camera's view: they read clipped, with no distance, and the rule always brakes for them.
+
+PASS:
+- every object up to `need_cm` (25) is seen, its distance within `tolerance_cm` (3);
+- no false alarm on a clear lane;
+- the brake decision is right at every gap more than 2 cm from the rule's 12 cm.
+
+The summary gives the range.
+
+**`obstacle-stop`.** Motors on, a straight route, from a start mark toward the object standing in the lane (`--set objects=5`). The robot should brake with the object about 10 cm away and wait. While it waits, the tester tapes the gap, then lifts the object away, and the robot should drive on about 1 s later (`OBSTACLE_CLEAR_MS`). The watch times that from the rule's clear wait to driving on, and ends the run a second later. Then `--set clear=2` drives the lane with nothing on it for `clear_s` (6): any obstacle brake there is a false alarm.
+
+PASS:
+- every object trial stopped without touching, each gap within 5-15 cm;
+- it drove on every time, within the clear time plus 0.5 s;
+- no false brake.
+
+**`stop-sign`.** Motors on, a straight route, from a start mark about 60 cm before an intersection's stop line, with its stop sign posted (`--set signs=5`), then with the sign taken away (`--set no_signs=3`). The watch counts stop-sign brakes and times the hold from its first frame to the first frame after it. It ends the run a second into the intersection's exit stage. Each row also says whether the sign was ever voted on the way: a missing stop with `sign_seen` false is the detector; with it true, navigation.
+
+PASS:
+- every sign trial stopped, held within 0.3 s of `STOP_SIGN_HOLD_TIME_MS` (2 s), and drove on across;
+- no stop on a trial without the sign.
+
 
 PASS, each run: completed (the tester says so **and** the robot ended on the route's finish); no touches; no stop sign or red light run. The times are the result, not judged: the summary gives the best and mean of the completed runs. Setting: `--set max_s=...` (300 s, the production run's cap). Motors on: walk beside it.
 

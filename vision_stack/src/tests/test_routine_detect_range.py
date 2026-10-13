@@ -59,7 +59,8 @@ def test_seen_counts_lights_and_signs_at_their_gates():
                      det(STOP_SIGN, "stop", p3.min_confidence_sign)]), p3)
     assert s == {"light": RED, "sign": True, "drive_state": "stop", "stop_sign": True, "lane_offset": 0.08,
                  "lane_status": "vision", "p2_offset": 0.1, "lane_mode": "two", "lane_width_px": 300,
-                 "total_ms": 31.5}
+                 "obstacle": False, "obstacle_cm": None, "obstacle_clipped": False, "obstacle_voted": False,
+                 "obstacle_voted_cm": None, "obstacle_voted_clipped": False, "total_ms": 31.5}
     under = seen(result([det(TRAFFIC_LIGHT, RED, p3.min_confidence_traffic - 0.01),
                          det(STOP_SIGN, "stop", p3.min_confidence_sign - 0.01)]), p3)
     assert under["light"] is None and under["sign"] is False

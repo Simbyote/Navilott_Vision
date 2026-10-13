@@ -302,6 +302,85 @@ def _plot_imu_check(ax, rows, result, folder):
     ax.set_ylabel("error (deg)")
 
 
+def _plot_obstacle_check(ax, rows, result, folder):
+    present = [r for r in rows if r.get("state") == "present"]
+    gap, rep = _col(present, "gap_cm"), _col(present, "reported_cm")
+    ok = np.array([r.get("result") == "ok" for r in present], bool)
+    clipped = np.array([_number(r.get("clipped_pct")) not in (None, 0.0) and np.isnan(rep[i])
+                        for i, r in enumerate(present)], bool)
+    missed = np.array([r.get("result") == "missed" for r in present], bool)
+    c = _criterion(result, "worst distance error")
+    tol = c["limit"] if c else 3.0
+    hi = float(np.nanmax(np.concatenate([gap, rep, [20.0]]))) * 1.15 if len(gap) else 40.0
+    line = np.array([0.0, hi])
+    ax.fill_between(line, line - tol, line + tol, color=BAND_COLOR, alpha=0.12, label=f"±{tol:g} cm")
+    ax.plot(line, line, color="black", linewidth=1, label="reported = tape")
+    m = ~np.isnan(rep)
+    ax.scatter(gap[m & ok], rep[m & ok], color=PASS_COLOR, zorder=3, label="seen, measured")
+    ax.scatter(gap[m & ~ok], rep[m & ~ok], color=FAIL_COLOR, zorder=3, label="distance off")
+    ax.scatter(gap[clipped], np.zeros(int(clipped.sum())), marker="v", color="#7f7f7f", zorder=3,
+               label="below the view (drawn at 0)")
+    ax.scatter(gap[missed], np.zeros(int(missed.sum())), marker="x", s=60, color=FAIL_COLOR, zorder=3,
+               label="not seen (drawn at 0)")
+    b = _criterion(result, "brake decisions")
+    m2 = re.search(r"from ([0-9.]+) cm", b["name"]) if b else None
+    if m2:
+        ax.axvline(float(m2.group(1)), color="#555555", linestyle="--", linewidth=1, label="the rule brakes nearer")
+    falses = sum(1 for r in rows if r.get("state") == "clear" and r.get("result") == "wrong")
+    clears = sum(1 for r in rows if r.get("state") == "clear")
+    ax.set_title(f"reported distance against the tape; clear lane: {falses} false alarms in {clears}", loc="left")
+    ax.set_xlim(0, hi)
+    ax.set_ylim(-2, hi)
+    ax.set_xlabel("tape: front edge to the object (cm)")
+    ax.set_ylabel("reported (cm)")
+    ax.legend(fontsize=8, frameon=False, loc="upper left")
+
+
+def _plot_obstacle_stop(ax, rows, result, folder):
+    objs = [r for r in rows if r.get("state") == "object"]
+    gap = _col(objs, "gap_cm")
+    c = _criterion(result, "gaps outside")
+    m = re.search(r"outside ([0-9.]+)\.\.([0-9.]+) cm", c["name"]) if c else None
+    if m:
+        ax.axhspan(float(m.group(1)), float(m.group(2)), color=BAND_COLOR, alpha=0.12,
+                   label=f"{m.group(1)}..{m.group(2)} cm")
+    ax.axhline(0, color="black", linewidth=1, label="the object")
+    stopped = np.array([bool(r.get("stopped")) for r in objs], bool)
+    x = np.arange(1, len(objs) + 1)
+    ax.scatter(x[stopped], gap[stopped], color=PASS_COLOR, zorder=3, label="stopped")
+    ax.scatter(x[~stopped], np.nan_to_num(gap[~stopped]), marker="x", s=60, color=FAIL_COLOR, zorder=3,
+               label="didn't stop")
+    falses = sum(int(_number(r.get("brakes")) or 0) for r in rows if r.get("state") == "clear")
+    ax.set_xticks(x)
+    ax.set_title(f"gap from the front edge to the object, per stop; clear lane: {falses} false brakes", loc="left")
+    ax.set_xlabel("object trial")
+    ax.set_ylabel("gap (cm)")
+    ax.legend(fontsize=8, frameon=False)
+
+
+def _plot_stop_sign(ax, rows, result, folder):
+    signs = [r for r in rows if r.get("sign") == "present"]
+    hold = _col(signs, "hold_s")
+    c = _criterion(result, "worst hold off")
+    m = re.search(r"off ([0-9.]+) s", c["name"]) if c else None
+    if m:
+        target, tol = float(m.group(1)), c["limit"]
+        ax.axhspan(target - tol, target + tol, color=BAND_COLOR, alpha=0.12, label=f"{target:g} ± {tol:g} s")
+    x = np.arange(1, len(signs) + 1)
+    stopped = np.array([(_number(r.get("stops")) or 0) >= 1 for r in signs], bool)
+    ax.scatter(x[stopped], hold[stopped], s=50, color=PASS_COLOR, zorder=3, label="held")
+    ax.set_xticks(x)
+    ax.set_ylim(-0.2, max(3.0, float(np.nanmax(hold)) + 0.5) if np.any(~np.isnan(hold)) else 3.0)
+    ax.scatter(x[~stopped], np.zeros(int((~stopped).sum())), marker="x", s=60, color=FAIL_COLOR, zorder=3,
+               label="didn't stop")
+    wrong = sum(int(_number(r.get("stops")) or 0) for r in rows if r.get("sign") == "absent")
+    nones = sum(1 for r in rows if r.get("sign") == "absent")
+    ax.set_title(f"hold at the line, per sign trial; no sign: {wrong} stops in {nones} trials", loc="left")
+    ax.set_xlabel("sign trial")
+    ax.set_ylabel("hold (s)")
+    ax.legend(fontsize=8, frameon=False)
+
+
 # Routine name -> its own plot: the one its question asks for
 KEY_PLOTS = {
     "tape-check": _plot_tape_check,
@@ -311,6 +390,9 @@ KEY_PLOTS = {
     "recover-offset": _plot_recover_offset,
     "power-profile": _plot_power_profile,
     "imu-check": _plot_imu_check,
+    "obstacle-check": _plot_obstacle_check,
+    "obstacle-stop": _plot_obstacle_stop,
+    "stop-sign": _plot_stop_sign,
 }
 
 
