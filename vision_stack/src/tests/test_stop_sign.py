@@ -2,8 +2,10 @@
 test_stop_sign.py  --  src/navigation/stop_sign.py
 
 The stop-sign rule against a real tracker: no sign, no stop; a sign seen
-within SIGN_MEMORY_MS before the line is reached brakes until the wheels
-stop, holds STOP_SIGN_HOLD_TIME_MS, then lets go; jittery or missing
+within SIGN_MEMORY_MS before the line is reached, and no more than
+SIGN_LEAD_MS before that line came into view, brakes until the wheels
+stop, holds STOP_SIGN_HOLD_TIME_MS, then lets go; a ghost sign seen
+earlier on the way doesn't stop it at an unrelated line; jittery or missing
 encoders still start the hold; the sign is used up by one line; reset.
 """
 import pytest
@@ -11,8 +13,8 @@ import pytest
 from src.navigation.navigation_contract import BRAKE
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import (
-    REASON_HOLD, REASON_STOPPING, SIGN_MEMORY_MS, STOP_SETTLE_MAX_MS, STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS,
-    StopSignRule,
+    REASON_HOLD, REASON_STOPPING, SIGN_LEAD_MS, SIGN_MEMORY_MS, STOP_SETTLE_MAX_MS, STOP_SIGN_HOLD_TIME_MS,
+    STOPPED_CPS, StopSignRule,
 )
 from src.tests.navigation_checks import packet, reach_frames
 
@@ -49,6 +51,7 @@ def braked(out):
 @pytest.mark.software
 def test_the_constants():
     assert (STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS, STOP_SETTLE_MAX_MS, SIGN_MEMORY_MS) == (2000, 20.0, 1000, 5000)
+    assert SIGN_LEAD_MS == 2000 < SIGN_MEMORY_MS
 
 
 @pytest.mark.software
@@ -130,3 +133,21 @@ def test_both_wheels_must_read_stopped(left, right):
         seq[i] = {"left_wheel_cps": left, "right_wheel_cps": right}
     _, out = drive(seq)
     assert [rec["reason"] for _, rec in out[REACHED:REACHED + 4]] == [REASON_STOPPING] * 4
+
+
+@pytest.mark.software
+def test_a_sign_seen_well_before_the_line_came_into_view_is_a_ghost():
+    gap = SIGN_LEAD_MS // MS + 5                             # within the memory, but before the lead
+    assert (gap + len(LINE) + reach_frames(frame_ms=MS)) * MS < SIGN_MEMORY_MS
+    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False))
+    assert not braked(out)
+    no_lead = StopSignRule(StopLineTracker(), sign_lead_ms=None)      # the old rule: memory alone
+    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False), rule=no_lead)
+    assert braked(out)
+
+
+@pytest.mark.software
+def test_a_sign_seen_within_the_lead_before_the_line_still_counts():
+    gap = SIGN_LEAD_MS // MS - 2
+    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False))
+    assert braked(out)

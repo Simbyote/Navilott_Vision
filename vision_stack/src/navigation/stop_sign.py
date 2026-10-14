@@ -15,7 +15,8 @@ Main package:
 
 Flow:
     1. Remember when a stop sign was last seen.
-    2. On the tracker's reached frame: a sign seen recently starts the stop.
+    2. On the tracker's reached frame: a sign seen within SIGN_MEMORY_MS, and
+       no more than SIGN_LEAD_MS before that line came into view, starts the stop.
     3. Brake; once the wheels read stopped (or STOP_SETTLE_MAX_MS has passed),
        hold STOP_SIGN_HOLD_TIME_MS more, then release.
 """
@@ -36,6 +37,12 @@ STOP_SETTLE_MAX_MS = 1000
 # A stop sign seen this long before the robot reaches the line still counts.
 # The sign comes into view before the line does; not yet measured on the course
 SIGN_MEMORY_MS = 5000
+# ... and only if it was seen no more than this long before the line itself
+# came into view: a ghost sign (a leg or a chair in the background read as a
+# sign) seen on the way to another stretch can't stop the robot at an
+# unrelated line. A first guess: the sign shows up before the line does, by
+# how much isn't measured
+SIGN_LEAD_MS = 2000
 
 REASON_STOPPING, REASON_HOLD = "stop_sign_stopping", "stop_sign_hold"
 
@@ -51,10 +58,11 @@ class StopSignRule:
     record: {"reason": REASON_STOPPING or REASON_HOLD} while it brakes; {} otherwise.
     """
     def __init__(self, tracker: StopLineTracker, hold_ms: int = STOP_SIGN_HOLD_TIME_MS,
-                 sign_memory_ms: int = SIGN_MEMORY_MS) -> None:
+                 sign_memory_ms: int = SIGN_MEMORY_MS, sign_lead_ms: int | None = SIGN_LEAD_MS) -> None:
         self.tracker = tracker
         self.hold_ms = hold_ms
         self.sign_memory_ms = sign_memory_ms
+        self.sign_lead_ms = sign_lead_ms
         self.reset()
 
     def reset(self) -> None:
@@ -80,7 +88,7 @@ class StopSignRule:
         if packet.stop_sign_detected:
             self._sign_ms = now
         if (self.tracker.reached and self._sign_ms is not None
-                and now - self._sign_ms <= self.sign_memory_ms):
+                and now - self._sign_ms <= self.sign_memory_ms and self._for_this_line()):
             self._braking_ms, self._sign_ms = now, None     # this sign is used up
         if self._braking_ms is None:
             self.record = {}
@@ -96,3 +104,8 @@ class StopSignRule:
             return None
         self.record = {"reason": REASON_STOPPING if self._hold_ms is None else REASON_HOLD}
         return BRAKE
+
+    def _for_this_line(self) -> bool:
+        """The remembered sign was seen no more than sign_lead_ms before the line reached came into view."""
+        line_ms = self.tracker.seen_ms
+        return self.sign_lead_ms is None or line_ms is None or self._sign_ms >= line_ms - self.sign_lead_ms

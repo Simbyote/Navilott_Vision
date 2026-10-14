@@ -43,7 +43,7 @@ from src.params import (
     STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, load_color_config
-from src.perception.geometry import GeometryConfig, StopLineFilter
+from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
 from src.perception.ground import GroundHomography, load_ground_homography
 from src.perception.lane_offset import LaneOffsetConfig
 from src.perception.obstacle import ObstacleConfig
@@ -133,7 +133,17 @@ MEASURED = PipelineConfig(
     # (2026-10-05), but still took parts of the intersection itself for stop
     # lines, each counted as another intersection; 2 stopped that (2026-10-07).
     # The cost: a real line approached more than 2 deg off square is missed
-    geometry = GeometryConfig(stop_line = StopLineFilter(max_tilt_deg = 2.0)),
+    # Ghost signs (seen on course runs, Oct 2026): a leg or parts of a chair in
+    # the background passed as a stop sign now and then, and the robot stopped
+    # at a plain stop line. Any solid, roundish red blob reaches 8-9 hull
+    # vertices, so shape and content are gated too. Synthetic octagons read
+    # aspect 1.0 and extent 0.75-0.81 (0.83 for a perfect one); their
+    # letters 11-16% white from radius 28 px. First guesses: not yet checked
+    # on course frames, against the course's own sign
+    geometry = GeometryConfig(
+        stop_line = StopLineFilter(max_tilt_deg = 2.0),
+        sign = SignContourFilter(aspect_range = (0.6, 1.6), extent_range = (0.68, 0.92), min_letter_share = 0.03),
+    ),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
         min_proximity = 0.05,

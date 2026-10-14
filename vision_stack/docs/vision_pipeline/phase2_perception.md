@@ -204,8 +204,11 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 | `vertices` | 8–9 after `approxPolyDP` on the hull | Red shapes that aren't octagons. On the hull, so letters and noise notches don't add vertices |
 | `hull` | hull area > 0 | Degenerate outlines |
 | `solidity` | contour area / hull area ≥ 0.80 | Ragged or concave blobs (measured on the raw contour; the hull alone is always 1.0) |
+| `aspect` | off; `MEASURED`: bounding box w / h 0.6–1.6 | Ghost signs: a leg's tall outline. An octagon is ~1 |
+| `extent` | off; `MEASURED`: contour area / box area 0.68–0.92 | Ghost signs: a chair back's boxy outline (a rectangle is 1.0, an octagon 0.83) |
+| `letters` | off; `MEASURED`: ≥ 3% of the hull white (each channel ≥ 150, redness ≤ 60), for contours ≥ 2000 px² | Ghost signs: any red blob without the sign's white letters. A far sign's letters blur into its red, so small ones aren't held to it |
 
-Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
+The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
 With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the blobs set aside as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 

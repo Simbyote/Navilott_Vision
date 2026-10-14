@@ -109,6 +109,26 @@ class SignContourFilter:
     # and the notches the white STOP letters leave at the rim. 5 per the
     # design; larger starts merging the sign with red nearby. < 2 disables
     close_kernel: int = 5
+    # Ghost signs: a leg, a chair or skin in the background passed as a
+    # sign, since any solid roundish red blob comes out at 8-9 hull
+    # vertices. These shape and content gates catch most of them; each is
+    # off (None) by default and set in MEASURED. Bounding box width /
+    # height: an octagon is ~1, a leg or a chair back is not; wide enough
+    # for a sign seen at an angle
+    aspect_range: tuple[float, float] | None = None
+    # Contour area / bounding box area: a regular octagon is 0.83, a
+    # rectangle 1.0, a disc 0.79
+    extent_range: tuple[float, float] | None = None
+    # A real sign has white letters inside: at least this share of the hull's
+    # pixels must be white (each BGR channel >= letter_min_v and redness <=
+    # letter_max_redness; the letters' blurred pink edges don't count)
+    min_letter_share: float | None = None
+    letter_min_v: int = 150
+    letter_max_redness: int = 60
+    # Only a sign this large (contour px^2) is held to the letters gate: a
+    # far sign's letters blur into its red (synthetic signs: ~0.1% white up
+    # to radius 24 px, 1700 px^2; 11-16% from radius 28, 2150 px^2)
+    letters_min_area: float = 2000.0
 
 @dataclass(frozen=True)
 class StopLineFilter:
@@ -800,6 +820,39 @@ def _sign_polygon(contour: np.ndarray, sign_filter: SignContourFilter):
     epsilon = sign_filter.epsilon_factor * cv2.arcLength(hull, closed=True)
     return hull, cv2.contourArea(hull), cv2.approxPolyDP(hull, epsilon, closed=True)
 
+def _letter_share(sign_color_roi: np.ndarray, hull: np.ndarray, f: SignContourFilter) -> float:
+    """Share of the hull's pixels that are white (the sign's letters), in [0, 1]."""
+    region = np.zeros(sign_color_roi.shape[:2], np.uint8)
+    cv2.fillPoly(region, [hull.reshape(-1, 2).astype(np.int32)], 255)
+    inside = region > 0
+    n = int(inside.sum())
+    if n == 0:
+        return 0.0
+    white = ((sign_color_roi.min(axis=2) >= f.letter_min_v)
+             & (_redness(sign_color_roi) <= f.letter_max_redness) & inside)
+    return int(white.sum()) / n
+
+
+def _shape_gate(contour: np.ndarray, area: float, hull: np.ndarray, sign_color_roi: np.ndarray | None,
+                f: SignContourFilter) -> tuple[str | None, dict]:
+    """
+    The ghost-sign gates after solidity, in order: aspect, extent, letters.
+    (the gate that failed or None, the measured values). A gate whose
+    setting is None is skipped; letters is skipped without the ROI.
+    """
+    _, _, bw, bh = cv2.boundingRect(contour)
+    got = {"aspect": round(bw / max(bh, 1), 3), "extent": round(area / max(bw * bh, 1), 3)}
+    if f.aspect_range is not None and not f.aspect_range[0] <= got["aspect"] <= f.aspect_range[1]:
+        return "aspect", got
+    if f.extent_range is not None and not f.extent_range[0] <= got["extent"] <= f.extent_range[1]:
+        return "extent", got
+    if f.min_letter_share is not None and sign_color_roi is not None and area >= f.letters_min_area:
+        got["letters"] = round(_letter_share(sign_color_roi, hull, f), 4)
+        if got["letters"] < f.min_letter_share:
+            return "letters", got
+    return None, got
+
+
 def _extract_sign_candidates(
     contours: Sequence[np.ndarray],
     sign_filter: SignContourFilter,
@@ -807,10 +860,12 @@ def _extract_sign_candidates(
     timestamp_ms: int,
     reject_counts: dict | None = None,
     trace: list[dict] | None = None,
+    sign_color_roi: np.ndarray | None = None,
 ) -> list[SignCandidate]:
     """
     Gate the red-mask contours: below min_area dropped, then only the largest
-    goes on, through max_area, hull, vertex count and solidity.
+    goes on, through max_area, hull, vertex count, solidity, and the
+    ghost-sign gates (aspect, extent, letters; the letters read sign_color_roi).
 
     Inputs:
         contours: External contours of the red mask.
@@ -828,7 +883,8 @@ def _extract_sign_candidates(
         Mutates reject_counts and trace.
     """
     rc = reject_counts if reject_counts is not None else {}
-    for _k in ("seen", "area", "not_largest", "vertices", "hull", "solidity", "accepted"):
+    for _k in ("seen", "area", "not_largest", "vertices", "hull", "solidity", "aspect", "extent", "letters",
+               "accepted"):
         rc.setdefault(_k, 0)
 
     sized = []
@@ -886,6 +942,13 @@ def _extract_sign_candidates(
                                       confidence, approx))
         return []
 
+    gate, _ = _shape_gate(contour, area, hull, sign_color_roi, sign_filter)
+    if gate is not None:
+        rc[gate] += 1
+        if trace is not None:
+            trace.append(_trace_entry(contour, gate, area, n_verts, solidity, confidence, approx))
+        return []
+
     rc["accepted"] += 1
     if trace is not None:
         trace.append(_trace_entry(contour, None, area, n_verts, solidity, confidence, approx))
@@ -906,6 +969,7 @@ def _filter_sign_contours(
     sign_filter: SignContourFilter,
     frame_id: int,
     timestamp_ms: int,
+    sign_color_roi: np.ndarray | None = None,
 ) -> list[SignCandidate]:
     """
     Production twin of _extract_sign_candidates(): same gates in the same
@@ -929,6 +993,8 @@ def _filter_sign_contours(
         return []
     solidity = round(best_area / hull_area, 4)
     if solidity < sign_filter.min_solidity:
+        return []
+    if _shape_gate(best, best_area, hull, sign_color_roi, sign_filter)[0] is not None:
         return []
 
     return [SignCandidate(
@@ -984,6 +1050,7 @@ def extract_sign_candidates(
         timestamp_ms,
         reject_counts,
         trace_log,
+        sign_color_roi,
     )
 
     debug_images = {
@@ -1034,6 +1101,7 @@ def find_sign_candidates(
         sign_filter,
         frame_id,
         timestamp_ms,
+        sign_color_roi,
     )
 
 # =============================================================================

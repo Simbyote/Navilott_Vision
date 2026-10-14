@@ -1245,3 +1245,69 @@ def test_geometry_characterization(request, frames, artifacts):
             "sign": [{"bbox": list(c.bbox), "confidence": c.confidence, "vertices": c.vertex_count,
                       "area": c.area, "solidity": c.solidity} for c in res.sign_candidates],
         })
+
+# =============================================================================
+# Ghost signs: aspect, extent and letters
+# =============================================================================
+
+GHOST = replace(TEST_SIGN, aspect_range=(0.6, 1.6), extent_range=(0.68, 0.92), min_letter_share=0.03)
+
+
+def red_shape(pts):
+    img = blank_bgr(SIGN_SHAPE, 80)
+    cv2.fillPoly(img, [np.asarray(pts, np.int32)], RED)
+    return cv2.GaussianBlur(img, (5, 5), 0)
+
+
+def stretched_octagon(sx=0.45, sy=1.5):
+    """An octagon squeezed tall: 8 vertices and solid, like a leg's outline."""
+    return [(120 + (x - 120) * sx, 100 + (y - 100) * sy) for x, y in polygon_pts(8, 60, (120, 100))]
+
+
+def clipped_square(side=120, cut=18):
+    """A square with its corners cut: 8 vertices and solid, but as full as a box (a chair back)."""
+    x0, y0, x1, y1 = 60, 40, 60 + side, 40 + side
+    return [(x0 + cut, y0), (x1 - cut, y0), (x1, y0 + cut), (x1, y1 - cut),
+            (x1 - cut, y1), (x0 + cut, y1), (x0, y1 - cut), (x0, y0 + cut)]
+
+
+def both_twins(img, flt):
+    """(gate that decided, candidates) from the debug twin, checked against the production twin."""
+    cands, dbg = extract_sign_candidates(img, flt, 1, 2, False, True)
+    prod = geo.find_sign_candidates(img, flt, 1, 2)
+    assert [(c.bbox, c.vertex_count) for c in cands] == [(c.bbox, c.vertex_count) for c in prod]
+    gates = [t["gate"] for t in dbg["trace"] if t["gate"] != "not_largest"]
+    return (gates[-1] if gates else "none"), cands
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("name, img, gate", [
+    ("a tall solid blob (a leg)", red_shape(stretched_octagon()), "aspect"),
+    ("a box with cut corners (a chair back)", red_shape(clipped_square()), "extent"),
+    ("a large octagon with no letters", course_sign(80, RED, 40, letters=False), "letters"),
+])
+def test_each_ghost_gate_rejects_its_ghost(name, img, gate):
+    got, cands = both_twins(img, GHOST)
+    assert (got, cands) == (gate, []), name
+    off, kept = both_twins(img, TEST_SIGN)              # every ghost gate is off by default
+    assert (off, len(kept)) == (None, 1), name
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("radius", [14, 40])
+def test_a_lettered_sign_passes_and_a_small_one_needs_no_letters(radius):
+    assert both_twins(course_sign(80, RED, radius), GHOST)[0] is None
+    small = course_sign(80, RED, 14, letters=False)     # under letters_min_area: letters blur away at range
+    assert both_twins(small, GHOST)[0] is None
+
+
+@pytest.mark.software
+def test_the_letter_share_counts_white_inside_the_hull_only():
+    img = blank_bgr((60, 60), 240)                      # white all round
+    cv2.rectangle(img, (10, 10), (49, 49), RED, -1)
+    cv2.rectangle(img, (20, 25), (39, 34), (240, 240, 240), -1)      # a white band inside: 200 of 1600 px
+    hull = np.array([[10, 10], [49, 10], [49, 49], [10, 49]], np.int32).reshape(-1, 1, 2)
+    assert geo._letter_share(img, hull, GHOST) == pytest.approx(200 / 1600, abs=0.02)
+    pink = img.copy()
+    pink[25:35, 20:40] = (170, 170, 255)                # bright but red: the blur's pink, not a letter
+    assert geo._letter_share(pink, hull, GHOST) == 0.0

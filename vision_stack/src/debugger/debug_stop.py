@@ -29,7 +29,7 @@ from src.params import STOP_SIGN
 
 # geometry sign gate names, shortened for labels
 GATE_SHORT = {"area": "area", "not_largest": "smaller", "vertices": "vert", "hull": "hull",
-              "solidity": "sol"}
+              "solidity": "sol", "aspect": "aspect", "extent": "extent", "letters": "letters"}
 C_MASK = (255, 255, 0)      # cyan: the red mask's outline on the redness panel
 
 class StopView(dv.CandidateView):

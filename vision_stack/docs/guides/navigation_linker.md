@@ -23,7 +23,7 @@ What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 - **Lane keeping:** 0.40 duty, steering against the lane offset, or against the heading while vision is lost.
 - **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until the lane boundaries are back (both for 3 frames, or one for 6), or 3 s past the line. No new stop line is taken up while it crosses.
 - **1.5 s after the line leaves the view** the robot is at it:
-  - with a **stop sign** seen in the last 5 s, it stops, holds 2 s, and goes;
+  - with a **stop sign** seen in the last 5 s, and no more than 2 s before the line came into view, it stops, holds 2 s, and goes;
   - with a **red light**, it waits for the light to change.
 - **Otherwise it crosses.** A red light with no stop line doesn't stop it.
 
@@ -116,7 +116,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
-- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0.5 s, `src/navigation/stop_line.py`) after it leaves the view. If it stops short or long of the line, tune that.
+- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0, `src/navigation/stop_line.py`) after it leaves the view: it stops as the line leaves, so the hanging traffic light stays in view. Turns then drive `ADVANCE_MS` (2.5 s, `intersection.py`) into the intersection first. If it stops short or long of the line, tune the first; if turns cut the corner or overshoot, the second.
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.

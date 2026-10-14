@@ -69,7 +69,7 @@ def active(out):
 @pytest.mark.software
 def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
-    assert ADVANCE_MS == 0            # 2026-10-12: STOP_DELAY_MS (500) carries the robot in instead
+    assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 

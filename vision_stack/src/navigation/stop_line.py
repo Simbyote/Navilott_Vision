@@ -33,12 +33,13 @@ IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
 
 # Time from the line leaving the bottom of the view to the robot being "at"
 # it, where a stop sign or red light brakes it. 1500 stopped it a few cm past
-# the line, 500 at it (2026-10-05). 0 since 2026-10-07: the course's new
-# traffic light hangs over the center, and 500 ms of driving carried the robot
-# under it and out of view; braking as the line leaves the view keeps the
-# light in frame. Turns no longer start here either: the intersection rule
-# advances ADVANCE_MS first. It's a time, so it moves with speed (the battery)
-STOP_DELAY_MS = 500
+# the line, 500 at it (2026-10-05). 0, tuned on the course: its traffic
+# light hangs over the center of the intersection, and any drive past the
+# line carries the robot under it and out of view; braking as the line leaves
+# the view keeps the whole light in one frame. Turns get their distance from
+# the intersection rule's ADVANCE_MS instead. It's a time, so it moves with
+# speed (the battery)
+STOP_DELAY_MS = 0
 # A line last seen within this many lane-ROI rows of the bottom left by
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts
 # 22.6 rows at ~11.9 cm, 2 cm past the view bottom (~10 cm)
@@ -56,6 +57,8 @@ class StopLineTracker:
         reached: True only on the frame the robot reaches the line.
         last_rows: The line's last seen stop_line_distance_px; None in IDLE.
         lost_ms: timestamp_ms the line left the view; None unless CROSSING.
+        seen_ms: timestamp_ms the current line first came into view; on the
+            reached frame, the line just reached's. None in IDLE before any line.
     """
     def __init__(self, delay_ms: int = STOP_DELAY_MS, near_bottom_rows: float = NEAR_BOTTOM_ROWS) -> None:
         self.delay_ms = delay_ms
@@ -68,6 +71,7 @@ class StopLineTracker:
         self.entered = self.reached = False
         self.last_rows: float | None = None
         self.lost_ms: int | None = None
+        self.seen_ms: int | None = None
 
     def update(self, packet: EstimationPacket, accept_new: bool = True) -> None:
         """
@@ -83,6 +87,7 @@ class StopLineTracker:
         if self.phase == IDLE:
             if seen and accept_new:
                 self.phase, self.last_rows = APPROACH, packet.stop_line_distance_px
+                self.seen_ms = packet.timestamp_ms
         elif self.phase == APPROACH:
             if seen:
                 self.last_rows = packet.stop_line_distance_px
@@ -92,5 +97,6 @@ class StopLineTracker:
             else:
                 self.reset()                    # lost far away: not this robot driving over it
         elif packet.timestamp_ms - self.lost_ms >= self.delay_ms:     # CROSSING; a re-sighting is the same line flickering
+            seen_ms = self.seen_ms
             self.reset()
-            self.reached = True
+            self.reached, self.seen_ms = True, seen_ms         # the rules read which line it was
