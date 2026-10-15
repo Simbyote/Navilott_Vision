@@ -25,6 +25,16 @@ Purpose:
                        row, at least one for ONE_BOUNDARY_FRAMES, or
                        MAX_CROSS_CM of odometry (MAX_CROSS_MS of driving
                        without it). Then lane keeping takes over.
+    The approach angle: the heading is counted from the street, not from
+    the robot. A robot that comes at the line off square carries that angle
+    through the crossing: zeroed at the line, a turn of TURN_TARGET_DEG ends
+    off square by the same angle, and a straight crossing goes diagonally.
+    So the crossing starts its heading at the approach angle, read from the
+    stop line's tilt in the image (the tracker's approach_tilt_deg less
+    TILT_ZERO_DEG, x TILT_TO_HEADING, at most MAX_APPROACH_DEG): the heading hold then
+    straightens the robot to the street, and the turn's TURN_TARGET_DEG is
+    measured from the street. Without TILT_TO_HEADING, or a tilt, it starts
+    at 0 as before.
     Distance or time: a stage goes by distance when its _CM is set and the
     packet has odometry (distance_cm: encoders and calibration/odometry.json);
     otherwise by time, as before odometry. Every crossing record carries
@@ -49,6 +59,7 @@ Main package:
         None when not crossing. active, stage.
 
 Flow (each frame while active):
+    0. On the crossing's first frame: the heading starts at the approach angle.
     1. Integrate yaw (net of the gyro bias) into the heading.
     2. At the line: STAGE_ADVANCE for left / right, else STAGE_EXIT.
     3. STAGE_ADVANCE: the heading hold for ADVANCE_CM (ADVANCE_MS); then STAGE_TURN.
@@ -114,6 +125,21 @@ RIGHT_TURN = Command(0.50, 0.25)
 # the drive's coast after the turn stops (maneuver_linker's 180 turn aims
 # at 171). Tune on the mat: overshoot -> lower, short -> raise
 TURN_TARGET_DEG = 85.0
+# The approach angle from the stop line's tilt: heading deg (+ = turned
+# right of square) per deg of the line's tilt in the image (+ = its right end
+# nearer). A line on the floor looks flatter than it is from a low camera, so
+# this is larger than 1, and negative: a robot turned right sees the line's
+# left end nearer. Measured, not computed (guides/navigation_linker.md,
+# "Measuring TILT_TO_HEADING": park at a known angle to a line, read
+# stop_line_tilt_deg). None: no
+# correction, the heading starts at 0
+TILT_TO_HEADING: float | None = None
+# The tilt a square approach reads: a camera mounted a little rotated sees
+# every line tilted. Measured with TILT_TO_HEADING, subtracted before scaling
+TILT_ZERO_DEG = 0.0
+# The largest approach angle believed. The geometry's tilt gate (max_tilt_deg)
+# already refuses steeper lines; this caps a wrong scale
+MAX_APPROACH_DEG = 15.0
 # ... or after this long if the gyro never gets there (no IMU, a wrong
 # sign): open-loop times (left 2.75 s, right 1.62 s) plus half
 LEFT_TURN_MAX_MS = 4100
@@ -149,12 +175,14 @@ class IntersectionRule:
             shares its own); None drives the turn's duties as they are.
         advance_ms: See ADVANCE_MS.
         advance_cm, max_cross_cm: See ADVANCE_CM, MAX_CROSS_CM; None goes by time.
+        tilt_to_heading: See TILT_TO_HEADING; None leaves the approach uncorrected.
 
     active: True while crossing. stage: STAGE_* while active, None otherwise.
     record: {"reason": REASON_CROSSING or REASON_TURNING, "source", "steer",
         "heading_deg", "stage", "step" (progress.label()), "maneuver",
         "turn_end" (how this crossing's turn ended: TURN_END_GYRO,
-        TURN_END_TIME; None before it does, or with no turn), "stage_cm"
+        TURN_END_TIME; None before it does, or with no turn), "approach_deg"
+        (the approach angle the heading started at; 0.0 uncorrected), "stage_cm"
         (odometry cm driven in this stage; None without odometry), and while
         turning with wheels, "wheels" (WheelSpeed.record)} while crossing;
         {} otherwise.
@@ -163,12 +191,14 @@ class IntersectionRule:
                  kp_heading: float = KP_HEADING, gyro_bias_dps: float = 0.0,
                  progress: RouteProgress | None = None, wheels: WheelSpeed | None = None,
                  advance_ms: int = ADVANCE_MS, advance_cm: float | None = ADVANCE_CM,
-                 max_cross_cm: float | None = MAX_CROSS_CM) -> None:
+                 max_cross_cm: float | None = MAX_CROSS_CM,
+                 tilt_to_heading: float | None = TILT_TO_HEADING) -> None:
         self.tracker = tracker
         self.wheels = wheels
         self.advance_ms = advance_ms
         self.advance_cm = advance_cm
         self.max_cross_cm = max_cross_cm
+        self.tilt_to_heading = tilt_to_heading
         self.progress = progress or RouteProgress()
         self.lane = lane
         self.kp_heading = kp_heading
@@ -180,7 +210,7 @@ class IntersectionRule:
         self._active = False
         self.stage: str | None = None
         self._maneuver = STRAIGHT
-        self._heading = 0.0
+        self._heading = self._approach = 0.0
         self._turn_ms = self._driving_ms = self._advance_ms = 0
         self._turn_end: str | None = None
         self._two_boundary = self._any_boundary = 0
@@ -198,6 +228,12 @@ class IntersectionRule:
         if self._stage_from_cm is None:              # odometry came up mid-stage: measure from here
             self._stage_from_cm = packet.distance_cm
         return packet.distance_cm - self._stage_from_cm
+
+    def approach_deg(self, tilt_deg: float | None) -> float:
+        """The approach angle a stop line's tilt says, + = turned right of square; 0.0 without a scale or a tilt."""
+        if self.tilt_to_heading is None or tilt_deg is None:
+            return 0.0
+        return max(-MAX_APPROACH_DEG, min(MAX_APPROACH_DEG, self.tilt_to_heading * (tilt_deg - TILT_ZERO_DEG)))
 
     @staticmethod
     def _done(cm: float | None, limit_cm: float | None, ms: int, limit_ms: int) -> bool:
@@ -228,6 +264,7 @@ class IntersectionRule:
         if not self._active and self.tracker.phase == CROSSING:
             self.reset()
             self._active, self._last_ms, self.stage = True, now, STAGE_TO_LINE
+            self._heading = self._approach = self.approach_deg(self.tracker.approach_tilt_deg)
             current = self.progress.current
             self._maneuver = current[2] if current and current[2] in TURNS else STRAIGHT
         if not self._active:
@@ -279,6 +316,7 @@ class IntersectionRule:
         self.record = {"reason": reason, "source": source, "steer": steer,
                        "heading_deg": round(self._heading, 2), "stage": self.stage,
                        "step": self.progress.label(), "maneuver": self._maneuver, "turn_end": self._turn_end,
+                       "approach_deg": round(self._approach, 1),
                        "stage_cm": None if (cm := self._stage_cm(packet)) is None else round(cm, 1)}
         if wheels is not None:
             self.record["wheels"] = wheels

@@ -118,9 +118,21 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
 - **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0, `src/navigation/stop_line.py`) after it leaves the view: it stops as the line leaves, so the hanging traffic light stays in view. Turns then drive `ADVANCE_MS` (2.5 s, `intersection.py`) into the intersection first. If it stops short or long of the line, tune the first; if turns cut the corner or overshoot, the second. With odometry calibrated, both can go by cm instead (`REACH_CM` in `stop_line.py`, `ADVANCE_CM`): nav.csv's `line_left_cm` (cm of the line still ahead, by the encoders) and `stage_cm` show what the timed versions gave, which is what to set them to.
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
+- **Angled approaches:** a robot that comes at a stop line off square carries the angle through the crossing unless `TILT_TO_HEADING` (`intersection.py`) is set; then the crossing's heading starts at the approach angle the line's tilt gives (`approach_deg` in nav.csv), the heading hold squares the robot to the street, and a turn's 85° is measured from the street. See "Measuring `TILT_TO_HEADING`" below.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.
 - **Stop sign and traffic light:** their gates are uncalibrated, so both can be missed or falsely seen.
 - **Gains:** Bench values. His normalized-offset path assumes 30 cm per unit of `lane_offset`, which isn't measured; pass `--cm-per-px` once the ground scale is known and the navigator steers by cm.
+
+### Measuring `TILT_TO_HEADING`
+
+The scale from the stop line's tilt in the image to the robot's angle on the floor. From the low camera a line looks flatter than it is, so it's larger than 1; it's negative because a robot turned right sees the line's left end nearer.
+
+1. Park the robot on the mat facing a stop line square, its front edge ~15 cm from the line (the line in the lower half of the view). Run `python3 -m src.phase3_linker --camera --limit 100` and note the median `stop_line_tilt_deg` in `p3.csv`. That's `TILT_ZERO_DEG`: near 0 unless the camera sits a little rotated.
+2. Turn the robot about its center to a known angle, **right** of square, e.g. 8°: a protractor, or a strip of tape at that angle to line it up against. Same run, same column.
+3. `TILT_TO_HEADING = angle / (tilt at the angle − tilt square)`, e.g. 8 / (−2.6 − 0.1) ≈ −2.96. Check it on the left: −8° should read about the same tilt with the sign flipped.
+4. Keep the angle under what the geometry's tilt gate passes (`StopLineFilter.max_tilt_deg` in `config.py`): past it the line isn't detected at all, which is also the largest approach this can correct (gate × the scale).
+
+With it set, `intersection_linker` crossings from a deliberately angled start should end with `heading_deg` near the street's (`approach_deg` in nav.csv says what the line read).
 
 | Symptom | Likely cause |
 | --- | --- |

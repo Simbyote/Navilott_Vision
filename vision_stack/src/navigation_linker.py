@@ -83,7 +83,7 @@ REASON_CONTRACT = "contract"        # the linker braked: the navigator's command
 SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "approach_deg", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "distance_cm",
               "target_left_cps", "target_right_cps", "gain_left", "gain_right",
@@ -375,7 +375,7 @@ def run(
                  "line_left_cm": None if rec.get("line_left_cm") is None else round(rec["line_left_cm"], 1),
                  "step": rec.get("step", ""),
                  "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "", "stage_cm": rec.get("stage_cm"),
-                 "turn_end": rec.get("turn_end") or "", "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
+                 "turn_end": rec.get("turn_end") or "", "approach_deg": rec.get("approach_deg"), "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),

@@ -184,6 +184,11 @@ class EstimationPacket:
     distance_cm: float | None = None
     left_distance_cm: float | None = None
     right_distance_cm: float | None = None
+    # The voted stop line's tilt in the image, this frame's measurement only
+    # (never held), deg from horizontal, + = its right end nearer the robot.
+    # None unless stop_line_detected and seen this frame. The intersection
+    # rule reads the approach angle from it
+    stop_line_tilt_deg: float | None = None
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
@@ -412,12 +417,14 @@ class StopLineClassifier:
     measurement already refuses weak candidates. While the vote says a line
     is there, a frame that misses it repeats the last measured distances (px
     and cm together, from the same frame); both are None whenever the vote
-    says there isn't one.
+    says there isn't one. tilt is this frame's measured tilt only: never
+    held, None on a missed frame or while the vote says there's no line.
     """
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, False)
         self._last: tuple[float | None, float | None] = (None, None)
+        self.tilt: float | None = None
 
     def update(
             self,
@@ -428,7 +435,9 @@ class StopLineClassifier:
         seen = next((r for r in results if r.detected), None)
         if seen is not None:
             self._last = (seen.distance_px, seen.distance_cm)
-        if not self._vote.update(seen is not None):
+        voted = self._vote.update(seen is not None)
+        self.tilt = seen.tilt_deg if voted and seen is not None else None
+        if not voted:
             return False, None, None
         if seen is None:
             log.append(f"[STOPLINE] missed this frame; holding {self._last[0]:.1f}px")
@@ -548,6 +557,7 @@ class Phase3Processor:
             distance_cm = odom.distance_cm,
             left_distance_cm = odom.left_cm,
             right_distance_cm = odom.right_cm,
+            stop_line_tilt_deg = self.stop_line.tilt,
         )
         return packet, {
             "frame_id": phase2.frame_id,

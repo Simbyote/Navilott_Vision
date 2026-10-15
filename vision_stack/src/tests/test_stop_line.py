@@ -236,3 +236,22 @@ def test_left_cm_is_logged_by_the_timed_stop_too():
     out = roll(StopLineTracker(), [20.0, 17.0, 14.0, 11.0], 3)       # reach_cm None: STOP_DELAY_MS
     odo, left = reached_at(out)
     assert left == pytest.approx(20.0 - odo) and out[0][2] == 20.0
+
+
+# =============================================================================
+# The approach tilt
+# =============================================================================
+
+@pytest.mark.software
+def test_the_approach_tilt_is_the_median_of_the_last_fresh_tilts_until_the_line_is_reached():
+    t, states = StopLineTracker(), []
+    tilts = [9.0, 9.0, 1.0, 2.0, None, 3.0, 2.5, 2.0]                 # None: a frame Phase 3 held, no fresh tilt
+    frames = [(30.0 - 3 * i, tilt) for i, tilt in enumerate(tilts)] + [(None, None)] * 3
+    for i, (rows, tilt) in enumerate(frames):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
+                        stop_line_distance_px=rows, stop_line_tilt_deg=tilt))
+        states.append((t.phase, t.reached, t.approach_tilt_deg))
+    assert all(a is None for phase, _, a in states if phase == APPROACH)
+    crossing = [a for phase, reached, a in states if phase == CROSSING or reached]
+    assert crossing and set(crossing) == {2.0}                               # median of 1, 2, 3, 2.5, 2: the 9s fell out
+    assert states[-1] == (IDLE, False, None)

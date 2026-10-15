@@ -29,6 +29,12 @@ Purpose:
     line_left_cm), which is how REACH_CM is measured: run with it None and
     read left_cm on the reached frames.
 
+    The approach angle: the line's tilt in the image says how far off square
+    the robot is coming at it. The tracker keeps the median of the last
+    TILT_FRAMES fresh tilts while approaching, as approach_tilt_deg, from
+    the frame the line leaves the view until it's reached; the intersection
+    rule turns it into a heading (intersection.TILT_TO_HEADING).
+
 Main package:
     StopLineTracker: update(packet) once per frame; phase, reached, lost_ms.
     IDLE, APPROACH, CROSSING: its phases.
@@ -39,6 +45,9 @@ Flow:
     left (or, by distance, REACH_CM short of it) -> IDLE.
     APPROACH -> IDLE when it's voted out far away.
 """
+from collections import deque
+from statistics import median
+
 from src.estimation.estimation import EstimationPacket
 
 IDLE, APPROACH, CROSSING = "idle", "approach", "crossing"
@@ -59,6 +68,10 @@ STOP_DELAY_MS = 0
 # None: by STOP_DELAY_MS. Set it from left_cm on reached frames (nav.csv's
 # line_left_cm) once odometry is calibrated
 REACH_CM: float | None = None
+# Fresh tilts (the packet's stop_line_tilt_deg) the approach angle is the
+# median of: the last ones before the line leaves the view, the nearest and
+# so the largest in the image. 5 is a quarter second at 20 FPS
+TILT_FRAMES = 5
 # A line last seen within this many lane-ROI rows of the bottom left by
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts
 # 22.6 rows at ~11.9 cm, 2 cm past the view bottom (~10 cm)
@@ -78,6 +91,9 @@ class StopLineTracker:
         lost_ms: timestamp_ms the line left the view; None unless CROSSING.
         seen_ms: timestamp_ms the current line first came into view; on the
             reached frame, the line just reached's. None in IDLE before any line.
+        approach_tilt_deg: the median of the line's last TILT_FRAMES fresh
+            tilts in the image, + = its right end nearer the robot; set while
+            CROSSING (and on the reached frame), None otherwise or with none.
         left_cm: cm of the tracked line still ahead, by odometry from its
             last fresh sighting; on the reached frame, what was left when it
             was reached. None without odometry or a cm for the line, and in IDLE.
@@ -99,11 +115,15 @@ class StopLineTracker:
         self.lost_ms: int | None = None
         self.seen_ms: int | None = None
         self.left_cm: float | None = None
+        self.approach_tilt_deg: float | None = None
+        self._tilts: deque = deque(maxlen=TILT_FRAMES)
         self._line_at: float | None = None        # the line's odometry position
         self._sighting: float | None = None       # the cm it was last measured at
 
     def _locate(self, packet: EstimationPacket) -> None:
         """A fresh sighting's cm puts the line at an odometry position. A held cm (Phase 3 repeats it through a missed frame) isn't fresh."""
+        if packet.stop_line_tilt_deg is not None:
+            self._tilts.append(packet.stop_line_tilt_deg)
         cm, odo = packet.stop_line_distance_cm, packet.distance_cm
         if cm is not None and odo is not None and cm != self._sighting:
             self._line_at, self._sighting = odo + cm, cm
@@ -127,6 +147,8 @@ class StopLineTracker:
                 crossed); a line already tracked carries on.
         """
         self.entered = self.reached = False
+        if self.phase == IDLE:                  # what the reached frame kept is over
+            self.left_cm = self.approach_tilt_deg = None
         odo = packet.distance_cm
         self._step_cm = 0.0 if odo is None or self._odometry is None else max(odo - self._odometry, 0.0)
         self._odometry = odo
@@ -143,14 +165,16 @@ class StopLineTracker:
             elif self.last_rows is not None and self.last_rows <= self.near_bottom_rows:
                 self.phase, self.lost_ms = CROSSING, packet.timestamp_ms
                 self.entered = True
+                self.approach_tilt_deg = median(self._tilts) if self._tilts else None
             else:
                 self.reset()                    # lost far away: not this robot driving over it
         else:                                   # CROSSING; a re-sighting is the same line flickering
             self.left_cm = self._left(packet)
             if self._at_line(packet):
-                seen_ms, left = self.seen_ms, self.left_cm
+                seen_ms, left, tilt = self.seen_ms, self.left_cm, self.approach_tilt_deg
                 self.reset()
                 self.reached, self.seen_ms, self.left_cm = True, seen_ms, left    # the rules read which line it was
+                self.approach_tilt_deg = tilt
                 return
         if self.phase != IDLE:
             self.left_cm = self._left(packet)
