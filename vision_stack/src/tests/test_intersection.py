@@ -11,7 +11,9 @@ advance ADVANCE_MS on the heading hold (held frames don't count; straight
 doesn't advance), then turn on their duties until the gyro reaches
 TURN_TARGET_DEG their way (or their time limit), then out on the new
 heading; held frames don't advance a turn, and lane lines seen mid-turn
-don't end it.
+don't end it. With odometry and a distance set (ADVANCE_CM, MAX_CROSS_CM),
+the advance and the exit go by cm instead; without either, by time; every
+record carries the stage's cm.
 """
 import pytest
 
@@ -41,7 +43,8 @@ TEST_ADVANCE_MS = 1000
 TURN_START = REACHED + TEST_ADVANCE_MS // MS - 1
 
 
-def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None, advance_ms=TEST_ADVANCE_MS, wheels=None):
+def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None, advance_ms=TEST_ADVANCE_MS, wheels=None,
+          advance_cm=None, max_cross_cm=None):
     """
     The line, then one dict of fields per frame after it. held: frame indexes
     a higher rule holds. maneuver: a one-step route taking it at this line;
@@ -50,7 +53,8 @@ def drive(after, held=(), bias=0.0, line=LINE, ms=MS, maneuver=None, advance_ms=
     tracker = StopLineTracker()
     progress = RouteProgress(Route((maneuver,)) if maneuver else None)
     rule = IntersectionRule(tracker, LaneKeepingNavigator(), gyro_bias_dps=bias, progress=progress,
-                            advance_ms=advance_ms, wheels=wheels)
+                            advance_ms=advance_ms, wheels=wheels, advance_cm=advance_cm,
+                            max_cross_cm=max_cross_cm)
     seq = [{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "right_only"} for r in line] + after
     out = []
     for i, fields in enumerate(seq):
@@ -85,7 +89,7 @@ def test_it_drives_straight_from_the_line_leaving_the_view():
     assert active(out)[0] == LOST and out[LOST][0] == Command(BASE_SPEED, BASE_SPEED)   # ignores the offset
     assert out[LOST][1] == {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD, "steer": 0.0,
                             "heading_deg": 0.0, "stage": STAGE_TO_LINE, "step": "1/0 extra", "maneuver": STRAIGHT,
-                            "turn_end": None}
+                            "turn_end": None, "stage_cm": None}
 
 
 @pytest.mark.software
@@ -332,3 +336,51 @@ def test_straight_and_no_route_never_turn():
     for maneuver in (STRAIGHT, None):
         _, out = drive(turn_case(-YAW_DPS), maneuver=maneuver)
         assert STAGE_TURN not in stages(out) and STAGE_EXIT in stages(out)
+
+
+# =============================================================================
+# By distance, when there's odometry
+# =============================================================================
+
+def rolling(n, cm_per_frame, start=0, **fields):
+    """n frames after the line, the odometry rising cm_per_frame each from the line's frames."""
+    base = (len(LINE) + start) * cm_per_frame
+    return [{"lane_mode": "none", "distance_cm": base + i * cm_per_frame, **fields} for i in range(n)]
+
+
+def first(out, stage):
+    return next(i for i, (_, rec) in enumerate(out) if rec.get("stage") == stage)
+
+
+@pytest.mark.software
+def test_the_advance_goes_by_distance_when_set_and_measured():
+    # 2 cm a frame: 30 cm is 15 frames from the line, however long the time limit
+    _, out = drive(rolling(60, 2.0), maneuver=LEFT, advance_ms=100_000, advance_cm=30.0)
+    advance = first(out, STAGE_ADVANCE)
+    assert first(out, STAGE_TURN) == advance + 15
+    assert out[advance + 14][1]["stage_cm"] == 28.0
+
+
+@pytest.mark.software
+def test_slower_wheels_advance_longer_in_time_but_the_same_distance():
+    frames = {}
+    for cm in (2.0, 1.0):                                   # a fresh pack, a tired one
+        _, out = drive(rolling(80, cm), maneuver=LEFT, advance_cm=30.0)
+        frames[cm] = first(out, STAGE_TURN) - first(out, STAGE_ADVANCE)
+    assert frames == {2.0: 15, 1.0: 30}
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("advance_cm, fields", [(None, {"distance_cm": 5.0}), (30.0, {})])
+def test_without_a_distance_set_or_without_odometry_the_advance_is_timed(advance_cm, fields):
+    _, out = drive([{"lane_mode": "none", **fields}] * 60, maneuver=LEFT, advance_cm=advance_cm)
+    assert first(out, STAGE_TURN) == TURN_START
+    assert all(rec.get("stage_cm") in (None, 0.0) for _, rec in out)
+
+
+@pytest.mark.software
+def test_the_exit_ends_on_distance_when_set():
+    _, out = drive(rolling(200, 2.0), max_cross_cm=40.0)
+    exit_ = first(out, STAGE_EXIT)
+    assert active(out)[-1] == exit_ + 19                    # 40 cm at 2 cm a frame
+    assert out[exit_ + 19][1]["stage_cm"] == 38.0

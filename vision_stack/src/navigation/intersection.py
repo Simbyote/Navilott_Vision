@@ -13,8 +13,9 @@ Purpose:
                        duty, steering only against the heading turned).
         STAGE_ADVANCE  left or right only, from the line (the tracker's
                        reached, STOP_DELAY_MS later): on into the
-                       intersection on the heading hold for ADVANCE_MS of
-                       driving, since the stop lines sit back in the street.
+                       intersection on the heading hold for ADVANCE_CM of
+                       odometry, or ADVANCE_MS of driving without it, since
+                       the stop lines sit back in the street.
         STAGE_TURN     left or right only, after the advance: fixed wheel
                        duties (LEFT_TURN, RIGHT_TURN, with their history)
                        until the gyro has turned TURN_TARGET_DEG that way,
@@ -22,7 +23,14 @@ Purpose:
         STAGE_EXIT     straight on the new heading until the lane is back:
                        both boundaries for TWO_BOUNDARY_FRAMES frames in a
                        row, at least one for ONE_BOUNDARY_FRAMES, or
-                       MAX_CROSS_MS of driving. Then lane keeping takes over.
+                       MAX_CROSS_CM of odometry (MAX_CROSS_MS of driving
+                       without it). Then lane keeping takes over.
+    Distance or time: a stage goes by distance when its _CM is set and the
+    packet has odometry (distance_cm: encoders and calibration/odometry.json);
+    otherwise by time, as before odometry. Every crossing record carries
+    stage_cm, the distance driven in the stage so far, which is how the _CM
+    values are measured: run with them None and read what the timed stages
+    covered in nav.csv.
 
     Straight goes from STAGE_TO_LINE to STAGE_EXIT at the line, with no
     advance. Which way to go comes from the route (route.py) through the
@@ -43,10 +51,10 @@ Main package:
 Flow (each frame while active):
     1. Integrate yaw (net of the gyro bias) into the heading.
     2. At the line: STAGE_ADVANCE for left / right, else STAGE_EXIT.
-    3. STAGE_ADVANCE: the heading hold for ADVANCE_MS; then STAGE_TURN.
+    3. STAGE_ADVANCE: the heading hold for ADVANCE_CM (ADVANCE_MS); then STAGE_TURN.
     4. STAGE_TURN: the turn's duties until the heading reaches the target
        or the time limit; then STAGE_EXIT, holding the heading it ended on.
-    5. STAGE_EXIT: count boundary frames and driving time; end on any limit.
+    5. STAGE_EXIT: count boundary frames and distance (driving time); end on any limit.
     Every stage before the end returns a command and a record.
 """
 from src.estimation.estimation import EstimationPacket
@@ -74,6 +82,9 @@ BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # at crossing one intersection, tuned on the mat (3 s 2026-10-01, 4 s
 # 2026-10-05 with the longer boundary counts)
 MAX_CROSS_MS = 4000
+# ... or this far, by odometry. None: by MAX_CROSS_MS. Set it from a run's
+# stage_cm at the end of timed exits (nav.csv), once odometry is calibrated
+MAX_CROSS_CM: float | None = None
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
 # Driving from the line into the intersection before a turn starts, on the
@@ -84,6 +95,11 @@ MAX_DT_MS = 500
 # don't advance: they drive on to the exit. Counts only while not held, like
 # the turn's time
 ADVANCE_MS = 2500
+# The advance by odometry instead: floor cm from the line. A time moves with
+# the speed, and the speed with the battery (the heading hold drives a duty);
+# a distance doesn't. None: by ADVANCE_MS. Set it from a run's stage_cm at
+# the end of timed advances (nav.csv), once odometry is calibrated
+ADVANCE_CM: float | None = None
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as
@@ -132,22 +148,27 @@ class IntersectionRule:
         wheels: The WheelSpeed the turn drives through (navigation.Navigation
             shares its own); None drives the turn's duties as they are.
         advance_ms: See ADVANCE_MS.
+        advance_cm, max_cross_cm: See ADVANCE_CM, MAX_CROSS_CM; None goes by time.
 
     active: True while crossing. stage: STAGE_* while active, None otherwise.
     record: {"reason": REASON_CROSSING or REASON_TURNING, "source", "steer",
         "heading_deg", "stage", "step" (progress.label()), "maneuver",
         "turn_end" (how this crossing's turn ended: TURN_END_GYRO,
-        TURN_END_TIME; None before it does, or with no turn), and while
+        TURN_END_TIME; None before it does, or with no turn), "stage_cm"
+        (odometry cm driven in this stage; None without odometry), and while
         turning with wheels, "wheels" (WheelSpeed.record)} while crossing;
         {} otherwise.
     """
     def __init__(self, tracker: StopLineTracker, lane: LaneKeepingNavigator,
                  kp_heading: float = KP_HEADING, gyro_bias_dps: float = 0.0,
                  progress: RouteProgress | None = None, wheels: WheelSpeed | None = None,
-                 advance_ms: int = ADVANCE_MS) -> None:
+                 advance_ms: int = ADVANCE_MS, advance_cm: float | None = ADVANCE_CM,
+                 max_cross_cm: float | None = MAX_CROSS_CM) -> None:
         self.tracker = tracker
         self.wheels = wheels
         self.advance_ms = advance_ms
+        self.advance_cm = advance_cm
+        self.max_cross_cm = max_cross_cm
         self.progress = progress or RouteProgress()
         self.lane = lane
         self.kp_heading = kp_heading
@@ -164,7 +185,26 @@ class IntersectionRule:
         self._turn_end: str | None = None
         self._two_boundary = self._any_boundary = 0
         self._last_ms: int | None = None
+        self._stage_from_cm: float | None = None      # odometry where the current stage began
+        self._stage_seen: str | None = None
         self.record: dict = {}
+
+    def _stage_cm(self, packet: EstimationPacket) -> float | None:
+        """Odometry cm driven since the current stage began; None without odometry."""
+        if self.stage != self._stage_seen:
+            self._stage_seen, self._stage_from_cm = self.stage, packet.distance_cm
+        if packet.distance_cm is None:
+            return None
+        if self._stage_from_cm is None:              # odometry came up mid-stage: measure from here
+            self._stage_from_cm = packet.distance_cm
+        return packet.distance_cm - self._stage_from_cm
+
+    @staticmethod
+    def _done(cm: float | None, limit_cm: float | None, ms: int, limit_ms: int) -> bool:
+        """A stage's distance reached, or its time without odometry or a distance set."""
+        if limit_cm is not None and cm is not None:
+            return cm >= limit_cm
+        return ms >= limit_ms
 
     @property
     def active(self) -> bool:
@@ -204,7 +244,7 @@ class IntersectionRule:
         if self.stage == STAGE_ADVANCE:
             if not held:
                 self._advance_ms += dt_ms
-            if self._advance_ms >= self.advance_ms:
+            if self._done(self._stage_cm(packet), self.advance_cm, self._advance_ms, self.advance_ms):
                 self.stage = STAGE_TURN
                 if self.wheels is not None:
                     self.wheels.start()
@@ -220,7 +260,7 @@ class IntersectionRule:
             self._two_boundary = self._two_boundary + 1 if packet.lane_mode == MODE_TWO_BOUNDARY else 0
             self._any_boundary = self._any_boundary + 1 if packet.lane_mode in BOUNDARY_MODES else 0
             if (self._two_boundary >= TWO_BOUNDARY_FRAMES or self._any_boundary >= ONE_BOUNDARY_FRAMES
-                    or self._driving_ms >= MAX_CROSS_MS):
+                    or self._done(self._stage_cm(packet), self.max_cross_cm, self._driving_ms, MAX_CROSS_MS)):
                 self.reset()
                 return None
 
@@ -238,7 +278,8 @@ class IntersectionRule:
             reason, source, steer = REASON_CROSSING, SOURCE_HEADING_HOLD, self.lane.record.get("steer", 0.0)
         self.record = {"reason": reason, "source": source, "steer": steer,
                        "heading_deg": round(self._heading, 2), "stage": self.stage,
-                       "step": self.progress.label(), "maneuver": self._maneuver, "turn_end": self._turn_end}
+                       "step": self.progress.label(), "maneuver": self._maneuver, "turn_end": self._turn_end,
+                       "stage_cm": None if (cm := self._stage_cm(packet)) is None else round(cm, 1)}
         if wheels is not None:
             self.record["wheels"] = wheels
         return cmd

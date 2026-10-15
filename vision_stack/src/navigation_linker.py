@@ -83,7 +83,7 @@ REASON_CONTRACT = "contract"        # the linker braked: the navigator's command
 SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "step", "maneuver", "stage", "stage_cm", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "distance_cm",
               "target_left_cps", "target_right_cps", "gain_left", "gain_right",
@@ -372,7 +372,7 @@ def run(
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
                  "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
-                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "",
+                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "", "stage_cm": rec.get("stage_cm"),
                  "turn_end": rec.get("turn_end") or "", "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
