@@ -154,3 +154,85 @@ def test_the_reached_frame_says_when_its_line_first_came_into_view():
     assert reached == (IDLE, True, 100)                      # the line just reached, still named
     t.reset()
     assert t.seen_ms is None
+
+
+# =============================================================================
+# By distance, with odometry
+# =============================================================================
+
+def roll(tracker, sightings, after, step=3.0):
+    """
+    The robot rolling step cm a frame: sightings are the line's cm ahead on
+    each frame it's seen (rows near the bottom), then `after` frames gone.
+    Returns each frame's (odometry, reached, left_cm).
+    """
+    out = []
+    for i in range(len(sightings) + after):
+        cm = sightings[i] if i < len(sightings) else None
+        p = packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=cm is not None,
+                   stop_line_distance_px=None if cm is None else 10.0, stop_line_distance_cm=cm,
+                   distance_cm=i * step)
+        tracker.update(p)
+        out.append((i * step, tracker.reached, tracker.left_cm))
+    return out
+
+
+def reached_at(out):
+    return next((odo, left) for odo, reached, left in out if reached)
+
+
+@pytest.mark.software
+def test_by_distance_it_stops_nearest_the_mark_by_the_encoders():
+    # the line 20 cm ahead at odometry 0, seen down to 11 cm; 3 cm a frame
+    out = roll(StopLineTracker(reach_cm=5.0), [20.0, 17.0, 14.0, 11.0], 6)
+    odo, left = reached_at(out)
+    assert left == 5.0 and odo == 15.0                     # exactly on the mark when a frame lands there
+
+
+@pytest.mark.software
+def test_a_frame_stops_when_the_next_would_be_further_from_the_mark():
+    # 4 cm a frame, the mark 4 cm before the line: a frame stops if what's left
+    # is nearer the mark than what the next frame would leave
+    out = roll(StopLineTracker(reach_cm=4.0), [20.0, 16.0, 12.0], 5, step=4.0)
+    assert reached_at(out)[1] == 4.0
+    out = roll(StopLineTracker(reach_cm=4.0), [21.5, 17.5, 13.5], 5, step=4.0)
+    assert reached_at(out)[1] == 5.5                        # 5.5 is 1.5 over; the next, 1.5, is 2.5 under
+
+
+@pytest.mark.software
+def test_where_the_line_left_the_view_no_longer_moves_the_stop():
+    # A line last seen 11 cm or 13 cm ahead: the timed stop carries the 2 cm
+    # into where the robot stops; by distance every stop is within half a
+    # frame's travel (1.5 cm) of the mark
+    sightings = ([20.0, 17.0, 14.0, 11.0], [22.0, 19.0, 16.0, 13.0])
+    timed = [reached_at(roll(StopLineTracker(), s, 8))[1] for s in sightings]
+    measured = [reached_at(roll(StopLineTracker(reach_cm=2.0), s, 8))[1] for s in sightings]
+    assert timed[1] - timed[0] == 2.0
+    assert all(abs(left - 2.0) <= 1.5 for left in measured)
+
+
+@pytest.mark.software
+def test_a_held_distance_isnt_a_fresh_sighting():
+    # Phase 3 repeats 14.0 through a missed frame while the robot moves on: the line stays where 14.0 put it
+    out = roll(StopLineTracker(reach_cm=5.0), [20.0, 17.0, 14.0, 14.0], 6)
+    assert out[3][2] == 11.0                               # 20 ahead of 0, the robot at 9: not 14 ahead of 9
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("line_cm, odometry", [(None, True), (12.0, False)])
+def test_without_a_line_cm_or_odometry_it_is_timed(line_cm, odometry):
+    t = StopLineTracker(reach_cm=5.0)
+    frames = [line_cm, line_cm, None, None, None, None]
+    for i, cm in enumerate(frames):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=i < 2, stop_line_distance_px=10.0 if i < 2 else None,
+                        stop_line_distance_cm=cm if i < 2 else None, distance_cm=i * 3.0 if odometry else None))
+        if t.reached:
+            break
+    assert t.reached and i == 2 + reach_frames(frame_ms=MS) and t.left_cm is None
+
+
+@pytest.mark.software
+def test_left_cm_is_logged_by_the_timed_stop_too():
+    out = roll(StopLineTracker(), [20.0, 17.0, 14.0, 11.0], 3)       # reach_cm None: STOP_DELAY_MS
+    odo, left = reached_at(out)
+    assert left == pytest.approx(20.0 - odo) and out[0][2] == 20.0

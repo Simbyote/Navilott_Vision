@@ -78,7 +78,7 @@ def test_the_first_rule_that_speaks_wins_and_every_rule_still_sees_the_frame():
     assert nav.update(packet()) == BRAKE
     first, second, third = (rule for _, rule in nav.rules)
     assert (first.calls, second.calls, third.calls) == ([False], [False], [True])     # held after the winner
-    assert nav.record == {"rule": "r1", "phase": IDLE, "step": "0/0", "reason": "stub"}
+    assert nav.record == {"rule": "r1", "phase": IDLE, "line_left_cm": None, "step": "0/0", "reason": "stub"}
 
 
 @pytest.mark.software
