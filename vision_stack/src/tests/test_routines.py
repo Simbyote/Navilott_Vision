@@ -147,12 +147,12 @@ def test_battery_volts_from_the_adc_or_none_without_it(monkeypatch):
 
     class Power:
         def voltage_raw(self):
-            return 11.876
+            return 11.8764
 
         def cleanup(self):
             cleaned.append(1)
     monkeypatch.setattr(battery_run, "open_battery", lambda say: Power())
-    assert h.read_battery_volts() == 11.88 and cleaned == [1]
+    assert h.read_battery_volts() == 11.876 and cleaned == [1]            # to the millivolt
     monkeypatch.setattr(battery_run, "open_battery", lambda say: None)
     assert h.read_battery_volts() is None
 

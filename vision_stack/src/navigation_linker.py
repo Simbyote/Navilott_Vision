@@ -387,7 +387,7 @@ def run(
                  "imu_read_ms": None if batch is None else batch.imu_read_ms_max,
                  "imu_failed": None if batch is None else batch.imu_failed,
                  "gc_ms": gc_ms or None,
-                 "battery_v": None if battery is None else round(battery.voltage(), 2),
+                 "battery_v": None if battery is None else round(battery.voltage(), 3),
                  "battery_state": "" if battery is None else battery.state().name,
                  "event": event}
             if battery is not None:
@@ -436,7 +436,7 @@ def run(
     wall = 0.0 if t0 is None else clock() - t0
     battery_report = sensors_report = None
     if battery is not None and t0 is not None and volts:
-        battery_report = {"start_v": volts[0], "min_v": min(volts), "end_v": round(battery.voltage(), 2),
+        battery_report = {"start_v": volts[0], "min_v": min(volts), "end_v": round(battery.voltage(), 3),
                           "state": battery.state().name, "sensor_ok": battery.sensor_ok(),
                           "read_ms": read_stats(battery.read_ms())}
     if t0 is not None and imu_reads:
