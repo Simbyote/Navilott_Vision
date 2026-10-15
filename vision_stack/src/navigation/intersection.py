@@ -77,12 +77,13 @@ MAX_CROSS_MS = 4000
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
 # Driving from the line into the intersection before a turn starts, on the
-# heading hold. The course's stop lines are moving back into the street, away
-# from the intersection, and the robot now stops as the line leaves the view
-# (STOP_DELAY_MS = 0), so a turn from there would cut the corner short
-# (2026-10-07). Straight crossings don't advance: they drive on to the exit.
-# Counts only while not held, like the turn's time. Tune on the mat
-ADVANCE_MS = 0
+# heading hold. The course's stop lines sit back in the street, away from the
+# intersection, and the robot stops as the line leaves the view
+# (STOP_DELAY_MS = 0, for the hanging traffic light), so a turn from there
+# would cut the corner short. 2500, tuned on the course. Straight crossings
+# don't advance: they drive on to the exit. Counts only while not held, like
+# the turn's time
+ADVANCE_MS = 2500
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as

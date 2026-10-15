@@ -441,7 +441,7 @@ stateDiagram-v2
     APPROACH --> APPROACH: line still seen, track its rows
     APPROACH --> CROSSING: voted out within 25 rows of the bottom, entered = one intersection
     APPROACH --> IDLE: voted out far up the image (flicker, not driven over)
-    CROSSING --> IDLE: 1500 ms later, reached = the robot is at the line
+    CROSSING --> IDLE: STOP_DELAY_MS later (0: the next frame), reached = the robot is at the line
 ```
 
 The stop sign, traffic light and intersection rules all read this one tracker: `entered` (the line passed under the view) and `reached` (one frame, `STOP_DELAY_MS` later).
@@ -450,7 +450,7 @@ The stop sign, traffic light and intersection rules all read this one tracker: `
 
 | Rule | Speaks when | Says |
 | --- | --- | --- |
-| `StopSignRule` | At `reached`, if a stop sign was seen in the last 5 s | BRAKE until the wheels read stopped (< 20 cps), hold 2 s, release |
+| `StopSignRule` | At `reached`, if a stop sign was seen in the last 5 s, and no more than 2 s before the line came into view | BRAKE until the wheels read stopped (< 20 cps), hold 2 s, release |
 | `TrafficLightRule` | At `reached`, if the voted state is `stop` (red) | BRAKE until the light isn't red. Green and yellow drive on |
 | `IntersectionRule` | From `CROSSING` until the lane is back | Heading hold, the route's turn, then heading hold (below) |
 | `EndOfCourseRule` | Lane `stale` (not held), or the finish line | Creep at 0.30 duty steering by heading; still stale after 1 s → BRAKE, finished. Finish line reached → BRAKE, finished |

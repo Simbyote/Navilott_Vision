@@ -288,6 +288,15 @@ def test_the_battery_is_logged_every_frame_and_summarized(tmp_path):
 
 
 @pytest.mark.software
+def test_the_battery_is_logged_to_the_millivolt(tmp_path):
+    battery = FakeBattery(start_v=11.9876, volts_step=0.0004)
+    rep, out, _, _, _ = go(tmp_path, battery=battery)
+    r = rows(out / "nav.csv")
+    assert [x["battery_v"] for x in r[:2]] == ["11.987", "11.987"]          # a 30 mV drop is 30 steps, not 3
+    assert rep["battery"]["start_v"] == 11.987 and len(str(rep["battery"]["end_v"]).split(".")[1]) <= 3
+
+
+@pytest.mark.software
 def test_the_lowest_voltage_is_kept_through_a_sag_under_load(tmp_path):
     battery = FakeBattery(start_v=11.5)
     sag = iter([11.5, 10.9, 11.4] + [11.4] * 50)

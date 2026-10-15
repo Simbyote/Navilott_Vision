@@ -65,6 +65,9 @@ def sign_scene(frame_id=11, ts=222, sign=True):
         pts = np.array([(ox + r * np.cos(np.pi / 8 + 2 * np.pi * k / 8),
                          oy + r * np.sin(np.pi / 8 + 2 * np.pi * k / 8)) for k in range(8)], np.int32)
         cv2.fillPoly(frame, [pts], (40, 40, 200))                           # stop-sign red, BGR
+        (tw, th), _ = cv2.getTextSize("STOP", cv2.FONT_HERSHEY_SIMPLEX, r / 45.0, 3)
+        cv2.putText(frame, "STOP", (ox - tw // 2, oy + th // 2), cv2.FONT_HERSHEY_SIMPLEX, r / 45.0,
+                    (245, 245, 245), 3, cv2.LINE_AA)                        # its white letters
     return run_chain(frame, frame_id, ts, SCENE_CONFIG, trace=True), frame
 
 

@@ -43,6 +43,7 @@ import numpy as np
 from src.config import MEASURED, MEASURED_ESTIMATION
 from src.estimation.estimation import SensorSample
 from src.params import FRAME_H, FRAME_W
+from src.navigation.intersection import ADVANCE_MS
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
 from src.perception.ground import GroundHomography
@@ -255,6 +256,11 @@ def scene(
         pts = np.array([(cx + r * np.cos(np.pi / 8 + k * np.pi / 4),
                          cy + r * np.sin(np.pi / 8 + k * np.pi / 4)) for k in range(8)], np.int32)
         cv2.fillPoly(frame, [pts], (40, 40, 255))   # red, bright enough in gray for Canny
+        # the white STOP lettering a real sign carries (SignContourFilter's letters gate)
+        scale = r / 45.0
+        (tw, th), _ = cv2.getTextSize("STOP", cv2.FONT_HERSHEY_SIMPLEX, scale, max(1, r // 14))
+        cv2.putText(frame, "STOP", (cx - tw // 2, cy + th // 2), cv2.FONT_HERSHEY_SIMPLEX, scale,
+                    (245, 245, 245), max(1, r // 14), cv2.LINE_AA)
     for i, bgr in enumerate(lights):
         center = (FRAME_W // 2, 25 + i * 30)
         cv2.circle(frame, center, lamp_radius, bgr, -1)
@@ -481,6 +487,8 @@ def course_sequence() -> list[SequenceFrame]:
         # sign's hold, then waiting on the red light
         ("crossing", scene(**red), 30, moving),
         ("red", scene(**red), 60, stopped),
+        # Let go on green: on into the intersection for ADVANCE_MS, then the turn
+        ("advance", scene(**green), ADVANCE_MS // FRAME_MS, moving),
         ("green_turn", scene(**green), 35, turning_left),
         ("after_turn", scene(), 10, moving),
         # The mat's edge: the lane runs out and stays out

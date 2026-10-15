@@ -30,7 +30,7 @@ def feed(tracker, seq):
 def test_the_constants_follow_the_calibration_and_the_runs():
     # 500 since 2026-10-12 (0 from 2026-10-07): it carries the robot into the
     # intersection, where the turn now starts without an advance
-    assert STOP_DELAY_MS == 500 and NEAR_BOTTOM_ROWS == 25.0
+    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0         # 0: the hanging light stays in view
 
 
 
@@ -139,3 +139,18 @@ def test_with_accept_new_off_a_new_line_is_ignored_but_one_already_tracked_carri
     assert t.phase == CROSSING and t.entered                    # the tracked line still leaves the view
     t.update(packet(timestamp_ms=150 + STOP_DELAY_MS), accept_new=False)
     assert t.reached
+
+
+@pytest.mark.software
+def test_the_reached_frame_says_when_its_line_first_came_into_view():
+    t = StopLineTracker(delay_ms=0)
+    seen = []
+    for i, fields in enumerate([{}, {}] + [{"stop_line_detected": True, "stop_line_distance_px": r}
+                                           for r in (30.0, 15.0, 5.0)] + [{}] * 3):
+        t.update(packet(frame_id=i, timestamp_ms=i * 50, **fields))
+        seen.append((t.phase, t.reached, t.seen_ms))
+    assert seen[2] == (APPROACH, False, 100)                 # first sight
+    reached = next(s for s in seen if s[1])
+    assert reached == (IDLE, True, 100)                      # the line just reached, still named
+    t.reset()
+    assert t.seen_ms is None

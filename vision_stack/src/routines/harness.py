@@ -242,7 +242,7 @@ def read_battery_volts() -> float | None:
     if power is None:
         return None
     try:
-        return round(power.voltage_raw(), 2)
+        return round(power.voltage_raw(), 3)
     except Exception:                   # an unreadable ADC: the run goes on without it
         return None
     finally:

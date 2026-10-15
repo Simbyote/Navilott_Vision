@@ -17,7 +17,7 @@ from src.navigation.navigation import (
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
-from src.navigation.intersection import LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES
+from src.navigation.intersection import ADVANCE_MS, LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES
 from src.tests.navigation_checks import (
     APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
     contract_problems, frames, intersection, packet,
@@ -206,7 +206,7 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
 
 @pytest.mark.software
 def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
-    from src.navigation.intersection import ADVANCE_MS, LEFT_TURN, STAGE_ADVANCE, STAGE_TURN
+    from src.navigation.intersection import LEFT_TURN, STAGE_ADVANCE, STAGE_TURN
     from src.navigation.route import Route
     wait_ms = STOP_DELAY_MS + 1000
     case = intersection({"drive_state": "caution"}, after_frames=0)
@@ -263,9 +263,9 @@ def test_once_finished_no_rule_is_asked_again():
 # The route
 # =============================================================================
 
-# Frames after each line: to the line, a turn's time limit (no yaw in these
-# packets, so a turn runs to it) and the exit
-COURSE_AFTER = (STOP_DELAY_MS + LEFT_TURN_MAX_MS) // MS + 2 * ONE_BOUNDARY_FRAMES
+# Frames after each line: to the line, the advance, a turn's time limit (no
+# yaw in these packets, so a turn runs to it) and the exit
+COURSE_AFTER = (STOP_DELAY_MS + ADVANCE_MS + LEFT_TURN_MAX_MS) // MS + 2 * ONE_BOUNDARY_FRAMES
 
 
 def course(n_lines, tail):
