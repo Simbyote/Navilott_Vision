@@ -49,6 +49,7 @@ class Navigator(Protocol):
 | `obstacle_detected`, `obstacle_distance_cm` / `_px`, `obstacle_clipped` | Something in the path within reach (12 cm from the front edge, or 24 rows with no cm, or clipped) **brakes the robot, and it stays braked until nothing has been seen for 1 s**; then it drives on (decided 2026-10-12). Ahead of every other rule. The lane it hides doesn't count toward the end of the course |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
 | `left_wheel_cps`, `right_wheel_cps` | Counts per second over the frame window (100 Hz readings grouped per frame by `sensing.py`), + = forward. 0.0 means stopped **or** no encoders. The packet's only wheel speed: there is no m/s field (see "Open questions") |
+| `distance_cm`, `left_distance_cm`, `right_distance_cm` | Odometry: floor cm driven since the run's first encoder reading, the axle's midpoint and each wheel, + = forward. `None` without encoders or without `calibration/odometry.json`, so a rule that drives by distance needs a fallback (time) for that case. Not used by any rule yet: the advance, the exit and the stop at the line still go by time and frames |
 | `stop_sign_detected` | The sign gate is untuned (see `phase3_estimation.md`, "Open items"). Don't rely on it yet |
 | `timestamp_ms` | Capture time on `time.monotonic_ns() // 1_000_000`. Differences between packets give dt |
 
@@ -184,4 +185,4 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).
 - **Old packets.** What Navigation does with a packet much older than the last isn't decided (time steps are capped at 0.5 s).
 - **`caution`** (yellow) stops the robot at the line like red, since 2026-10-07 (`traffic_light.py`): a red LED's ring can read orange, inside yellow's band, and a red misread as yellow drove through.
-- **Wheel speed in m/s.** The packet's `wheel_speed` was removed (2026-10-02): nothing set it, so it was always 0.0. Speed is `left_wheel_cps` / `right_wheel_cps`. If m/s is needed, measure the encoder counts per wheel revolution and the wheel diameter, and compute it from the counts in one place.
+- **Wheel speed in m/s.** The packet's `wheel_speed` was removed (2026-10-02): nothing set it, so it was always 0.0. Speed is `left_wheel_cps` / `right_wheel_cps`; × `Phase3Config.cm_per_count` (`calibration/odometry.json`) gives cm/s.

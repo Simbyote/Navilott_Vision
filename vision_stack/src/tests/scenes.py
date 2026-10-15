@@ -145,6 +145,7 @@ ALT_ESTIMATION = replace(
     gyro_bias_dps = 1.5,
     heading_limit_deg = 20.0,
     max_dt_s = 0.3,
+    cm_per_count = 0.02,
 )
 
 
@@ -389,7 +390,8 @@ def drive_sequence() -> list[SequenceFrame]:
     and a sign below their gates, a lane dropout through hold into stale
     with the gyro turning, a frame gap inside the dropout, an offset jump,
     an approach to a stop line with one missed frame, noise, and frames with
-    no sensors or no yaw.
+    no sensors or no yaw. The encoders' cumulative counts follow each
+    frame's wheel speeds, so odometry moves too.
 
     Outputs:
         SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart
@@ -438,12 +440,20 @@ def drive_sequence() -> list[SequenceFrame]:
         ("obstacle_clipped", with_obstacle(scene(), 190, 290, 160, 270), 3, steady),
         ("obstacle_gone", scene(), 4, steady),
     ]
-    out, fid, ts = [], 100, 10_000
+    out, fid, ts, counts = [], 100, 10_000, [0.0, 0.0]
     for segment, frame, count, sensors in segments:
         for _ in range(count):
+            dt_ms = FRAME_MS
             if segment == "gap":
                 ts += 900 - FRAME_MS
-            out.append(SequenceFrame(frame, fid, ts, sensors, segment))
+                dt_ms = 900
+            if sensors is not None:
+                counts = [counts[0] + (sensors.left_wheel_cps or 0.0) * dt_ms / 1000.0,
+                          counts[1] + (sensors.right_wheel_cps or 0.0) * dt_ms / 1000.0]
+                sensors_ = replace(sensors, left_count=int(counts[0]), right_count=int(counts[1]))
+            else:
+                sensors_ = None
+            out.append(SequenceFrame(frame, fid, ts, sensors_, segment))
             fid, ts = fid + 1, ts + FRAME_MS
     return out
 

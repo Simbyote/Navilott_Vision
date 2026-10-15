@@ -69,7 +69,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline \
+        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -208,6 +208,9 @@ calib-camera: ## lens: capture checkerboard frames, solve, verify
 
 calib-stopline: ## stop-line distance in cm from tape marks, one at a time
 	$(PY) -m src.scripts.calibrate_stop_line $(ARGS)
+
+calib-odometry: ## encoder cm per count: push a measured distance (ARGS="--cm 150" or "--drive 3")
+	$(PY) -m src.scripts.calibrate_odometry $(ARGS)
 
 calib-ground: ## floor homography from a checkerboard (ARGS="--square-cm 2.46 --origin-x-cm -9.8")
 	$(PY) -m src.scripts.calibrate_ground $(ARGS)

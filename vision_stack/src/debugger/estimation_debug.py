@@ -15,10 +15,11 @@ Main package:
     TracedPhase3Processor.process(phase2, sensors) -> (packet, debug)
         debug holds Phase3Processor's fields (frame_id, timestamp_ms, dt,
         log), one record per stage (lane, heading, traffic, stop_sign,
-        stop_line, obstacle; see each Traced* class) and timings_ms per stage.
+        stop_line, obstacle, odometry; see each Traced* class, and
+        Odometer.record) and timings_ms per stage.
 
 Flow:
-    dt -> lane -> heading -> traffic -> stop sign -> stop line -> obstacle -> packet,
+    dt -> lane -> heading -> traffic -> stop sign -> stop line -> obstacle -> odometry -> packet,
     as Phase3Processor.process(), with a lap after each.
 """
 import time
@@ -204,7 +205,7 @@ class TracedPhase3Processor(Phase3Processor):
     call process() on every frame in order.
     """
     STAGES = ("p3_dt", "p3_lane", "p3_heading", "p3_traffic", "p3_stop_sign",
-              "p3_stop_line", "p3_obstacle", "p3_package")
+              "p3_stop_line", "p3_obstacle", "p3_odometry", "p3_package")
 
     def __init__(self, config: Phase3Config | None = None) -> None:
         super().__init__(config)
@@ -230,7 +231,8 @@ class TracedPhase3Processor(Phase3Processor):
         Outputs:
             (packet, debug). packet is what Phase3Processor would return.
             debug holds its frame_id, timestamp_ms, dt and log, plus lane,
-            heading, traffic, stop_sign, stop_line and obstacle (each stage's record)
+            heading, traffic, stop_sign, stop_line, obstacle and odometry
+            (each stage's record)
             and timings_ms (wall ms per STAGES name).
 
         Raises:
@@ -261,6 +263,8 @@ class TracedPhase3Processor(Phase3Processor):
         lap("p3_stop_line")
         obstacle, obstacle_px, obstacle_cm, obstacle_clipped = self.obstacle.update(phase2.obstacle_results, log)
         lap("p3_obstacle")
+        odom = self.odometry.update(sensors.left_count, sensors.right_count, log)
+        lap("p3_odometry")
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -283,6 +287,9 @@ class TracedPhase3Processor(Phase3Processor):
             obstacle_distance_px = obstacle_px,
             obstacle_distance_cm = obstacle_cm,
             obstacle_clipped = obstacle_clipped,
+            distance_cm = odom.distance_cm,
+            left_distance_cm = odom.left_cm,
+            right_distance_cm = odom.right_cm,
         )
         lap("p3_package")
         return packet, {
@@ -296,5 +303,6 @@ class TracedPhase3Processor(Phase3Processor):
             "stop_sign": self.stop_sign.record,
             "stop_line": self.stop_line.record,
             "obstacle": self.obstacle.record,
+            "odometry": self.odometry.record,
             "timings_ms": timings,
         }

@@ -211,6 +211,18 @@ Or the full floor homography, from a checkerboard: `python3 -m src.scripts.calib
 
 ---
 
+## Odometry: cm per encoder count — [calibrate_odometry.md](calibrate_odometry.md)
+
+Push the robot a taped distance by hand (motors off), or drive it and tape-measure; needs `sudo pigpiod`:
+
+```
+make calib-odometry                          # push 100 cm, 3 trials
+make calib-odometry ARGS="--cm 150 --trials 5"
+make calib-odometry ARGS="--drive 3"         # drive 3 s at duty 0.40, then measure
+```
+
+---
+
 ## Pi diagnostics — [diagnostics.md](diagnostics.md)
 
 Record a run's threads, cores, throttling and memory from a separate process (the run is unchanged):

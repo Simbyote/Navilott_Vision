@@ -31,6 +31,7 @@ from src.peripherals.sensing import SensorBatch, SensorReading
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
+from src.config import MEASURED_ESTIMATION
 from src.tests.sim_robot import FakeBattery, FakeClock
 
 DT = 0.05
@@ -678,3 +679,16 @@ def test_the_report_keeps_the_clock_at_the_start_for_lining_up_other_records(tmp
     rep, *_ = go(tmp_path)
     t = [float(r["t"]) for r in rows(tmp_path / "run" / "nav.csv")]
     assert rep["run"]["t0_monotonic"] == 100.0 and t[0] >= 0.0          # FakeClock starts at 100 s
+
+
+@pytest.mark.software
+def test_the_distance_driven_is_logged_every_frame(tmp_path):
+    class Counting(Sensors):
+        def read(self):
+            self.reads += 1
+            return SensorSample(left_count=100 * self.reads, right_count=120 * self.reads), None
+    _, out, *_ = go(tmp_path, sensors=Counting(None), p3_config=replace(MEASURED_ESTIMATION, cm_per_count=0.1))
+    r = rows(out / "nav.csv")
+    assert [float(x["distance_cm"]) for x in r[:3]] == [0.0, 11.0, 22.0]
+    _, out, *_ = go(tmp_path / "none", sensors=Counting(None), p3_config=replace(MEASURED_ESTIMATION, cm_per_count=None))
+    assert {x["distance_cm"] for x in rows(out / "nav.csv")} == {""}                # no scale: blank

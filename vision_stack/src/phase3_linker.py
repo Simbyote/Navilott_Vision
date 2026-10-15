@@ -242,6 +242,7 @@ CSV_COLUMNS = (
     "left_wheel_cps", "right_wheel_cps",
     "p2_obstacle_px", "p2_obstacle_cm",
     "obstacle_detected", "obstacle_distance_px", "obstacle_distance_cm", "obstacle_clipped",
+    "distance_cm", "left_distance_cm", "right_distance_cm",
 )
 
 class CsvLog:
@@ -273,6 +274,7 @@ class CsvLog:
             pk.left_wheel_cps, pk.right_wheel_cps,
             res.chain.obstacle.distance_px, res.chain.obstacle.distance_cm,      # blank when Phase 2 saw none
             int(pk.obstacle_detected), pk.obstacle_distance_px, pk.obstacle_distance_cm, int(pk.obstacle_clipped),
+            pk.distance_cm, pk.left_distance_cm, pk.right_distance_cm,      # blank without odometry
         ))
 
     def close(self) -> None:

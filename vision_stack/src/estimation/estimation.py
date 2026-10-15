@@ -27,7 +27,8 @@ Flow (Phase3Processor.process() is the only place the order is written):
     5. StopLineClassifier: majority vote -> bool, with the distance held
        through frames that miss the line while the vote stands.
     6. ObstacleClassifier: the same for the obstacle in the robot's path.
-    7. Assemble the EstimationPacket.
+    7. Odometer: encoder counts -> distance driven, cm (odometry.py).
+    8. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from src.params import (
     TRAFFIC_LIGHT, YELLOW,
 )
 from src.utils import clamp
+from src.estimation.odometry import Odometer
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
 from src.perception.obstacle import ObstacleResult
@@ -77,6 +79,8 @@ class Phase3Config:
     heading_limit_deg: float = 90.0         # clamp on the integrated heading
     max_dt_s: float = 0.5                   # longer frame gaps are clamped so a stall can't integrate a large heading step
 
+    cm_per_count: float | None = None       # floor cm per encoder count (calibration/odometry.json); None leaves every distance unset
+
 
 def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
                         frame_size: tuple[int, int]) -> Phase3Config:
@@ -104,6 +108,8 @@ class SensorSample:
     lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
     left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
     right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
+    left_count: int | None = None              # cumulative left count at the window's end; + = forward
+    right_count: int | None = None             # cumulative right count at the window's end
 
     @classmethod
     def from_batch(cls, batch) -> "SensorSample":
@@ -112,15 +118,17 @@ class SensorSample:
 
         Inputs:
             batch: Duck-typed on mean_yaw_dps (already + = turning right),
-                peak_lateral_accel, left_cps and right_cps, so this module
-                never imports sensing. Each is None when its sensor isn't
-                there or gave nothing this window.
+                peak_lateral_accel, left_cps, right_cps, left_count and
+                right_count, so this module never imports sensing. Each is
+                None when its sensor isn't there or gave nothing this window.
         """
         return cls(
             yaw_rate_dps = batch.mean_yaw_dps,
             lateral_accel_mps2 = batch.peak_lateral_accel,
             left_wheel_cps = batch.left_cps,
             right_wheel_cps = batch.right_cps,
+            left_count = getattr(batch, "left_count", None),
+            right_count = getattr(batch, "right_count", None),
         )
 
 @dataclass(frozen=True)
@@ -170,6 +178,12 @@ class EstimationPacket:
     obstacle_distance_px: float | None = None
     obstacle_distance_cm: float | None = None
     obstacle_clipped: bool = False
+    # Odometry (odometry.py): floor cm driven since the run's first encoder
+    # reading, + = forward; the axle's midpoint, and each wheel. None
+    # without encoders or without Phase3Config.cm_per_count
+    distance_cm: float | None = None
+    left_distance_cm: float | None = None
+    right_distance_cm: float | None = None
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
@@ -464,6 +478,7 @@ class Phase3Processor:
         self.stop_sign = StopSignClassifier(self._cfg)
         self.stop_line = StopLineClassifier(self._cfg)
         self.obstacle = ObstacleClassifier(self._cfg)
+        self.odometry = Odometer(self._cfg.cm_per_count)
         self._last_ts: int | None = None
 
     def _dt(self, timestamp_ms: int, log: list[str]) -> float:
@@ -507,6 +522,7 @@ class Phase3Processor:
         stop_sign = self.stop_sign.update(phase2.detections, log)
         stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
         obstacle, obstacle_px, obstacle_cm, obstacle_clipped = self.obstacle.update(phase2.obstacle_results, log)
+        odom = self.odometry.update(sensors.left_count, sensors.right_count, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -529,6 +545,9 @@ class Phase3Processor:
             obstacle_distance_px = obstacle_px,
             obstacle_distance_cm = obstacle_cm,
             obstacle_clipped = obstacle_clipped,
+            distance_cm = odom.distance_cm,
+            left_distance_cm = odom.left_cm,
+            right_distance_cm = odom.right_cm,
         )
         return packet, {
             "frame_id": phase2.frame_id,

@@ -75,14 +75,19 @@ def _random_stream(n, seed):
 
 @pytest.mark.software
 @pytest.mark.parametrize("seed", range(5))
-@pytest.mark.parametrize("cfg", [CFG, Phase3Config(), Phase3Config(max_offset_jump=None, vote_window=5)])
+@pytest.mark.parametrize("cfg", [CFG, Phase3Config(), Phase3Config(max_offset_jump=None, vote_window=5),
+                                 Phase3Config(cm_per_count=0.0123)])
 def test_packets_and_log_match_the_production_processor(seed, cfg):
     prod, traced = Phase3Processor(cfg), TracedPhase3Processor(cfg)
     rng = random.Random(seed)
+    counts = [rng.randint(-50, 50), rng.randint(-50, 50)]
     for o in _random_stream(300, seed):
+        counts = [c + rng.randint(-5, 80) for c in counts]
+        have = rng.random() < 0.85                              # a window now and then without counts
         sensors = SensorSample(yaw_rate_dps=rng.choice([None, rng.uniform(-30, 30)]),
                                left_wheel_cps=rng.choice([None, 0.0, rng.uniform(-400, 400)]),
-                               right_wheel_cps=rng.choice([None, 0.0, rng.uniform(-400, 400)]))
+                               right_wheel_cps=rng.choice([None, 0.0, rng.uniform(-400, 400)]),
+                               left_count=counts[0] if have else None, right_count=counts[1] if have else None)
         p_pkt, p_dbg = prod.process(o, sensors)
         t_pkt, t_dbg = traced.process(o, sensors)
         same(p_pkt, t_pkt, f"f{o.frame_id} packet")
@@ -105,7 +110,7 @@ def test_every_stage_is_timed_and_the_record_keys_are_present():
     _, dbg = run(frames(([], None, None)))[0]
     assert tuple(dbg["timings_ms"]) == TracedPhase3Processor.STAGES
     assert all(v >= 0.0 for v in dbg["timings_ms"].values())
-    for stage in ("lane", "heading", "traffic", "stop_sign", "stop_line", "obstacle"):
+    for stage in ("lane", "heading", "traffic", "stop_sign", "stop_line", "obstacle", "odometry"):
         assert isinstance(dbg[stage], dict)
 
 
