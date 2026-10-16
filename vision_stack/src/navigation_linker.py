@@ -61,7 +61,7 @@ from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, o
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
-from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ
+from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 from src.utils import GcWatch
@@ -310,7 +310,7 @@ def run(
     ended_by, error = END_SOURCE, None
     last_reason = None
     t0 = None
-    gc_watch = GcWatch()
+    gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)
 
     try:
         if system is not None:
@@ -365,6 +365,7 @@ def run(
 
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
+            gc_watch.tick(cmd.brake)
             gc_ms, gc_gen = gc_watch.take()
             slow = slow_frame(res, gc_ms=gc_ms, gc_gen=gc_gen)
             if slow:

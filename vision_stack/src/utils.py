@@ -103,11 +103,15 @@ class GcWatch:
         watch = GcWatch().start()      # once, before the loop
         ms, gen = watch.take()         # each frame: collector ms since the last take, the highest generation run
         watch.stop()                   # after the loop
+        tick()                         # once per frame
     """
-    def __init__(self) -> None:
+    def __init__(self, disable: bool = False, collect_every: int = 200) -> None:
         self._t: float | None = None
         self._ms = 0.0
         self._gen = -1
+        self._disable = disable
+        self._every = max(1, collect_every)
+        self._frames = 0
 
     def _callback(self, phase: str, info: dict) -> None:
         if phase == "start":
@@ -122,6 +126,8 @@ class GcWatch:
         import gc
         gc.collect()
         gc.freeze()
+        if self._disable:
+            gc.disable()
         gc.callbacks.append(self._callback)
         return self
 
@@ -136,3 +142,12 @@ class GcWatch:
         import gc
         if self._callback in gc.callbacks:
             gc.callbacks.remove(self._callback)
+        if self._disable:
+            gc.enable()
+
+    def tick(self, braked: bool = False) -> None:
+        """Once per frame. With collection off, collect the youngest generation on a braked frame or every collect_every frames."""
+        import gc
+        self._frames += 1
+        if self._disable and (braked or self._frames % self._every == 0):
+            gc.collect(0)
