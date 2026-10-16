@@ -46,6 +46,7 @@ from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navi
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
 from src.navigation_linker import run as navigation_run
 from src.params import RUNS_DIR
+from src.perception import parallel
 
 # Lane keeping on vision this long after the crossing ends the sequence:
 # the robot found its lane again and kept it
@@ -216,7 +217,9 @@ def cli(argv: list[str] | None = None) -> int:
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--no-render", action="store_true", help="skip each sequence's video")
     ap.add_argument("--out", default=None, metavar="DIR")
+    parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    parallel.apply(args)
     try:
         camera_controls = parse_controls(args.camera_control)
     except ValueError as exc:

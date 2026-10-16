@@ -42,6 +42,7 @@ from src.estimation.estimation import (
 from src.navigation.navigation import Command, Navigation, enforce
 from src.navigation.route import Route
 from src.params import FRAME_H, FRAME_W
+from src.perception.parallel import enabled as parallel_enabled, run_side, side_pool
 from src.perception.color_branch import detect_color
 from src.perception.feature_fusion import fuse
 from src.perception.geometry import detect_geometry
@@ -73,6 +74,9 @@ class Pipeline:
             default: the loop shouldn't pay for timers it doesn't read.
         frame_size: (height, width) the camera delivers. Only used to derive
             the lane ROI width.
+        parallel: Color and obstacle on Phase 2's side thread while geometry
+            runs here (perception/parallel.py); None is the run's choice, else
+            params.PARALLEL_PERCEPTION.
 
     Attributes:
         config: As given; read on every frame.
@@ -88,7 +92,10 @@ class Pipeline:
         last_timings_ms: With timing on, the latest frame's stage times
             (preprocess, roi, geometry, color, lane_offset, stop_line, obstacle, fusion, package,
             then phase3 and navigation once run); {} with timing off. A fresh
-            dict per frame, so a caller may keep it.
+            dict per frame, so a caller may keep it. Parallel, the main
+            thread's only (color and obstacle replaced by branch_wait, so
+            they still add up to the frame), and last_side_ms has the side
+            thread's own color and obstacle times.
     """
 
     def __init__(
@@ -98,8 +105,11 @@ class Pipeline:
             route: Route | None = None,
             timing: bool = False,
             frame_size: tuple[int, int] = (FRAME_H, FRAME_W),
+            parallel: bool | None = None,
         ) -> None:
         self.config = config
+        self.parallel = parallel_enabled(parallel)
+        self.last_side_ms: dict = {}
         self.estimation = with_lane_roi_width(estimation, config.roi, frame_size)
         # A derived width holds every frame to the size it was derived at
         self._frame_size = None if self.estimation is estimation else tuple(frame_size)
@@ -154,6 +164,9 @@ class Pipeline:
         if laps:
             laps.lap("roi")
 
+        if self.parallel:
+            return self._perceive_parallel(roi, cfg, laps)
+
         geo = detect_geometry(roi, cfg.geometry)
         if laps:
             laps.lap("geometry")
@@ -179,6 +192,33 @@ class Pipeline:
             laps.lap("fusion")
 
         phase2 = package_phase2(fusion, offset, stop_line, obstacle)
+        if laps:
+            laps.lap("package")
+            self.last_timings_ms = laps.times
+        return phase2
+
+    def _perceive_parallel(self, roi, cfg: PipelineConfig, laps) -> Phase2Output:
+        """perceive() from the ROIs on: color and obstacle on the side thread, the rest here."""
+        side = side_pool().submit(run_side, [
+            ("color", lambda: detect_color(roi, cfg.color)),
+            ("obstacle", lambda: estimate_obstacle(roi, cfg.obstacle, cfg.ground, cfg.stop_line_table)),
+        ])
+        geo = detect_geometry(roi, cfg.geometry)
+        if laps:
+            laps.lap("geometry")
+        offset = estimate_lane_offset(geo, roi, cfg.lane_offset)
+        if laps:
+            laps.lap("lane_offset")
+        stop_line = estimate_stop_line_distance(geo, roi, cfg.stop_line, cfg.ground, cfg.stop_line_table)
+        if laps:
+            laps.lap("stop_line")
+        results, self.last_side_ms = side.result()
+        if laps:
+            laps.lap("branch_wait")
+        fusion = fuse(geo, results["color"], roi)
+        if laps:
+            laps.lap("fusion")
+        phase2 = package_phase2(fusion, offset, stop_line, results["obstacle"])
         if laps:
             laps.lap("package")
             self.last_timings_ms = laps.times

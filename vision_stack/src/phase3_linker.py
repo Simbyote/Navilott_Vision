@@ -51,6 +51,7 @@ from src.estimation.estimation import (
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
 from src.peripherals.sensing import Sensors           # re-exported: older imports read it from here
+from src.perception import parallel
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -311,7 +312,8 @@ class Phase3Stats:
         self.frames += 1
         for k, v in res.timings_ms.items():
             self.timings.setdefault(k, []).append(v)
-        stages = {**res.chain.timings_ms, **res.p3_debug.get("timings_ms", {})}
+        stages = {**res.chain.timings_ms, **{f"side_{k}": v for k, v in res.chain.side_timings_ms.items()},
+                  **res.p3_debug.get("timings_ms", {})}
         if "render" in res.timings_ms:
             stages["render"] = res.timings_ms["render"]
         for k, v in stages.items():
@@ -551,7 +553,9 @@ def cli(argv: list[str] | None = None) -> int:
     if not argv:
         ap.print_help()
         return 0
+    parallel.add_arguments(ap)
     args = ap.parse_args(argv)
+    parallel.apply(args)
 
     try:
         if args.camera:

@@ -69,7 +69,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry \
+        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -165,6 +165,9 @@ timeline: ## how long each rule, stage and state lasted, and what changed into w
 
 timing: ## where each frame's time goes, against the 50 ms budget
 	$(PY) -m src.analysis.stage_timing $(strip $(RUN)) $(ARGS)
+
+compare-parallel: ## serial vs parallel perception on the same frames (ARGS="--frames runs/nav_<time>/frames" or "--camera")
+	$(PY) -m src.analysis.parallel_compare $(ARGS)
 
 jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 	$(PY) -m src.analysis.jitter $(strip $(RUN)) $(ARGS)

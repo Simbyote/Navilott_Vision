@@ -58,6 +58,7 @@ from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W
 from src.pipeline import Pipeline
 from src.utils import GcWatch
+from src.perception import parallel
 
 # The run's backstop: brake and end after this long, whatever Navigation
 # does (decided 2026-10-01: a generous cap, in case the end of the course is
@@ -257,7 +258,11 @@ def cli(argv: list[str] | None = None) -> int:
                     help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
     ap.add_argument("--max-run-s", type=float, default=MAX_RUN_S,
                     help=f"brake and end after this long (default {MAX_RUN_S:.0f})")
+    parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    parallel.apply(args)
+    if parallel.enabled():
+        print("perception: color and obstacle on a side thread (--serial to turn off)")
 
     try:
         route = load_route(args.route)

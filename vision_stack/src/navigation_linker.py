@@ -65,6 +65,7 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 from src.utils import GcWatch
+from src.perception import parallel
 
 # The run's backstop: brake and end after this long, whatever the navigator
 # does. The only linker-level safety stop (decided 2026-09-30); a run that
@@ -208,7 +209,8 @@ def summary_lines(report: dict) -> list[str]:
     return [
         f"[NAVIGATION] ended by {report['ended_by']}"
         + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
-        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
+        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
+        + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
         f" decided by            {rules}",
@@ -446,6 +448,7 @@ def run(
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
                           "imu_failed": imu_failed}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "parallel_perception": parallel.enabled(),
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
               "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
@@ -522,7 +525,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--out", default=None, metavar="DIR")
+    parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    parallel.apply(args)
     try:
         camera_controls = parse_controls(args.camera_control)
     except ValueError as exc:

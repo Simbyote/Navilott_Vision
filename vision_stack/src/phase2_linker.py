@@ -37,6 +37,7 @@ from src.perception.feature_fusion import fuse_detections, FusionResult
 from src.perception.phase2_out import package_phase2, Phase2Output
 from src.perception.stop_line_distance import compute_stop_line_distance, StopLineResult
 from src.perception.obstacle import compute_obstacle, ObstacleResult
+from src.perception.parallel import enabled as parallel_enabled, run_side, side_pool
 import src.debugger.live_view as live_view
 from src.config import MEASURED, PipelineConfig      # re-exported: older imports read them from here
 
@@ -65,6 +66,7 @@ class ChainResult:
     stop_line_debug: dict = field(default_factory=dict) # compute_stop_line_distance's debug summary
     obstacle: ObstacleResult | None = None              # nearest obstacle in the robot's path
     obstacle_debug: dict = field(default_factory=dict)  # compute_obstacle's debug summary: masks, every blob's fate
+    side_timings_ms: dict = field(default_factory=dict) # parallel only: color and obstacle as the side thread timed them
 
 
 def run_chain(
@@ -74,6 +76,7 @@ def run_chain(
         config: PipelineConfig = PipelineConfig(),
         draw_overlays: bool = False,
         trace: bool = False,
+        parallel: bool | None = None,
     ) -> ChainResult:
     """
     Run one frame through every Phase 1-2 stage.
@@ -86,9 +89,16 @@ def run_chain(
         draw_overlays: Build the geometry debug overlays.
         trace: Record the per-contour sign trace and the per-blob traffic
             trace in the debug dicts.
+        parallel: Color and obstacle on Phase 2's side thread while geometry
+            runs here (perception/parallel.py), as Pipeline does; None is
+            the run's choice (perception/parallel.py), else
+            params.PARALLEL_PERCEPTION. The results are the same either way.
 
     Outputs:
-        ChainResult, with each stage's wall time in timings_ms.
+        ChainResult, with each stage's wall time in timings_ms. Parallel,
+        color and obstacle are the side thread's own times (side_timings_ms)
+        and timings_ms has branch_wait in their place, the main thread's time
+        waiting for them, so timings_ms still adds up to the frame.
     """
     timings = {}
     mark = [time.perf_counter()]    # a list so lap() can update it without nonlocal
@@ -106,23 +116,42 @@ def run_chain(
     roi = crop_rois(pre, config.roi)
     lap("roi")
 
-    geo, lane_debug, sign_debug = run_geometry_stage(
-        roi, config.geometry, draw_overlays, trace
-    )
-    lap("geometry")
+    side_ms = {}
+    if parallel_enabled(parallel):
+        # color and obstacle read only the ROIs: the side thread runs them
+        # while geometry and what needs it run here (perception/parallel.py)
+        side = side_pool().submit(run_side, [
+            ("color", lambda: run_color_stage(roi, config.color, trace)),
+            ("obstacle", lambda: compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)),
+        ])
+        geo, lane_debug, sign_debug = run_geometry_stage(roi, config.geometry, draw_overlays, trace)
+        lap("geometry")
+        offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
+        lap("lane_offset")
+        stop_line, stop_line_debug = compute_stop_line_distance(geo, roi, config.stop_line, config.ground,
+                                                                config.stop_line_table)
+        lap("stop_line")
+        results, side_ms = side.result()
+        lap("branch_wait")
+        (traffic, traffic_debug), (obstacle, obstacle_debug) = results["color"], results["obstacle"]
+    else:
+        geo, lane_debug, sign_debug = run_geometry_stage(
+            roi, config.geometry, draw_overlays, trace
+        )
+        lap("geometry")
 
-    traffic, traffic_debug = run_color_stage(roi, config.color, trace)
-    lap("color")
+        traffic, traffic_debug = run_color_stage(roi, config.color, trace)
+        lap("color")
 
-    offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
-    lap("lane_offset")
+        offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
+        lap("lane_offset")
 
-    stop_line, stop_line_debug = compute_stop_line_distance(geo, roi, config.stop_line, config.ground,
-                                                            config.stop_line_table)
-    lap("stop_line")
+        stop_line, stop_line_debug = compute_stop_line_distance(geo, roi, config.stop_line, config.ground,
+                                                                config.stop_line_table)
+        lap("stop_line")
 
-    obstacle, obstacle_debug = compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)
-    lap("obstacle")
+        obstacle, obstacle_debug = compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)
+        lap("obstacle")
 
     fusion, fusion_debug = fuse_detections(geo, traffic, roi)
     lap("fusion")
@@ -133,7 +162,7 @@ def run_chain(
     return ChainResult(fd, pre, roi, geo, offset, lane_debug, offset_debug,
                        sign_debug, fusion, fusion_debug, phase2, timings,
                        traffic, traffic_debug, stop_line, stop_line_debug,
-                       obstacle, obstacle_debug)
+                       obstacle, obstacle_debug, side_ms)
 
 
 def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,

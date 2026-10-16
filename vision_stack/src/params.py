@@ -46,6 +46,13 @@ MAX_FPS = 30
 # of a core, the workers' preemptions ~3,800 / 6 / 0 a second. Two keep
 # the parallel speedup and give back a quarter of a core
 OPENCV_THREADS = 2
+# Phase 2's color and obstacle branches on a side thread while the main
+# thread runs geometry (perception/parallel.py), so perception uses two
+# cores. Off until measured on the Pi against the serial flow: stage timing
+# shows branch_wait (the main thread waiting for the side); the linkers'
+# --parallel / --serial override it for one run. With it on, OPENCV_THREADS 1
+# may do as well (the side thread replaces OpenCV's own second worker)
+PARALLEL_PERCEPTION = False
 
 # --- Paths ---
 # Resolved from this file (<root>/src/params.py) so the working directory never matters

@@ -44,9 +44,11 @@ from src.analysis.common import Table, interval_ms
 from src.params import FPS
 
 # Pipeline order for the stages run_chain times, then anything timed around
-# it. Unknown *_ms columns are appended after these in file order
+# it. Unknown *_ms columns are appended after these in file order.
+# branch_wait: parallel perception (perception/parallel.py), the main thread
+# waiting for the side thread's color and obstacle, timed in their place
 STAGE_ORDER = ("capture", "preprocess", "roi", "geometry", "color",
-               "lane_offset", "stop_line", "obstacle", "fusion", "package", "phase2", "phase3", "nav", "hud",
+               "lane_offset", "stop_line", "obstacle", "branch_wait", "fusion", "package", "phase2", "phase3", "nav", "hud",
                "record")
 
 # Timed outside run_chain, so not part of total_ms
