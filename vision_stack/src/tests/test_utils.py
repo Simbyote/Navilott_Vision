@@ -75,3 +75,22 @@ def test_gc_watch_freezes_and_times_collections():
         watch.stop()
         gc.unfreeze()
     assert watch._callback not in gc.callbacks
+
+@pytest.mark.software
+def test_gc_watch_can_turn_collection_off_and_collect_the_young_itself(monkeypatch):
+    import gc
+    from src.utils import GcWatch
+    collected = []
+    real = gc.collect
+    monkeypatch.setattr(gc, "collect", lambda gen=2: collected.append(gen) or real(gen))
+    watch = GcWatch(disable=True, collect_every=3).start()
+    try:
+        assert not gc.isenabled()
+        collected.clear()
+        for braked in (False, False, False, True, False):
+            watch.tick(braked)
+        assert collected == [0, 0]                       # the 3rd frame, then the braked one
+    finally:
+        watch.stop()
+        gc.unfreeze()
+    assert gc.isenabled()

@@ -55,7 +55,7 @@ from src.diagnostics import battery_run
 from src.diagnostics.battery_run import CODE_BATTERY
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
-from src.params import FPS, FRAME_H, FRAME_W
+from src.params import FPS, FRAME_H, FRAME_W, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
 from src.pipeline import Pipeline
 from src.utils import GcWatch
 
@@ -148,14 +148,14 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         Drives the motors. Always halts them first, then releases the
         camera and stops the sensors, whatever ended the run.
     """
-    ended_by, error, frames, t0 = END_INTERRUPT, None, 0, None
+    ended_by, error, frames, t0, gc_watch = END_INTERRUPT, None, 0, None, None
     try:
         system.wait_for_start(step_text(route))
         system.run_countdown()
         sensors.sample()                                # start the first window at GO
         if battery is not None and not battery_run.start(battery):
             battery = None
-        GcWatch().start()                               # freeze the setup's objects: a full collection stopped the loop ~1 s
+        gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY).start()   # freeze the setup; no automatic collections while driving
         t0 = clock()
         while True:
             if clock() - t0 >= max_run_s:
@@ -173,6 +173,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
             else:
                 motor.drive(cmd.left, cmd.right)
             frames += 1
+            gc_watch.tick(cmd.brake)
             system.update_display(clock() - t0)
             if pipeline.finished:
                 ended_by = END_EARLY if pipeline.navigation.outcome == OUTCOME_EARLY else END_FINISHED
@@ -187,6 +188,8 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         finally:
             sensors.stop()
             camera.release()
+            if gc_watch is not None:
+                gc_watch.stop()
     elapsed = 0.0 if t0 is None else clock() - t0
     end_step = pipeline.navigation.end_step
     return RunResult(ended_by, elapsed, frames,

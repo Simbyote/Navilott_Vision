@@ -47,6 +47,14 @@ MAX_FPS = 30
 # the parallel speedup and give back a quarter of a core
 OPENCV_THREADS = 2
 
+# Python's cyclic garbage collector off while a run drives (utils.GcWatch).
+# A collection holds the GIL, stopping every thread: 21 in the 2026-10-14
+# course run (longest 12.5 ms), one of 122 ms in the figure eight. Off, the
+# loop collects only the youngest generation itself: on braked frames, and
+# every GC_COLLECT_EVERY frames. False: automatic collections, as before
+GC_DISABLE_IN_RUN = True
+GC_COLLECT_EVERY = 200          # frames, ~10 s at 20 FPS
+
 # --- Paths ---
 # Resolved from this file (<root>/src/params.py) so the working directory never matters
 PIPELINE_ROOT = Path(__file__).resolve().parents[1]
