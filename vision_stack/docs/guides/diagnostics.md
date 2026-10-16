@@ -67,7 +67,7 @@ flowchart LR
 | `main` | The frame loop. Perception, estimation and navigation all run here | The busiest thread |
 | `sensor-hub` | `peripherals/sensing.py`: reads the IMU and encoder totals every 10 ms | A few % CPU, ~200 voluntary switches a second: per tick one sleep and one I²C transfer (the IMU's sample block), more when it waits for the GIL (measured 5.6% and 220 a second, 2026-10-03). Before the block read (2026-10-03) the Adafruit driver's 7 transfers per reading took 4.6 ms and showed as ~800 a second alone, ~2,900 and 54% CPU in a run |
 | `pigpio-cb` | pigpio's callback thread, one per `pigpio.pi()` connection. `main.py` has three: the encoders' (counting edges), the motors' and the start button's (both idle). A linker opens only what its flags ask for: `--no-motors --no-button` leaves the encoders' alone | Low CPU; voluntary switches rise with wheel speed (one wake per batch of edges) |
-| `task0` | GStreamer's streaming thread: libcamera's frames through `videoconvert` into OpenCV's newest-frame `appsink` (pure C, no GIL) | 25–35%, steady (2026-10-03, 480x270 at 20 FPS) |
+| `task0` | GStreamer's streaming thread: libcamera's frames into OpenCV's newest-frame `appsink` (pure C, no GIL) | 25–35%, steady (2026-10-03, 480x270 at 20 FPS) |
 | `CameraManager` ×3, `IPAProxyRPi` | libcamera itself: frame requests to the sensor, and the image algorithms (auto exposure, white balance) | `CameraManager` ~5%, ~200 voluntary switches a second; the rest near zero |
 | `pool-spawner`, `pool-1`, `python3-ust` ×2 | Thread pools and LTTng tracing threads libcamera starts | Idle |
 | `python3` (unnamed) | OpenCV's TBB worker: the Pi's OpenCV is built with TBB as its parallel framework (`cv2.getBuildInformation()`), which starts its workers at the first parallel operation (2026-10-03: 1 thread after `import cv2`, 4 after a blur). `src/perception/__init__.py` caps OpenCV at `OPENCV_THREADS` = 2, so one worker beside `main`; TBB starts it, not our code, so nothing names it | ~33%, few involuntary switches. At OpenCV's default of 4 there were three, ~20% each and ~1,300 involuntary switches a second each, spinning while they waited for work (`params.py` has the 4 / 2 / 1 comparison) |
@@ -188,11 +188,11 @@ Keep each run's `summary.txt`. The per-thread table, the core loads and the thro
 `make capture-anatomy` (or `python3 -m src.diagnostics.capture_anatomy [--seconds 10] [--camera-control KEY=VALUE]`) records once how a frame gets from the sensor to OpenCV on this Pi. Stop the robot's pipeline first: the camera opens in one process at a time.
 
 ```
-IMX290 --CSI-2--> Unicam --DMA--> raw Bayer in CMA memory --> VideoCore ISP --> YUV 480x270
+IMX290 --CSI-2--> Unicam --DMA--> raw Bayer in CMA memory --> VideoCore BGR --> BGR 480x270
 (1920x1080 10-bit)  (/dev/video0)                            (demosaic, colour, scale)
                                          libcamera IPA (AGC/AWB, on the ARM cores) <-- ISP statistics
                                          --> next exposure and gain, over I2C to the sensor
-YUV --> videoconvert --> videoflip --> BGR --> appsink --> OpenCV        (ARM cores, software)
+BGR --> videoflip --> BGR --> appsink --> OpenCV        (ARM cores, software)
 ```
 
 It runs the robot's exact pipeline string, appsink swapped for a silent fakesink, under `gst-launch-1.0 -v` with GStreamer's latency tracer and libcamera's log on, and probes the rest:
@@ -201,7 +201,7 @@ It runs the robot's exact pipeline string, appsink swapped for a silent fakesink
 |---|---|---|
 | `summary.txt` | all of it | the route, the caps, ms per element, the VideoCore side, findings |
 | `media<N>.txt`, `.dot`, `.png` | `media-ctl -p`, `--print-dot` | the kernel's hardware graph: sensor -> Unicam, the ISP's input and output nodes, the format on each link |
-| `gst_launch.txt`, `gst_pipeline.dot/.png` | `gst-launch-1.0 -v`, `GST_DEBUG_DUMP_DOT_DIR` | the caps every pad settled on: what the ISP hands over decides what videoconvert does |
+| `gst_launch.txt`, `gst_pipeline.dot/.png` | `gst-launch-1.0 -v`, `GST_DEBUG_DUMP_DOT_DIR` | the caps every pad settled on: what the ISP hands over |
 | `gst_trace.log`, `latency.csv` | `GST_TRACERS=latency(flags=pipeline+element)` | per frame: how long each element held it, and source pad to sink |
 | `libcamera.log` | `LIBCAMERA_LOG_LEVELS=*:INFO` | the sensor mode and Unicam format libcamera picked, the streams it configured |
 | `vc_*.txt` | `vcgencmd` | ARM, core, ISP, 3D and H.264 clocks; core volts; the ARM / GPU memory split |

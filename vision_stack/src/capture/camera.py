@@ -314,6 +314,7 @@ def build_gst_pipeline(
     Raises:
         ValueError: For an unknown control name.
     """
+    # ISP outputs BGR format instead of NV21x
     # sensor-config: pinned mode so field of view doesn't change with output size
     # videoflip:     see CAMERA_ROTATE_180
     # appsink:       hold only the newest frame so a slow consumer never reads a stale backlog
@@ -321,8 +322,7 @@ def build_gst_pipeline(
     ctl = format_controls(CAMERA_CONTROLS if controls is None else controls)
     return (
         f'libcamerasrc sensor-config="{SENSOR_CONFIG}"{" " + ctl if ctl else ""} ! '
-        f"video/x-raw,width={width},height={height},framerate={fps}/1 ! "
-        "videoconvert ! "
+        f"video/x-raw,format={color_space},width={width},height={height},framerate={fps}/1 ! "
         f"{flip}"
         f"video/x-raw,format={color_space} ! "
         "appsink drop=true max-buffers=1 sync=false"

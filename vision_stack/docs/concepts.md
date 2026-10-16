@@ -193,7 +193,7 @@ From light to a frame in Python (`guides/diagnostics.md` has the measured times)
 | **DMA** | Direct memory access: the receiver writes the image into memory without the CPU copying it |
 | **CMA** | The contiguous memory pool camera buffers come from; running low stalls capture |
 | **Bayer, debayer** | The sensor sees one color per pixel through a checkerboard of red, green and blue filters (a **Bayer** pattern); **debayering** fills in the other two colors at every pixel |
-| **ISP** | The Pi's image signal processor: debayers, applies the white balance and color correction, and scales to 480×270; libcamera's algorithms set exposure and white balance from its statistics |
+| **ISP** | The Pi's image signal processor: debayers, applies the white balance and color correction, and scales to 480×270; libcamera's algorithms set exposure and white balance from its statistics; produces BGR |
 | **libcamera** | The Linux camera stack that drives the sensor and ISP |
 | **GStreamer** | A media pipeline framework: `libcamerasrc` brings the frames in, `videoflip` turns them right way up, `videoconvert` makes BGR |
 | **appsink** | GStreamer's handoff to the program; set to keep only the newest frame (`drop=true max-buffers=1`), so a slow frame skips stale ones instead of queueing them |

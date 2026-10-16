@@ -23,7 +23,7 @@ Pi ISP (debayer, scale)
 libcamera                        buffers, sensor timing, exposure
   │
   ▼
-GStreamer                        libcamerasrc → videoconvert → videoflip → appsink
+GStreamer                        libcamerasrc → videoflip → appsink
   │
   ▼
 cv2.VideoCapture (CAP_GSTREAMER)
@@ -37,7 +37,6 @@ The pipeline string, built by `build_gst_pipeline()`:
 ```
 libcamerasrc sensor-config="sensor/config,width=1920,height=1080,depth=10" !
 video/x-raw,width=480,height=270,framerate=20/1 !
-videoconvert !
 videoflip method=rotate-180 !
 video/x-raw,format=BGR !
 appsink drop=true max-buffers=1 sync=false
