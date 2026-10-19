@@ -267,4 +267,7 @@ def test_os_counters_on_the_pi():
     time.sleep(1.0)
     out = c.take(1.0, time.perf_counter())
     assert out["irqs"], "no interrupt fired in a second"
-    assert out["system"]["cma_free_mb"] is not None, "no CmaFree in /proc/meminfo"
+    # CMA (where camera buffers come from) is the Pi's; another Linux may have none
+    model = Path("/proc/device-tree/model")
+    if model.exists() and b"Raspberry Pi" in model.read_bytes():
+        assert out["system"]["cma_free_mb"] is not None, "no CmaFree in /proc/meminfo"

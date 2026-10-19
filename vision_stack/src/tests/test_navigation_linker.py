@@ -136,7 +136,8 @@ def go(tmp_path, cam=None, nav=None, sensors=None, system=None, render=False, **
 
 
 def rows(path):
-    return list(csv.DictReader(open(path)))
+    with open(path) as f:
+        return list(csv.DictReader(f))
 
 
 # =============================================================================
@@ -153,7 +154,7 @@ def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
     assert len(rows(out / "nav.csv")) == len(rows(out / "p3.csv")) == n
     assert rep["run"]["video_frames"] == rep["run"]["recorder_written"] == n
     assert motor.calls[-1] == ("stop",) and camera.closed
-    assert json.load(open(out / "report.json"))["nav"]["frames"] == n
+    assert json.loads((out / "report.json").read_text())["nav"]["frames"] == n
     assert "[NAVIGATION] ended by the source ended" in (out / "summary.txt").read_text()
 
 

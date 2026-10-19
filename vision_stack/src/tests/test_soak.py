@@ -89,7 +89,8 @@ def test_steady_memory_growth_is_a_suspected_leak(tmp_path):
 @pytest.mark.software
 def test_warm_up_growth_is_not_a_leak(tmp_path):
     path = write_system(tmp_path / "system.csv")
-    rows = list(csv.reader(open(path)))
+    with open(path) as f:
+        rows = list(csv.reader(f))
     for row in rows[1:31]:                             # 20 MB of growth in the first 30 s only
         row[FIELDS.index("rss_mb")] = str(60 + 20 * (int(row[0]) / 30))
     with open(path, "w", newline="") as f:

@@ -36,6 +36,7 @@ Main package:
     same(): field-by-field equality across dataclasses, containers and arrays.
 """
 from dataclasses import dataclass, fields, is_dataclass, replace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -566,7 +567,7 @@ def lens_distort(undistorted: np.ndarray, calibration_path: str, alpha: float = 
     where undistortion would send it. Resampling twice softens edges slightly.
     """
     import json
-    calib = json.loads(open(calibration_path).read())
+    calib = json.loads(Path(calibration_path).read_text())
     K, dist = np.array(calib["camera_matrix"]), np.array(calib["dist_coeffs"])
     h, w = undistorted.shape[:2]
     new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), alpha, (w, h))

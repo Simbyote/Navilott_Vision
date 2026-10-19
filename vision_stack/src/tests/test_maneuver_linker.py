@@ -78,7 +78,8 @@ def trial(tmp_path, cfg=CFG, cam=None, sensor_fail=None, system=None, render=Tru
 
 
 def rows(path):
-    return list(csv.DictReader(open(path)))
+    with open(path) as f:
+        return list(csv.DictReader(f))
 
 
 # =============================================================================

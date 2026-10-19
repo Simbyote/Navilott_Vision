@@ -12,6 +12,7 @@ need an argument refuse to run without it.
 
 --software  Runs make and each module's --help. No hardware.
 """
+import os
 import re
 import shutil
 import subprocess
@@ -32,10 +33,25 @@ NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "calib
 NEEDS = {"compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "sweep-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
 
 
+def _clean_make_env() -> dict:
+    """
+    The environment without the calling make's: run under `make test ARGS=...`,
+    make exports ARGS (every command-line variable, named in MAKEFLAGS after
+    "--") and MAKEFLAGS itself, and each make run here would take them.
+    """
+    flags = os.environ.get("MAKEFLAGS", "")
+    names = {a.split("=", 1)[0] for a in flags.split(" -- ", 1)[1].split()} if " -- " in flags else set()
+    drop = names | {"MAKEFLAGS", "MFLAGS", "MAKELEVEL", "MAKEOVERRIDES"}
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+MAKE_ENV = _clean_make_env()
+
+
 def make_n(target, *assigns):
     """The commands `make -n target VAR=value ...` would run, continuation lines joined."""
     out = subprocess.run(["make", "-s", "-n", "-C", str(PIPELINE_ROOT), target, "PY=python3", *assigns],
-                         capture_output=True, text=True)
+                         env=MAKE_ENV, capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     return [" ".join(line.split()) for line in out.stdout.replace("\\\n", " ").splitlines() if line.strip()]
 
@@ -89,7 +105,7 @@ def test_each_target_runs_a_real_module_with_flags_it_takes(target):
 def test_guarded_targets_refuse_to_run_without_their_argument(target, tmp_path):
     shutil.copy(MAKEFILE, tmp_path / "Makefile")       # no runs/ here, so render has no newest run to fall back on
     out = subprocess.run(["make", "-s", "-C", str(tmp_path), target, "PY=python3", "RUN=", "LAMPS=",
-                          "BASE=", "NEW="], capture_output=True, text=True)
+                          "BASE=", "NEW="], env=MAKE_ENV, capture_output=True, text=True)
     assert out.returncode != 0
     assert "usage" in out.stdout or "make render RUN=" in out.stdout
     assert "python3 -m" not in out.stdout
@@ -98,7 +114,7 @@ def test_guarded_targets_refuse_to_run_without_their_argument(target, tmp_path):
 
 
 def test_help_lists_every_target():
-    out = subprocess.run(["make", "-s", "-C", str(PIPELINE_ROOT), "help"], capture_output=True, text=True)
+    out = subprocess.run(["make", "-s", "-C", str(PIPELINE_ROOT), "help"], env=MAKE_ENV, capture_output=True, text=True)
     assert out.returncode == 0
     listed = re.findall(r"^  ([a-z0-9-]+) ", re.sub(r"\x1b\[[0-9;]*m", "", out.stdout), re.M)
     assert listed == targets()
@@ -146,7 +162,7 @@ def test_the_venv_setup_mk_makes_is_used_when_there_is_one(tmp_path):
     (venv / "bin" / "python").write_text("")
     def lint(*assigns):
         return subprocess.run(["make", "-s", "-n", "-C", str(PIPELINE_ROOT), "lint", *assigns],
-                              capture_output=True, text=True).stdout.strip()
+                              env=MAKE_ENV, capture_output=True, text=True).stdout.strip()
     assert lint(f"VENV_DIR={venv}") == f"{venv}/bin/python -m pyflakes src"
     assert lint(f"VENV_DIR={tmp_path / 'none'}") == "python3 -m pyflakes src"
     setup_mk = (PIPELINE_ROOT.parent / "setup.mk").read_text()
@@ -176,5 +192,5 @@ def test_no_option_carries_a_comment_after_its_value():
 def test_compare_needs_both_runs(tmp_path):
     shutil.copy(MAKEFILE, tmp_path / "Makefile")
     out = subprocess.run(["make", "-s", "-C", str(tmp_path), "compare", "PY=python3", "BASE=a"],
-                         capture_output=True, text=True)
+                         env=MAKE_ENV, capture_output=True, text=True)
     assert out.returncode != 0 and "usage" in out.stdout and "python3 -m" not in out.stdout
