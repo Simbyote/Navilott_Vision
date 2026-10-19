@@ -141,7 +141,7 @@ MEASURED = PipelineConfig(
     # letters 11-16% white from radius 28 px. First guesses: not yet checked
     # on course frames, against the course's own sign
     geometry = GeometryConfig(
-        stop_line = StopLineFilter(max_tilt_deg = 2.0),
+        stop_line = StopLineFilter(max_tilt_deg = 4.0),
         sign = SignContourFilter(aspect_range = (0.6, 1.6), extent_range = (0.68, 0.92), min_letter_share = 0.03),
     ),
     lane_offset = LaneOffsetConfig(
