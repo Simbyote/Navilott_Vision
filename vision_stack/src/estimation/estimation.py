@@ -110,6 +110,11 @@ class SensorSample:
     right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
     left_count: int | None = None              # cumulative left count at the window's end; + = forward
     right_count: int | None = None             # cumulative right count at the window's end
+    # Degrees turned over the window, integrated reading by reading (raw: the
+    # gyro bias is subtracted over yaw_span_s). None leaves the heading to
+    # yaw_rate_dps x the frame step, as replays without it do
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
 
     @classmethod
     def from_batch(cls, batch) -> "SensorSample":
@@ -118,9 +123,10 @@ class SensorSample:
 
         Inputs:
             batch: Duck-typed on mean_yaw_dps (already + = turning right),
-                peak_lateral_accel, left_cps, right_cps, left_count and
-                right_count, so this module never imports sensing. Each is
-                None when its sensor isn't there or gave nothing this window.
+                peak_lateral_accel, left_cps, right_cps, left_count,
+                right_count, yaw_deg and yaw_span_s, so this module never
+                imports sensing. Each is None when its sensor isn't there or
+                gave nothing this window.
         """
         return cls(
             yaw_rate_dps = batch.mean_yaw_dps,
@@ -129,6 +135,8 @@ class SensorSample:
             right_wheel_cps = batch.right_cps,
             left_count = getattr(batch, "left_count", None),
             right_count = getattr(batch, "right_count", None),
+            yaw_deg = getattr(batch, "yaw_deg", None),
+            yaw_span_s = getattr(batch, "yaw_span_s", None),
         )
 
 @dataclass(frozen=True)
@@ -189,6 +197,11 @@ class EstimationPacket:
     # None unless stop_line_detected and seen this frame. The intersection
     # rule reads the approach angle from it
     stop_line_tilt_deg: float | None = None
+    # Pass-through: degrees turned over this frame's sensor window, integrated
+    # reading by reading, raw (the gyro bias is the reader's, over yaw_span_s).
+    # None without it; readers then fall back to yaw_rate x the frame step
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
@@ -334,24 +347,37 @@ class HeadingTracker:
             yaw_rate_dps: float | None,
             dt: float,
             log: list[str],
+            yaw_deg: float | None = None,
+            yaw_span_s: float | None = None,
         ) -> float:
         """
         Degrees turned since vision was lost, clamped to +/- heading_limit_deg.
 
         Inputs:
             lane_status: LANE_VISION resets the heading to 0.
-            yaw_rate_dps: None holds the heading and logs it.
-            dt: Seconds since the previous frame; 0 integrates nothing.
+            yaw_rate_dps: None (and no yaw_deg) holds the heading and logs it.
+            dt: Seconds since the previous frame, already clamped to
+                max_dt_s; 0 integrates nothing. Used only without yaw_deg.
+            yaw_deg, yaw_span_s: The window's turn, integrated reading by
+                reading, and the seconds it covers. When given, the heading
+                steps by exactly that (less the bias over the span), however
+                long the frame gap was: a stall loses only readings the hub
+                couldn't keep.
         """
         cfg = self._cfg
         if lane_status == LANE_VISION:
             self._heading = 0.0
+            return 0.0
+        if yaw_deg is not None:
+            step = yaw_deg - cfg.gyro_bias_dps * (yaw_span_s or 0.0)
         elif yaw_rate_dps is None:
             log.append("[HEADING] no yaw rate this frame; heading held")
-        elif dt > 0.0:
-            self._heading += (yaw_rate_dps - cfg.gyro_bias_dps) * dt
+            step = 0.0
+        else:
+            step = (yaw_rate_dps - cfg.gyro_bias_dps) * dt
+        if step:
             limit = cfg.heading_limit_deg
-            self._heading = clamp(self._heading, -limit, limit)
+            self._heading = clamp(self._heading + step, -limit, limit)
         return round(self._heading, 3)
 
 
@@ -526,7 +552,7 @@ class Phase3Processor:
 
         dt = self._dt(phase2.timestamp_ms, log)
         lane = self.lane.update(phase2.lane_offset_results, log)
-        heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
+        heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log, sensors.yaw_deg, sensors.yaw_span_s)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
         stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
@@ -558,6 +584,8 @@ class Phase3Processor:
             left_distance_cm = odom.left_cm,
             right_distance_cm = odom.right_cm,
             stop_line_tilt_deg = self.stop_line.tilt,
+            yaw_deg = sensors.yaw_deg,
+            yaw_span_s = sensors.yaw_span_s,
         )
         return packet, {
             "frame_id": phase2.frame_id,

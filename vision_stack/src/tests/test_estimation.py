@@ -152,6 +152,14 @@ def test_heading_is_clamped():
 
 
 @pytest.mark.software
+def test_heading_takes_the_windows_integrated_turn_less_the_bias_over_its_span():
+    h = HeadingTracker(Phase3Config(gyro_bias_dps=1.0))
+    # the frame step (clamped) doesn't matter: the window says how far it turned
+    assert h.update(LANE_HOLD, 11.0, 0.5, [], yaw_deg=16.5, yaw_span_s=1.5) == pytest.approx(15.0)
+    assert h.update(LANE_HOLD, None, 0.0, [], yaw_deg=1.0, yaw_span_s=0.0) == pytest.approx(16.0)
+
+
+@pytest.mark.software
 def test_heading_holds_when_no_yaw_is_available():
     h = HeadingTracker(Phase3Config())
     h.update(LANE_HOLD, 10.0, 0.1, [])
@@ -250,6 +258,16 @@ def test_dt_is_clamped_on_a_long_gap():
     proc.process(p2(ts=0, lanes=[lane(ts=0)]))
     _, dbg = proc.process(p2(frame_id=2, ts=5000, lanes=[lane(frame_id=2, ts=5000)]))
     assert dbg["dt"] == 0.5
+
+
+@pytest.mark.software
+def test_a_stall_past_max_dt_still_counts_the_whole_turn_the_hub_kept():
+    proc = Phase3Processor(Phase3Config(hold_max_frames=5))
+    proc.process(p2(frame_id=1, ts=0, lanes=[lane(frame_id=1, ts=0)]), SensorSample(yaw_rate_dps=0.0))
+    stalled = SensorSample(yaw_rate_dps=30.0, yaw_deg=45.0, yaw_span_s=1.5)       # 1.5 s at 30 deg/s
+    pkt, dbg = proc.process(p2(frame_id=2, ts=1500, lanes=[]), stalled)
+    assert dbg["dt"] == 0.5 and pkt.heading_error == pytest.approx(45.0)        # the rate x dt gave 15
+    assert (pkt.yaw_deg, pkt.yaw_span_s) == (45.0, 1.5)                         # passed through for navigation
 
 
 @pytest.mark.software

@@ -13,7 +13,7 @@ import types
 import pytest
 
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
-from src.peripherals.sensing import SensorBatch, SensorHub, SensorReading, Sensors
+from src.peripherals.sensing import MAX_YAW_GAP_S, SensorBatch, SensorHub, SensorReading, Sensors
 
 
 class FakeIMU:
@@ -91,12 +91,36 @@ def test_an_empty_batch_has_nothing_to_report():
     b = SensorBatch(())
     assert (b.span_s, b.imu_count, b.mean_yaw_dps, b.peak_lateral_accel) == (0.0, 0, None, None)
     assert (b.left_count, b.right_count, b.left_cps, b.right_cps) == (None, None, None, None)
+    assert (b.yaw_deg, b.yaw_span_s) == (None, None)
 
 
 @pytest.mark.software
 def test_yaw_is_the_mean_of_the_imu_readings_only():
     b = SensorBatch((reading(1.0, 10.0), reading(1.01, 20.0), reading(1.02, None, left=5, right=5)))
     assert b.mean_yaw_dps == pytest.approx(15.0) and b.imu_count == 2
+
+
+@pytest.mark.software
+def test_yaw_is_integrated_reading_by_reading_each_over_the_time_since_the_previous_imu_reading():
+    # Uneven spacing: a mean x the window would give 15 x 0.03; each reading over its own gap gives this
+    b = SensorBatch((reading(1.01, 10.0), reading(1.03, 20.0), reading(1.04, None, left=5, right=5)), imu_base_t=1.0)
+    assert b.yaw_deg == pytest.approx(10.0 * 0.01 + 20.0 * 0.02) and b.yaw_span_s == pytest.approx(0.03)
+    # a failed read leaves its interval to the next good one
+    b = SensorBatch((reading(1.01, 10.0), reading(1.02, None), reading(1.03, 10.0)), imu_base_t=1.0)
+    assert b.yaw_deg == pytest.approx(0.3) and b.yaw_span_s == pytest.approx(0.03)
+
+
+@pytest.mark.software
+def test_the_first_imu_reading_ever_only_starts_the_integral():
+    b = SensorBatch((reading(1.0, 50.0), reading(1.01, 50.0)))
+    assert b.yaw_deg == pytest.approx(0.5) and b.yaw_span_s == pytest.approx(0.01)
+
+
+@pytest.mark.software
+def test_a_gap_longer_than_the_cap_counts_only_the_cap():
+    # readings lost to I2C errors or a full buffer: their turn isn't guessed
+    b = SensorBatch((reading(2.0, 30.0),), imu_base_t=1.0)
+    assert b.yaw_deg == pytest.approx(30.0 * MAX_YAW_GAP_S) and b.yaw_span_s == pytest.approx(MAX_YAW_GAP_S)
 
 
 @pytest.mark.software
@@ -199,6 +223,39 @@ def test_each_window_measures_speed_from_where_the_last_one_ended():
     assert second.left_cps == pytest.approx(10 / 0.10)
     clock.now += 0.05
     assert h.drain().left_cps == 0.0                    # stopped reads zero, not None
+
+
+@pytest.mark.software
+def test_windows_chain_their_yaw_integrals_so_every_reading_counts_once_across_drains():
+    h, imu, enc, clock = hub(yaw_sign=1)
+    imu.yaw, total = 20.0, 0.0
+    for frame in range(4):
+        for _ in range(5):
+            clock.now += 0.01
+            h.tick()
+        clock.now += 0.002                                       # the drain's closing reading, a little later
+        b = h.drain()
+        total += b.yaw_deg
+        if frame:
+            assert b.imu_base_t == pytest.approx(b.readings[0].t - 0.012)   # the last IMU reading before
+    # from the very first reading to the last: the time after a window's last IMU
+    # reading is the next window's first reading's
+    assert total == pytest.approx(20.0 * (4 * 0.052 - 0.002 - 0.01))
+
+
+@pytest.mark.software
+def test_a_long_stall_is_integrated_in_full_while_the_buffer_holds():
+    # 1.5 s without a drain (a stalled frame loop) at 100 Hz, inside the 2 s buffer
+    h, imu, enc, clock = hub(yaw_sign=1)
+    imu.yaw = 40.0
+    clock.now += 0.01
+    h.tick()
+    h.drain()                                                    # the integral starts here
+    for _ in range(150):
+        clock.now += 0.01
+        h.tick()
+    b = h.drain()
+    assert b.dropped == 0 and b.yaw_deg == pytest.approx(40.0 * 1.5)    # 60 deg; mean x a 0.5 s clamp gave 20
 
 
 @pytest.mark.software

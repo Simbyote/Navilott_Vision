@@ -121,8 +121,23 @@ def test_the_gyro_bias_is_taken_off():
 
 @pytest.mark.software
 def test_a_long_packet_gap_integrates_as_at_most_max_dt():
+    # without the window's integral (a replay that logged only the rate)
     _, out = drive([{"lane_mode": "right_only", "yaw_rate": 10.0}] * 2, ms=2000)
     assert out[LOST + 1][1]["heading_deg"] == pytest.approx(10.0 * MAX_DT_MS / 1000.0)
+
+
+@pytest.mark.software
+def test_the_windows_integrated_turn_counts_in_full_however_long_the_gap():
+    # 2 s frames at 10 deg/s: the sensor window integrated 20 deg each, all of it counts
+    _, out = drive([{"lane_mode": "right_only", "yaw_rate": 10.0, "yaw_deg": 20.0, "yaw_span_s": 2.0}] * 2, ms=2000)
+    assert out[LOST + 1][1]["heading_deg"] - out[LOST][1]["heading_deg"] == pytest.approx(20.0)
+
+
+@pytest.mark.software
+def test_the_gyro_bias_comes_off_the_integrated_turn_over_its_span():
+    _, out = drive([{"lane_mode": "right_only", "yaw_rate": 1.1, "yaw_deg": 0.055, "yaw_span_s": 0.05}] * 20,
+                   bias=1.1)
+    assert all(rec["heading_deg"] == pytest.approx(0.0) for _, rec in out[LOST:])
 
 
 @pytest.mark.software

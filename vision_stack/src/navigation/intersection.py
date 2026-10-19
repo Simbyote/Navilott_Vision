@@ -60,7 +60,9 @@ Main package:
 
 Flow (each frame while active):
     0. On the crossing's first frame: the heading starts at the approach angle.
-    1. Integrate yaw (net of the gyro bias) into the heading.
+    1. Add the frame's turn (net of the gyro bias) to the heading: the
+       packet's yaw_deg, integrated reading by reading, or yaw_rate x the
+       frame step without it.
     2. At the line: STAGE_ADVANCE for left / right, else STAGE_EXIT.
     3. STAGE_ADVANCE: the heading hold for ADVANCE_CM (ADVANCE_MS); then STAGE_TURN.
     4. STAGE_TURN: the turn's duties until the heading reaches the target
@@ -151,6 +153,19 @@ STAGE_TO_LINE, STAGE_ADVANCE, STAGE_TURN, STAGE_EXIT = "to_line", "advance", "tu
 TURN_END_GYRO, TURN_END_TIME = "gyro target", "time limit"
 REASON_CROSSING, REASON_TURNING = "crossing", "turning"
 SOURCE_HEADING_HOLD, SOURCE_TURN = "heading_hold", "turn"
+
+
+def turned_deg(packet, dt_ms: float, gyro_bias_dps: float) -> float:
+    """
+    Degrees the robot turned this frame, net of the gyro bias, + = right.
+
+    The packet's yaw_deg when it has one: integrated reading by reading over
+    the sensor window, so a long frame gap is counted in full. Otherwise
+    yaw_rate x dt_ms (the frame step, already capped at MAX_DT_MS).
+    """
+    if getattr(packet, "yaw_deg", None) is not None:
+        return packet.yaw_deg - gyro_bias_dps * (packet.yaw_span_s or 0.0)
+    return (packet.yaw_rate - gyro_bias_dps) * dt_ms / 1000.0
 
 
 def turn_cps(duties: Command) -> tuple[float, float]:
@@ -272,7 +287,7 @@ class IntersectionRule:
 
         dt_ms = min(max(now - self._last_ms, 0), MAX_DT_MS)
         self._last_ms = now
-        self._heading += (packet.yaw_rate - self.gyro_bias_dps) * dt_ms / 1000.0
+        self._heading += turned_deg(packet, dt_ms, self.gyro_bias_dps)
 
         if self.stage == STAGE_TO_LINE and self.tracker.reached:
             # Route through STAGE_ADVANCE if turning, otherwise go straight to EXIT

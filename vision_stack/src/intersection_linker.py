@@ -69,7 +69,9 @@ class SequenceWatch:
     crossing, and keeps the findings.
 
     Inputs:
-        gyro_bias_dps: Subtracted from each row's yaw_rate (raw) for the heading.
+        gyro_bias_dps: Subtracted from each row's turn (raw) for the heading:
+            its yaw_deg over yaw_span_s, as the robot's rule counts it, or
+            yaw_rate x the row's step in a nav.csv without them.
         settle_s: See SETTLE_S.
     """
     def __init__(self, gyro_bias_dps: float = 0.0, settle_s: float = SETTLE_S) -> None:
@@ -94,7 +96,10 @@ class SequenceWatch:
             self.started = True
             self.stage_s[stage] += dt
         if self.started:
-            self.heading += (float(n.get("yaw_rate") or 0.0) - self.gyro_bias_dps) * dt
+            if n.get("yaw_deg") not in (None, ""):
+                self.heading += float(n["yaw_deg"]) - self.gyro_bias_dps * float(n.get("yaw_span_s") or 0.0)
+            else:
+                self.heading += (float(n.get("yaw_rate") or 0.0) - self.gyro_bias_dps) * dt
         if n.get("turn_end") and self.turn_end is None:
             self.turn_end, self.heading_at_turn_end = n["turn_end"], self.heading
         if self.started and rule == RULE_LANE_KEEPING:

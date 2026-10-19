@@ -245,6 +245,7 @@ CSV_COLUMNS = (
     "obstacle_detected", "obstacle_distance_px", "obstacle_distance_cm", "obstacle_clipped",
     "distance_cm", "left_distance_cm", "right_distance_cm",
     "stop_line_tilt_deg",
+    "yaw_deg", "yaw_span_s",
 )
 
 class CsvLog:
@@ -278,6 +279,7 @@ class CsvLog:
             int(pk.obstacle_detected), pk.obstacle_distance_px, pk.obstacle_distance_cm, int(pk.obstacle_clipped),
             pk.distance_cm, pk.left_distance_cm, pk.right_distance_cm,      # blank without odometry
             pk.stop_line_tilt_deg,                                          # blank unless a line was seen
+            pk.yaw_deg, pk.yaw_span_s,                                      # blank without an IMU window
         ))
 
     def close(self) -> None:

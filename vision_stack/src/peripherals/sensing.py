@@ -18,8 +18,9 @@ Main package:
     SensorReading: one reading: time, yaw rate, lateral accel, both counts,
         and how long the IMU read took (imu_ms: I2C plus the GIL, as the
         thread lived it; diagnostics.i2c_trace has the bus's side).
-    SensorBatch: one frame window's readings, what Phase 3 needs from them,
-        and the window's IMU reads: attempted, failed, the slowest.
+    SensorBatch: one frame window's readings, what Phase 3 needs from them
+        (the yaw integrated reading by reading, so a long window loses
+        nothing), and the window's IMU reads: attempted, failed, the slowest.
     SensorHub: the sampling thread, its buffer, and drain().
     Sensors: what a frame loop uses (src/main.py and every linker): opens and
         starts a hub, then one read() / sample() per frame.
@@ -43,6 +44,12 @@ from src.estimation.estimation import SensorSample
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
 
 log = logging.getLogger(__name__)
+
+# An IMU reading stands for the time since the previous one, up to this long.
+# A longer gap means readings were lost (I2C errors, or a buffer that filled
+# during a stall): the turn made in them can't be recovered, so it isn't
+# guessed at either
+MAX_YAW_GAP_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -68,10 +75,13 @@ class SensorBatch:
         speeds are measured from. None only if the hub had no reading to
         start from.
     dropped: Readings lost to a full buffer since the previous drain.
+    imu_base_t: When the last IMU reading before this window was taken,
+        where its first IMU reading's interval starts. None before any.
     """
     readings: tuple[SensorReading, ...]
     base: SensorReading | None = None
     dropped: int = 0
+    imu_base_t: float | None = None
 
     @property
     def span_s(self) -> float:
@@ -106,6 +116,38 @@ class SensorBatch:
         """Mean yaw rate over the window's IMU readings; None without any."""
         yaws = [r.yaw_dps for r in self.readings if r.yaw_dps is not None]
         return sum(yaws) / len(yaws) if yaws else None
+
+    def _yaw_integral(self) -> tuple[float, float] | None:
+        deg = span = 0.0
+        prev, seen = self.imu_base_t, False
+        for r in self.readings:
+            if r.yaw_dps is None:
+                continue
+            seen = True
+            if prev is not None:
+                gap = min(max(r.t - prev, 0.0), MAX_YAW_GAP_S)
+                deg += r.yaw_dps * gap
+                span += gap
+            prev = r.t
+        return (deg, span) if seen else None
+
+    @property
+    def yaw_deg(self) -> float | None:
+        """
+        Degrees turned over the window, + = right: each IMU reading's rate
+        times the time since the previous IMU reading (at most
+        MAX_YAW_GAP_S), so the window is integrated however long it is.
+        Raw: the gyro bias is the caller's, over yaw_span_s. None without
+        an IMU reading.
+        """
+        got = self._yaw_integral()
+        return None if got is None else got[0]
+
+    @property
+    def yaw_span_s(self) -> float | None:
+        """Seconds yaw_deg covers (what a gyro bias is subtracted over); None without an IMU reading."""
+        got = self._yaw_integral()
+        return None if got is None else got[1]
 
     @property
     def peak_lateral_accel(self) -> float | None:
@@ -183,6 +225,7 @@ class SensorHub:
         self._stop_evt = threading.Event()
         self._thread: threading.Thread | None = None
         self._base: SensorReading | None = None
+        self._imu_t: float | None = None
         self._dropped = 0
         self._closers: list = []
         self.read_errors = 0
@@ -284,9 +327,10 @@ class SensorHub:
             readings, dropped = tuple(self._buf), self._dropped
             self._buf.clear()
             self._dropped = 0
-        batch = SensorBatch(readings, self._base, dropped)
+        batch = SensorBatch(readings, self._base, dropped, self._imu_t)
         if readings:
             self._base = readings[-1]
+        self._imu_t = next((r.t for r in reversed(readings) if r.yaw_dps is not None), self._imu_t)
         return batch
 
     def _counts(self) -> tuple[int | None, int | None]:

@@ -86,7 +86,7 @@ SLOW_FRAME_MS = 250.0
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
               "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "approach_deg", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
-              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "distance_cm",
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "yaw_deg", "yaw_span_s", "distance_cm",
               "target_left_cps", "target_right_cps", "gain_left", "gain_right",
               "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
@@ -387,6 +387,7 @@ def run(
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "yaw_deg": pkt.yaw_deg, "yaw_span_s": pkt.yaw_span_s,
                  "distance_cm": pkt.distance_cm,
                  **wheel_columns(rec, getattr(navigator, "wheels", None)),
                  "imu_reads": None if batch is None else batch.imu_attempts,
