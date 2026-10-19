@@ -50,6 +50,10 @@ def seen(res, p3) -> dict:
         the base is below the view.
     obstacle_voted, obstacle_voted_cm, obstacle_voted_clipped: the vote
         after this frame, and the measurement it reports.
+    stop_line: Phase 2 found a stop line this frame; stop_line_voted: the
+        vote after this frame; stop_line_tilt: the voted line's tilt this
+        frame (deg, + = its right end nearer; None unless seen this frame),
+        what the intersection reads the approach angle from.
     total_ms: Phases 2 and 3's time on the frame.
     """
     light = sign = None
@@ -60,6 +64,7 @@ def seen(res, p3) -> dict:
             sign = True
     pk, off = res.packet, res.chain.offset
     ob = next((r for r in getattr(res.chain.phase2, "obstacle_results", []) if r.detected), None)
+    line = getattr(res.chain, "stop_line", None)
     return {"light": light, "sign": bool(sign), "drive_state": pk.drive_state, "stop_sign": pk.stop_sign_detected,
             "lane_offset": pk.lane_offset, "lane_status": pk.lane_status, "p2_offset": off.offset,
             "lane_mode": off.mode, "lane_width_px": off.lane_width_px,
@@ -68,6 +73,9 @@ def seen(res, p3) -> dict:
             "obstacle_voted": bool(getattr(pk, "obstacle_detected", False)),
             "obstacle_voted_cm": getattr(pk, "obstacle_distance_cm", None),
             "obstacle_voted_clipped": bool(getattr(pk, "obstacle_clipped", False)),
+            "stop_line": bool(line is not None and line.detected),
+            "stop_line_voted": bool(getattr(pk, "stop_line_detected", False)),
+            "stop_line_tilt": getattr(pk, "stop_line_tilt_deg", None),
             "total_ms": res.timings_ms["phase2"] + res.timings_ms["phase3"]}
 
 

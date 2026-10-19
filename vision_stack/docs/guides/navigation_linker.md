@@ -132,6 +132,8 @@ The scale from the stop line's tilt in the image to the robot's angle on the flo
 3. `TILT_TO_HEADING = angle / (tilt at the angle − tilt square)`, e.g. 8 / (−2.6 − 0.1) ≈ −2.96. Check it on the left: −8° should read about the same tilt with the sign flipped.
 4. Keep the angle under what the geometry's tilt gate passes (`StopLineFilter.max_tilt_deg` in `config.py`): past it the line isn't detected at all, which is also the largest approach this can correct (gate × the scale).
 
+The `detect-range` routine does the same with prompts and fits all the angles at once: `make routine-detect-range ARGS="--set target=line --set gaps=15 --set angles=-8,-4,0,4,8"` prints `TILT_ZERO_DEG` and `TILT_TO_HEADING` (a least-squares fit of tilt against angle), and its rows show at which angle the tilt gate starts refusing the line.
+
 With it set, `intersection_linker` crossings from a deliberately angled start should end with `heading_deg` near the street's (`approach_deg` in nav.csv says what the line read).
 
 | Symptom | Likely cause |

@@ -23,6 +23,14 @@ Purpose:
     out of tolerance. A clear trial reads OK unless the vote said obstacle
     (WRONG: a false alarm; the robot would brake on an empty lane).
 
+    laterals places the object off the lane's middle as well: every gap
+    at every lateral offset (cm, + = right of the middle), so the trials map
+    how wide the path the detector watches really is. Only objects within
+    in_path_cm of the middle (the robot's own path; 0 = the middle only)
+    are judged: one farther out is outside the path, and seeing it or not
+    is the map, not a fault. The summary gives, per gap, the widest offset
+    up to which every object, both sides, read OK.
+
     Pass (first guesses, to refine after the first runs): every object up
     to need_cm seen and its distance within tolerance; no false alarm on a
     clear lane; the brake decision right at every gap more than
@@ -32,11 +40,13 @@ Purpose:
 Main package:
     ObstacleCheck: the routine (make routine-obstacle-check).
     read_look(frames, gap_cm, present, tolerance_cm): one look's numbers and its result.
+    seen_width(results): per gap, the widest offset every object read OK out to.
 
 Flow (per trial):
-    present trials, one per gap, nearest first, then `clear` clear-lane
-    trials: the tester places (or removes) the object; Enter; one look; the
-    row and attempt_NN_<gap>cm.jpg (attempt_NN_clear.jpg).
+    present trials, nearest gap first, each gap at every lateral offset,
+    then `clear` clear-lane trials: the tester places (or removes) the
+    object; Enter; one look; the row and attempt_NN_<gap>cm[_<lateral>cm].jpg
+    (attempt_NN_clear.jpg).
 """
 import statistics
 
@@ -46,6 +56,8 @@ from src.routines.detect_range import reliable_range
 from src.routines.harness import Routine, criterion
 
 GAPS_CM = "10,15,20,25,30"  # front edge to where the object meets the floor; 10 is under the view's edge
+LATERALS_CM = "0"           # object's center off the lane's middle, + = right: "-10,-5,0,5,10" maps the path
+IN_PATH_CM = 0.0            # judged only this close to the middle: farther out is outside the robot's path
 CLEAR_TRIALS = 3            # trials with the lane clear: false alarms
 NEED_CM = 25.0              # every object seen and measured from here in
 TOLERANCE_CM = 3.0          # reported distance against the tape
@@ -100,6 +112,23 @@ def read_look(frames: list[dict], gap_cm: float | None, present: bool, tolerance
             "clipped_pct": clipped_pct, "would_brake": would_brake(frames[-1]) if frames else None, "result": result}
 
 
+def seen_width(results: list[tuple[float, float, str]]) -> dict[float, float | None]:
+    """
+    Per gap, from (gap, lateral, result) present trials: the widest |lateral|
+    up to which every trial at that gap, both sides, read OK; None if the
+    middle-most didn't.
+    """
+    out = {}
+    for gap in sorted({g for g, _, _ in results}):
+        best = None
+        for w in sorted({abs(lat) for g, lat, _ in results if g == gap}):
+            if any(r != OK for g, lat, r in results if g == gap and abs(lat) <= w):
+                break
+            best = w
+        out[gap] = best
+    return out
+
+
 class ObstacleCheck(Routine):
     name = "obstacle-check"
     title = "Obstacle check: an object in the lane, parked at gaps"
@@ -107,28 +136,31 @@ class ObstacleCheck(Routine):
                 "and does it see nothing when the lane is clear?")
     requirement = "obstacle detection (stretch goal: stop for an obstacle)"
     trials = len(parse_numbers(GAPS_CM)) + CLEAR_TRIALS
-    fields = ("gap_cm", "state", "frames", "seen_pct", "voted", "reported_cm", "error_cm", "clipped_pct",
+    fields = ("gap_cm", "lateral_cm", "state", "frames", "seen_pct", "voted", "reported_cm", "error_cm", "clipped_pct",
               "would_brake", "result")
     settings = {"gaps": f"gaps from the front edge to the object, cm, comma separated (default {GAPS_CM})",
                 "clear": f"trials with the lane clear (default {CLEAR_TRIALS})",
                 "need_cm": f"every object seen and measured at gaps up to this (default {NEED_CM:g})",
                 "tolerance_cm": f"reported distance against the tape (default {TOLERANCE_CM:g})",
+                "laterals": f"object off the lane's middle, cm, + = right, comma separated (default {LATERALS_CM})",
+                "in_path_cm": f"objects judged only this close to the middle (default {IN_PATH_CM:g})",
                 "frames": f"frames per look (default {FRAMES})",
                 "object": "what the object is, recorded (e.g. can, box)"}
     instructions = f"""\
 Set up: a straight lane, the room lit as it will be on the day. Park the robot
 centered in the lane, pointing along it, and leave it there: the object moves,
 not the robot. Motors stay off; nothing drives.
-Each gap: place the object in the middle of the lane with its nearest point
-that far from the robot's front edge (tape along the lane's center), and press
-Enter: the robot looks for ~2 s. Then the clear trials: take the object away
+Each gap: place the object in the middle of the lane (or as far off it as the
+prompt says, measured to the object's center) with its nearest point that far
+from the robot's front edge (tape along the lane's center), and press Enter:
+the robot looks for ~2 s. Then the clear trials: take the object away
 (and anything else off the lane) and press Enter. Gaps under ~10 cm sit below
 the camera's view: they read clipped, and the rule brakes for them at
 {OBSTACLE_STOP_CM:g} cm or nearer. Keep people and bright clothes out of view."""
 
     def __init__(self, eyes=None):
         self._eyes = eyes
-        self._need, self._tol = NEED_CM, TOLERANCE_CM
+        self._need, self._tol, self._in_path = NEED_CM, TOLERANCE_CM, IN_PATH_CM
 
     @staticmethod
     def _defaults(options: dict) -> None:
@@ -136,43 +168,60 @@ the camera's view: they read clipped, and the rule brakes for them at
         options.setdefault("clear", CLEAR_TRIALS)
         options.setdefault("need_cm", NEED_CM)
         options.setdefault("tolerance_cm", TOLERANCE_CM)
+        options.setdefault("laterals", LATERALS_CM)
+        options.setdefault("in_path_cm", IN_PATH_CM)
         options.setdefault("frames", FRAMES)
         options.setdefault("object", "")
+
+    @staticmethod
+    def _placements(options: dict) -> list[tuple[float, float]]:
+        return [(g, lat) for g in sorted(parse_numbers(options["gaps"])) for lat in parse_numbers(options["laterals"])]
 
     def plan(self, options):
         o = dict(options)
         self._defaults(o)
-        return len(parse_numbers(o["gaps"])) + int(float(o["clear"]))
+        return len(self._placements(o)) + int(float(o["clear"]))
 
     def setup(self, ctx):
         self._defaults(ctx.options)
         self._need, self._tol = float(ctx.options["need_cm"]), float(ctx.options["tolerance_cm"])
+        self._in_path = float(ctx.options["in_path_cm"])
         self._eyes = (self._eyes or Eyes()).open()
         ctx.state["results"] = {}
 
     def teardown(self, ctx):
         if self._eyes is not None:
             self._eyes.close()
-        done = [(g, r) for g, r in ctx.state.get("results", {}).values() if g is not None]
-        if done:
-            rng = reliable_range(done)
+        done = [(g, lat, r) for g, lat, r in ctx.state.get("results", {}).values() if g is not None]
+        judged = [(g, r) for g, lat, r in done if abs(lat) <= self._in_path]
+        if judged:
+            rng = reliable_range(judged)
             ctx.state["range_cm"] = rng
             ctx.console.say("\nrange: " + ("not even at the nearest gap" if rng is None else
                                            f"every object seen and measured up to {rng:g} cm"))
+        if len({lat for _, lat, _ in done}) > 1:
+            width = seen_width(done)
+            ctx.state["seen_width_cm"] = {f"{g:g}": w for g, w in width.items()}
+            for g, w in width.items():
+                ctx.console.say(f"  at {g:g} cm: " + ("missed even nearest the middle" if w is None
+                                                      else f"seen out to {w:g} cm off the middle, both sides"))
 
     def trial(self, ctx, i):
-        gaps = sorted(parse_numbers(ctx.options["gaps"]))
-        present = i < len(gaps)
-        gap = gaps[i] if present else None
+        placements = self._placements(ctx.options)
+        present = i < len(placements)
+        gap, lateral = placements[i] if present else (None, None)
         if present:
-            ctx.console.wait(f"Object {gap:g} cm from the front edge, in the middle of the lane? Enter looks")
+            where = ("in the middle of the lane" if not lateral else
+                     f"its center {abs(lateral):g} cm {'right' if lateral > 0 else 'left'} of the lane's middle")
+            ctx.console.wait(f"Object {gap:g} cm from the front edge, {where}? Enter looks")
         else:
             ctx.console.wait("Lane CLEAR: object taken away, nothing on the lane? Enter looks")
         frames, last = self._eyes.look(int(ctx.options["frames"]))
-        row = {"gap_cm": gap, "state": PRESENT if present else CLEAR,
+        row = {"gap_cm": gap, "lateral_cm": lateral, "state": PRESENT if present else CLEAR,
                **read_look(frames, gap, present, self._tol)}
-        save_frame(ctx.out_dir / f"attempt_{ctx.attempt + 1:02d}_{f'{gap:g}cm' if present else 'clear'}.jpg", last)
-        ctx.state["results"][str(i)] = (gap, row["result"])
+        tag = (f"{gap:g}cm" + (f"_{lateral:g}cm" if lateral else "")) if present else "clear"
+        save_frame(ctx.out_dir / f"attempt_{ctx.attempt + 1:02d}_{tag}.jpg", last)
+        ctx.state["results"][str(i)] = (gap, lateral, row["result"])
         if row["result"] != OK:
             ctx.console.say(f"  {row['result'].upper()}: voted {row['voted']}, seen {row['seen_pct']:g}%"
                             + ("" if row["reported_cm"] is None else f", reported {row['reported_cm']:g} cm"))
@@ -180,9 +229,10 @@ the camera's view: they read clipped, and the rule brakes for them at
 
     def judge(self, rows):
         need, tol = self._need, self._tol
-        near = [r for r in rows if r["state"] == PRESENT and r["gap_cm"] <= need]
+        in_path = [r for r in rows if r["state"] == CLEAR or abs(r.get("lateral_cm") or 0.0) <= self._in_path]
+        near = [r for r in in_path if r["state"] == PRESENT and r["gap_cm"] <= need]
         errors = [abs(r["error_cm"]) for r in near if r["error_cm"] is not None]
-        judged = [r for r in rows if r["state"] == CLEAR or abs(r["gap_cm"] - OBSTACLE_STOP_CM) > BRAKE_MARGIN_CM]
+        judged = [r for r in in_path if r["state"] == CLEAR or abs(r["gap_cm"] - OBSTACLE_STOP_CM) > BRAKE_MARGIN_CM]
         wrong_brake = sum(1 for r in judged
                           if r["would_brake"] != (r["state"] == PRESENT and r["gap_cm"] <= OBSTACLE_STOP_CM))
         return [criterion(f"objects within {need:g} cm not seen", sum(1 for r in near if r["result"] == MISSED),

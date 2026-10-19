@@ -2,14 +2,17 @@
 test_routine_detect_range.py  --  src/routines/detect_range.py, src/routines/camera_look.py
 
 camera_look: a frame's result as a Seen dict (lights and signs at their
-confidence gates), looks through the real chain on black frames (drops
+confidence gates, the stop line and its tilt), looks through the real chain on black frames (drops
 skipped, the source ending, a fresh processor each look), the source
 closed, frames saved, --set lists parsed. detect_range: a look read OK,
 MISSED or WRONG for every light and sign state; the reliable range; the
 routine on fake eyes: gaps times states planned from the settings, the
 robot moved once per gap, every state prompted, a JPEG per attempt, a
 redo repeating its state, the range in the summary, a bad target refused;
-the criteria one at a time and at need_cm.
+the criteria one at a time and at need_cm. Angles and offsets: every gap
+from every pose, the pose in the prompt and the file name, a range per
+pose; the line target's looks, and the tilt fit that gives TILT_ZERO_DEG
+and TILT_TO_HEADING.
 
 --software  A scripted tester and fake eyes; black frames through the real chain.
 """
@@ -60,7 +63,8 @@ def test_seen_counts_lights_and_signs_at_their_gates():
     assert s == {"light": RED, "sign": True, "drive_state": "stop", "stop_sign": True, "lane_offset": 0.08,
                  "lane_status": "vision", "p2_offset": 0.1, "lane_mode": "two", "lane_width_px": 300,
                  "obstacle": False, "obstacle_cm": None, "obstacle_clipped": False, "obstacle_voted": False,
-                 "obstacle_voted_cm": None, "obstacle_voted_clipped": False, "total_ms": 31.5}
+                 "obstacle_voted_cm": None, "obstacle_voted_clipped": False,
+                 "stop_line": False, "stop_line_voted": False, "stop_line_tilt": None, "total_ms": 31.5}
     under = seen(result([det(TRAFFIC_LIGHT, RED, p3.min_confidence_traffic - 0.01),
                          det(STOP_SIGN, "stop", p3.min_confidence_sign - 0.01)]), p3)
     assert under["light"] is None and under["sign"] is False
@@ -169,7 +173,8 @@ def test_sign_looks(frames, state, result):
 def test_a_looks_numbers():
     frames = look(n=30, light=RED, drive="stop") + look(n=6, light=YELLOW, drive="stop") + look(n=4, drive="stop")
     assert dr.read_look(frames, dr.LIGHT, RED) == {"frames": 40, "seen_pct": 75.0, "wrong_frames": 6,
-                                                    "voted": "stop", "expected": "stop", "result": dr.OK}
+                                                    "voted": "stop", "expected": "stop", "tilt_deg": None,
+                                                    "result": dr.OK}
     off = dr.read_look(look(n=8, light=GREEN) + look(n=32), dr.LIGHT, dr.OFF)
     assert (off["seen_pct"], off["wrong_frames"], off["result"]) == (20.0, 8, dr.OK)
     sign = dr.read_look(look(n=10, sign=True, stop_sign=True) + look(n=30, stop_sign=True), dr.SIGN, dr.PRESENT)
@@ -266,7 +271,7 @@ def test_a_redo_looks_again_at_the_same_state(tmp_path):
 
 @pytest.mark.software
 def test_a_bad_target_is_refused():
-    with pytest.raises(ValueError, match="light or sign"):
+    with pytest.raises(ValueError, match="light, sign or line"):
         dr.DetectRange().plan({"target": "cone"})
 
 
@@ -317,3 +322,69 @@ def test_need_cm_moves_the_line(tmp_path):
     looks = LIGHT_OK * 3 + [look()] + LIGHT_OK[1:] + LIGHT_OK          # red missed at 30 cm
     res = go(FakeEyes(looks), Person(*[""] * 45), tmp_path, need_cm=30)
     assert [c["name"] for c in res["criteria"] if not c["passed"]] == ["trials not read right within 30 cm"]
+
+
+# =============================================================================
+# Angles and offsets, and the stop line
+# =============================================================================
+
+def line_look(n=40, tilt=0.0, seen_=True):
+    return [{"light": None, "sign": False, "drive_state": "go", "stop_sign": False, "stop_line": seen_,
+             "stop_line_voted": seen_, "stop_line_tilt": tilt if seen_ else None} for _ in range(n)]
+
+
+@pytest.mark.software
+def test_a_line_look_reads_the_vote_the_share_and_the_median_tilt():
+    got = dr.read_look(line_look(n=30, tilt=-2.0) + line_look(n=10, seen_=False)[:9] + line_look(n=1, tilt=-1.0),
+                       dr.LINE, dr.PRESENT)
+    assert (got["seen_pct"], got["voted"], got["tilt_deg"], got["result"]) == (77.5, True, -2.0, dr.OK)
+    assert dr.read_look(line_look(seen_=False), dr.LINE, dr.PRESENT)["result"] == dr.MISSED
+
+
+@pytest.mark.software
+def test_the_tilt_fit_is_the_slope_and_intercept_of_tilt_against_angle():
+    # a camera 0.5 deg off square, a line tilting -0.25 deg per deg turned
+    rows = [{"angle_deg": a, "tilt_deg": 0.5 - 0.25 * a} for a in (-10, -5, 0, 5, 10)]
+    fit = dr.tilt_fit(rows + [{"angle_deg": 20, "tilt_deg": None}])
+    assert fit == {"tilt_zero_deg": 0.5, "tilt_to_heading": -4.0, "points": 5}
+    assert dr.tilt_fit(rows[2:3]) is None                                 # one angle: nothing to fit
+    assert dr.tilt_fit([{"angle_deg": a, "tilt_deg": 1.0} for a in (0, 5)]) is None    # tilt doesn't move
+
+
+@pytest.mark.software
+def test_every_gap_from_every_pose_with_a_range_per_pose(tmp_path):
+    # 2 gaps x (2 angles x 2 offsets) x the sign's 2 states; turned 10 deg it misses at 20 cm
+    looks = SIGN_OK * 4 + SIGN_OK * 2 + [look(), look()] + [look(), look()]
+    eyes = FakeEyes(looks)
+    person = Person(*[""] * 60)
+    res = go(eyes, person, tmp_path, target="sign", gaps="10,20", angles="0,10", offsets="0,-3", need_cm=10)
+    assert res["trials_planned"] == 16 and res["verdict"] == h.PASS, res["criteria"]
+    rows = results(tmp_path)["rows"]
+    assert [(r["gap_cm"], r["angle_deg"], r["offset_cm"]) for r in rows[:4:2]] == [(10, 0, 0), (10, 0, -3)]
+    prompts = "\n".join(person.prompts)
+    assert "10 cm before the stop line, centered?" in prompts
+    assert "turned 10 deg right, 3 cm left of center?" in prompts and "square, 3 cm left of center?" in prompts
+    assert (tmp_path / "out" / "attempt_08_10cm_10deg_-3cm_absent.jpg").exists()
+    state = results(tmp_path)["state"]
+    assert state["range_cm"] == 10
+    assert state["pose_range_cm"] == {"0deg 0cm": 20, "0deg -3cm": 20, "10deg 0cm": 10, "10deg -3cm": 10}
+    assert "turned 10 deg right, centered: up to 10 cm" in person.said()
+
+
+@pytest.mark.software
+def test_the_line_target_looks_once_per_pose_and_gives_the_tilt_correction(tmp_path):
+    looks = [line_look(tilt=0.5 - 0.25 * a) for a in (-10, 0, 10)]
+    person = Person(*[""] * 6)
+    res = go(FakeEyes(looks), person, tmp_path, target="line", gaps=15, angles="-10,0,10")
+    assert res["trials_planned"] == 3 and res["verdict"] == h.PASS
+    assert not any("Set " in p for p in person.prompts)                  # nothing to set for a line
+    assert [r["tilt_deg"] for r in results(tmp_path)["rows"]] == [3.0, 0.5, -2.0]
+    assert results(tmp_path)["state"]["tilt_fit"] == {"tilt_zero_deg": 0.5, "tilt_to_heading": -4.0, "points": 3}
+    assert "TILT_ZERO_DEG = 0.5, TILT_TO_HEADING = -4" in person.said()
+
+
+@pytest.mark.software
+def test_a_square_centered_run_is_planned_and_prompted_as_before():
+    assert dr.DetectRange().plan({}) == dr.DetectRange.trials == 20
+    assert dr.DetectRange().plan({"target": "line", "angles": "-5,0,5", "offsets": "-2,2"}) == 5 * 3 * 2 * 1
+    assert dr.pose_text(0, 0) == "centered" and dr.pose_tag(0, 0) == ""
