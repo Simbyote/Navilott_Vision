@@ -158,6 +158,26 @@ def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
 
 
 @pytest.mark.software
+def test_the_collector_runs_as_params_says_off_while_driving_and_back_on_after(monkeypatch, tmp_path):
+    import gc
+    from src.params import GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
+    from src.utils import GcWatch
+    made, enabled = [], []
+
+    class Watch(GcWatch):
+        def __init__(self, *args):
+            made.append(args)
+            super().__init__(*args)
+    monkeypatch.setattr(nl, "GcWatch", Watch)
+    real = Motor.drive
+    monkeypatch.setattr(Motor, "drive", lambda self, *a: enabled.append(gc.isenabled()) or real(self, *a))
+    go(tmp_path)
+    assert made == [(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)]
+    assert enabled and set(enabled) == {not GC_DISABLE_IN_RUN}
+    assert gc.isenabled()
+
+
+@pytest.mark.software
 def test_the_motors_get_exactly_the_navigators_commands_in_frame_order(tmp_path):
     rep, out, motor, nav, _ = go(tmp_path)
     sent = motor.calls[:-1]                            # all but the final stop

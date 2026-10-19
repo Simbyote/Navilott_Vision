@@ -10,7 +10,9 @@ crossing; reset.
 """
 import pytest
 
-from src.navigation.stop_line import APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, STOP_DELAY_MS, StopLineTracker
+from src.navigation.stop_line import (
+    APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, REACH_CM, STOP_DELAY_MS, TILT_FRAMES, StopLineTracker,
+)
 from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
@@ -28,9 +30,13 @@ def feed(tracker, seq):
 
 @pytest.mark.software
 def test_the_constants_follow_the_calibration_and_the_runs():
-    # 500 since 2026-10-12 (0 from 2026-10-07): it carries the robot into the
-    # intersection, where the turn now starts without an advance
-    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0         # 0: the hanging light stays in view
+    # 0 since 2026-10-14 (500 from 2026-10-12): braking as the line leaves the
+    # view keeps the hanging traffic light in frame; turns get their distance
+    # from the intersection's advance instead
+    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0
+    # Distance is opt-in until odometry is calibrated: None keeps the time-based stop
+    assert REACH_CM is None
+    assert TILT_FRAMES == 5                                        # fresh tilts in the approach-angle median
 
 
 

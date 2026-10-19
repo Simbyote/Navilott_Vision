@@ -49,6 +49,16 @@ def feed(stage, values):
 
 
 @pytest.mark.software
+def test_the_defaults_the_robot_runs_with():
+    # MEASURED_ESTIMATION is these plus the gyro bias and cm_per_count (test_config)
+    c = Phase3Config()
+    assert (c.ema_alpha, c.max_offset_jump, c.hold_max_frames) == (0.35, 0.5, 7)    # 7 frames: ~350 ms at 20 FPS
+    assert (c.vote_window, c.min_confidence_traffic, c.min_confidence_sign) == (3, 0.40, 0.45)
+    assert (c.heading_limit_deg, c.max_dt_s) == (90.0, 0.5)
+    assert (c.gyro_bias_dps, c.cm_per_count, c.lane_roi_width_px, c.cm_per_px) == (0.0, None, None, None)
+
+
+@pytest.mark.software
 def test_lane_first_usable_frame_seeds_the_estimate():
     est = LaneFilter(Phase3Config()).update([lane(0.2)], [])
     assert (est.offset, est.status) == (0.2, LANE_VISION)

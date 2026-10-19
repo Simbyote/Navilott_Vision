@@ -148,6 +148,26 @@ def test_a_finished_course_drives_the_pipelines_commands_then_halts():
 
 
 @pytest.mark.software
+def test_the_collector_runs_as_params_says_off_while_driving_and_back_on_after(monkeypatch):
+    import gc
+    from src.params import GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
+    from src.utils import GcWatch
+    made, enabled = [], []
+
+    class Watch(GcWatch):
+        def __init__(self, *args):
+            made.append(args)
+            super().__init__(*args)
+    monkeypatch.setattr(main, "GcWatch", Watch)
+    real = Motor.drive
+    monkeypatch.setattr(Motor, "drive", lambda self, *a: enabled.append(gc.isenabled()) or real(self, *a))
+    go()
+    assert made == [(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)]
+    assert enabled and set(enabled) == {not GC_DISABLE_IN_RUN}
+    assert gc.isenabled()
+
+
+@pytest.mark.software
 def test_the_start_screen_is_the_step_count_and_the_time_runs_every_frame():
     result, _, system, _, _, _ = go(route=Route(("left", "straight", "right")))
     assert system.screens[0] == "St 3"

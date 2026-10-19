@@ -158,6 +158,15 @@ def test_gst_pipeline_string_carries_parameters():
 
 
 @pytest.mark.software
+def test_the_robots_pipeline_takes_bgr_from_the_isp_and_converts_nothing_on_the_arm():
+    p = build_gst_pipeline()
+    elements = [e.split()[0] for e in p.split(" ! ")]
+    assert elements[:2] == ["libcamerasrc", "video/x-raw,format=BGR,width=480,height=270,framerate=20/1"]
+    assert "videoconvert" not in elements                      # the ISP does the conversion (2026-10-16)
+    assert "videoflip" in elements                             # the camera is mounted upside down
+
+
+@pytest.mark.software
 def test_no_controls_leaves_the_camera_on_its_own_auto_settings(monkeypatch):
     monkeypatch.setattr(camera, "CAMERA_CONTROLS", {})
     p = build_gst_pipeline()

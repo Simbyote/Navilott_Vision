@@ -2,10 +2,12 @@
 test_capture_anatomy.py  --  src/diagnostics/capture_anatomy.py
 
 Each parser on output shaped like the tool's own (media-ctl -p for Unicam
-and the ISP, gst-launch -v caps lines, the latency tracer's log, vcgencmd,
-/proc/meminfo, libcamera's log); the latency statistics; record() end to
-end with fake tools that write what the real ones would; the findings and
-summary; a laptop with no tools at all; the command line.
+and the ISP, gst-launch -v caps lines, pad_timing.py's lines and the older
+latency tracer's log, vcgencmd, /proc/meminfo, libcamera's log); the
+latency statistics; record() end to end with fake tools that write what the
+real ones would; the findings and summary; a laptop with no tools at all;
+the command line. The canned caps are the robot's pipeline as it is now:
+BGR straight from the ISP, then videoflip (no videoconvert).
 
 --software  Canned tool output and fake runners. No Pi, camera or GStreamer.
 --hardware  The real thing for 3 s on the Pi (the camera must be free).
@@ -14,6 +16,7 @@ import csv
 import json
 import shlex
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -76,11 +79,11 @@ Device topology
 GST_V = """\
 Setting pipeline to PAUSED ...
 Pipeline is live and does not need PREROLL ...
-/GstPipeline:pipeline0/GstLibcameraSrc:libcamerasrc0.GstLibcameraPad:src: caps = video/x-raw, format=(string)NV12, width=(int)480, height=(int)270, colorimetry=(string)bt709, framerate=(fraction)20/1
-/GstPipeline:pipeline0/GstCapsFilter:capsfilter0.GstPad:src: caps = video/x-raw, format=(string)NV12, width=(int)480, height=(int)270, framerate=(fraction)20/1
-/GstPipeline:pipeline0/GstVideoConvert:videoconvert0.GstPad:src: caps = video/x-raw, format=(string)YUY2, width=(int)480, height=(int)270, framerate=(fraction)20/1
-/GstPipeline:pipeline0/GstVideoConvert:videoconvert0.GstPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)20/1
+/GstPipeline:pipeline0/GstLibcameraSrc:libcamerasrc0.GstLibcameraPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, colorimetry=(string)sRGB, framerate=(fraction)20/1
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter0.GstPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)20/1
+/GstPipeline:pipeline0/GstVideoFlip:videoflip0.GstPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)0/1
 /GstPipeline:pipeline0/GstVideoFlip:videoflip0.GstPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)20/1
+/GstPipeline:pipeline0/GstCapsFilter:capsfilter1.GstPad:src: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)20/1
 /GstPipeline:pipeline0/GstFakeSink:fakesink0.GstPad:sink: caps = video/x-raw, format=(string)BGR, width=(int)480, height=(int)270, framerate=(fraction)20/1
 Setting pipeline to PLAYING ...
 """
@@ -101,10 +104,29 @@ def tracer_log(frames=21, conv_ms=3.0, flip_ms=1.0, pipe_ms=6.0, period_ms=50.0)
     return "\n".join(lines) + "\n"
 
 
+def pad_log(frames=21, flip_ms=1.0, pipe_ms=3.0, camera_ms=20.0, period_ms=50.0, conv_ms=None, end="EOS"):
+    """
+    pad_timing.py's stdout: per frame, videoflip0 (and videoconvert0 when
+    conv_ms is given, for a pipeline that still has one), the source-to-sink
+    time and the sensor-to-first-pad time; then its status line.
+    """
+    lines = []
+    for i in range(frames):
+        ts = 1000 + i * period_ms
+        if conv_ms is not None:
+            lines.append(f"{ca.PAD_TAG}\telement\tvideoconvert0\t{ts}\t{conv_ms + 0.1 * (i % 3)}")
+        lines.append(f"{ca.PAD_TAG}\telement\tvideoflip0\t{ts}\t{flip_ms}")
+        lines.append(f"{ca.PAD_TAG}\tpipeline\tlibcamerasrc0 -> fakesink0\t{ts}\t{pipe_ms}")
+        lines.append(f"{ca.PAD_TAG}\tcamera\tlibcamerasrc0\t{ts}\t{camera_ms}")
+    if end:
+        lines.append(f"{ca.PAD_TAG}\t{end}")
+    return "\n".join(lines) + "\n"
+
+
 LIBCAMERA_LOG = """\
 [0:00:00.1] [4242]  INFO Camera camera_manager.cpp:325 libcamera v0.7.2+rpt20250903
 [0:00:00.2] [4242]  INFO RPI vc4.cpp:448 Sensor: /base/soc/i2c0mux/i2c@1/imx290@1a - Selected sensor format: 1920x1080-SRGGB10_1X10 - Selected unicam format: 1920x1080-pRAA
-[0:00:00.3] [4242]  INFO Camera camera.cpp:1197 configuring streams: (0) 480x270-NV12
+[0:00:00.3] [4242]  INFO Camera camera.cpp:1197 configuring streams: (0) 480x270-RGB888
 [0:00:00.2] [4242]  INFO RPI vc4.cpp:448 Sensor: /base/soc/i2c0mux/i2c@1/imx290@1a - Selected sensor format: 1920x1080-SRGGB10_1X10 - Selected unicam format: 1920x1080-pRAA
 """
 
@@ -147,11 +169,11 @@ def test_media_graph_keeps_entities_nodes_formats_and_only_enabled_links():
 def test_caps_one_row_per_pad_the_last_it_settled_on_in_first_seen_order():
     caps = ca.parse_caps(GST_V)
     assert [(c["element"], c["pad"]) for c in caps] == [
-        ("libcamerasrc0", "src"), ("capsfilter0", "src"), ("videoconvert0", "src"), ("videoflip0", "src"),
+        ("libcamerasrc0", "src"), ("capsfilter0", "src"), ("videoflip0", "src"), ("capsfilter1", "src"),
         ("fakesink0", "sink")]
     src = caps[0]
-    assert (src["format"], src["size"], src["framerate"], src["caps"]) == ("NV12", "480x270", "20/1", "video/x-raw")
-    assert caps[2]["format"] == "BGR"                                               # renegotiated: the last wins
+    assert (src["format"], src["size"], src["framerate"], src["caps"]) == ("BGR", "480x270", "20/1", "video/x-raw")
+    assert caps[2]["framerate"] == "20/1"                                           # renegotiated: the last wins
 
 
 @pytest.mark.software
@@ -161,6 +183,19 @@ def test_tracer_rows_per_element_and_for_the_pipeline_in_ms():
     assert rows[2] == {"ts_ms": 1000.0, "kind": "pipeline", "element": "libcamerasrc0 -> fakesink0", "ms": 6.0}
     assert len(rows) == 6
     assert ca.parse_tracer("latency, time=(guint64)abc\nnothing here\n") == []
+
+
+@pytest.mark.software
+def test_pad_timing_rows_per_element_the_pipeline_and_the_camera_and_its_status():
+    text = pad_log(frames=2)
+    rows = ca.parse_pad_timing(text)
+    assert rows[0] == {"ts_ms": 1000.0, "kind": "element", "element": "videoflip0", "ms": 1.0}
+    assert rows[1] == {"ts_ms": 1000.0, "kind": "pipeline", "element": "libcamerasrc0 -> fakesink0", "ms": 3.0}
+    assert rows[2]["kind"] == "camera" and len(rows) == 6
+    assert ca.pad_timing_status(text) == ("EOS", "")
+    assert ca.pad_timing_status(f"{ca.PAD_TAG}\tERROR\tInternal data stream error") == ("ERROR", "Internal data stream error")
+    assert ca.pad_timing_status("nothing") == (None, "")
+    assert ca.parse_pad_timing(f"{ca.PAD_TAG}\telement\tx\tabc\t1\n{ca.PAD_TAG}\tother\tx\t1\t1\n") == []
 
 
 @pytest.mark.software
@@ -200,7 +235,7 @@ def test_libcamera_keeps_the_mode_selection_once_without_the_log_prefix():
     assert sel == ["libcamera v0.7.2+rpt20250903",
                    "Sensor: /base/soc/i2c0mux/i2c@1/imx290@1a - Selected sensor format: 1920x1080-SRGGB10_1X10 "
                    "- Selected unicam format: 1920x1080-pRAA",
-                   "configuring streams: (0) 480x270-NV12"]
+                   "configuring streams: (0) 480x270-RGB888"]
     assert ca.libcamera_selected(None) == []
 
 
@@ -218,10 +253,14 @@ def test_the_pipeline_is_the_robots_with_a_silent_fakesink():
 # =============================================================================
 
 class FakePi:
-    """The Pi's tools: run() answers from canned output; launch() writes what gst-launch would."""
-    def __init__(self, gst_v=GST_V, trace=None, dot=True, graphviz=True):
-        self.gst_v, self.trace, self.dot, self.graphviz = gst_v, trace if trace is not None else tracer_log(), dot, graphviz
-        self.calls, self.launched = [], None
+    """
+    The Pi's tools: run() answers from canned output; launch() writes what
+    gst-launch would (the caps run), or answers as pad_timing.py (the timing
+    run).
+    """
+    def __init__(self, gst_v=GST_V, pad=None, dot=True, graphviz=True):
+        self.gst_v, self.pad, self.dot, self.graphviz = gst_v, pad if pad is not None else pad_log(), dot, graphviz
+        self.calls, self.launched, self.timed = [], None, None
 
     def run(self, argv):
         self.calls.append(argv)
@@ -239,8 +278,10 @@ class FakePi:
         return 0, f"{argv[0]} output"
 
     def launch(self, argv, env, duration_s):
+        if argv[0] != "gst-launch-1.0":
+            self.timed = (argv, env, duration_s)
+            return 0, self.pad
         self.launched = (argv, env, duration_s)
-        Path(env["GST_DEBUG_FILE"]).write_text(self.trace)
         Path(env["LIBCAMERA_LOG_FILE"]).write_text(LIBCAMERA_LOG)
         if self.dot:
             d = Path(env["GST_DEBUG_DUMP_DOT_DIR"])
@@ -264,7 +305,7 @@ def meminfo(tmp_path):
 
 
 @pytest.mark.software
-def test_record_runs_every_probe_and_the_pipeline_with_the_tracer_and_logs_on(tmp_path):
+def test_record_runs_every_probe_the_caps_run_with_its_logs_on_and_the_timing_run(tmp_path):
     pi = FakePi()
     out = tmp_path / "anatomy"
     res = ca.record(out, 7.0, {"exposure-value": -1}, run=pi.run, launch=pi.launch,
@@ -274,33 +315,41 @@ def test_record_runs_every_probe_and_the_pipeline_with_the_tracer_and_logs_on(tm
     assert dur == 7.0 + ca.STARTUP_S and argv[-1] == f"num-buffers={7 * FPS}"
     assert all(" " not in a for a in argv[3:]), "a space inside one argument: gst-launch reads it as a syntax error"
     assert "exposure-value=-1" in argv[3:]
-    assert env["GST_TRACERS"] == ca.GST_TRACERS and env["GST_DEBUG"] == "GST_TRACER:7"
+    assert "GST_TRACERS" not in env                                                  # the tracer stalls libcamerasrc on the Pi
     assert env["LIBCAMERA_LOG_LEVELS"] == ca.LIBCAMERA_LOG_LEVELS
+    targv, _, tdur = pi.timed                                                       # the same pipeline, under the probes
+    assert targv == [sys.executable, str(ca.PAD_TIMING), res["pipeline"]] and tdur == dur
+    assert res["pad_timing"]["status"] == "EOS" and not res["pad_timing"]["interrupted"]
     assert ["vcgencmd", "measure_clock", "isp"] in pi.calls and ["v4l2-ctl", "--list-devices"] in pi.calls
     assert res["vc"]["clock_isp"] == 3e8 and res["vc"]["mem_gpu"] == 64.0 and res["vc"]["cma_free_mb"] == 196.0
     assert "clock_version" not in res["vc"] and "version" not in res["vc"]
     assert [m["driver"] for m in res["media"]] == ["unicam", "bcm2835-isp"]
-    assert res["caps"][0]["format"] == "NV12" and res["libcamera"]
-    assert {s["element"] for s in res["latency"]} == {"videoconvert0", "videoflip0", "libcamerasrc0 -> fakesink0"}
+    assert res["caps"][0]["format"] == "BGR" and res["caps_from"] == "gst_launch.txt" and res["libcamera"]
+    assert {(s["kind"], s["element"]) for s in res["latency"]} == {
+        ("element", "videoflip0"), ("pipeline", "libcamerasrc0 -> fakesink0"), ("camera", "libcamerasrc0")}
     for name in ("summary.txt", "anatomy.json", "latency.csv", "media0.txt", "media1.dot", "gst_launch.txt",
-                 "gst_pipeline.dot", "vc_clock_isp.txt", "uname.txt"):
+                 "pad_timing.txt", "gst_pipeline.dot", "vc_clock_isp.txt", "uname.txt"):
         assert (out / name).exists(), name
     assert (out / "gst_pipeline.dot").read_text() == "digraph b {}"                 # the PAUSED_PLAYING dump
     assert res["pngs"] == ["media0.png", "media1.png", "gst_pipeline.png"]
     assert json.loads((out / "anatomy.json").read_text())["caps"] == res["caps"]
     with open(out / "latency.csv") as f:
         rows = list(csv.DictReader(f))
-    assert rows[0]["element"] == "videoconvert0" and len(rows) == 63
+    assert rows[0]["element"] == "videoflip0" and len(rows) == 63
+    assert not (out / "gst_trace.log").exists()
 
 
 @pytest.mark.software
 def test_videoconvert_and_videoflip_over_the_threshold_earn_a_finding_naming_the_isp_format(tmp_path):
-    pi = FakePi(trace=tracer_log(conv_ms=3.0, flip_ms=1.0))
+    # a pipeline that still converts on the ARM: the ISP hands over NV12
+    nv12 = GST_V.replace("format=(string)BGR, width=(int)480, height=(int)270, colorimetry", "format=(string)NV12, "
+                         "width=(int)480, height=(int)270, colorimetry")
+    pi = FakePi(gst_v=nv12, pad=pad_log(conv_ms=3.0, flip_ms=1.0))
     res = ca.record(tmp_path / "a", 1.0, run=pi.run, launch=pi.launch, media_glob=media_devs(tmp_path),
                     meminfo=meminfo(tmp_path))
     (f,) = [x for x in res["findings"] if "videoconvert" in x]
     assert "take 4.1 ms of every frame from NV12" in f and f"{100 * 4.1 / (1000 / FPS):.0f}%" in f
-    quick = FakePi(trace=tracer_log(conv_ms=0.5, flip_ms=0.5))
+    quick = FakePi(pad=pad_log(flip_ms=0.5))                                         # the robot's: videoflip alone
     res = ca.record(tmp_path / "b", 1.0, run=quick.run, launch=quick.launch, media_glob=str(tmp_path / "none*"),
                     meminfo=meminfo(tmp_path))
     assert not any("videoconvert" in x for x in res["findings"])
@@ -309,7 +358,7 @@ def test_videoconvert_and_videoflip_over_the_threshold_earn_a_finding_naming_the
 
 @pytest.mark.software
 def test_a_slow_pipeline_and_a_full_cma_pool_are_findings(tmp_path):
-    pi = FakePi(trace=tracer_log(period_ms=100.0, conv_ms=0.1, flip_ms=0.1))
+    pi = FakePi(pad=pad_log(period_ms=100.0, flip_ms=0.1))
     mi = tmp_path / "meminfo"
     mi.write_text("CmaTotal: 262144 kB\nCmaFree: 10240 kB\n")
     res = ca.record(tmp_path / "a", 1.0, run=pi.run, launch=pi.launch, media_glob=media_devs(tmp_path), meminfo=mi)
@@ -319,12 +368,11 @@ def test_a_slow_pipeline_and_a_full_cma_pool_are_findings(tmp_path):
 
 @pytest.mark.software
 def test_no_frames_says_the_camera_may_be_busy(tmp_path):
-    pi = FakePi(trace="", dot=False)
+    pi = FakePi(pad=pad_log(frames=0), dot=False)
     res = ca.record(tmp_path / "a", 1.0, run=pi.run, launch=pi.launch, media_glob=media_devs(tmp_path),
                     meminfo=meminfo(tmp_path))
-    assert res["findings"] == ["the pipeline negotiated its caps but no buffer was traced: either no frame reached "
-                               "the sink, or the latency tracer isn't here (gst-inspect-1.0 coretracers). See "
-                               "gst_launch.txt and gst_trace.log"]
+    assert res["findings"] == ["the pipeline negotiated its caps but no buffer was timed: either no frame reached "
+                               "the sink, or the pad-timing run failed. See gst_launch.txt and pad_timing.txt"]
     assert "gst_pipeline.png" not in res["pngs"]
 
 
@@ -345,9 +393,9 @@ def test_a_gst_launch_error_is_quoted_and_a_busy_camera_named():
 def test_element_times_without_a_pipeline_time_still_mean_frames_flowed():
     res = {"missing": [], "caps": [], "vc": {}, "gst_errors": [],
            "latency": [{"kind": "element", "element": "videoconvert0", "frames": 40, "median_ms": 3.0}]}
-    assert ca.frames_flowed(res) and "frames flowed (40 element-latency entries)" in ca.findings(res)[0]
+    assert ca.frames_flowed(res) and ca.findings(res)[0].startswith("element times recorded but no source-to-sink time")
     res["latency"], res["caps"] = [], [{"element": "libcamerasrc0"}]
-    assert "negotiated its caps but no buffer was traced" in ca.findings(res)[0]
+    assert "negotiated its caps but no buffer was timed" in ca.findings(res)[0]
     res["caps"] = []
     assert ca.findings(res)[0].startswith("no frame reached the sink and gst-launch reported no error")
     res.update(duration_s=3.0, gst_playing=True)
@@ -391,8 +439,10 @@ def test_summary_shows_the_route_caps_times_videocore_and_libcamera(tmp_path):
                     meminfo=meminfo(tmp_path))
     text = "\n".join(ca.summary_lines(res))
     assert "imx290 10-001a [SRGGB10_1X10 1920x1080] [/dev/v4l-subdev0] -> unicam-image [/dev/video0]" in text
-    assert "libcamerasrc0.src" in text and "NV12" in text
-    assert text.index("pipeline libcamerasrc0 -> fakesink0") < text.index("videoconvert0 ")   # the pipeline first
+    assert "libcamerasrc0.src" in text and "BGR" in text
+    # the pipeline first, then sensor -> first pad, then the elements
+    assert (text.index("pipeline libcamerasrc0 -> fakesink0") < text.index("sensor -> libcamerasrc0")
+            < text.index("videoflip0 "))
     assert "clocks MHz: arm 1000  core 400  isp 300  v3d 300" in text and "h264" not in text.split("clocks")[1].split("\n")[0]
     assert "core 1.200 V   memory arm 448 MB, gpu 64 MB   CMA 196 of 256 MB free" in text
     assert "Selected sensor format: 1920x1080-SRGGB10_1X10" in text
@@ -459,28 +509,28 @@ def test_launch_for_marks_a_run_it_had_to_stop_and_not_one_that_ended(tmp_path):
 
 @pytest.mark.software
 def test_a_stalled_recording_is_bisected_to_the_setting_that_stalls_it(tmp_path):
-    """The 2026-10-12 Pi: the traced run stuck in PAUSED; by hand, with none of the tool's settings, it ran."""
-    pi = FakePi(trace="")
+    """The 2026-10-12 Pi: the recording stuck in PAUSED; by hand, with none of the tool's settings, it ran."""
+    pi = FakePi()
     runs = []
 
     def launch(argv, env, duration_s):
-        runs.append(sorted(k for k in ("GST_TRACERS", "GST_DEBUG_DUMP_DOT_DIR", "LIBCAMERA_LOG_FILE") if k in env))
-        if "GST_TRACERS" in env:
-            if "GST_DEBUG_FILE" in env:
-                Path(env["GST_DEBUG_FILE"]).write_text("")
+        if argv[0] != "gst-launch-1.0":
+            return 0, pad_log()                     # the timing run has none of the settings: it runs
+        runs.append(sorted(k for k in ("GST_DEBUG_DUMP_DOT_DIR", "LIBCAMERA_LOG_FILE") if k in env))
+        if "GST_DEBUG_DUMP_DOT_DIR" in env:
             return 130, f"Setting pipeline to PAUSED ...\n{ca.INTERRUPTED} Ctrl-C after {duration_s:.0f} s\n"
         return 0, "Setting pipeline to PLAYING ...\nGot EOS from element \"pipeline0\".\n"
     res = ca.record(tmp_path / "a", 2.0, run=pi.run, launch=launch, media_glob=media_devs(tmp_path),
                     meminfo=meminfo(tmp_path))
-    assert res["stall_bisect"] == {"none": True, "latency tracer": False, "dot dumps": True, "libcamera log": True}
-    assert runs[1:] == [[], ["GST_TRACERS"], ["GST_DEBUG_DUMP_DOT_DIR"], ["LIBCAMERA_LOG_FILE"]]
-    assert res["findings"][0].startswith("gst-launch stalled with the tool's latency tracer set, and runs without")
-    assert ca.frames_flowed(res) and (tmp_path / "a" / "gst_bisect_latency_tracer.txt").exists()
+    assert res["stall_bisect"] == {"none": True, "dot dumps": False, "libcamera log": True}
+    assert runs[1:] == [[], ["GST_DEBUG_DUMP_DOT_DIR"], ["LIBCAMERA_LOG_FILE"]]
+    assert res["findings"][0].startswith("gst-launch stalled with the tool's dot dumps set, and runs without")
+    assert ca.frames_flowed(res) and (tmp_path / "a" / "gst_bisect_dot_dumps.txt").exists()
 
 
 @pytest.mark.software
 def test_a_stall_even_with_nothing_set_says_the_launch_itself_differs(tmp_path):
-    pi = FakePi(trace="")
+    pi = FakePi()
 
     def launch(argv, env, duration_s):
         return 130, f"Setting pipeline to PAUSED ...\n{ca.INTERRUPTED} Ctrl-C after {duration_s:.0f} s\n"

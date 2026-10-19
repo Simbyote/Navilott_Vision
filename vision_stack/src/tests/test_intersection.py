@@ -23,7 +23,7 @@ import math
 import pytest
 
 from src.navigation.intersection import (
-    MAX_APPROACH_DEG, ADVANCE_MS, LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
+    ADVANCE_CM, MAX_APPROACH_DEG, ADVANCE_MS, MAX_CROSS_CM, TILT_TO_HEADING, TILT_ZERO_DEG, LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
     REASON_TURNING, RIGHT_TURN, RIGHT_TURN_MAX_MS, SOURCE_HEADING_HOLD, SOURCE_TURN, STAGE_ADVANCE, STAGE_EXIT,
     STAGE_TO_LINE, STAGE_TURN, TURN_TARGET_DEG, TWO_BOUNDARY_FRAMES, IntersectionRule,
 )
@@ -80,6 +80,11 @@ def active(out):
 def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
+    assert RIGHT_TURN_MAX_MS == 2400
+    # Distance and tilt correction are opt-in until calibrated: None keeps the timed advance and exit,
+    # and no approach correction
+    assert (ADVANCE_CM, MAX_CROSS_CM, TILT_TO_HEADING) == (None, None, None)
+    assert TILT_ZERO_DEG == 0.0 and MAX_APPROACH_DEG == 15.0
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 

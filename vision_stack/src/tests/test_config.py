@@ -243,6 +243,18 @@ def test_measured_takes_stop_lines_within_2_degrees_gates_ghost_signs_and_keeps_
 
 
 @pytest.mark.software
+def test_measured_estimation_is_the_defaults_plus_the_gyro_bias_and_the_odometry_calibration():
+    from src.estimation.estimation import Phase3Config
+    from src.estimation.odometry import load_odometry
+    from src.params import ODOMETRY_PATH
+    assert config.MEASURED_ESTIMATION == Phase3Config(gyro_bias_dps=config.GYRO_BIAS_DPS,
+                                                      cm_per_count=load_odometry(ODOMETRY_PATH))
+    # Uncalibrated, distances stay unset and every distance rule keeps its timed fallback
+    if not ODOMETRY_PATH.exists():
+        assert config.MEASURED_ESTIMATION.cm_per_count is None
+
+
+@pytest.mark.software
 def test_one_gyro_bias_for_phase_3_navigation_and_the_drive_trial():
     assert config.MEASURED_ESTIMATION.gyro_bias_dps == config.MANEUVER.gyro_bias_dps == config.GYRO_BIAS_DPS
     assert config.GYRO_BIAS_DPS == -1.1          # the raw reading at rest; IMU_YAW_SIGN is 1
