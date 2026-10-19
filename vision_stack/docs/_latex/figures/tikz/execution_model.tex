@@ -1,0 +1,54 @@
+% figures/tikz/execution_model.tex -- threads, buffers, data flow and the safety path
+% needs: \usetikzlibrary{positioning,arrows.meta,fit,calc}
+\begin{tikzpicture}[
+    font=\footnotesize, >={Stealth[length=1.8mm]},
+    th/.style={draw, rounded corners=1.5pt, align=center, minimum height=9mm, text width=24mm, inner sep=2pt, fill=white},
+    py/.style={th, line width=0.8pt},
+    nat/.style={th, dashed},
+    buf/.style={draw, align=center, inner sep=2pt, font=\scriptsize, fill=black!8, text width=15mm},
+    hw/.style={draw, align=center, minimum height=8mm, text width=19mm, inner sep=2pt, fill=black!15},
+    lab/.style={font=\scriptsize, align=center, inner sep=1.5pt}]
+
+    % --- threads of the Python process ------------------------------------------
+    \node[nat] (cvw) at (0,2.3)    {\textbf{OpenCV worker}\\image operations (C++)};
+    \node[nat] (gst) at (-5,0.4)   {\textbf{GStreamer / libcamera}\\capture, flip (C)};
+    \node[py]  (main) at (0,0.4)   {\textbf{main}\\frame loop, Phases 1--4};
+    \node[py]  (bat) at (5,0.4)    {\textbf{battery}\\pack voltage, 1\,Hz};
+    \node[py]  (hub) at (-5,-1.8)  {\textbf{sensor-hub}\\IMU + counts, 100\,Hz};
+    \node[py]  (wd)  at (5,-1.8)   {\textbf{watchdog}\\brakes after 0.5\,s};
+    \node[py]  (cb)  at (-5,-3.6)  {\textbf{pigpio-cb}\\edges $\rightarrow$ counts};
+    \node[buf] (sink) at (-2.5,0.4)  {appsink:\\newest frame};
+    \node[buf] (deq)  at (-2.5,-0.8) {readings,\\up to 2\,s};
+
+    \draw[->] (gst) -- (sink);
+    \draw[->] (sink) -- (main);
+    \draw[->] (hub.north) |- (deq.west);
+    \draw[->] (deq.east) -| ([xshift=-7mm]main.south);
+    \draw[->] (cb) -- node[lab, right]{counts} (hub);
+    \draw[<->, densely dotted] (cvw) -- (main);
+    \draw[->] (bat) -- node[lab, above]{voltage} (main);
+    \draw[->] ([yshift=-3mm]main.east) -| (2.5,-1.8) node[lab, pos=0.75, left]{time of last\\command} -- (wd.west);
+
+    \node[draw, rounded corners=3pt, inner sep=7pt, fit=(cvw)(gst)(bat)(cb)(wd)(sink)(deq)(main),
+        label={[font=\scriptsize\bfseries, anchor=south west]north west:Python process: one interpreter, one GIL}] (proc) {};
+
+    % --- pigpiod and the hardware -------------------------------------------------
+    \node[th, line width=0.8pt, fill=black!4] (pg) at (0,-5.5) {\textbf{pigpiod}\\separate process:\\pins, PWM, edges};
+    \node[hw] (cam) at (-5.2,-7.7) {camera\\CSI-2};
+    \node[hw] (imu) at (-2.6,-7.7) {MPU-6050\\I\textsuperscript{2}C};
+    \node[hw] (mot) at (0,-7.7)    {TB6612\\+ motors};
+    \node[hw] (enc) at (2.6,-7.7)  {encoders};
+    \node[hw] (ads) at (5.2,-7.7)  {ADS1115\\I\textsuperscript{2}C};
+
+    \draw[->] (main.south) -- node[lab, right, pos=0.62]{duty per wheel,\\or brake} (pg.north);
+    \draw[->] (wd.south) |- node[lab, pos=0.8, above]{brake} ([yshift=2mm]pg.east);
+    \draw[->] (enc.north) |- node[lab, pos=0.8, below]{edges} ([yshift=-2mm]pg.east);
+    \draw[->] (pg.west) -| node[lab, pos=0.3, above]{edge events} (cb.south);
+    \draw[->] (pg) -- node[lab, right]{PWM} (mot);
+    \draw[->] (cam.west) -| (-7.3,0) |- (gst.west);
+    \draw[->] (imu.north) |- (-6.75,-6.6) |- (hub.west);
+    \draw[->] (ads.east) -| (7.3,0) |- (bat.east);
+
+    \node[font=\scriptsize, anchor=north] at ([yshift=-4mm]mot.south)
+    {heavy outline: Python thread, needs the GIL \quad dashed: native thread, no GIL \quad shaded: buffer};
+\end{tikzpicture}
