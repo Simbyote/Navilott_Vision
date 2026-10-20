@@ -121,10 +121,19 @@ class StopLineTracker:
         self._sighting: float | None = None       # the cm it was last measured at
 
     def _locate(self, packet: EstimationPacket) -> None:
-        """A fresh sighting's cm puts the line at an odometry position. A held cm (Phase 3 repeats it through a missed frame) isn't fresh."""
+        """
+        A fresh sighting's cm puts the line at an odometry position. A held
+        cm (Phase 3 repeats it through a missed frame) isn't fresh, and
+        neither is a clipped one (distance_px 0: the line runs off the view
+        bottom, so its near edge is somewhere under the view's edge, ~9-10 cm
+        ahead, which the stop-line table reports as 0); the last whole
+        sighting stays the measurement.
+        """
         if packet.stop_line_tilt_deg is not None:
             self._tilts.append(packet.stop_line_tilt_deg)
         cm, odo = packet.stop_line_distance_cm, packet.distance_cm
+        if packet.stop_line_distance_px == 0:
+            return
         if cm is not None and odo is not None and cm != self._sighting:
             self._line_at, self._sighting = odo + cm, cm
 

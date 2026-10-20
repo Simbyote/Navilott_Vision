@@ -225,6 +225,17 @@ def test_a_held_distance_isnt_a_fresh_sighting():
 
 
 @pytest.mark.software
+def test_a_clipped_sighting_doesnt_move_the_line_to_the_robot():
+    # The near edge reaches the view bottom at ~9 cm: the line reads clipped, 0 px and 0 cm, for as many
+    # frames as the tape is wide. The line stays where the last whole sighting (11 cm at odometry 9) put it
+    t = StopLineTracker(reach_cm=5.0)
+    for i, (px, cm) in enumerate([(30.0, 20.0), (20.0, 17.0), (12.0, 14.0), (5.0, 11.0), (0.0, 0.0), (0.0, 0.0)]):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=True, stop_line_distance_px=px,
+                        stop_line_distance_cm=cm, distance_cm=i * 3.0))
+    assert t.left_cm == pytest.approx(20.0 - 15.0)          # 5 cm left at odometry 15, not 0
+
+
+@pytest.mark.software
 @pytest.mark.parametrize("line_cm, odometry", [(None, True), (12.0, False)])
 def test_without_a_line_cm_or_odometry_it_is_timed(line_cm, odometry):
     t = StopLineTracker(reach_cm=5.0)
