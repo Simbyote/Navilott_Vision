@@ -42,7 +42,7 @@ from src.estimation.odometry import load_odometry
 from src.maneuver import ManeuverConfig
 from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
-    ODOMETRY_PATH, STOP_LINE_TABLE_PATH,
+    NOMINAL_CM_PER_COUNT, ODOMETRY_PATH, STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, load_color_config
 from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
@@ -178,9 +178,11 @@ GYRO_BIAS_DPS = -1.1
 
 # Phase 3: estimation.Phase3Config's defaults until course runs tune them,
 # with this robot's gyro bias and odometry scale (calibration/odometry.json;
-# without it every distance_cm is None). lane_roi_width_px stays None:
-# Pipeline derives it from MEASURED's lane ROI when cm_per_px is set.
-MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS, cm_per_count=load_odometry(ODOMETRY_PATH))
+# without it params' NOMINAL_CM_PER_COUNT, from the wheel and the gearbox).
+# lane_roi_width_px stays None: Pipeline derives it from MEASURED's lane ROI
+# when cm_per_px is set.
+MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS,
+                                   cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
 
 # maneuver_linker's drive trial: ManeuverConfig's placeholders until course
 # runs set them. leg_counts in particular is a guess until counts per meter

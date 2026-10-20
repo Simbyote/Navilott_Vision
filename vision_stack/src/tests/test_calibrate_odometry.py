@@ -87,3 +87,16 @@ def test_main_writes_the_scale_the_pipeline_reads(tmp_path):
     rc = co.main(["--trials", "1", "--out", str(tmp_path / "none.json")], hardware=lambda: (w.counts, None, lambda: None),
                  ask=asker("q"), say=lambda s: None)
     assert rc == 1 and not (tmp_path / "none.json").exists()
+
+
+@pytest.mark.software
+def test_the_report_says_how_far_the_measurement_is_from_the_nominal_scale():
+    # 700 counts over 10 turns' 103.67 cm: exactly the nominal 3.3 cm wheel at 700 counts/turn
+    s = co.summarize([co.trial(103.67, (0, 0), (7000, 7000))])
+    n = co.against_nominal(s)
+    assert n["vs_nominal_pct"] == pytest.approx(0.0, abs=0.1) and n["counts_per_rev"] == pytest.approx(700, abs=1)
+    assert "vs nominal     +0%" in co.report(s) or "vs nominal     -0%" in co.report(s)
+    squashed = co.summarize([co.trial(100.0, (0, 0), (7000, 7000))])          # 3.5% short: a 3.18 cm wheel
+    assert co.against_nominal(squashed)["effective_diameter_cm"] == pytest.approx(3.183, abs=0.002)
+    wrong = co.summarize([co.trial(103.67, (0, 0), (2350, 2350))])            # a third the counts: not 100:1
+    assert "the gear ratio or the decoding" in co.report(wrong)

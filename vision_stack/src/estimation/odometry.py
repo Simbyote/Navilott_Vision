@@ -79,24 +79,30 @@ class Odometer:
         return self._last
 
 
-def load_odometry(path: str | Path) -> float | None:
+def load_odometry(path: str | Path, nominal: float | None = None) -> float | None:
     """
     cm per encoder count from calibration/odometry.json.
 
+    Inputs:
+        nominal: The scale to fall back on without a usable file (params'
+            NOMINAL_CM_PER_COUNT, from the wheel and the gearbox); None
+            leaves distances off.
     Outputs:
-        cm_per_count; None (logged) when the file is missing or unreadable,
-        so the robot runs without odometry rather than not at all.
+        cm_per_count; nominal (logged) when the file is missing or
+        unreadable, so the robot runs on the nominal scale, or without
+        odometry, rather than not at all.
     """
     p = Path(path)
+    fallback = "the nominal scale" if nominal is not None else "distances are off"
     if not p.exists():
-        log.info("no odometry calibration at %s: distances are off (scripts/calibrate_odometry.py)", p)
-        return None
+        log.info("no odometry calibration at %s: %s (scripts/calibrate_odometry.py)", p, fallback)
+        return nominal
     try:
         value = float(json.loads(p.read_text())["cm_per_count"])
     except (ValueError, KeyError, TypeError) as e:
-        log.warning("odometry calibration %s unreadable (%s): distances are off", p, e)
-        return None
+        log.warning("odometry calibration %s unreadable (%s): %s", p, e, fallback)
+        return nominal
     if value <= 0.0:
-        log.warning("odometry calibration %s has cm_per_count %s: distances are off", p, value)
-        return None
+        log.warning("odometry calibration %s has cm_per_count %s: %s", p, value, fallback)
+        return nominal
     return value

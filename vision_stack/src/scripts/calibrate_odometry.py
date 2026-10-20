@@ -31,11 +31,12 @@ Flow:
 """
 import argparse
 import json
+import math
 import time
 from datetime import datetime
 from pathlib import Path
 
-from src.params import ODOMETRY_PATH
+from src.params import ENCODER_COUNTS_PER_REV, NOMINAL_CM_PER_COUNT, ODOMETRY_PATH, WHEEL_DIAMETER_CM
 
 DEFAULT_CM = 100.0
 DEFAULT_TRIALS = 3
@@ -166,12 +167,29 @@ def run(counts, ask=input, say=print, cm: float = DEFAULT_CM, trials: int = DEFA
     return done
 
 
+def against_nominal(s: dict, nominal: float = NOMINAL_CM_PER_COUNT) -> dict:
+    """
+    The measured scale against the nominal one: the difference in %, and
+    what it means for the wheel (its effective diameter at the nominal
+    counts per turn) and the gearbox (counts per turn at the nominal wheel).
+    """
+    cpc = s["cm_per_count"]
+    return {"vs_nominal_pct": round(100.0 * (cpc - nominal) / nominal, 1),
+            "effective_diameter_cm": round(cpc * ENCODER_COUNTS_PER_REV / math.pi, 3),
+            "counts_per_rev": round(math.pi * WHEEL_DIAMETER_CM / cpc, 1)}
+
+
 def report(s: dict) -> str:
     """The summary as printed."""
+    n = against_nominal(s)
     return "\n".join([
         f"cm per count   {s['cm_per_count']:.6f}  ({s['counts_per_cm']:.3f} counts/cm)",
         f"each wheel     left {s['left_counts_per_cm']:.3f}, right {s['right_counts_per_cm']:.3f} counts/cm",
         f"trials         {len(s['trials'])}, spread {s['spread_pct']:g}% between the largest and smallest",
+        f"vs nominal     {n['vs_nominal_pct']:+g}% ({WHEEL_DIAMETER_CM:g} cm wheel, {ENCODER_COUNTS_PER_REV} counts/turn): "
+        f"a {n['effective_diameter_cm']:g} cm wheel, or {n['counts_per_rev']:g} counts/turn"
+        + ("  (off by 2x or more: the gear ratio or the decoding, not the tyre)"
+           if abs(n["vs_nominal_pct"]) >= 50 else ""),
     ])
 
 

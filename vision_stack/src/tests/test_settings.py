@@ -43,6 +43,12 @@ def test_threads_perception_and_the_collector_as_the_robot_runs_them():
     assert params.GC_DISABLE_IN_RUN is True and params.GC_COLLECT_EVERY == 200
 
 
+def test_the_nominal_odometry_scale_is_the_wheel_over_the_counts_per_turn():
+    # 3.3 cm wheels; 7-pulse encoders behind 100:1 N20s (300 RPM at 12 V)
+    assert (params.WHEEL_DIAMETER_CM, params.ENCODER_COUNTS_PER_REV) == (3.3, 700)
+    assert params.NOMINAL_CM_PER_COUNT == pytest.approx(0.01481, abs=1e-5)
+
+
 def test_the_bus_addresses_and_rates_are_the_boards():
     assert (params.IMU_I2C_ADDRESS, params.ADS1115_I2C_ADDRESS) == (0x68, 0x48)    # AD0 low; ADDR to GND
     assert params.SENSOR_RATE_HZ == params.IMU_RATE_HZ == 100.0

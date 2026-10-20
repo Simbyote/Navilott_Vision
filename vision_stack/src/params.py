@@ -14,6 +14,7 @@ Purpose:
 Main package:
     None; module-level constants only.
 """
+import math
 from pathlib import Path
 
 # --- Camera ---
@@ -108,6 +109,17 @@ SENSOR_HISTORY_S = 2.0
 # brakes the motors on its own. 0.5 s = 10 missed frames: clear of any
 # frame the loop has taken in a run, short enough to stop within a few cm.
 MOTOR_WATCHDOG_S = 0.5
+
+# --- Wheels and encoders (estimation/odometry.py) ---
+# The nominal scale, used until scripts/calibrate_odometry.py writes
+# ODOMETRY_PATH: a 3.3 cm wheel, and 700 counts per wheel turn (a 7-pulse
+# encoder behind 100:1 N20s, sold as 300 RPM at 12 V; EncoderReader counts
+# one edge per pulse). It agrees with the drive's own numbers: CPS_PER_DUTY
+# 3000 is ~260 RPM at full duty, ~1166 counts/s at 0.40 is ~17 cm/s.
+# Measured beats this: tyres squash and the gearbox is the seller's word
+WHEEL_DIAMETER_CM = 3.3
+ENCODER_COUNTS_PER_REV = 700
+NOMINAL_CM_PER_COUNT = math.pi * WHEEL_DIAMETER_CM / ENCODER_COUNTS_PER_REV     # ~0.0148
 
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"

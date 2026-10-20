@@ -246,12 +246,13 @@ def test_measured_takes_stop_lines_within_2_degrees_gates_ghost_signs_and_keeps_
 def test_measured_estimation_is_the_defaults_plus_the_gyro_bias_and_the_odometry_calibration():
     from src.estimation.estimation import Phase3Config
     from src.estimation.odometry import load_odometry
-    from src.params import ODOMETRY_PATH
+    from src.params import NOMINAL_CM_PER_COUNT, ODOMETRY_PATH
     assert config.MEASURED_ESTIMATION == Phase3Config(gyro_bias_dps=config.GYRO_BIAS_DPS,
-                                                      cm_per_count=load_odometry(ODOMETRY_PATH))
-    # Uncalibrated, distances stay unset and every distance rule keeps its timed fallback
+                                                      cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
+    # Uncalibrated, distances run on the wheel and gearbox's nominal scale; the
+    # distance rules stay timed until their *_CM settings are set
     if not ODOMETRY_PATH.exists():
-        assert config.MEASURED_ESTIMATION.cm_per_count is None
+        assert config.MEASURED_ESTIMATION.cm_per_count == NOMINAL_CM_PER_COUNT
 
 
 @pytest.mark.software

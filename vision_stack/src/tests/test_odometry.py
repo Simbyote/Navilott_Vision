@@ -68,6 +68,10 @@ def test_the_calibration_file_gives_the_scale(tmp_path):
                 json.dumps({"cm_per_count": "x"})):
         p.write_text(bad)
         assert load_odometry(p) is None
+        assert load_odometry(p, nominal=0.0148) == 0.0148               # unusable: the nominal scale
+    assert load_odometry(tmp_path / "missing.json", nominal=0.0148) == 0.0148
+    p.write_text(json.dumps({"cm_per_count": 0.0213}))
+    assert load_odometry(p, nominal=0.0148) == 0.0213                     # measured beats nominal
 
 
 @pytest.mark.software
@@ -95,5 +99,5 @@ def test_phase_3_puts_the_distances_in_the_packet():
 @pytest.mark.software
 def test_the_robots_tuning_reads_the_calibration_file():
     from src import config
-    from src.params import ODOMETRY_PATH
-    assert config.MEASURED_ESTIMATION.cm_per_count == load_odometry(ODOMETRY_PATH)
+    from src.params import NOMINAL_CM_PER_COUNT, ODOMETRY_PATH
+    assert config.MEASURED_ESTIMATION.cm_per_count == load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT)

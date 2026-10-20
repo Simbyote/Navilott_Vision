@@ -155,7 +155,7 @@ Using the encoder readings to control anything (checking that a steering correct
 
 It uses the cumulative counts, never counts per second × frame time, so a late or long frame loses nothing: the counts went on while the loop was busy, and the next frame catches up. A frame without counts holds the last distance.
 
-`cm_per_count` comes from `calibration/odometry.json`, measured by pushing or driving the robot a taped distance (`guides/calibrate_odometry.md`); `MEASURED_ESTIMATION` reads it at startup. Without the file, or without encoders, every distance is `None`, and nothing may drive by it.
+`cm_per_count` comes from `calibration/odometry.json`, measured by pushing or driving the robot a taped distance (`guides/calibrate_odometry.md`); `MEASURED_ESTIMATION` reads it at startup. Without the file it is `params.NOMINAL_CM_PER_COUNT`, from the wheel's 3.3 cm and 700 counts per turn; without encoders every distance is `None`. Nothing drives by distance until its `*_CM` setting is set.
 
 ---
 

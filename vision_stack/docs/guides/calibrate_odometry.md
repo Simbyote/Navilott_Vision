@@ -4,7 +4,7 @@
 
 Odometry turns the wheel encoders' counts into distance driven (`distance_cm` in the packet), so the rules can measure in cm instead of time. It needs one number, **cm per count**. It depends on the wheels (diameter, how much the tyres squash), the gearbox and how the encoders are decoded, so it's measured rather than computed: move the robot a known distance, count, divide.
 
-It writes `calibration/odometry.json`. `MEASURED_ESTIMATION` (`config.py`) reads `cm_per_count` from it when the pipeline starts. Without the file every distance is `None` and the robot runs as before.
+It writes `calibration/odometry.json`. `MEASURED_ESTIMATION` (`config.py`) reads `cm_per_count` from it when the pipeline starts. Without the file it uses the nominal scale in `params.py`: a 3.3 cm wheel (`WHEEL_DIAMETER_CM`) over 700 counts per wheel turn (`ENCODER_COUNTS_PER_REV`: a 7-pulse encoder behind the 100:1, 300 RPM N20s), about 0.0148 cm per count. Measured beats nominal: tyres squash, and the gearbox ratio is the seller's word. Nothing drives by distance until its `*_CM` setting is set either way.
 
 **Code:** `src/scripts/calibrate_odometry.py`, `src/estimation/odometry.py` · **Tests:** `test_calibrate_odometry.py`, `test_odometry.py`
 
@@ -36,6 +36,8 @@ The motors stay off and you roll the robot by hand. The distance is exact and no
 
 Each trial prints both wheels' counts and counts per cm. Use the same point on the robot at both marks (the axle, or the front edge).
 
+No tape measure? Use the wheel: mark it, roll the robot exactly 10 turns, and give that distance, 10 × π × 3.3 = 103.7 cm: `make calib-odometry ARGS="--cm 103.7"`.
+
 ---
 
 ## 2. Drive trials (`--drive S`)
@@ -58,10 +60,12 @@ Push trials and drive trials should agree within a few %. If drive trials read n
 cm per count   0.021277  (47.000 counts/cm)
 each wheel     left 46.800, right 47.200 counts/cm
 trials         3, spread 0.8% between the largest and smallest
+vs nominal     +43.7% (3.3 cm wheel, 700 counts/turn): a 4.741 cm wheel, or 487.3 counts/turn
 ```
 
 - **cm per count** is what odometry uses.
 - **Each wheel** should be within a few %. A trial whose wheels differ by more than 3% is flagged: the push wasn't straight, or a wheel slipped. Redo it.
+- **vs nominal** compares it with the wheel and gearbox's scale, as the wheel diameter that would explain it (at 700 counts per turn) and the counts per turn (at 3.3 cm). A few % is tyre squash and slip. 2× or more (flagged) is the gear ratio or the decoding, not the tyre: set `ENCODER_COUNTS_PER_REV` from the counts per turn.
 - **Spread** is how repeatable the trials were. Under ~2% is good; more means the pushes weren't consistent. Do more trials or a longer distance.
 
 `--dry-run` prints without writing the file.
