@@ -141,7 +141,7 @@ TILT_TO_HEADING: float | None = None
 TILT_ZERO_DEG = 0.0
 # The largest approach angle believed. The geometry's tilt gate (max_tilt_deg)
 # already refuses steeper lines; this caps a wrong scale
-MAX_APPROACH_DEG = 15.0
+MAX_APPROACH_DEG = 10.0
 # ... or after this long if the gyro never gets there (no IMU, a wrong
 # sign): open-loop times (left 2.75 s, right 1.62 s) plus half
 LEFT_TURN_MAX_MS = 4100
