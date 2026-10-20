@@ -78,7 +78,7 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 4000, 500)
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 40, 5500, 500)   # 2026-10-19
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
     # Distance and tilt correction are opt-in until calibrated: None keeps the timed advance and exit,
@@ -211,7 +211,7 @@ def test_it_gives_up_after_max_cross_ms_of_driving():
 @pytest.mark.software
 def test_held_frames_count_toward_neither_ending():
     hold = set(range(REACHED, REACHED + 60))                         # 3 s held at the line
-    after = [{"lane_mode": "two_boundary"}] * (REACHED - LOST + 60) + [{"lane_mode": "none"}] * 100
+    after = [{"lane_mode": "two_boundary"}] * (REACHED - LOST + 60) + [{"lane_mode": "none"}] * (MAX_CROSS_MS // MS + 20)
     _, out = drive(after, held=hold)
     assert active(out)[-1] == REACHED + 60 + MAX_CROSS_MS // MS - 2      # the timeout, not the boundaries
 
@@ -258,7 +258,7 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.50, 0.25))     # 2026-10-12
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.48, 0.73), Command(0.78, 0.25))     # 2026-10-19
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
 

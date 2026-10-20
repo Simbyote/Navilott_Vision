@@ -69,7 +69,7 @@ def test_each_top_edge_is_graded_pass_low_or_rejected_with_its_gate():
     assert (sm["passed"], sm["low"], sm["rejected"]) == (1, 0, 0)
     blob = view._summary(data("horizontal_blob", view))
     assert blob["rejected"] == 1 and blob["entries"][0]["gate"] == "short"
-    steep = view._summary(data("stop_line_too_tilted", view))  # 4 deg: past MEASURED's 2
+    steep = view._summary(data("stop_line_too_tilted", view))  # 5 deg: past MEASURED's 4
     assert steep["rejected"] == 1 and steep["entries"][0]["gate"] == "tilt"
 
 

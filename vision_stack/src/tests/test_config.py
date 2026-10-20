@@ -235,10 +235,10 @@ def test_the_route_file_config_points_at_loads():
 
 
 @pytest.mark.software
-def test_measured_takes_stop_lines_within_2_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
+def test_measured_takes_stop_lines_within_4_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
     assert MEASURED.geometry == GeometryConfig(
-        stop_line=StopLineFilter(max_tilt_deg=2.0),
+        stop_line=StopLineFilter(max_tilt_deg=4.0),                 # 2 until 2026-10-19
         sign=SignContourFilter(aspect_range=(0.6, 1.6), extent_range=(0.68, 0.92), min_letter_share=0.03))
 
 

@@ -89,12 +89,12 @@ TWO_BOUNDARY_FRAMES = 10
 # the robot pressed against the right line). Longer than TWO_BOUNDARY_FRAMES,
 # since one line is weaker evidence than two (~1 s at 20 FPS; 6 until
 # 2026-10-05, raised with it)
-ONE_BOUNDARY_FRAMES = 20
+ONE_BOUNDARY_FRAMES = 40
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # Driving time in STAGE_EXIT before lane keeping takes over anyway; a guess
 # at crossing one intersection, tuned on the mat (3 s 2026-10-01, 4 s
-# 2026-10-05 with the longer boundary counts)
-MAX_CROSS_MS = 4000
+# 2026-10-05 with the longer boundary counts, 5.5 s 2026-10-19)
+MAX_CROSS_MS = 5500
 # ... or this far, by odometry. None: by MAX_CROSS_MS. Set it from a run's
 # stage_cm at the end of timed exits (nav.csv), once odometry is calibrated
 MAX_CROSS_CM: float | None = None
@@ -121,8 +121,8 @@ ADVANCE_CM: float | None = None
 # (wheel_speed.py) the turn asks for these duties' wheel speeds at that
 # voltage (x CPS_PER_DUTY), and finds whatever duty gets them on the day's
 # battery; without encoders it drives these duties as they are
-LEFT_TURN = Command(0.50, 0.73)
-RIGHT_TURN = Command(0.50, 0.25)
+LEFT_TURN = Command(0.48, 0.73)
+RIGHT_TURN = Command(0.78, 0.25)
 # A turn ends once the gyro reads this many degrees turned its way: 90 less
 # the drive's coast after the turn stops (maneuver_linker's 180 turn aims
 # at 171). Tune on the mat: overshoot -> lower, short -> raise

@@ -129,12 +129,14 @@ MEASURED = PipelineConfig(
     color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB, glow = _TRAFFIC_LIGHT_GLOW),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
-    # Stop lines within 2 deg of horizontal (default 20): the near end of a
+    # Stop lines within 4 deg of horizontal (default 20): the near end of a
     # thick diagonal lane line passed for a stop line past an intersection
     # (2026-10-01 run; 15 then); 5 cut the false lines further on the mat
     # (2026-10-05), but still took parts of the intersection itself for stop
     # lines, each counted as another intersection; 2 stopped that (2026-10-07).
-    # The cost: a real line approached more than 2 deg off square is missed
+    # 4 since 2026-10-19: at 2 a real line approached a little off square was
+    # missed (detect-range --set target=line --set angles=... maps where).
+    # The cost: a real line approached more than 4 deg off square is missed
     # Ghost signs (seen on course runs, Oct 2026): a leg or parts of a chair in
     # the background passed as a stop sign now and then, and the robot stopped
     # at a plain stop line. Any solid, roundish red blob reaches 8-9 hull
@@ -143,7 +145,7 @@ MEASURED = PipelineConfig(
     # letters 11-16% white from radius 28 px. First guesses: not yet checked
     # on course frames, against the course's own sign
     geometry = GeometryConfig(
-        stop_line = StopLineFilter(max_tilt_deg = 2.0),
+        stop_line = StopLineFilter(max_tilt_deg = 4.0),
         sign = SignContourFilter(aspect_range = (0.6, 1.6), extent_range = (0.68, 0.92), min_letter_share = 0.03),
     ),
     lane_offset = LaneOffsetConfig(

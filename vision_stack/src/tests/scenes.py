@@ -347,7 +347,7 @@ SCENES = {
                                    stop_line_thickness=12),
     "stop_line_clipped": scene(stop_line=(120, 320, 76)),
     "stop_line_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=1.5),       # inside MEASURED's 2 deg
-    "stop_line_too_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=4.0),   # past it; steeper loses its edge pixels
+    "stop_line_too_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=5.0),   # past it; steeper loses its edge pixels
     "stop_line_faint": _faint_stop_line(),
     "two_stop_lines": _two_stop_lines(),
     "intersection": scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,)),
