@@ -84,7 +84,7 @@ def test_the_constants():
     # Distance and tilt correction are opt-in until calibrated: None keeps the timed advance and exit,
     # and no approach correction
     assert (ADVANCE_CM, MAX_CROSS_CM, TILT_TO_HEADING) == (None, None, None)
-    assert TILT_ZERO_DEG == 0.0 and MAX_APPROACH_DEG == 15.0
+    assert TILT_ZERO_DEG == 0.0 and MAX_APPROACH_DEG == 10.0         # 15 until 2026-10-20
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 
@@ -448,7 +448,7 @@ def test_a_turn_from_an_angled_approach_ends_square_to_the_street(maneuver, sign
 
 @pytest.mark.software
 @pytest.mark.parametrize("tilt, gain, approach", [(-2.0, None, 0.0), (None, GAIN, 0.0), (-9.0, GAIN, MAX_APPROACH_DEG),
-                                                  (4.0, GAIN, -12.0)])
+                                                  (3.0, GAIN, -9.0)])     # under the cap: as read
 def test_without_a_scale_or_a_tilt_it_starts_square_and_the_angle_is_capped(tilt, gain, approach):
     _, out = drive([{"lane_mode": "right_only"}] * 3, tilt=tilt, tilt_to_heading=gain)
     assert out[LOST][1]["approach_deg"] == approach

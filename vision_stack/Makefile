@@ -69,7 +69,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel \
+        jitter gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here

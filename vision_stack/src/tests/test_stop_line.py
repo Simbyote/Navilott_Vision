@@ -34,8 +34,9 @@ def test_the_constants_follow_the_calibration_and_the_runs():
     # view keeps the hanging traffic light in frame; turns get their distance
     # from the intersection's advance instead
     assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0
-    # Distance is opt-in until odometry is calibrated: None keeps the time-based stop
-    assert REACH_CM is None
+    # By odometry since 2026-10-20 (odometry.json measured): reached with 9 cm of the line left, about
+    # where its near edge reaches the view's bottom (8.6 cm, the 2026-10-20 stop-line table)
+    assert REACH_CM == 9.0
     assert TILT_FRAMES == 5                                        # fresh tilts in the approach-angle median
     # The line leaves the view when its near edge reaches the bottom, not after the whole tape (2026-10-20)
     assert CROSS_ON_CLIP is True
