@@ -11,7 +11,7 @@ crossing; reset.
 import pytest
 
 from src.navigation.stop_line import (
-    APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, REACH_CM, STOP_DELAY_MS, TILT_FRAMES, StopLineTracker,
+    APPROACH, CROSS_ON_CLIP, CROSSING, IDLE, NEAR_BOTTOM_ROWS, REACH_CM, STOP_DELAY_MS, TILT_FRAMES, StopLineTracker,
 )
 from src.tests.navigation_checks import packet, reach_frames
 
@@ -37,6 +37,8 @@ def test_the_constants_follow_the_calibration_and_the_runs():
     # Distance is opt-in until odometry is calibrated: None keeps the time-based stop
     assert REACH_CM is None
     assert TILT_FRAMES == 5                                        # fresh tilts in the approach-angle median
+    # The line leaves the view when its near edge reaches the bottom, not after the whole tape (2026-10-20)
+    assert CROSS_ON_CLIP is True
 
 
 
@@ -62,11 +64,25 @@ def test_crossing_remembers_when_the_line_left():
 @pytest.mark.parametrize("last_rows, crosses", [(NEAR_BOTTOM_ROWS, True), (NEAR_BOTTOM_ROWS + 0.5, False),
                                                 (0.0, True), (None, False)])
 def test_only_a_line_last_seen_near_the_bottom_counts_as_passed(last_rows, crosses):
-    t = StopLineTracker()
+    t = StopLineTracker(cross_on_clip=False)        # the vanish rule alone; a clipped line is the next test
     out = feed(t, [60.0, last_rows, None])
     assert (out[-1][0] == CROSSING) == crosses
     if not crosses:
         assert out[-1][0] == IDLE and t.last_rows is None
+
+
+@pytest.mark.software
+def test_the_line_has_left_the_view_once_its_near_edge_reaches_the_bottom():
+    # Clipped (0 rows) from the third frame for as many frames as the tape is wide: CROSSING starts on the
+    # first clipped frame, a tape's width before it vanishes; reached then, with STOP_DELAY_MS 0
+    t = StopLineTracker()
+    out = feed(t, [60.0, 12.0, 0.0, 0.0, 0.0, None])
+    assert [p for p, _ in out[:3]] == [APPROACH, APPROACH, CROSSING]
+    assert t.lost_ms is None and sum(r for _, r in out) == 1 and next(i for i, (_, r) in enumerate(out) if r) == \
+        2 + reach_frames(frame_ms=MS)
+    assert [p for p, _ in out[3:]] == [IDLE] * 3                       # the rest of the same tape starts nothing
+    old = feed(StopLineTracker(cross_on_clip=False), [60.0, 12.0, 0.0, 0.0, 0.0, None])
+    assert [p for p, _ in old[:5]] == [APPROACH] * 5                    # waited for the whole tape
 
 
 @pytest.mark.software

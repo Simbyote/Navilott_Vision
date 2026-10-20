@@ -10,6 +10,10 @@ Purpose:
     navigation rules (stop sign, traffic light, intersection) all read this
     one tracker, which navigation.Navigation updates once per frame.
 
+    "Leaving the view" is the line's near edge reaching the view's bottom
+    (CROSS_ON_CLIP): from there it reads clipped, 0 px, until the tape's
+    far edge has passed too, so waiting for it to vanish braked a tape's
+    width late (stop-distance, 2026-10-20: ten stops 1.0 cm from the line).
     A line that drops out while still far up the image is flicker or a lost
     detection, not the robot driving over it: only a line last seen within
     NEAR_BOTTOM_ROWS of the lane ROI's bottom counts as passing under the view.
@@ -40,8 +44,8 @@ Main package:
     IDLE, APPROACH, CROSSING: its phases.
 
 Flow:
-    IDLE -> APPROACH (line voted in, when accept_new) -> CROSSING (voted out near the bottom:
-    entered, one intersection) -> reached on the frame STOP_DELAY_MS after it
+    IDLE -> APPROACH (line voted in, when accept_new) -> CROSSING (clipped at the
+    view bottom, or voted out near it: entered, one intersection) -> reached on the frame STOP_DELAY_MS after it
     left (or, by distance, REACH_CM short of it) -> IDLE.
     APPROACH -> IDLE when it's voted out far away.
 """
@@ -76,6 +80,11 @@ TILT_FRAMES = 5
 # passing under the view; higher up, it was lost. The 2026-09-30 table puts
 # 22.6 rows at ~11.9 cm, 2 cm past the view bottom (~10 cm)
 NEAR_BOTTOM_ROWS = 25.0
+# The line has left the view when its near edge reaches the view's bottom
+# (the voted line reads clipped: 0 px), not when the whole tape has passed
+# under it. False: when it's voted out, a tape's width (plus a frame of the
+# vote) later; ADVANCE_MS and REACH_CM were first tuned that way
+CROSS_ON_CLIP = True
 
 
 class StopLineTracker:
@@ -99,8 +108,9 @@ class StopLineTracker:
             was reached. None without odometry or a cm for the line, and in IDLE.
     """
     def __init__(self, delay_ms: int = STOP_DELAY_MS, near_bottom_rows: float = NEAR_BOTTOM_ROWS,
-                 reach_cm: float | None = REACH_CM) -> None:
+                 reach_cm: float | None = REACH_CM, cross_on_clip: bool = CROSS_ON_CLIP) -> None:
         self.delay_ms = delay_ms
+        self.cross_on_clip = cross_on_clip
         self.near_bottom_rows = near_bottom_rows
         self.reach_cm = reach_cm
         self._odometry: float | None = None       # the previous frame's distance_cm
@@ -162,16 +172,19 @@ class StopLineTracker:
         self._step_cm = 0.0 if odo is None or self._odometry is None else max(odo - self._odometry, 0.0)
         self._odometry = odo
         seen = bool(packet.stop_line_detected)
+        clipped = seen and self.cross_on_clip and packet.stop_line_distance_px == 0
         if self.phase == IDLE:
-            if seen and accept_new:
+            # A line first seen already clipped is the tape just reached, still under the view's
+            # edge (or one the robot started on): not a line coming up
+            if seen and accept_new and not clipped:
                 self.phase, self.last_rows = APPROACH, packet.stop_line_distance_px
                 self.seen_ms = packet.timestamp_ms
                 self._locate(packet)
         elif self.phase == APPROACH:
-            if seen:
+            if seen and not clipped:
                 self.last_rows = packet.stop_line_distance_px
                 self._locate(packet)
-            elif self.last_rows is not None and self.last_rows <= self.near_bottom_rows:
+            elif clipped or (self.last_rows is not None and self.last_rows <= self.near_bottom_rows):
                 self.phase, self.lost_ms = CROSSING, packet.timestamp_ms
                 self.entered = True
                 self.approach_tilt_deg = median(self._tilts) if self._tilts else None
