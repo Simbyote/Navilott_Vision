@@ -243,7 +243,7 @@ def test_libcamera_keeps_the_mode_selection_once_without_the_log_prefix():
 def test_the_pipeline_is_the_robots_with_a_silent_fakesink():
     pipe = ca.anatomy_pipeline({"exposure-value": -1})
     assert pipe.startswith("libcamerasrc ") and "exposure-value=-1" in pipe
-    assert pipe.endswith(" ! videoflip method=rotate-180 ! video/x-raw,format=BGR ! fakesink sync=false silent=true")
+    assert pipe.endswith(",framerate=20/1 ! fakesink sync=false silent=true")
     assert ca.anatomy_pipeline(num_buffers=60).endswith("fakesink sync=false silent=true num-buffers=60")
     assert "appsink" not in pipe
 

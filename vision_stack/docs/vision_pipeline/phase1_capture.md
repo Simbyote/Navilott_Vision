@@ -23,24 +23,24 @@ Pi ISP (debayer, scale)
 libcamera                        buffers, sensor timing, exposure
   │
   ▼
-GStreamer                        libcamerasrc → videoflip → appsink
+GStreamer                        libcamerasrc → appsink
   │
   ▼
 cv2.VideoCapture (CAP_GSTREAMER)
-  │  (270, 480, 3) uint8 BGR
+  │  (270, 480, 3) uint8 BGR, upside down
   ▼
-CameraSource.read() → FrameData
+CameraSource.read() → orient() → FrameData      rotated 180° (CAMERA_ROTATE_180)
 ```
 
 The pipeline string, built by `build_gst_pipeline()`:
 
 ```
 libcamerasrc sensor-config="sensor/config,width=1920,height=1080,depth=10" !
-video/x-raw,width=480,height=270,framerate=20/1 !
-videoflip method=rotate-180 !
-video/x-raw,format=BGR !
+video/x-raw,format=BGR,width=480,height=270,framerate=20/1 !
 appsink drop=true max-buffers=1 sync=false
 ```
+
+**The turn upright is in OpenCV, not GStreamer.** The ISP hands over BGR, so nothing in the pipeline copies the frame before the appsink. A `videoflip` there read the ISP's buffer itself, back to front a pixel at a time, from memory the ARM doesn't cache: GStreamer's thread (`task0`) took 100% of a core (pi-load, 2026-10-20) against 25–35% when `videoconvert` still made the first copy. `orient()` rotates the frame the appsink already copied into ordinary memory, one pass. `calibrate_camera` turns its frames the same way, so a lens calibration matches what the robot sees.
 
 ---
 

@@ -150,10 +150,9 @@ Phase 1 is `src/capture/camera.py`. It gets frames off the Pi camera with as lit
 ```mermaid
 flowchart LR
     S["libcamerasrc<br/>sensor-config pinned:<br/>1920x1080, 10-bit"] --> C["caps<br/>480x270 @ 20 FPS<br/>(FRAME_W, FRAME_H, FPS)"]
-    C --> FL["videoflip rotate-180<br/>(only if CAMERA_ROTATE_180)"]
-    FL --> B["caps: format=BGR"]
-    B --> A["appsink<br/>drop=true max-buffers=1<br/>sync=false"]
+    C --> A["appsink<br/>drop=true max-buffers=1<br/>sync=false"]
     A --> CV["cv2.VideoCapture<br/>CameraSource.open()"]
+    CV --> FL["orient(): rotate 180<br/>(only if CAMERA_ROTATE_180)"]
 ```
 
 Why each piece is there:
