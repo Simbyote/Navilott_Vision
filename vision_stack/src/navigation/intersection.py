@@ -97,7 +97,7 @@ BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 MAX_CROSS_MS = 5500
 # ... or this far, by odometry. None: by MAX_CROSS_MS. Set it from a run's
 # stage_cm at the end of timed exits (nav.csv), once odometry is calibrated
-MAX_CROSS_CM: float | None = None
+MAX_CROSS_CM: float | None = 49.7
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
 # Driving from the line into the intersection before a turn starts, on the
@@ -112,7 +112,7 @@ ADVANCE_MS = 2500
 # the speed, and the speed with the battery (the heading hold drives a duty);
 # a distance doesn't. None: by ADVANCE_MS. Set it from a run's stage_cm at
 # the end of timed advances (nav.csv), once odometry is calibrated
-ADVANCE_CM: float | None = None
+ADVANCE_CM: float | None = 22.3
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
 # tight arc around the right wheel. Measured on the mat 2026-10-01 as
