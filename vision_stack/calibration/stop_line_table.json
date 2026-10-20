@@ -1,103 +1,114 @@
 {
-    "model": "stop_line_rows_to_cm",
-    "curve": [
-        1015.891590515022,
-        127.58420453282861,
-        2.216162771367034
-    ],
-    "formula": "cm = curve[0] / (curve[1] - rows) + curve[2]; rows = distance_px above the lane ROI bottom",
-    "reference": "the front edge of the robot",
-    "marks": [
-        {
-            "cm": 12.5,
-            "rows": 22.65,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.03,
-            "fit_cm": 11.897,
-            "error_cm": 0.603
-        },
-        {
-            "cm": 17.9,
-            "rows": 64.83,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.04,
-            "fit_cm": 18.405,
-            "error_cm": 0.505
-        },
-        {
-            "cm": 10.2,
-            "rows": 3.77,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.3,
-            "fit_cm": 10.421,
-            "error_cm": 0.221
-        },
-        {
-            "cm": 15.5,
-            "rows": 50.73,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.0,
-            "fit_cm": 15.435,
-            "error_cm": 0.065
-        },
-        {
-            "cm": 16.2,
-            "rows": 56.05,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.08,
-            "fit_cm": 16.418,
-            "error_cm": 0.218
-        },
-        {
-            "cm": 10.3,
-            "rows": 4.26,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.02,
-            "fit_cm": 10.454,
-            "error_cm": 0.154
-        },
-        {
-            "cm": 16.8,
-            "rows": 56.19,
-            "seen": 15,
-            "frames": 15,
-            "clipped": 0,
-            "candidates": 1,
-            "spread": 0.12,
-            "fit_cm": 16.445,
-            "error_cm": 0.355
-        }
-    ],
-    "error_cm": {
-        "mean": 0.30280337553967335,
-        "max": 0.6026127409855562
+  "model": "stop_line_rows_to_cm",
+  "curve": [
+    938.7856288575099,
+    156.19383641234006,
+    2.5982877065451517
+  ],
+  "formula": "cm = curve[0] / (curve[1] - rows) + curve[2]; rows = distance_px above the lane ROI bottom",
+  "reference": "the front edge of the robot",
+  "marks": [
+    {
+      "cm": 12.7,
+      "rows": 63.8,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.06,
+      "fit_cm": 12.759,
+      "error_cm": 0.059
     },
-    "image_size": [
-        480,
-        270
-    ],
-    "undistort_alpha": 0.0,
-    "lens_calibration": {
-        "file": "camera_calibration.json",
-        "sha256": "781e1eea45aae63544c02e38bc44ea847f123dd69feee6477df7d4ae148cb95a"
+    {
+      "cm": 11.9,
+      "rows": 55.24,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.1,
+      "fit_cm": 11.897,
+      "error_cm": 0.003
     },
-    "created": "2026-09-30T18:03:23"
+    {
+      "cm": 11.4,
+      "rows": 49.58,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.08,
+      "fit_cm": 11.404,
+      "error_cm": 0.004
+    },
+    {
+      "cm": 10.6,
+      "rows": 38.83,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.72,
+      "fit_cm": 10.597,
+      "error_cm": 0.003
+    },
+    {
+      "cm": 8.7,
+      "rows": 2.98,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.09,
+      "fit_cm": 8.726,
+      "error_cm": 0.026
+    },
+    {
+      "cm": 9.1,
+      "rows": 12.61,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.01,
+      "fit_cm": 9.137,
+      "error_cm": 0.037
+    },
+    {
+      "cm": 9.4,
+      "rows": 16.57,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.88,
+      "fit_cm": 9.322,
+      "error_cm": 0.078
+    },
+    {
+      "cm": 13.2,
+      "rows": 67.31,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.21,
+      "fit_cm": 13.16,
+      "error_cm": 0.04
+    }
+  ],
+  "error_cm": {
+    "mean": 0.030999295407671434,
+    "max": 0.07803492589514072
+  },
+  "image_size": [
+    480,
+    270
+  ],
+  "undistort_alpha": 0.0,
+  "lens_calibration": {
+    "file": "camera_calibration.json",
+    "sha256": "781e1eea45aae63544c02e38bc44ea847f123dd69feee6477df7d4ae148cb95a"
+  },
+  "created": "2026-10-20T11:23:04"
 }

@@ -1,0 +1,32 @@
+{
+  "cm_per_count": 0.007107,
+  "counts_per_cm": 140.7083,
+  "left_counts_per_cm": 142.74,
+  "right_counts_per_cm": 138.6767,
+  "spread_pct": 0.83,
+  "trials": [
+    {
+      "cm": 100.0,
+      "left": 14269,
+      "right": 14013,
+      "counts_per_cm": 141.41,
+      "mismatch_pct": 1.81
+    },
+    {
+      "cm": 100.0,
+      "left": 14255,
+      "right": 13793,
+      "counts_per_cm": 140.24,
+      "mismatch_pct": 3.29
+    },
+    {
+      "cm": 100.0,
+      "left": 14298,
+      "right": 13797,
+      "counts_per_cm": 140.475,
+      "mismatch_pct": 3.57
+    }
+  ],
+  "mode": "push",
+  "measured": "2026-10-20T11:40:03"
+}
