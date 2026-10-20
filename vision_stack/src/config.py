@@ -142,11 +142,14 @@ MEASURED = PipelineConfig(
     # at a plain stop line. Any solid, roundish red blob reaches 8-9 hull
     # vertices, so shape and content are gated too. Synthetic octagons read
     # aspect 1.0 and extent 0.75-0.81 (0.83 for a perfect one); their
-    # letters 11-16% white from radius 28 px. First guesses: not yet checked
-    # on course frames, against the course's own sign
+    # letters 11-16% white from radius 28 px. The course's own sign, on a
+    # run's frames (sign_check, 2026-10-20): aspect 0.55-0.72 and extent
+    # 0.63-0.75, narrower than a square-on octagon, so the first guesses
+    # (0.6-1.6, 0.68-0.92) cut through it; lowered to 0.5 and 0.6. A leg is
+    # still ~0.3 wide for its height, a chair back still boxier than 0.92
     geometry = GeometryConfig(
         stop_line = StopLineFilter(max_tilt_deg = 4.0),
-        sign = SignContourFilter(aspect_range = (0.6, 1.6), extent_range = (0.68, 0.92), min_letter_share = 0.03),
+        sign = SignContourFilter(aspect_range = (0.5, 1.6), extent_range = (0.6, 0.92), min_letter_share = 0.03),
     ),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,

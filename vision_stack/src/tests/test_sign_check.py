@@ -61,8 +61,11 @@ def test_the_relaxed_gate_that_would_pass_is_named():
 
 
 def test_a_sign_cut_by_the_rois_top_edge_loses_its_corners():
-    # The scenes' default 28 px sign is centered 13 px below the sign ROI's top (y0 = 0.20): cut across
-    row = sc.check_frame(sign_roi(scene(sign=True)), FILTER)
+    # The sign ROI's top was y0 0.20 until 2026-10-20, which cut the scenes' 28 px sign (centered at
+    # 0.25 of the frame) across; from the frame's top it's whole. Cut it the way the old edge did
+    whole = sign_roi(scene(sign=True))
+    assert sc.check_frame(whole, FILTER)["detected"]
+    row = sc.check_frame(whole[int(0.20 * 270):], FILTER)
     assert row["largest_gate"] == "vertices" and row["measured"]["vertices"] < 8 and row["cut"] == "top"
     assert sc.summarize([{**row, "frame_id": 0}])["refused_cut_by_roi"] == 1
 

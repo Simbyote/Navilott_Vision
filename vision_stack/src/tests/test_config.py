@@ -239,7 +239,8 @@ def test_measured_takes_stop_lines_within_4_degrees_gates_ghost_signs_and_keeps_
     from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
     assert MEASURED.geometry == GeometryConfig(
         stop_line=StopLineFilter(max_tilt_deg=4.0),                 # 2 until 2026-10-19
-        sign=SignContourFilter(aspect_range=(0.6, 1.6), extent_range=(0.68, 0.92), min_letter_share=0.03))
+        # aspect and extent lowered 2026-10-20 to the course's own sign (0.55-0.72, 0.63-0.75)
+        sign=SignContourFilter(aspect_range=(0.5, 1.6), extent_range=(0.6, 0.92), min_letter_share=0.03))
 
 
 @pytest.mark.software

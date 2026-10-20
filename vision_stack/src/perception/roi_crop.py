@@ -60,8 +60,12 @@ LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
 # higher (red's reads yellow), but with the swept bands the frames at the
 # stop still read 139 of 139 right with it in view (2026-10-06)
 TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
-# Upper-right: signs are posted right of the lane
-SIGN = ROIBounds(x0=0.55, y0=0.20, x1=1.00, y1=0.85)
+# Upper-right: signs are posted right of the lane. From the frame's top since
+# 2026-10-20 (0.20 from 2026-09-28): near the line the sign rises in the
+# frame, and the ROI's top edge cut it into 5-7 vertices from ~20 cm in
+# (sign_check on a course run). The traffic ROI ends at x 0.53, so the two
+# don't overlap
+SIGN = ROIBounds(x0=0.55, y0=0.00, x1=1.00, y1=0.85)
 # The robot's path ahead (perception/obstacle.py): the middle half of the
 # frame, where the robot's own body will go, from the bottom of the view up
 # past the lane ROI. Upright objects rise above their base, so the extra

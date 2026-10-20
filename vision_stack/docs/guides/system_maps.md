@@ -239,7 +239,7 @@ Fractions of the frame (`roi_crop.py`), in pixels at 480×270:
 | --- | --- | --- | --- | --- |
 | Lane | gray | 0.05–0.95 → 24–456 | 0.70–1.00 → 189–270 | The floor just ahead: lane lines and stop lines |
 | Traffic | BGR | 0.25–0.65 → 120–312 | 0.00–0.40 → 0–108 | Top center, where a light sits when the robot is square to an intersection |
-| Sign | gray + BGR | 0.55–1.00 → 264–480 | 0.20–0.75 → 54–202 | Upper right: signs are posted right of the lane |
+| Sign | gray + BGR | 0.55–1.00 → 264–480 | 0.00–0.85 → 0–229 | Upper right: signs are posted right of the lane; from the frame's top since 2026-10-20, so the sign isn't cut near the line |
 
 Each ROI is a view into the frame, not a copy, and keeps its rectangle so detections can be mapped back to frame pixels.
 
