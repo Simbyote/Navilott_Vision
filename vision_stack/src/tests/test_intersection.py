@@ -81,10 +81,11 @@ def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 40, 5500, 500)   # 2026-10-19
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
-    # Distance and tilt correction are opt-in until calibrated: None keeps the timed advance and exit,
-    # and no approach correction
-    assert (ADVANCE_CM, MAX_CROSS_CM, TILT_TO_HEADING) == (None, None, None)
-    assert TILT_ZERO_DEG == 0.0 and MAX_APPROACH_DEG == 10.0         # 15 until 2026-10-20
+    # Distance is opt-in until set: None keeps the timed advance and exit
+    assert (ADVANCE_CM, MAX_CROSS_CM) == (None, None)
+    # The approach angle from the line's tilt, measured 2026-10-20 (detect-range, 10 cm, -6..6 deg)
+    assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-4.3, 0.19)
+    assert MAX_APPROACH_DEG == 10.0                                    # 15 until 2026-10-20
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
 
@@ -444,6 +445,17 @@ def test_a_turn_from_an_angled_approach_ends_square_to_the_street(maneuver, sign
     # 6 deg more to go left, 6 less right: the frame that gets there is already the exit's
     assert len(turned) == math.ceil((TURN_TARGET_DEG - sign * 6.0) / step) - 1
     assert next(rec for _, rec in out if rec.get("turn_end"))["turn_end"] == "gyro target"
+
+
+@pytest.mark.software
+def test_the_cameras_own_tilt_is_taken_off_before_scaling(monkeypatch):
+    # The measured zero, which the suite otherwise sets to 0 for its square synthetic camera (conftest)
+    import src.navigation.intersection as intersection
+    monkeypatch.setattr(intersection, "TILT_ZERO_DEG", TILT_ZERO_DEG)
+    _, out = drive([{"lane_mode": "right_only"}] * 3, tilt=-2.0, tilt_to_heading=GAIN)
+    assert out[LOST][1]["approach_deg"] == pytest.approx(GAIN * (-2.0 - TILT_ZERO_DEG), abs=0.05)   # 6.57, logged to 0.1
+    _, out = drive([{"lane_mode": "right_only"}] * 3, tilt=TILT_ZERO_DEG, tilt_to_heading=GAIN)
+    assert out[LOST][1]["approach_deg"] == 0.0                         # what a square approach reads: square
 
 
 @pytest.mark.software

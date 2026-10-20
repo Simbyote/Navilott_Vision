@@ -134,11 +134,15 @@ TURN_TARGET_DEG = 85.0
 # left end nearer. Measured, not computed (guides/navigation_linker.md,
 # "Measuring TILT_TO_HEADING": park at a known angle to a line, read
 # stop_line_tilt_deg). None: no
-# correction, the heading starts at 0
-TILT_TO_HEADING: float | None = None
+# correction, the heading starts at 0. -4.3: detect-range target=line, 10 cm,
+# -6..6 deg (2026-10-20): tilts +1.39, +1.26, +0.03, -0.49, -1.22, redone
+# looks within 0.1-0.3 deg. Check the sign on the robot before trusting it
+# (an angled start's approach_deg reads + when turned right): wrong, it
+# doubles the error instead of removing it
+TILT_TO_HEADING: float | None = -4.3
 # The tilt a square approach reads: a camera mounted a little rotated sees
 # every line tilted. Measured with TILT_TO_HEADING, subtracted before scaling
-TILT_ZERO_DEG = 0.0
+TILT_ZERO_DEG = 0.19
 # The largest approach angle believed. The geometry's tilt gate (max_tilt_deg)
 # already refuses steeper lines; this caps a wrong scale
 MAX_APPROACH_DEG = 10.0

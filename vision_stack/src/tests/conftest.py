@@ -74,6 +74,20 @@ def _selected_modes(config) -> set[str]:
     return modes or {"software"}
 
 
+@pytest.fixture(autouse=True)
+def square_camera(request, monkeypatch):
+    """
+    Software tests see a square camera: intersection.TILT_ZERO_DEG is the
+    robot camera's own tilt (0.19 deg, measured 2026-10-20), and synthetic
+    stop lines are drawn square, so it would read every one of them as an
+    approach angle. A test of the zero itself imports the measured value.
+    Hardware runs keep it.
+    """
+    if request.node.get_closest_marker("hardware") is None:
+        import src.navigation.intersection as intersection
+        monkeypatch.setattr(intersection, "TILT_ZERO_DEG", 0.0)
+
+
 def pytest_collection_modifyitems(config, items):
     modes = _selected_modes(config)
     kept, dropped = [], []
