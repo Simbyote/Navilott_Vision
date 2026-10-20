@@ -175,6 +175,9 @@ jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 gates: ## which detector gate refuses the most candidates
 	$(PY) -m src.analysis.gate_rejections $(strip $(RUN)) $(ARGS)
 
+sign-check: ## why a stop sign in view isn't detected: each gate, a larger red blob hiding it (ARGS="--frames runs/nav_<time>/frames")
+	$(PY) -m src.analysis.sign_check $(ARGS)
+
 stability: ## offset noise and lane-mode flicker on a still scene (record parked and centered)
 	$(PY) -m src.analysis.stability $(strip $(RUN)) $(ARGS)
 

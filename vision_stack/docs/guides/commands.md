@@ -251,6 +251,7 @@ python3 -m src.analysis.<tool> --help
 | `stage_timing` | `artifacts/<run>` or `runs/nav_<run>` | where the frame time goes |
 | `jitter` | `artifacts/<run>` or `runs/nav_<run>` | frame-to-frame timing spread |
 | `gate_rejections` | `artifacts/<run>` | which gates reject candidates |
+| `sign_check` | `--frames runs/<run>/frames` or a routine folder | why a stop sign in view isn't detected (`make sign-check`) |
 | `compare_runs` | `artifacts/<a> artifacts/<b>` | what changed between two runs |
 | `stability` | `runs/<run>` | lane offset noise while still |
 | `state_timeline` | `runs/<run>` | lane and drive state over time; rule and stage on a navigation run |
