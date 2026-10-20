@@ -81,8 +81,10 @@ def test_the_constants():
     assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 40, 5500, 500)   # 2026-10-19
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
-    # Distance is opt-in until set: None keeps the timed advance and exit
-    assert (ADVANCE_CM, MAX_CROSS_CM) == (None, None)
+    # By odometry since 2026-10-20 (None keeps the timed advance and exit);
+    # the advance ends well inside the exit limit
+    assert (ADVANCE_CM, MAX_CROSS_CM) == (22.3, 49.7)
+    assert ADVANCE_CM < MAX_CROSS_CM
     # The approach angle from the line's tilt, measured 2026-10-20 (detect-range, 10 cm, -6..6 deg)
     assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-4.3, 0.19)
     assert MAX_APPROACH_DEG == 10.0                                    # 15 until 2026-10-20
