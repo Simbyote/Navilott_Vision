@@ -71,7 +71,7 @@ STOP_DELAY_MS = 0
 # one frame past that, so anything near 10 or more is STOP_DELAY_MS 0 again.
 # None: by STOP_DELAY_MS. Set it from left_cm on reached frames (nav.csv's
 # line_left_cm) once odometry is calibrated
-REACH_CM: float | None = None
+REACH_CM: float | None = 9.0
 # Fresh tilts (the packet's stop_line_tilt_deg) the approach angle is the
 # median of: the last ones before the line leaves the view, the nearest and
 # so the largest in the image. 5 is a quarter second at 20 FPS
