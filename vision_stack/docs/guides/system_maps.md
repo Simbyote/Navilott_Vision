@@ -268,7 +268,7 @@ flowchart TB
     S4 --> SC["StopLineCandidate[]"]
 
     SG["sign ROI (BGR)"] --> G1["redness mask (Otsu, floored)"]
-    G1 --> G2["close, take the largest blob"]
+    G1 --> G2["close; blobs largest first,<br/>until one passes"]
     G2 --> G3["hull's polygon: ~8 vertices,<br/>area, solidity (SignContourFilter)"]
     G3 --> GC["SignCandidate[]"]
 ```

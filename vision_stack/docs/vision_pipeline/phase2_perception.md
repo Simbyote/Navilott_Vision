@@ -198,8 +198,8 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 | Setting / gate | Default | Why |
 | --- | --- | --- |
 | `min_redness` | 20 | Otsu always splits the image, so a sign-free ROI thresholds its own noise (Otsu ≈ 1 there, with false blobs). The dimmest synthetic sign had Otsu at 22. Check on course frames |
-| `close_kernel` | 5 | Fills noise pinholes; rejoins a sign cut by a line up to ~2 px wide before blur. Wider cuts split it and only the larger half is gated |
-| `min_area` | 100 px² | Noise blobs; also decides which blobs compete for largest |
+| `close_kernel` | 5 | Fills noise pinholes; rejoins a sign cut by a line up to ~2 px wide before blur. Wider cuts split it, and each half fails the vertex gate |
+| `min_area` | 100 px² | Noise blobs; the blobs over it are gated largest first, and the first to pass all the gates is the sign |
 | `max_area` | 30000 px² | A red area bigger than any sign at range |
 | `vertices` | 8–9 after `approxPolyDP` on the hull | Red shapes that aren't octagons. On the hull, so letters and noise notches don't add vertices |
 | `hull` | hull area > 0 | Degenerate outlines |
@@ -210,7 +210,7 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 
 The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
-With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the blobs set aside as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
+The blobs are gated largest first until one passes: until 2026-10-20 only the largest was gated, so a larger red thing in the sign ROI (a box, a chair), refused, hid the sign behind it (`make sign-check` on the detect-range looks found it). With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the smaller blobs never gated, a larger one having passed, as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 
 ---
 

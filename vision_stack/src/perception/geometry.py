@@ -32,8 +32,10 @@ Flow:
     4. Stop line: keep near-horizontal edges, split them into top (dark to
        bright going down) and bottom edges, fit each, pair top with bottom,
        gate by length, tilt, thickness and brightness.
-    5. Sign: redness mask of the sign ROI (Otsu, floored), close, take the
-       largest blob, gate its hull's polygon by area, vertex count and solidity.
+    5. Sign: redness mask of the sign ROI (Otsu, floored), close, then gate
+       the blobs largest first (area, vertex count, solidity, the ghost-sign
+       gates) and take the first that passes: a larger red thing in the ROI
+       (a chair, a box) refused no longer hides the sign behind it.
     6. Package the three candidate lists with the frame identity.
 """
 import math
@@ -853,6 +855,46 @@ def _shape_gate(contour: np.ndarray, area: float, hull: np.ndarray, sign_color_r
     return None, got
 
 
+def _gate_sign(contour: np.ndarray, area: float, sign_filter: SignContourFilter,
+               sign_color_roi: np.ndarray | None) -> tuple[str | None, dict]:
+    """
+    One sized blob through the sign gates after min_area: max_area, hull,
+    vertex count, solidity, then the ghost-sign gates. (the gate that
+    refused it or None, what was measured: hull, approx, vertices,
+    solidity, confidence as far as it got).
+    """
+    got = {}
+    if area > sign_filter.max_area:
+        return "area", got
+    hull, hull_area, approx = _sign_polygon(contour, sign_filter)
+    if hull_area <= 0:
+        return "hull", got
+    got.update(hull=hull, approx=approx, vertices=len(approx),
+               confidence=_sign_confidence(area, len(approx), sign_filter))
+    if len(approx) < sign_filter.min_vertices or len(approx) > sign_filter.max_vertices:
+        return "vertices", got
+    # Of the raw contour against its hull; the hull alone is always 1.0
+    got["solidity"] = round(area / hull_area, 4)
+    if got["solidity"] < sign_filter.min_solidity:
+        return "solidity", got
+    gate, _ = _shape_gate(contour, area, hull, sign_color_roi, sign_filter)
+    return gate, got
+
+
+def _sign_candidate(contour, area, got, frame_id, timestamp_ms) -> SignCandidate:
+    return SignCandidate(
+        label = STOP_SIGN,
+        bbox = cv2.boundingRect(contour),
+        contour = got["approx"],
+        vertex_count = got["vertices"],
+        confidence = got["confidence"],
+        frame_id = frame_id,
+        timestamp_ms = timestamp_ms,
+        area = area,
+        solidity = got["solidity"],
+    )
+
+
 def _extract_sign_candidates(
     contours: Sequence[np.ndarray],
     sign_filter: SignContourFilter,
@@ -863,15 +905,18 @@ def _extract_sign_candidates(
     sign_color_roi: np.ndarray | None = None,
 ) -> list[SignCandidate]:
     """
-    Gate the red-mask contours: below min_area dropped, then only the largest
-    goes on, through max_area, hull, vertex count, solidity, and the
-    ghost-sign gates (aspect, extent, letters; the letters read sign_color_roi).
+    Gate the red-mask contours: below min_area dropped, then the rest
+    largest first through max_area, hull, vertex count, solidity, and the
+    ghost-sign gates (aspect, extent, letters; the letters read
+    sign_color_roi), until one passes. Only the largest used to be gated, so
+    a larger red thing in the ROI, refused, hid the sign behind it
+    (sign_check on detect-range looks, 2026-10-20).
 
     Inputs:
         contours: External contours of the red mask.
         reject_counts: Filled with one count per gate. Every contour lands in
-            exactly one bucket ("not_largest" for the sized ones set aside),
-            so the buckets sum to "seen".
+            exactly one bucket ("not_largest" for the smaller ones never
+            gated, a larger one having passed), so the buckets sum to "seen".
         trace: A list to receive one _trace_entry() per contour that reached a
             gate, accepted or not, or None to skip tracing. Area rejects are
             traced only when their bbox clears TRACE_MIN_BBOX_FRAC.
@@ -899,70 +944,23 @@ def _extract_sign_candidates(
                     trace.append(_trace_entry(contour, "area", area))
             continue
         sized.append((area, contour))
-    if not sized:
-        return []
 
-    # max() keeps the first of equal areas, as _filter_sign_contours does
-    largest = max(range(len(sized)), key=lambda i: sized[i][0])
-    for i, (area, contour) in enumerate(sized):
-        if i != largest:
+    # Largest first; sorted() keeps equal areas in contour order, as _filter_sign_contours does
+    found = None
+    for area, contour in sorted(sized, key=lambda ac: -ac[0]):
+        if found is not None:
             rc["not_largest"] += 1
             if trace is not None:
                 trace.append(_trace_entry(contour, "not_largest", area))
-    area, contour = sized[largest]
-
-    if area > sign_filter.max_area:
-        rc["area"] += 1
+            continue
+        gate, got = _gate_sign(contour, area, sign_filter, sign_color_roi)
+        rc[gate or "accepted"] += 1
         if trace is not None:
-            trace.append(_trace_entry(contour, "area", area))
-        return []
-
-    hull, hull_area, approx = _sign_polygon(contour, sign_filter)
-    if hull_area <= 0:
-        rc["hull"] += 1
-        if trace is not None:
-            trace.append(_trace_entry(contour, "hull", area))
-        return []
-
-    n_verts = len(approx)
-    confidence = _sign_confidence(area, n_verts, sign_filter)
-    if n_verts < sign_filter.min_vertices or n_verts > sign_filter.max_vertices:
-        rc["vertices"] += 1
-        if trace is not None:
-            trace.append(_trace_entry(contour, "vertices", area, n_verts,
-                                      confidence=confidence, poly=approx))
-        return []
-
-    # Of the raw contour against its hull; the hull alone is always 1.0
-    solidity = round(area / hull_area, 4)
-    if solidity < sign_filter.min_solidity:
-        rc["solidity"] += 1
-        if trace is not None:
-            trace.append(_trace_entry(contour, "solidity", area, n_verts, solidity,
-                                      confidence, approx))
-        return []
-
-    gate, _ = _shape_gate(contour, area, hull, sign_color_roi, sign_filter)
-    if gate is not None:
-        rc[gate] += 1
-        if trace is not None:
-            trace.append(_trace_entry(contour, gate, area, n_verts, solidity, confidence, approx))
-        return []
-
-    rc["accepted"] += 1
-    if trace is not None:
-        trace.append(_trace_entry(contour, None, area, n_verts, solidity, confidence, approx))
-    return [SignCandidate(
-        label = STOP_SIGN,
-        bbox = cv2.boundingRect(contour),
-        contour = approx,
-        vertex_count = n_verts,
-        confidence = confidence,
-        frame_id = frame_id,
-        timestamp_ms = timestamp_ms,
-        area = area,
-        solidity = solidity,
-    )]
+            trace.append(_trace_entry(contour, gate, area, got.get("vertices"), got.get("solidity"),
+                                      got.get("confidence"), got.get("approx")))
+        if gate is None:
+            found = _sign_candidate(contour, area, got, frame_id, timestamp_ms)
+    return [] if found is None else [found]
 
 def _filter_sign_contours(
     contours: Sequence[np.ndarray],
@@ -978,36 +976,12 @@ def _filter_sign_contours(
     Outputs:
         At most one candidate, holding the hull's approxPolyDP polygon.
     """
-    best, best_area = None, -1.0
-    for contour in contours:
-        area = cv2.contourArea(contour)
-        if area >= sign_filter.min_area and area > best_area:
-            best, best_area = contour, area
-    if best is None or best_area > sign_filter.max_area:
-        return []
-
-    hull, hull_area, approx = _sign_polygon(best, sign_filter)
-    n_verts = len(approx)
-    if (hull_area <= 0 or n_verts < sign_filter.min_vertices
-            or n_verts > sign_filter.max_vertices):
-        return []
-    solidity = round(best_area / hull_area, 4)
-    if solidity < sign_filter.min_solidity:
-        return []
-    if _shape_gate(best, best_area, hull, sign_color_roi, sign_filter)[0] is not None:
-        return []
-
-    return [SignCandidate(
-        label = STOP_SIGN,
-        bbox = cv2.boundingRect(best),
-        contour = approx,
-        vertex_count = n_verts,
-        confidence = _sign_confidence(best_area, n_verts, sign_filter),
-        frame_id = frame_id,
-        timestamp_ms = timestamp_ms,
-        area = best_area,
-        solidity = solidity,
-    )]
+    sized = [(cv2.contourArea(c), c) for c in contours]
+    for area, contour in sorted((ac for ac in sized if ac[0] >= sign_filter.min_area), key=lambda ac: -ac[0]):
+        gate, got = _gate_sign(contour, area, sign_filter, sign_color_roi)
+        if gate is None:
+            return [_sign_candidate(contour, area, got, frame_id, timestamp_ms)]
+    return []
 
 def extract_sign_candidates(
     sign_color_roi: np.ndarray,

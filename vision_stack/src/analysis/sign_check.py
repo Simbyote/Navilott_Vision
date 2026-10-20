@@ -3,11 +3,11 @@ sign_check.py  --  why a stop sign in view isn't detected: which gate, and what 
 
 Purpose:
     The sign detector (perception/geometry.py) takes the red pixels in the
-    sign ROI, keeps only the LARGEST red blob, and gates it: area, vertex
-    count, solidity, then the ghost-sign gates (aspect, extent, letters). A
-    real sign can be lost two ways the run's CSVs don't tell apart: its own
-    blob fails a gate, or something larger and red in the ROI is gated in
-    its place (and refused) while the sign is never looked at.
+    sign ROI and gates the blobs largest first: area, vertex count,
+    solidity, then the ghost-sign gates (aspect, extent, letters); the first
+    that passes is the sign. Until 2026-10-20 it gated only the largest, so
+    something larger and red in the ROI, refused, hid the sign; this check
+    found it, and still counts those frames (found behind a larger blob).
 
     This replays recorded frames through Phase 1-2 with the run's tuning
     and, per frame, gates every red blob on its own: the largest's gate, and
@@ -99,9 +99,9 @@ def check_frame(sign_color_roi, sign_filter) -> dict:
         blobs; largest_area, largest_gate and its measured values (None
         without a blob); cut: the ROI edges the largest touches; detected
         (the largest passes, as the robot runs);
-        hidden (the largest is refused but a smaller blob passes: lost
-        behind it); relaxed: the RELAXED names under which the largest
-        passes.
+        hidden (the largest is refused but a smaller blob passes: found
+        behind it, which the detector missed before 2026-10-20); relaxed:
+        for a frame not detected, the RELAXED names under which a blob passes.
     """
     found = blobs(sign_color_roi, sign_filter)
     row = {"blobs": len(found), "largest_area": None, "largest_gate": None, "measured": {}, "cut": "",
@@ -109,12 +109,17 @@ def check_frame(sign_color_roi, sign_filter) -> dict:
     if not found:
         return row
     gate, got = gate_of(found[0], sign_filter, sign_color_roi)
-    row.update(largest_area=got["area"], largest_gate=gate, measured=got, detected=gate is None,
+    row.update(largest_area=got["area"], largest_gate=gate, measured=got,
                cut=edges_touched(found[0], sign_color_roi.shape))
-    if gate is not None:
-        row["hidden"] = any(gate_of(c, sign_filter, sign_color_roi)[0] is None for c in found[1:])
+    if gate is None:
+        row["detected"] = True
+        return row
+    row["hidden"] = any(gate_of(c, sign_filter, sign_color_roi)[0] is None for c in found[1:])
+    row["detected"] = row["hidden"]                         # the detector goes on to the smaller blobs
+    if not row["detected"]:
         row["relaxed"] = [name for name, change in RELAXED
-                          if gate_of(found[0], replace(sign_filter, **change), sign_color_roi)[0] is None]
+                          if any(gate_of(c, replace(sign_filter, **change), sign_color_roi)[0] is None
+                                 for c in found)]
     return row
 
 
@@ -122,11 +127,12 @@ def summarize(rows: list[dict]) -> dict:
     """Frames with a red blob, detected, hidden behind a larger blob, refused per gate, and what each relaxed gate adds."""
     red = [r for r in rows if r["blobs"]]
     refused = [r for r in red if not r["detected"]]
+    largest_refused = [r for r in red if r["largest_gate"] is not None]
     by_gate = {}
-    for r in refused:
+    for r in largest_refused:
         by_gate[r["largest_gate"]] = by_gate.get(r["largest_gate"], 0) + 1
     return {"frames": len(rows), "with_red_blob": len(red), "detected": sum(r["detected"] for r in red),
-            "hidden_behind_larger": sum(r["hidden"] for r in refused),
+            "found_behind_larger": sum(r["hidden"] for r in red),
             "refused_cut_by_roi": sum(bool(r.get("cut")) for r in refused),
             "refused_by_gate": dict(sorted(by_gate.items(), key=lambda kv: -kv[1])),
             "relaxed_adds": {name: sum(name in r["relaxed"] for r in refused) for name, _ in RELAXED}}
@@ -136,9 +142,9 @@ def report(s: dict) -> list[str]:
     """The summary as printed."""
     lines = [f"{s['frames']} frames, {s['with_red_blob']} with a red blob in the sign ROI, "
              f"{s['detected']} detected as the robot runs",
-             f"lost behind a larger red blob (a smaller one would pass): {s['hidden_behind_larger']} frames",
+             f"found behind a larger, refused red blob (missed before 2026-10-20): {s['found_behind_larger']} frames",
              f"refused while cut off by the ROI's edge (the sign partly outside it): {s['refused_cut_by_roi']} frames",
-             "the largest blob refused by:"]
+             "the largest blob refused by (the sign, or something red beside it):"]
     lines += [f"  {g:<16}{n:6}" for g, n in s["refused_by_gate"].items()] or ["  (none)"]
     lines.append("frames detected with one gate relaxed:")
     lines += [f"  {name:<16}{n:+6}" for name, n in s["relaxed_adds"].items()]

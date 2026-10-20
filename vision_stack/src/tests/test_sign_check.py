@@ -2,8 +2,8 @@
 test_sign_check.py  --  src/analysis/sign_check.py
 
 A synthetic sign through the real gates: detected as it stands; cut by
-the sign ROI's top edge into 6 vertices and refused, the edge named; hidden
-behind a larger red blob the detector gates in its place; a gate's
+the sign ROI's top edge into 6 vertices and refused, the edge named; found
+behind a larger, refused red blob, as the detector now does; a gate's
 relaxing named when it alone refuses the sign; the summary's counts and
 the printed report; the command line over a folder of frames.
 
@@ -42,12 +42,12 @@ def test_a_sign_alone_is_detected():
     assert row["measured"]["vertices"] in (8, 9)
 
 
-def test_a_larger_red_blob_hides_the_sign_from_the_detector():
+def test_a_sign_behind_a_larger_refused_red_blob_is_found():
     frame = with_red_block(scene(sign=True, sign_radius=16))
     row = sc.check_frame(sign_roi(frame), FILTER)
-    assert row["blobs"] == 2 and not row["detected"] and row["hidden"]
+    assert row["blobs"] == 2 and row["detected"] and row["hidden"]
     assert row["largest_gate"] is not None                           # the block was gated, and refused
-    assert not run_chain(frame, 0, 0, SCENE_CONFIG).geometry.sign_candidates       # the robot sees no sign
+    assert run_chain(frame, 0, 0, SCENE_CONFIG).geometry.sign_candidates     # and the robot sees the sign
 
 
 def test_the_relaxed_gate_that_would_pass_is_named():
@@ -75,15 +75,16 @@ def test_no_red_is_no_blob():
 def test_the_summary_and_report():
     rows = [{"blobs": 0, "detected": False, "hidden": False, "largest_gate": None, "relaxed": [], "cut": ""},
             {"blobs": 1, "detected": True, "hidden": False, "largest_gate": None, "relaxed": []},
-            {"blobs": 2, "detected": False, "hidden": True, "largest_gate": "extent", "relaxed": []},
+            {"blobs": 2, "detected": True, "hidden": True, "largest_gate": "extent", "relaxed": []},
             {"blobs": 1, "detected": False, "hidden": False, "largest_gate": "letters",
              "relaxed": ["no letters", "no ghost gates"]}]
     s = sc.summarize(rows)
-    assert (s["frames"], s["with_red_blob"], s["detected"], s["hidden_behind_larger"]) == (4, 3, 1, 1)
+    assert (s["frames"], s["with_red_blob"], s["detected"], s["found_behind_larger"]) == (4, 3, 2, 1)
     assert s["refused_by_gate"] == {"extent": 1, "letters": 1}
     assert s["relaxed_adds"]["no letters"] == 1 and s["relaxed_adds"]["no aspect"] == 0
     text = "\n".join(sc.report(s))
-    assert "lost behind a larger red blob (a smaller one would pass): 1 frames" in text and "no letters" in text
+    assert "found behind a larger, refused red blob (missed before 2026-10-20): 1 frames" in text
+    assert "no letters" in text
     assert "cut off by the ROI's edge (the sign partly outside it): 0 frames" in text
 
 
@@ -100,8 +101,8 @@ def test_the_command_line_over_a_folder(tmp_path, capsys):
         from src.config import MEASURED
         sc.MEASURED = MEASURED
     out = capsys.readouterr().out
-    assert "3 frames, 2 with a red blob in the sign ROI, 1 detected" in out
+    assert "3 frames, 2 with a red blob in the sign ROI, 2 detected" in out
     summary = json.loads((tmp_path / "out" / "sign_check.json").read_text())["summary"]
-    assert summary["hidden_behind_larger"] == 1
+    assert summary["found_behind_larger"] == 1
     lines = (tmp_path / "out" / "sign_check.csv").read_text().splitlines()
     assert len(lines) == 4 and lines[1].split(",")[3] == "passed" and lines[0].split(",")[4] == "cut"
