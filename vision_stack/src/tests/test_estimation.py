@@ -104,6 +104,44 @@ def test_lane_jump_beyond_gate_is_a_dropout():
     assert any("[LANE] jump" in e for e in log)
 
 
+def single(offset, other, mode="left_only"):
+    """A one-boundary result: its offset as sided by the ROI's center, and the other side's."""
+    return LaneOffsetResult(offset, 10.0, None, None, 0.6, 1, mode, FID, TS, other_side_offset=other)
+
+
+@pytest.mark.software
+def test_lane_takes_one_boundary_as_the_other_side_when_its_side_breaks_continuity():
+    """
+    2026-10-20: the robot drifted right until its lane's right line crossed
+    the ROI's center; read as a left line (-0.73) against an estimate near
+    +0.8, it steered hard right and out. As the right line, it reads +0.92.
+    """
+    f = LaneFilter(Phase3Config())
+    f.update([lane(0.8)], [])
+    log = []
+    est = f.update([single(-0.73, 0.92)], log)
+    assert est.status == LANE_VISION
+    assert est.offset == pytest.approx(0.8 + 0.35 * (0.92 - 0.8), abs=1e-4)
+    assert any("taken as the other side" in e for e in log)
+
+
+@pytest.mark.software
+def test_lane_drops_one_boundary_that_fits_neither_side():
+    f = LaneFilter(Phase3Config())
+    f.update([lane(0.0)], [])
+    log = []
+    est = f.update([single(-0.8, 0.9)], log)
+    assert (est.offset, est.status) == (0.0, LANE_HOLD)
+    assert any("[LANE] jump" in e for e in log)
+
+
+@pytest.mark.software
+def test_lane_keeps_one_boundarys_own_side_when_it_fits():
+    f = LaneFilter(Phase3Config())
+    f.update([lane(-0.6)], [])
+    assert f.update([single(-0.7, 0.9)], []).offset == pytest.approx(-0.6 + 0.35 * -0.1, abs=1e-4)
+
+
 @pytest.mark.software
 def test_lane_reseeds_after_stale_so_the_jump_gate_cannot_lock_out():
     f = LaneFilter(Phase3Config(max_offset_jump=0.3, hold_max_frames=1))

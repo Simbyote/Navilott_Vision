@@ -65,6 +65,14 @@ def test_measured_keeps_the_swept_lane_gates():
 
 
 @pytest.mark.software
+def test_measured_takes_a_pair_as_a_lane_only_near_the_measured_width():
+    """Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line."""
+    lo = MEASURED.lane_offset
+    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (300.0, 400.0, 178.0)
+    assert lo.min_lane_width_px < 2 * lo.expected_half_lane_px < lo.max_lane_width_px
+
+
+@pytest.mark.software
 def test_bare_pipeline_config_is_each_stages_defaults():
     # run_chain's default; tests that mean "defaults" rely on it staying bare
     c = PipelineConfig()
@@ -81,9 +89,13 @@ def test_scene_config_is_measured_without_undistortion():
     assert SCENE_CONFIG.preprocess.calibration_path is None
     # Everything else, the HSV bands included, is MEASURED's; the cm
     # calibrations (ground plane, stop-line table) are left out on purpose,
-    # and the lamps get the scenes' own traffic ROI and blob gates
+    # the lamps get the scenes' own traffic ROI and blob gates, and the
+    # scenes' narrower lanes the default floor for a pair
     assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess, ground=MEASURED.ground,
-                   stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color) == MEASURED
+                   stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color,
+                   lane_offset=MEASURED.lane_offset) == MEASURED
+    assert replace(SCENE_CONFIG.lane_offset, min_lane_width_px=MEASURED.lane_offset.min_lane_width_px) \
+        == MEASURED.lane_offset
     assert SCENE_CONFIG.color.hsv_ranges == MEASURED.color.hsv_ranges
     assert replace(SCENE_CONFIG.roi, traffic=MEASURED.roi.traffic) == MEASURED.roi
     assert replace(SCENE_CONFIG.preprocess, calibration_path=MEASURED.preprocess.calibration_path) \

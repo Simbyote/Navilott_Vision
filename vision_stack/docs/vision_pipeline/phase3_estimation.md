@@ -66,6 +66,8 @@ A frame counts as a **measurement** only if:
 1. its mode is `two_boundary`, `left_only` or `right_only` (`none` and `single_uncalibrated` report 0.0 with nothing behind it), and
 2. its offset is within `max_offset_jump` (0.5) of the current estimate. A larger change between two frames isn't physically plausible at driving speed, so it's treated as a dropout.
 
+   One exception: a single-boundary frame whose offset fails the gate but whose `other_side_offset` passes it is taken as that, the line being the lane's other side. Perception picks a lone line's side by which half of the ROI it's in, so once the robot drifts past the lane's right line, that line reads as a left one. On 2026-10-20 that read −0.73 against a robot actually far right (+0.9 as the right line); seeded after a stale, it steered hard right and out of the lane. The log says `taken as the other side`.
+
 | Status | When | Offset reported |
 | --- | --- | --- |
 | `vision` | This frame was a measurement | EMA of the measurements |

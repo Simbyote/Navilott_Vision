@@ -80,13 +80,16 @@ SYNTHETIC_STOP_LINE_TABLE = StopLineTable(a=800.0, b=160.0, c=-2.0, image_size=(
 # against the placeholder blob gates (the sizes in scene() and
 # drive_sequence()), glow mode off: not the course's bare LEDs, which
 # MEASURED's color mode and traffic ROI are fit to (config.py,
-# roi_crop.TRAFFIC, 2026-10-06)
+# roi_crop.TRAFFIC, 2026-10-06). Their lanes are drawn narrower (140 px), under
+# MEASURED's 300 px floor for a pair (fit to the course's 357 px lane), so a
+# pair is taken from the default 60 px
 SCENE_TRAFFIC_ROI = ROIBounds(x0 = 0.30, y0 = 0.00, x1 = 0.60, y1 = 0.35)
 SCENE_CONFIG = replace(
     MEASURED,
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
     roi = replace(MEASURED.roi, traffic = SCENE_TRAFFIC_ROI),
     color = replace(MEASURED.color, blob = BlobFilter(), glow = None),
+    lane_offset = replace(MEASURED.lane_offset, min_lane_width_px = 60.0),
     ground = None,
     stop_line_table = None,
 )

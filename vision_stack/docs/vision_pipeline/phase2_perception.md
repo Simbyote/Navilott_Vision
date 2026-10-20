@@ -280,7 +280,7 @@ The robot sits at the center of the lane ROI. Its lane is bounded by the **neare
 2. All anchors on one side (the robot has drifted out): take the two nearest center. They still describe the nearest lane, and the offset steers back.
 3. One anchor: single-boundary mode.
 
-Then the pair's spacing is checked. Closer than 60 px means one marking seen twice; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor.
+Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 300 px (~0.84 of the 357 px lane). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
 
 ### The offset
 
@@ -302,7 +302,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 

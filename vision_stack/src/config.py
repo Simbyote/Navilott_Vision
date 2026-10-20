@@ -165,6 +165,13 @@ MEASURED = PipelineConfig(
         # frames around it (one dash seen: a hard swerve, then the jump gate
         # dropped the lane to hold and stale); at 178, ~0.04-0.08
         expected_half_lane_px = 178.0,
+        # 60 let pairs 61-65 px apart through as a lane (2026-10-20: one line
+        # and something beside it, as the robot neared the right line); one
+        # was accepted, flipped the estimate's sign and the robot veered off.
+        # The same run's real pairs were 325-400 px; its 250-300 px pairs put
+        # the robot twice as far left as the right line alone did. ~0.84 of
+        # the measured 357 px lane: a narrower pair falls to one line
+        min_lane_width_px = 300.0,
     ),
 )
 

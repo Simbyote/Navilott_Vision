@@ -278,6 +278,12 @@ class LaneFilter:
             return None
         return round(offset * (cfg.lane_roi_width_px / 2.0) * cfg.cm_per_px, 2)
 
+    def _jumps(self, offset: float) -> bool:
+        """True if offset is further than max_offset_jump from the estimate (never while it's unseeded)."""
+        cfg = self._cfg
+        return (cfg.max_offset_jump is not None and self._ema.value is not None
+                and abs(offset - self._ema.value) > cfg.max_offset_jump)
+
     def update(
             self,
             results: list[LaneOffsetResult],
@@ -298,20 +304,29 @@ class LaneFilter:
         cfg = self._cfg
         result = results[0] if results else None
         accepted = False
+        offset = None if result is None else result.offset
 
         if result is None:
             log.append("[LANE] no lane offset result supplied")
         elif result.mode not in USABLE_LANE_MODES:
             log.append(f"[LANE] mode {result.mode} carries no measurement")
-        elif (cfg.max_offset_jump is not None and self._ema.value is not None
-                and abs(result.offset - self._ema.value) > cfg.max_offset_jump):
-            log.append(f"[LANE] jump {result.offset - self._ema.value:+.3f} "
-                       f"exceeds {cfg.max_offset_jump}; treated as dropout")
+        elif self._jumps(offset):
+            # One boundary's side is a guess from where it sits in the ROI;
+            # past the lane's edge, its right line is left of center. The other
+            # side, if it fits the estimate, is the line it is.
+            other = getattr(result, "other_side_offset", None)
+            if other is not None and not self._jumps(other):
+                log.append(f"[LANE] {result.mode} {offset:+.3f} breaks continuity; "
+                           f"the line taken as the other side: {other:+.3f}")
+                offset, accepted = other, True
+            else:
+                log.append(f"[LANE] jump {offset - self._ema.value:+.3f} "
+                           f"exceeds {cfg.max_offset_jump}; treated as dropout")
         else:
             accepted = True
 
         if accepted:
-            self._last = self._ema.update(result.offset, cfg.ema_alpha)
+            self._last = self._ema.update(offset, cfg.ema_alpha)
             self._missed = 0
             status = LANE_VISION
         else:

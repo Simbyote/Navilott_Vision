@@ -320,6 +320,24 @@ def test_right_only_projects_the_lane_center_to_the_left_of_the_boundary():
 
 
 @pytest.mark.software
+@pytest.mark.parametrize("x", [130.0, 170.0])       # near center, so neither side clamps
+def test_one_boundary_carries_its_offset_were_it_the_lanes_other_side(x):
+    """A line left of center read as the lane's right line, and the reverse: Phase 3 takes it on a broken streak."""
+    res, _ = run([cand(x)], cfg=TEST_CFG)
+    half = TEST_CFG.expected_half_lane_px
+    other_center = x - half if res.mode == "left_only" else x + half
+    assert res.other_side_offset == round((CENTER_X - other_center) / CENTER_X, 4)
+    assert res.other_side_offset - res.offset == pytest.approx(
+        (2 if res.mode == "left_only" else -2) * half / CENTER_X, abs=1e-3)
+
+
+@pytest.mark.software
+def test_two_boundaries_have_no_other_side():
+    res, _ = run([cand(40), cand(260)], cfg=TEST_CFG)
+    assert res.mode == "two_boundary" and res.other_side_offset is None
+
+
+@pytest.mark.software
 def test_uncalibrated_single_boundary_emits_no_steering_signal():
     res, dbg = run([cand(100)], cfg=UNCALIBRATED)
     assert res.mode == "single_uncalibrated"
