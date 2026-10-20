@@ -112,14 +112,15 @@ MOTOR_WATCHDOG_S = 0.5
 
 # --- Wheels and encoders (estimation/odometry.py) ---
 # The nominal scale, used until scripts/calibrate_odometry.py writes
-# ODOMETRY_PATH: a 3.3 cm wheel, and 700 counts per wheel turn (a 7-pulse
-# encoder behind 100:1 N20s, sold as 300 RPM at 12 V; EncoderReader counts
-# one edge per pulse). It agrees with the drive's own numbers: CPS_PER_DUTY
-# 3000 is ~260 RPM at full duty, ~1166 counts/s at 0.40 is ~17 cm/s.
-# Measured beats this: tyres squash and the gearbox is the seller's word
+# ODOMETRY_PATH: a 3.3 cm wheel, and 1400 counts per wheel turn (a 7-pulse
+# encoder behind the N20s' 200:1 gearbox, sold as 12 V, 140 RPM no load;
+# EncoderReader counts one edge per pulse). It agrees with the drive's own
+# numbers: CPS_PER_DUTY 3000 is ~130 RPM at full duty, and ~1166 counts/s
+# at 0.40 is ~50 RPM, ~8.6 cm/s. Measured beats this: tyres squash, and the
+# encoder's pulses per turn are assumed
 WHEEL_DIAMETER_CM = 3.3
-ENCODER_COUNTS_PER_REV = 700
-NOMINAL_CM_PER_COUNT = math.pi * WHEEL_DIAMETER_CM / ENCODER_COUNTS_PER_REV     # ~0.0148
+ENCODER_COUNTS_PER_REV = 1400
+NOMINAL_CM_PER_COUNT = math.pi * WHEEL_DIAMETER_CM / ENCODER_COUNTS_PER_REV     # ~0.0074
 
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"

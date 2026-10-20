@@ -44,9 +44,9 @@ def test_threads_perception_and_the_collector_as_the_robot_runs_them():
 
 
 def test_the_nominal_odometry_scale_is_the_wheel_over_the_counts_per_turn():
-    # 3.3 cm wheels; 7-pulse encoders behind 100:1 N20s (300 RPM at 12 V)
-    assert (params.WHEEL_DIAMETER_CM, params.ENCODER_COUNTS_PER_REV) == (3.3, 700)
-    assert params.NOMINAL_CM_PER_COUNT == pytest.approx(0.01481, abs=1e-5)
+    # 3.3 cm wheels; 7-pulse encoders behind 200:1 N20s (12 V, 140 RPM no load: the seller's listing)
+    assert (params.WHEEL_DIAMETER_CM, params.ENCODER_COUNTS_PER_REV) == (3.3, 1400)
+    assert params.NOMINAL_CM_PER_COUNT == pytest.approx(0.007405, abs=1e-6)
 
 
 def test_the_bus_addresses_and_rates_are_the_boards():
