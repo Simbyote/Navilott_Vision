@@ -31,6 +31,7 @@ from src.peripherals.sensing import SensorBatch, SensorReading
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command
 from src.tests.scenes import SCENE_CONFIG, SCENES
+from src.config import MEASURED_ESTIMATION
 from src.tests.sim_robot import FakeBattery, FakeClock
 
 DT = 0.05
@@ -135,7 +136,8 @@ def go(tmp_path, cam=None, nav=None, sensors=None, system=None, render=False, **
 
 
 def rows(path):
-    return list(csv.DictReader(open(path)))
+    with open(path) as f:
+        return list(csv.DictReader(f))
 
 
 # =============================================================================
@@ -152,8 +154,28 @@ def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
     assert len(rows(out / "nav.csv")) == len(rows(out / "p3.csv")) == n
     assert rep["run"]["video_frames"] == rep["run"]["recorder_written"] == n
     assert motor.calls[-1] == ("stop",) and camera.closed
-    assert json.load(open(out / "report.json"))["nav"]["frames"] == n
+    assert json.loads((out / "report.json").read_text())["nav"]["frames"] == n
     assert "[NAVIGATION] ended by the source ended" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_the_collector_runs_as_params_says_off_while_driving_and_back_on_after(monkeypatch, tmp_path):
+    import gc
+    from src.params import GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
+    from src.utils import GcWatch
+    made, enabled = [], []
+
+    class Watch(GcWatch):
+        def __init__(self, *args):
+            made.append(args)
+            super().__init__(*args)
+    monkeypatch.setattr(nl, "GcWatch", Watch)
+    real = Motor.drive
+    monkeypatch.setattr(Motor, "drive", lambda self, *a: enabled.append(gc.isenabled()) or real(self, *a))
+    go(tmp_path)
+    assert made == [(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)]
+    assert enabled and set(enabled) == {not GC_DISABLE_IN_RUN}
+    assert gc.isenabled()
 
 
 @pytest.mark.software
@@ -678,3 +700,16 @@ def test_the_report_keeps_the_clock_at_the_start_for_lining_up_other_records(tmp
     rep, *_ = go(tmp_path)
     t = [float(r["t"]) for r in rows(tmp_path / "run" / "nav.csv")]
     assert rep["run"]["t0_monotonic"] == 100.0 and t[0] >= 0.0          # FakeClock starts at 100 s
+
+
+@pytest.mark.software
+def test_the_distance_driven_is_logged_every_frame(tmp_path):
+    class Counting(Sensors):
+        def read(self):
+            self.reads += 1
+            return SensorSample(left_count=100 * self.reads, right_count=120 * self.reads), None
+    _, out, *_ = go(tmp_path, sensors=Counting(None), p3_config=replace(MEASURED_ESTIMATION, cm_per_count=0.1))
+    r = rows(out / "nav.csv")
+    assert [float(x["distance_cm"]) for x in r[:3]] == [0.0, 11.0, 22.0]
+    _, out, *_ = go(tmp_path / "none", sensors=Counting(None), p3_config=replace(MEASURED_ESTIMATION, cm_per_count=None))
+    assert {x["distance_cm"] for x in rows(out / "nav.csv")} == {""}                # no scale: blank

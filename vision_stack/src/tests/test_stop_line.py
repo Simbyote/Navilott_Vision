@@ -10,7 +10,9 @@ crossing; reset.
 """
 import pytest
 
-from src.navigation.stop_line import APPROACH, CROSSING, IDLE, NEAR_BOTTOM_ROWS, STOP_DELAY_MS, StopLineTracker
+from src.navigation.stop_line import (
+    APPROACH, CROSS_ON_CLIP, CROSSING, IDLE, NEAR_BOTTOM_ROWS, REACH_CM, STOP_DELAY_MS, TILT_FRAMES, StopLineTracker,
+)
 from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
@@ -28,9 +30,16 @@ def feed(tracker, seq):
 
 @pytest.mark.software
 def test_the_constants_follow_the_calibration_and_the_runs():
-    # 500 since 2026-10-12 (0 from 2026-10-07): it carries the robot into the
-    # intersection, where the turn now starts without an advance
-    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0         # 0: the hanging light stays in view
+    # 0 since 2026-10-14 (500 from 2026-10-12): braking as the line leaves the
+    # view keeps the hanging traffic light in frame; turns get their distance
+    # from the intersection's advance instead
+    assert STOP_DELAY_MS == 0 and NEAR_BOTTOM_ROWS == 25.0
+    # By odometry since 2026-10-20 (odometry.json measured): reached with 9 cm of the line left, about
+    # where its near edge reaches the view's bottom (8.6 cm, the 2026-10-20 stop-line table)
+    assert REACH_CM == 9.0
+    assert TILT_FRAMES == 5                                        # fresh tilts in the approach-angle median
+    # The line leaves the view when its near edge reaches the bottom, not after the whole tape (2026-10-20)
+    assert CROSS_ON_CLIP is True
 
 
 
@@ -56,11 +65,25 @@ def test_crossing_remembers_when_the_line_left():
 @pytest.mark.parametrize("last_rows, crosses", [(NEAR_BOTTOM_ROWS, True), (NEAR_BOTTOM_ROWS + 0.5, False),
                                                 (0.0, True), (None, False)])
 def test_only_a_line_last_seen_near_the_bottom_counts_as_passed(last_rows, crosses):
-    t = StopLineTracker()
+    t = StopLineTracker(cross_on_clip=False)        # the vanish rule alone; a clipped line is the next test
     out = feed(t, [60.0, last_rows, None])
     assert (out[-1][0] == CROSSING) == crosses
     if not crosses:
         assert out[-1][0] == IDLE and t.last_rows is None
+
+
+@pytest.mark.software
+def test_the_line_has_left_the_view_once_its_near_edge_reaches_the_bottom():
+    # Clipped (0 rows) from the third frame for as many frames as the tape is wide: CROSSING starts on the
+    # first clipped frame, a tape's width before it vanishes; reached then, with STOP_DELAY_MS 0
+    t = StopLineTracker()
+    out = feed(t, [60.0, 12.0, 0.0, 0.0, 0.0, None])
+    assert [p for p, _ in out[:3]] == [APPROACH, APPROACH, CROSSING]
+    assert t.lost_ms is None and sum(r for _, r in out) == 1 and next(i for i, (_, r) in enumerate(out) if r) == \
+        2 + reach_frames(frame_ms=MS)
+    assert [p for p, _ in out[3:]] == [IDLE] * 3                       # the rest of the same tape starts nothing
+    old = feed(StopLineTracker(cross_on_clip=False), [60.0, 12.0, 0.0, 0.0, 0.0, None])
+    assert [p for p, _ in old[:5]] == [APPROACH] * 5                    # waited for the whole tape
 
 
 @pytest.mark.software
@@ -154,3 +177,115 @@ def test_the_reached_frame_says_when_its_line_first_came_into_view():
     assert reached == (IDLE, True, 100)                      # the line just reached, still named
     t.reset()
     assert t.seen_ms is None
+
+
+# =============================================================================
+# By distance, with odometry
+# =============================================================================
+
+def roll(tracker, sightings, after, step=3.0):
+    """
+    The robot rolling step cm a frame: sightings are the line's cm ahead on
+    each frame it's seen (rows near the bottom), then `after` frames gone.
+    Returns each frame's (odometry, reached, left_cm).
+    """
+    out = []
+    for i in range(len(sightings) + after):
+        cm = sightings[i] if i < len(sightings) else None
+        p = packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=cm is not None,
+                   stop_line_distance_px=None if cm is None else 10.0, stop_line_distance_cm=cm,
+                   distance_cm=i * step)
+        tracker.update(p)
+        out.append((i * step, tracker.reached, tracker.left_cm))
+    return out
+
+
+def reached_at(out):
+    return next((odo, left) for odo, reached, left in out if reached)
+
+
+@pytest.mark.software
+def test_by_distance_it_stops_nearest_the_mark_by_the_encoders():
+    # the line 20 cm ahead at odometry 0, seen down to 11 cm; 3 cm a frame
+    out = roll(StopLineTracker(reach_cm=5.0), [20.0, 17.0, 14.0, 11.0], 6)
+    odo, left = reached_at(out)
+    assert left == 5.0 and odo == 15.0                     # exactly on the mark when a frame lands there
+
+
+@pytest.mark.software
+def test_a_frame_stops_when_the_next_would_be_further_from_the_mark():
+    # 4 cm a frame, the mark 4 cm before the line: a frame stops if what's left
+    # is nearer the mark than what the next frame would leave
+    out = roll(StopLineTracker(reach_cm=4.0), [20.0, 16.0, 12.0], 5, step=4.0)
+    assert reached_at(out)[1] == 4.0
+    out = roll(StopLineTracker(reach_cm=4.0), [21.5, 17.5, 13.5], 5, step=4.0)
+    assert reached_at(out)[1] == 5.5                        # 5.5 is 1.5 over; the next, 1.5, is 2.5 under
+
+
+@pytest.mark.software
+def test_where_the_line_left_the_view_no_longer_moves_the_stop():
+    # A line last seen 11 cm or 13 cm ahead: the timed stop carries the 2 cm
+    # into where the robot stops; by distance every stop is within half a
+    # frame's travel (1.5 cm) of the mark
+    sightings = ([20.0, 17.0, 14.0, 11.0], [22.0, 19.0, 16.0, 13.0])
+    timed = [reached_at(roll(StopLineTracker(), s, 8))[1] for s in sightings]
+    measured = [reached_at(roll(StopLineTracker(reach_cm=2.0), s, 8))[1] for s in sightings]
+    assert timed[1] - timed[0] == 2.0
+    assert all(abs(left - 2.0) <= 1.5 for left in measured)
+
+
+@pytest.mark.software
+def test_a_held_distance_isnt_a_fresh_sighting():
+    # Phase 3 repeats 14.0 through a missed frame while the robot moves on: the line stays where 14.0 put it
+    out = roll(StopLineTracker(reach_cm=5.0), [20.0, 17.0, 14.0, 14.0], 6)
+    assert out[3][2] == 11.0                               # 20 ahead of 0, the robot at 9: not 14 ahead of 9
+
+
+@pytest.mark.software
+def test_a_clipped_sighting_doesnt_move_the_line_to_the_robot():
+    # The near edge reaches the view bottom at ~9 cm: the line reads clipped, 0 px and 0 cm, for as many
+    # frames as the tape is wide. The line stays where the last whole sighting (11 cm at odometry 9) put it
+    t = StopLineTracker(reach_cm=5.0)
+    for i, (px, cm) in enumerate([(30.0, 20.0), (20.0, 17.0), (12.0, 14.0), (5.0, 11.0), (0.0, 0.0), (0.0, 0.0)]):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=True, stop_line_distance_px=px,
+                        stop_line_distance_cm=cm, distance_cm=i * 3.0))
+    assert t.left_cm == pytest.approx(20.0 - 15.0)          # 5 cm left at odometry 15, not 0
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("line_cm, odometry", [(None, True), (12.0, False)])
+def test_without_a_line_cm_or_odometry_it_is_timed(line_cm, odometry):
+    t = StopLineTracker(reach_cm=5.0)
+    frames = [line_cm, line_cm, None, None, None, None]
+    for i, cm in enumerate(frames):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=i < 2, stop_line_distance_px=10.0 if i < 2 else None,
+                        stop_line_distance_cm=cm if i < 2 else None, distance_cm=i * 3.0 if odometry else None))
+        if t.reached:
+            break
+    assert t.reached and i == 2 + reach_frames(frame_ms=MS) and t.left_cm is None
+
+
+@pytest.mark.software
+def test_left_cm_is_logged_by_the_timed_stop_too():
+    out = roll(StopLineTracker(), [20.0, 17.0, 14.0, 11.0], 3)       # reach_cm None: STOP_DELAY_MS
+    odo, left = reached_at(out)
+    assert left == pytest.approx(20.0 - odo) and out[0][2] == 20.0
+
+
+# =============================================================================
+# The approach tilt
+# =============================================================================
+
+@pytest.mark.software
+def test_the_approach_tilt_is_the_median_of_the_last_fresh_tilts_until_the_line_is_reached():
+    t, states = StopLineTracker(), []
+    tilts = [9.0, 9.0, 1.0, 2.0, None, 3.0, 2.5, 2.0]                 # None: a frame Phase 3 held, no fresh tilt
+    frames = [(30.0 - 3 * i, tilt) for i, tilt in enumerate(tilts)] + [(None, None)] * 3
+    for i, (rows, tilt) in enumerate(frames):
+        t.update(packet(frame_id=i, timestamp_ms=i * MS, stop_line_detected=rows is not None,
+                        stop_line_distance_px=rows, stop_line_tilt_deg=tilt))
+        states.append((t.phase, t.reached, t.approach_tilt_deg))
+    assert all(a is None for phase, _, a in states if phase == APPROACH)
+    crossing = [a for phase, reached, a in states if phase == CROSSING or reached]
+    assert crossing and set(crossing) == {2.0}                               # median of 1, 2, 3, 2.5, 2: the 9s fell out
+    assert states[-1] == (IDLE, False, None)

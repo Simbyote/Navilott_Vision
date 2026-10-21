@@ -51,6 +51,7 @@ from src.estimation.estimation import (
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
 from src.peripherals.sensing import Sensors           # re-exported: older imports read it from here
+from src.perception import parallel
 
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
@@ -242,6 +243,9 @@ CSV_COLUMNS = (
     "left_wheel_cps", "right_wheel_cps",
     "p2_obstacle_px", "p2_obstacle_cm",
     "obstacle_detected", "obstacle_distance_px", "obstacle_distance_cm", "obstacle_clipped",
+    "distance_cm", "left_distance_cm", "right_distance_cm",
+    "stop_line_tilt_deg",
+    "yaw_deg", "yaw_span_s",
 )
 
 class CsvLog:
@@ -273,6 +277,9 @@ class CsvLog:
             pk.left_wheel_cps, pk.right_wheel_cps,
             res.chain.obstacle.distance_px, res.chain.obstacle.distance_cm,      # blank when Phase 2 saw none
             int(pk.obstacle_detected), pk.obstacle_distance_px, pk.obstacle_distance_cm, int(pk.obstacle_clipped),
+            pk.distance_cm, pk.left_distance_cm, pk.right_distance_cm,      # blank without odometry
+            pk.stop_line_tilt_deg,                                          # blank unless a line was seen
+            pk.yaw_deg, pk.yaw_span_s,                                      # blank without an IMU window
         ))
 
     def close(self) -> None:
@@ -307,7 +314,8 @@ class Phase3Stats:
         self.frames += 1
         for k, v in res.timings_ms.items():
             self.timings.setdefault(k, []).append(v)
-        stages = {**res.chain.timings_ms, **res.p3_debug.get("timings_ms", {})}
+        stages = {**res.chain.timings_ms, **{f"side_{k}": v for k, v in res.chain.side_timings_ms.items()},
+                  **res.p3_debug.get("timings_ms", {})}
         if "render" in res.timings_ms:
             stages["render"] = res.timings_ms["render"]
         for k, v in stages.items():
@@ -547,7 +555,9 @@ def cli(argv: list[str] | None = None) -> int:
     if not argv:
         ap.print_help()
         return 0
+    parallel.add_arguments(ap)
     args = ap.parse_args(argv)
+    parallel.apply(args)
 
     try:
         if args.camera:

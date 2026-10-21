@@ -7,7 +7,9 @@ OK, MISSED, OFF or WRONG, its median distance and error, clipped frames
 not measured; the routine on fake eyes: one trial per gap nearest first
 then the clear trials, planned from the settings, a JPEG per attempt, the
 range in the summary; each criterion on its own, and the brake decision
-not judged next to the stop distance.
+not judged next to the stop distance. Laterals: every gap at every offset,
+the offset in the prompt and the file name, only objects in the path
+judged, and the seen width per gap.
 
 --software  A scripted tester and fake eyes.
 """
@@ -170,3 +172,47 @@ def test_each_criterion_on_its_own():
         "false alarms on a clear lane", f"brake decisions wrong (gaps over 2 cm from {OBSTACLE_STOP_CM:g} cm)"]
     assert failed((20, oc.OK, 1.0, True)) == [f"brake decisions wrong (gaps over 2 cm from {OBSTACLE_STOP_CM:g} cm)"]
     assert failed((20, oc.OK, 1.0, False), (OBSTACLE_STOP_CM + 1, oc.OK, 0.5, False)) == []   # too near to judge
+
+
+# =============================================================================
+# Laterals: how wide the path the detector watches is
+# =============================================================================
+
+@pytest.mark.software
+def test_the_seen_width_is_the_widest_offset_every_object_read_ok_out_to():
+    ok, miss = oc.OK, oc.MISSED
+    res = [(15, -10, miss), (15, -5, ok), (15, 0, ok), (15, 5, ok), (15, 10, ok),
+           (25, -5, ok), (25, 0, miss), (25, 5, ok)]
+    assert oc.seen_width(res) == {15: 5, 25: None}                     # a miss at -10 caps 15 cm at 5
+
+
+@pytest.mark.software
+def test_every_gap_at_every_offset_and_only_the_path_is_judged(tmp_path):
+    # 2 gaps x offsets -8, 0, 8; missed 8 cm right at 20 cm, outside the 4 cm path: mapped, not a fault
+    looks = [at(15.0)] * 3 + [at(20.0), at(20.0), clear()] + [clear()]
+    eyes = FakeEyes(looks)
+    person = Person(*[""] * 14)
+    res = go(eyes, person, tmp_path, gaps="15,20", laterals="-8,0,8", in_path_cm=4, clear=1)
+    assert res["trials_planned"] == 7 and res["verdict"] == h.PASS, res["criteria"]
+    rows = results(tmp_path)["rows"]
+    assert [(r["gap_cm"], r["lateral_cm"]) for r in rows[:6]] == [(15, -8), (15, 0), (15, 8), (20, -8), (20, 0), (20, 8)]
+    assert rows[5]["result"] == oc.MISSED and rows[6]["state"] == oc.CLEAR
+    prompts = "\n".join(person.prompts)
+    assert "its center 8 cm left of the lane's middle" in prompts and "in the middle of the lane" in prompts
+    assert (tmp_path / "out" / "attempt_06_20cm_8cm.jpg").exists() and (tmp_path / "out" / "attempt_02_15cm.jpg").exists()
+    state = results(tmp_path)["state"]
+    assert state["range_cm"] == 20 and state["seen_width_cm"] == {"15": 8, "20": 0}
+    assert "at 20 cm: seen out to 0 cm off the middle, both sides" in person.said()
+
+
+@pytest.mark.software
+def test_an_object_off_the_middle_counts_once_it_is_inside_the_path():
+    r = oc.ObstacleCheck()
+    r._in_path = 5.0
+    rows = [{"gap_cm": 20, "lateral_cm": 8, "state": oc.PRESENT, "result": oc.MISSED, "error_cm": None,
+             "would_brake": False},
+            {"gap_cm": 20, "lateral_cm": 4, "state": oc.PRESENT, "result": oc.MISSED, "error_cm": None,
+             "would_brake": False}]
+    assert [c["name"] for c in r.judge(rows[:1]) if not c["passed"]] == ["worst distance error within 25 cm"]
+    assert "objects within 25 cm not seen" in [c["name"] for c in r.judge(rows) if not c["passed"]]
+    assert oc.ObstacleCheck().plan({"gaps": "10,20", "laterals": "-5,0,5", "clear": 2}) == 8

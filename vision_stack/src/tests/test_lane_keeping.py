@@ -27,6 +27,14 @@ def nav(**kw):
 # =============================================================================
 
 @pytest.mark.software
+def test_the_gains_the_robot_drives_with():
+    # Set on the bench demo (2026-09-30); not yet tuned on the course
+    assert BASE_SPEED == 0.40 and MAX_STEERING_ADJ == 0.40
+    assert (KP_CM, KP_NORM, GAIN_SCALE, KP_HEADING) == (0.015, 0.30, 0.05, 0.010)
+    assert NORM_TO_CM == 30.0                                      # carried over, not measured
+
+
+@pytest.mark.software
 def test_it_is_a_navigator():
     assert isinstance(nav(), Navigator)
 

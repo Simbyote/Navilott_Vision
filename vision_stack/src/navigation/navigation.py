@@ -75,7 +75,7 @@ class Navigation:
         through it, so a turn's arc holds as the battery drains.
 
     record: Why the last update() returned what it did:
-        {"rule": RULE_*, "phase": the tracker's phase, plus the deciding
+        {"rule": RULE_*, "phase": the tracker's phase, "line_left_cm": its left_cm, plus the deciding
         part's own record ("reason", and "source" / "steer" when steering)}.
     """
     def __init__(self, lane: LaneKeepingNavigator | None = None, tracker: StopLineTracker | None = None,
@@ -129,7 +129,7 @@ class Navigation:
         # This packet's wheel speeds answer the last command: the gain learns from them
         self.wheels.observe(self._last_cmd, packet)
         if self.finished:
-            self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, **self._end.record}
+            self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, "line_left_cm": self.tracker.left_cm, **self._end.record}
             self._last_cmd = BRAKE
             return BRAKE
         # No new stop line while crossing: marks inside an intersection (the
@@ -147,6 +147,6 @@ class Navigation:
         if self.finished:                        # the finish line, reached this frame, beats any rule
             decided = (RULE_END_OF_COURSE, self._end, BRAKE)
         name, part, cmd = decided
-        self.record = {"rule": name, "phase": self.tracker.phase, "step": self.progress.label(), **part.record}
+        self.record = {"rule": name, "phase": self.tracker.phase, "line_left_cm": self.tracker.left_cm, "step": self.progress.label(), **part.record}
         self._last_cmd = cmd
         return cmd

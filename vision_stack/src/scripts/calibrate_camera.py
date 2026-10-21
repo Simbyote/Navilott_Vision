@@ -33,7 +33,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from src.capture.camera import build_gst_pipeline
+from src.capture.camera import build_gst_pipeline, orient
 from src.params import (
     CAMERA_CALIB_PATH, CAMERA_ROTATE_180, FPS, FRAME_H, FRAME_W, PIPELINE_ROOT, SENSOR_CONFIG,
 )
@@ -186,6 +186,7 @@ def capture(args) -> None:
             ok, frame = cap.read()
             if not ok:
                 continue
+            frame = orient(frame)          # upright, as CameraSource delivers it
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             corners = find_corners(gray, pattern)
@@ -384,6 +385,7 @@ def verify(args) -> None:
         ok, frame = cap.read()
         cap.release()
         if ok:
+            frame = orient(frame)
             und = undistort(frame, params)
             _save_pair(out_dir / "verify_live.png", frame, und)
             print("  verify_live.png  saved (live view: check that tape looks straight)")

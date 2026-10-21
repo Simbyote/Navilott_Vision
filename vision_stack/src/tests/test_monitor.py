@@ -157,7 +157,8 @@ def test_the_run_folder_holds_every_file_and_the_summary_names_each_thread(tmp_p
     assert json.loads((tmp_path / "meta.json").read_text())["command"] == "python3 -m src.main"
     for name, fields in (("threads.csv", THREAD_FIELDS), ("cores.csv", CORE_FIELDS), ("system.csv", mon.SYSTEM_COLUMNS),
                          ("irqs.csv", osc.IRQ_FIELDS), ("procs.csv", osc.PROC_FIELDS)):
-        assert next(csv.reader(open(tmp_path / name))) == list(fields)
+        with open(tmp_path / name) as f:
+            assert next(csv.reader(f)) == list(fields)
     assert "os (the whole Pi)" in text and text.count("none recorded") == 2
 
 
@@ -219,7 +220,8 @@ def test_cli_launches_a_run_records_it_and_returns_its_exit_code(tmp_path):
              "t = threading.Thread(target=w); t.start(); t.join(); sys.exit(3)\n")
     code = mon.cli(["--interval", "0.2", "--out", str(tmp_path), "--", sys.executable, "-c", child])
     assert code == 3
-    names = {r["name"] for r in csv.DictReader(open(tmp_path / "threads.csv"))}
+    with open(tmp_path / "threads.csv") as f:
+        names = {r["name"] for r in csv.DictReader(f)}
     assert {"main", "child-worker"} <= names
     assert "child-worker" in (tmp_path / "summary.txt").read_text()
 

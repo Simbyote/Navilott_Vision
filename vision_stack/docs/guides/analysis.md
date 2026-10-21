@@ -28,6 +28,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `stability` | `p3.csv`, `lane_offset_timing.csv`, `stages.csv` | `stability.png`, `stability.json` | Offset std (noise floor), transitions and flickers per 100 frames |
 | `offset_accuracy` | one `p3.csv` per measured position | `offset_accuracy.png`, `offset_accuracy.json` | Bias per position, fit slope and intercept, the PASS/FAIL verdict |
 | `gate_rejections` | `geometry_timing.csv`, `color_timing.csv` | `gate_rejections.png`, `gate_rejections.json` | The gate with the largest share, per detector |
+| `sign_check` | recorded frames: a run's `frames/`, a video, or a routine's saved looks (`--frames DIR`, `--video PATH`) | `sign_check.csv`, `sign_check.json` | Why a stop sign in view isn't detected: per frame, the largest red blob's gate and measurements, whether it's cut off by the sign ROI's edge, whether a smaller red blob (the sign) was hidden behind it, and the frames each relaxed gate would add; `make sign-check ARGS="--frames ..."` |
 | `state_timeline` | `nav.csv` (rule, stage, lane, light) or `p3.csv` | `state_timeline.png`, `state_timeline.json` | Hold and stale dwell times, stop latching, frequent transitions; on a `nav.csv`, how long each rule and stage lasts |
 | `soak` | `system.csv` (from `test_soak` or a diagnostics recording), `soak_frames.csv` if there is one | `soak.png`, `soak.json` | Throttle flags, RSS trend in MB/min, loop time per minute against temperature |
 | `detection_range` | one `p3.csv` or `fusion_timing.csv` per measured distance | `detection_range.png`, `detection_range.json` | Reliable range per target, and where detection falls off |
@@ -35,6 +36,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `pi_load` | a `runs/diag_*` recording (`src.diagnostics.monitor`); optionally the run it recorded | `pi_load.png`, `pi_load.json` | Serial or parallel work, the frame loop's CPU, sensor-hub's cadence, heat and clock, the rest of the Pi (interrupts, other processes, SD card, pressure), over the run's own time when given the run; what slow frames coincided with |
 | `routine_report` | a routine folder's `results.json` (`runs/routine_<name>_<time>`; `samples.csv` for power-profile; `attempt_NN/nav.csv`) | `routine_report.png`, `routine_report.json`; `nav_run.png`, `.json` in each attempt | Each criterion as a gauge (pass region shaded, value marked), the routine's own plot, every changing field per trial; `make routine-report RUN=...` |
 | `hw_report` | a `pytest --hardware` run folder (`artifacts/<time>`) | each tool's own figures and JSON beside each CSV it read; `hw_report.txt` in the run folder | Every analysis the run can feed in one call: `stage_timing` and `jitter` on each `stage_timing.csv`, `stages.csv` and capture `frames.csv`, `stability` on `lane_offset_timing.csv`, `gate_rejections` on the geometry and color CSVs, `soak` on `system.csv`; `make hw-report RUN=artifacts/...` |
+| `parallel_compare` | frames: a run's `frames/` folder, a video, or `--camera` | `runs/parallel_<time>/compare.json` | Serial against parallel perception on the same frames held in memory: Phase 2 p50 / p95 / max, the main thread's `branch_wait`, the side thread's color and obstacle, CPU in cores, and the gain at p50; `make compare-parallel ARGS=...` |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 **Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
@@ -157,6 +159,15 @@ python3 -m src.analysis.compare_runs artifacts/<before> artifacts/<after>
 ```
 
 Prints each side's git commit from `run_meta.json`. It flags size, not direction: a lower `stage_ms.p95` is good, a lower `frames_with_lane` isn't.
+
+**Parallel perception (`parallel_compare`):** Phase 2's color and obstacle branches can run on a side thread while the main thread runs geometry (`perception/parallel.py`; `PARALLEL_PERCEPTION` in `params.py`, off by default; `--parallel` / `--serial` on `main.py` and every linker for one run). Whether it wins on the Pi depends on how much of each branch is inside OpenCV, which releases the GIL. Measure it on the Pi, robot still:
+
+```
+make compare-parallel ARGS="--frames runs/nav_<time>/frames"                      # a course run's frames
+make compare-parallel ARGS="--frames runs/nav_<time>/frames --opencv-threads 1,2" # and OpenCV's own threads
+```
+
+Frames are held in memory and the modes alternate every 20 frames, so heat and the clock governor hit both alike. Read `p50 ms` (Phase 2 per frame), `wait p50` (the main thread waiting for the side thread: near 0 means geometry is the long pole, as expected), and `cores` (CPU time over wall time). Then confirm on a course run with `--parallel`: nav.csv's `phase2_ms`, `summary.txt`'s `[TIMING]` (`branch_wait`, `side_color`, `side_obstacle`), and a `make diag-nav` recording, where the side thread shows as `p2-side`. The results are identical either way (`test_parallel`).
 
 ## Cautions
 

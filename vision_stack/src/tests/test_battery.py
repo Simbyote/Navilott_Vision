@@ -63,6 +63,13 @@ def test_the_pack_voltage_is_the_pin_times_the_divider(pwr):
     assert Power.DIVIDER_RATIO == 4.0
 
 
+def test_the_thresholds_are_the_3s_packs():
+    # 3.5 V and 3.3 V a cell: warn, then end the run after CONFIRM_SAMPLES readings
+    assert (Power.VOLTAGE_FULL, Power.VOLTAGE_NOMINAL) == (12.6, 11.1)
+    assert (Power.VOLTAGE_WARNING, Power.VOLTAGE_CRITICAL, Power.VOLTAGE_EMPTY) == (10.5, 9.9, 9.0)
+    assert (Power.HYSTERESIS_V, Power.CONFIRM_SAMPLES, Power._EMA_ALPHA) == (0.3, 3, 0.3)
+
+
 @pytest.mark.parametrize("pack_v, ok", [(12.2, True), (10.4, False)])
 def test_preflight_averages_resting_reads_against_the_warning_threshold(pwr, pack_v, ok):
     p, ch = pwr

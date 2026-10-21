@@ -9,6 +9,7 @@ records.pkl cut short by a crash.
 --software  Drawing and rendering from files. No hardware.
 """
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -116,7 +117,7 @@ def test_render_run_writes_one_frame_per_record_at_one_size(run_dir, tmp_path):
 def test_missing_frames_are_skipped_and_counted(run_dir):
     rep, out = run_dir
     gone = [frame_path(str(out), r["frame_id"]) for r in list(read_records(str(out)))[5:8]]
-    saved = [open(p, "rb").read() for p in gone]
+    saved = [Path(p).read_bytes() for p in gone]
     for p in gone:
         os.remove(p)
     try:
@@ -124,7 +125,7 @@ def test_missing_frames_are_skipped_and_counted(run_dir):
         assert res["missing"] == 3 and res["rendered"] == rep["run"]["recorder_written"] - 3
     finally:
         for p, data in zip(gone, saved):
-            open(p, "wb").write(data)
+            Path(p).write_bytes(data)
 
 
 @pytest.mark.software

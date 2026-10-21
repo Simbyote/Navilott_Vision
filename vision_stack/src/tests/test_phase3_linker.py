@@ -170,3 +170,9 @@ def test_the_obstacle_reaches_the_status_line_the_events_and_p3_csv(tmp_path):
     assert [r["obstacle_detected"] for r in rows] == ["0", "0", "1", "1", "1"]
     assert rows[1]["p2_obstacle_px"] != "" and rows[0]["p2_obstacle_px"] == ""
     assert rows[-1]["obstacle_clipped"] == "1" and rows[-1]["obstacle_distance_px"] == "0.0"
+
+
+@pytest.mark.software
+def test_the_odometry_tilt_and_integrated_yaw_columns_are_appended_last():
+    assert p3.CSV_COLUMNS[-6:] == ("distance_cm", "left_distance_cm", "right_distance_cm", "stop_line_tilt_deg",
+                                   "yaw_deg", "yaw_span_s")

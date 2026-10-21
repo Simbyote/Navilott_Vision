@@ -30,17 +30,19 @@ Flow:
     malformed rather than on the first frame. It also loads
     calibration/ground_homography.json once, checked against MEASURED's own
     preprocess settings; missing or mismatched, it warns and leaves ground
-    None, which only turns the cm outputs off. The lens calibration is stored
-    as a path and read by preprocess on first use.
+    None, which only turns the cm outputs off. MEASURED_ESTIMATION reads
+    calibration/odometry.json the same way: missing, distances are None. The
+    lens calibration is stored as a path and read by preprocess on first use.
 """
 import warnings
 from dataclasses import dataclass, field
 
 from src.estimation.estimation import Phase3Config
+from src.estimation.odometry import load_odometry
 from src.maneuver import ManeuverConfig
 from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
-    STOP_LINE_TABLE_PATH,
+    NOMINAL_CM_PER_COUNT, ODOMETRY_PATH, STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, load_color_config
 from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
@@ -127,22 +129,27 @@ MEASURED = PipelineConfig(
     color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB, glow = _TRAFFIC_LIGHT_GLOW),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
-    # Stop lines within 2 deg of horizontal (default 20): the near end of a
+    # Stop lines within 4 deg of horizontal (default 20): the near end of a
     # thick diagonal lane line passed for a stop line past an intersection
     # (2026-10-01 run; 15 then); 5 cut the false lines further on the mat
     # (2026-10-05), but still took parts of the intersection itself for stop
     # lines, each counted as another intersection; 2 stopped that (2026-10-07).
-    # The cost: a real line approached more than 2 deg off square is missed
+    # 4 since 2026-10-19: at 2 a real line approached a little off square was
+    # missed (detect-range --set target=line --set angles=... maps where).
+    # The cost: a real line approached more than 4 deg off square is missed
     # Ghost signs (seen on course runs, Oct 2026): a leg or parts of a chair in
     # the background passed as a stop sign now and then, and the robot stopped
     # at a plain stop line. Any solid, roundish red blob reaches 8-9 hull
     # vertices, so shape and content are gated too. Synthetic octagons read
     # aspect 1.0 and extent 0.75-0.81 (0.83 for a perfect one); their
-    # letters 11-16% white from radius 28 px. First guesses: not yet checked
-    # on course frames, against the course's own sign
+    # letters 11-16% white from radius 28 px. The course's own sign, on a
+    # run's frames (sign_check, 2026-10-20): aspect 0.55-0.72 and extent
+    # 0.63-0.75, narrower than a square-on octagon, so the first guesses
+    # (0.6-1.6, 0.68-0.92) cut through it; lowered to 0.5 and 0.6. A leg is
+    # still ~0.3 wide for its height, a chair back still boxier than 0.92
     geometry = GeometryConfig(
         stop_line = StopLineFilter(max_tilt_deg = 4.0),
-        sign = SignContourFilter(aspect_range = (0.6, 1.6), extent_range = (0.68, 0.92), min_letter_share = 0.03),
+        sign = SignContourFilter(aspect_range = (0.5, 1.6), extent_range = (0.6, 0.92), min_letter_share = 0.03),
     ),
     lane_offset = LaneOffsetConfig(
         conf_threshold = 0.25,
@@ -158,6 +165,13 @@ MEASURED = PipelineConfig(
         # frames around it (one dash seen: a hard swerve, then the jump gate
         # dropped the lane to hold and stale); at 178, ~0.04-0.08
         expected_half_lane_px = 178.0,
+        # 60 let pairs 61-65 px apart through as a lane (2026-10-20: one line
+        # and something beside it, as the robot neared the right line); one
+        # was accepted, flipped the estimate's sign and the robot veered off.
+        # The same run's real pairs were 325-400 px; its 250-300 px pairs put
+        # the robot twice as far left as the right line alone did. ~0.84 of
+        # the measured 357 px lane: a narrower pair falls to one line
+        min_lane_width_px = 300.0,
     ),
 )
 
@@ -168,16 +182,19 @@ if MEASURED.ground is None and MEASURED.stop_line_table is None:
 # Gyro Z at rest, deg/s, in the sensor hub's frame (+ = turning right, after
 # IMU_YAW_SIGN): the one bias every yaw reading is corrected by before it's
 # integrated, in Phase 3's heading, the intersection's heading hold and the
-# drive trial. The 2026-09-29 phase3_linker run read -1.1 raw at rest; it was
+# drive trial. The 2026-09-29 phase3_linker run read -0.90 raw at rest; it was
 # +1.1 while IMU_YAW_SIGN was -1, and with IMU_YAW_SIGN = 1 (2026-10-01) the
 # hub frame is the raw one. Re-measure, robot still: maneuver_linker prints
 # it ("gyro bias at rest ... measured"), as does test_imu --hardware (bias_dps)
-GYRO_BIAS_DPS = -1.1
+GYRO_BIAS_DPS = -0.90
 
 # Phase 3: estimation.Phase3Config's defaults until course runs tune them,
-# with this robot's gyro bias. lane_roi_width_px stays None: Pipeline
-# derives it from MEASURED's lane ROI when cm_per_px is set.
-MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS)
+# with this robot's gyro bias and odometry scale (calibration/odometry.json;
+# without it params' NOMINAL_CM_PER_COUNT, from the wheel and the gearbox).
+# lane_roi_width_px stays None: Pipeline derives it from MEASURED's lane ROI
+# when cm_per_px is set.
+MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS,
+                                   cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
 
 # maneuver_linker's drive trial: ManeuverConfig's placeholders until course
 # runs set them. leg_counts in particular is a guess until counts per meter

@@ -46,6 +46,7 @@ from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING, Navi
 from src.navigation.route import LEFT, MANEUVERS, RIGHT, STRAIGHT, Route
 from src.navigation_linker import run as navigation_run
 from src.params import RUNS_DIR
+from src.perception import parallel
 
 # Lane keeping on vision this long after the crossing ends the sequence:
 # the robot found its lane again and kept it
@@ -68,7 +69,9 @@ class SequenceWatch:
     crossing, and keeps the findings.
 
     Inputs:
-        gyro_bias_dps: Subtracted from each row's yaw_rate (raw) for the heading.
+        gyro_bias_dps: Subtracted from each row's turn (raw) for the heading:
+            its yaw_deg over yaw_span_s, as the robot's rule counts it, or
+            yaw_rate x the row's step in a nav.csv without them.
         settle_s: See SETTLE_S.
     """
     def __init__(self, gyro_bias_dps: float = 0.0, settle_s: float = SETTLE_S) -> None:
@@ -93,7 +96,10 @@ class SequenceWatch:
             self.started = True
             self.stage_s[stage] += dt
         if self.started:
-            self.heading += (float(n.get("yaw_rate") or 0.0) - self.gyro_bias_dps) * dt
+            if n.get("yaw_deg") not in (None, ""):
+                self.heading += float(n["yaw_deg"]) - self.gyro_bias_dps * float(n.get("yaw_span_s") or 0.0)
+            else:
+                self.heading += (float(n.get("yaw_rate") or 0.0) - self.gyro_bias_dps) * dt
         if n.get("turn_end") and self.turn_end is None:
             self.turn_end, self.heading_at_turn_end = n["turn_end"], self.heading
         if self.started and rule == RULE_LANE_KEEPING:
@@ -216,7 +222,9 @@ def cli(argv: list[str] | None = None) -> int:
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--no-render", action="store_true", help="skip each sequence's video")
     ap.add_argument("--out", default=None, metavar="DIR")
+    parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    parallel.apply(args)
     try:
         camera_controls = parse_controls(args.camera_control)
     except ValueError as exc:

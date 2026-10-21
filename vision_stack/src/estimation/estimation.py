@@ -27,7 +27,8 @@ Flow (Phase3Processor.process() is the only place the order is written):
     5. StopLineClassifier: majority vote -> bool, with the distance held
        through frames that miss the line while the vote stands.
     6. ObstacleClassifier: the same for the obstacle in the robot's path.
-    7. Assemble the EstimationPacket.
+    7. Odometer: encoder counts -> distance driven, cm (odometry.py).
+    8. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from src.params import (
     TRAFFIC_LIGHT, YELLOW,
 )
 from src.utils import clamp
+from src.estimation.odometry import Odometer
 from src.perception.feature_fusion import DetectionObject
 from src.perception.lane_offset import LaneOffsetResult
 from src.perception.obstacle import ObstacleResult
@@ -77,6 +79,8 @@ class Phase3Config:
     heading_limit_deg: float = 90.0         # clamp on the integrated heading
     max_dt_s: float = 0.5                   # longer frame gaps are clamped so a stall can't integrate a large heading step
 
+    cm_per_count: float | None = None       # floor cm per encoder count (calibration/odometry.json); None leaves every distance unset
+
 
 def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
                         frame_size: tuple[int, int]) -> Phase3Config:
@@ -104,6 +108,13 @@ class SensorSample:
     lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
     left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
     right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
+    left_count: int | None = None              # cumulative left count at the window's end; + = forward
+    right_count: int | None = None             # cumulative right count at the window's end
+    # Degrees turned over the window, integrated reading by reading (raw: the
+    # gyro bias is subtracted over yaw_span_s). None leaves the heading to
+    # yaw_rate_dps x the frame step, as replays without it do
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
 
     @classmethod
     def from_batch(cls, batch) -> "SensorSample":
@@ -112,15 +123,20 @@ class SensorSample:
 
         Inputs:
             batch: Duck-typed on mean_yaw_dps (already + = turning right),
-                peak_lateral_accel, left_cps and right_cps, so this module
-                never imports sensing. Each is None when its sensor isn't
-                there or gave nothing this window.
+                peak_lateral_accel, left_cps, right_cps, left_count,
+                right_count, yaw_deg and yaw_span_s, so this module never
+                imports sensing. Each is None when its sensor isn't there or
+                gave nothing this window.
         """
         return cls(
             yaw_rate_dps = batch.mean_yaw_dps,
             lateral_accel_mps2 = batch.peak_lateral_accel,
             left_wheel_cps = batch.left_cps,
             right_wheel_cps = batch.right_cps,
+            left_count = getattr(batch, "left_count", None),
+            right_count = getattr(batch, "right_count", None),
+            yaw_deg = getattr(batch, "yaw_deg", None),
+            yaw_span_s = getattr(batch, "yaw_span_s", None),
         )
 
 @dataclass(frozen=True)
@@ -170,6 +186,22 @@ class EstimationPacket:
     obstacle_distance_px: float | None = None
     obstacle_distance_cm: float | None = None
     obstacle_clipped: bool = False
+    # Odometry (odometry.py): floor cm driven since the run's first encoder
+    # reading, + = forward; the axle's midpoint, and each wheel. None
+    # without encoders or without Phase3Config.cm_per_count
+    distance_cm: float | None = None
+    left_distance_cm: float | None = None
+    right_distance_cm: float | None = None
+    # The voted stop line's tilt in the image, this frame's measurement only
+    # (never held), deg from horizontal, + = its right end nearer the robot.
+    # None unless stop_line_detected and seen this frame. The intersection
+    # rule reads the approach angle from it
+    stop_line_tilt_deg: float | None = None
+    # Pass-through: degrees turned over this frame's sensor window, integrated
+    # reading by reading, raw (the gyro bias is the reader's, over yaw_span_s).
+    # None without it; readers then fall back to yaw_rate x the frame step
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
@@ -246,6 +278,12 @@ class LaneFilter:
             return None
         return round(offset * (cfg.lane_roi_width_px / 2.0) * cfg.cm_per_px, 2)
 
+    def _jumps(self, offset: float) -> bool:
+        """True if offset is further than max_offset_jump from the estimate (never while it's unseeded)."""
+        cfg = self._cfg
+        return (cfg.max_offset_jump is not None and self._ema.value is not None
+                and abs(offset - self._ema.value) > cfg.max_offset_jump)
+
     def update(
             self,
             results: list[LaneOffsetResult],
@@ -266,20 +304,29 @@ class LaneFilter:
         cfg = self._cfg
         result = results[0] if results else None
         accepted = False
+        offset = None if result is None else result.offset
 
         if result is None:
             log.append("[LANE] no lane offset result supplied")
         elif result.mode not in USABLE_LANE_MODES:
             log.append(f"[LANE] mode {result.mode} carries no measurement")
-        elif (cfg.max_offset_jump is not None and self._ema.value is not None
-                and abs(result.offset - self._ema.value) > cfg.max_offset_jump):
-            log.append(f"[LANE] jump {result.offset - self._ema.value:+.3f} "
-                       f"exceeds {cfg.max_offset_jump}; treated as dropout")
+        elif self._jumps(offset):
+            # One boundary's side is a guess from where it sits in the ROI;
+            # past the lane's edge, its right line is left of center. The other
+            # side, if it fits the estimate, is the line it is.
+            other = getattr(result, "other_side_offset", None)
+            if other is not None and not self._jumps(other):
+                log.append(f"[LANE] {result.mode} {offset:+.3f} breaks continuity; "
+                           f"the line taken as the other side: {other:+.3f}")
+                offset, accepted = other, True
+            else:
+                log.append(f"[LANE] jump {offset - self._ema.value:+.3f} "
+                           f"exceeds {cfg.max_offset_jump}; treated as dropout")
         else:
             accepted = True
 
         if accepted:
-            self._last = self._ema.update(result.offset, cfg.ema_alpha)
+            self._last = self._ema.update(offset, cfg.ema_alpha)
             self._missed = 0
             status = LANE_VISION
         else:
@@ -315,24 +362,37 @@ class HeadingTracker:
             yaw_rate_dps: float | None,
             dt: float,
             log: list[str],
+            yaw_deg: float | None = None,
+            yaw_span_s: float | None = None,
         ) -> float:
         """
         Degrees turned since vision was lost, clamped to +/- heading_limit_deg.
 
         Inputs:
             lane_status: LANE_VISION resets the heading to 0.
-            yaw_rate_dps: None holds the heading and logs it.
-            dt: Seconds since the previous frame; 0 integrates nothing.
+            yaw_rate_dps: None (and no yaw_deg) holds the heading and logs it.
+            dt: Seconds since the previous frame, already clamped to
+                max_dt_s; 0 integrates nothing. Used only without yaw_deg.
+            yaw_deg, yaw_span_s: The window's turn, integrated reading by
+                reading, and the seconds it covers. When given, the heading
+                steps by exactly that (less the bias over the span), however
+                long the frame gap was: a stall loses only readings the hub
+                couldn't keep.
         """
         cfg = self._cfg
         if lane_status == LANE_VISION:
             self._heading = 0.0
+            return 0.0
+        if yaw_deg is not None:
+            step = yaw_deg - cfg.gyro_bias_dps * (yaw_span_s or 0.0)
         elif yaw_rate_dps is None:
             log.append("[HEADING] no yaw rate this frame; heading held")
-        elif dt > 0.0:
-            self._heading += (yaw_rate_dps - cfg.gyro_bias_dps) * dt
+            step = 0.0
+        else:
+            step = (yaw_rate_dps - cfg.gyro_bias_dps) * dt
+        if step:
             limit = cfg.heading_limit_deg
-            self._heading = clamp(self._heading, -limit, limit)
+            self._heading = clamp(self._heading + step, -limit, limit)
         return round(self._heading, 3)
 
 
@@ -398,12 +458,14 @@ class StopLineClassifier:
     measurement already refuses weak candidates. While the vote says a line
     is there, a frame that misses it repeats the last measured distances (px
     and cm together, from the same frame); both are None whenever the vote
-    says there isn't one.
+    says there isn't one. tilt is this frame's measured tilt only: never
+    held, None on a missed frame or while the vote says there's no line.
     """
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, False)
         self._last: tuple[float | None, float | None] = (None, None)
+        self.tilt: float | None = None
 
     def update(
             self,
@@ -414,7 +476,9 @@ class StopLineClassifier:
         seen = next((r for r in results if r.detected), None)
         if seen is not None:
             self._last = (seen.distance_px, seen.distance_cm)
-        if not self._vote.update(seen is not None):
+        voted = self._vote.update(seen is not None)
+        self.tilt = seen.tilt_deg if voted and seen is not None else None
+        if not voted:
             return False, None, None
         if seen is None:
             log.append(f"[STOPLINE] missed this frame; holding {self._last[0]:.1f}px")
@@ -464,6 +528,7 @@ class Phase3Processor:
         self.stop_sign = StopSignClassifier(self._cfg)
         self.stop_line = StopLineClassifier(self._cfg)
         self.obstacle = ObstacleClassifier(self._cfg)
+        self.odometry = Odometer(self._cfg.cm_per_count)
         self._last_ts: int | None = None
 
     def _dt(self, timestamp_ms: int, log: list[str]) -> float:
@@ -502,11 +567,12 @@ class Phase3Processor:
 
         dt = self._dt(phase2.timestamp_ms, log)
         lane = self.lane.update(phase2.lane_offset_results, log)
-        heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log)
+        heading = self.heading.update(lane.status, sensors.yaw_rate_dps, dt, log, sensors.yaw_deg, sensors.yaw_span_s)
         drive_state = self.traffic.update(phase2.detections, log)
         stop_sign = self.stop_sign.update(phase2.detections, log)
         stop_line, stop_line_px, stop_line_cm = self.stop_line.update(phase2.stop_line_results, log)
         obstacle, obstacle_px, obstacle_cm, obstacle_clipped = self.obstacle.update(phase2.obstacle_results, log)
+        odom = self.odometry.update(sensors.left_count, sensors.right_count, log)
 
         packet = EstimationPacket(
             lane_offset = lane.offset,
@@ -529,6 +595,12 @@ class Phase3Processor:
             obstacle_distance_px = obstacle_px,
             obstacle_distance_cm = obstacle_cm,
             obstacle_clipped = obstacle_clipped,
+            distance_cm = odom.distance_cm,
+            left_distance_cm = odom.left_cm,
+            right_distance_cm = odom.right_cm,
+            stop_line_tilt_deg = self.stop_line.tilt,
+            yaw_deg = sensors.yaw_deg,
+            yaw_span_s = sensors.yaw_span_s,
         )
         return packet, {
             "frame_id": phase2.frame_id,

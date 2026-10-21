@@ -47,6 +47,9 @@ StopLineClassifier  3-frame vote → hold distance          → stop_line_detect
 ObstacleClassifier  3-frame vote → hold measurement       → obstacle_detected, obstacle_distance_px / _cm, obstacle_clipped
    │
    ▼
+Odometer            cumulative encoder counts × cm/count  → distance_cm, left_distance_cm, right_distance_cm
+   │
+   ▼
 EstimationPacket    → Navigation
 ```
 
@@ -62,6 +65,8 @@ A frame counts as a **measurement** only if:
 
 1. its mode is `two_boundary`, `left_only` or `right_only` (`none` and `single_uncalibrated` report 0.0 with nothing behind it), and
 2. its offset is within `max_offset_jump` (0.5) of the current estimate. A larger change between two frames isn't physically plausible at driving speed, so it's treated as a dropout.
+
+   One exception: a single-boundary frame whose offset fails the gate but whose `other_side_offset` passes it is taken as that, the line being the lane's other side. Perception picks a lone line's side by which half of the ROI it's in, so once the robot drifts past the lane's right line, that line reads as a left one. On 2026-10-20 that read −0.73 against a robot actually far right (+0.9 as the right line); seeded after a stale, it steered hard right and out of the lane. The log says `taken as the other side`.
 
 | Status | When | Offset reported |
 | --- | --- | --- |
@@ -80,7 +85,7 @@ The hold only repeats the last value. It doesn't dead-reckon from the IMU or enc
 
 ## Heading tracker
 
-While the lane filter is on `vision`, the offset already carries any correction, so heading resets to 0. Once vision drops, the tracker integrates gyro yaw rate (minus `gyro_bias_dps`) over each frame's `dt`, clamped to ±90°.
+While the lane filter is on `vision`, the offset already carries any correction, so heading resets to 0. Once vision drops, the tracker adds each frame's turn, clamped to ±90°. The turn is the sensor window's `yaw_deg`: every IMU reading's rate times the time since the previous IMU reading, summed by `SensorBatch`, less `gyro_bias_dps` over the seconds it covers (`yaw_span_s`). A frame gap longer than `max_dt_s` is therefore counted in full, as long as the hub's 2 s buffer held its readings; only a reading gap over `MAX_YAW_GAP_S` (0.1 s: readings lost to I2C errors or a full buffer) is cut short. Without `yaw_deg` (a replay that logged only the rate) it falls back to the mean yaw rate times the frame's clamped `dt`.
 
 The result is **how far the robot has turned since the last good frame**, not an absolute heading relative to the lane. That's what a recovery maneuver needs: "I've turned 20° right since I lost the lines".
 
@@ -138,11 +143,21 @@ stop()      end the thread; release the encoders and pigpio
 
 Each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (+1 on this robot: its IMU is upside down, so the driver's + = left already reads + = right; set 2026-10-01 once the motor sides were fixed), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
 
-A `SensorBatch` gives Phase 3 what it needs: the mean yaw rate over its IMU readings, the signed lateral acceleration with the largest magnitude, and each wheel's counts per second from the previous batch's last reading to this one's (0.0 stopped). It also carries the cumulative counts, which the packet leaves out. `SensorSample.from_batch()` reads those by name, so `estimation.py` never imports `sensing.py` or the drivers, and it still runs on a laptop from replays with no sensors.
+A `SensorBatch` gives Phase 3 what it needs: the yaw integrated reading by reading (`yaw_deg`, over `yaw_span_s`, each window starting at the previous window's last IMU reading so nothing is counted twice or skipped), the mean yaw rate over its IMU readings, the signed lateral acceleration with the largest magnitude, and each wheel's counts per second from the previous batch's last reading to this one's (0.0 stopped). It also carries the cumulative counts, which `SensorSample` passes on for odometry. `SensorSample.from_batch()` reads those by name, so `estimation.py` never imports `sensing.py` or the drivers, and it still runs on a laptop from replays with no sensors.
 
 The MPU-6050 is at 0x68, with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit of 100 Hz sampling. The hub doesn't calibrate it, so `Phase3Config.gyro_bias_dps` (`phase3_linker --gyro-bias`) carries the bias (`config.GYRO_BIAS_DPS`, which `MEASURED_ESTIMATION`, the main run and every linker share), **in the hub's frame** (after `IMU_YAW_SIGN`; with +1 that's the raw reading at rest). The hub is the only way the IMU and encoders are read: the pipeline, the linkers and `test_imu`'s bench characterization all go through it, and the drivers only answer `read()` / `counts()`.
 
-Using the encoder readings (checking that a steering correction actually turned the wheels, speed control, distance travelled) is Navigation's job, since only Navigation knows what was commanded.
+Using the encoder readings to control anything (checking that a steering correction actually turned the wheels, speed control, driving a set distance) is Navigation's job, since only Navigation knows what was commanded. Phase 3 only measures the distance.
+
+---
+
+## Odometry
+
+`Odometer` (`src/estimation/odometry.py`) turns the encoders' cumulative counts into floor cm driven. Each wheel's distance is its counts since the first frame that had counts, times `Phase3Config.cm_per_count`; the robot's (`distance_cm`, the midpoint of its axle) is the mean of the two, so a spin in place adds about nothing and an arc adds its center's path.
+
+It uses the cumulative counts, never counts per second × frame time, so a late or long frame loses nothing: the counts went on while the loop was busy, and the next frame catches up. A frame without counts holds the last distance.
+
+`cm_per_count` comes from `calibration/odometry.json`, measured by pushing or driving the robot a taped distance (`guides/calibrate_odometry.md`); `MEASURED_ESTIMATION` reads it at startup. Without the file it is `params.NOMINAL_CM_PER_COUNT`, from the wheel's 3.3 cm and 1400 counts per turn (200:1); without encoders every distance is `None`. Nothing drives by distance until its `*_CM` setting is set.
 
 ---
 
@@ -162,7 +177,11 @@ Using the encoder readings (checking that a steering correction actually turned 
 | `yaw_rate` | `float` | Pass-through, deg/s; 0.0 if unavailable |
 | `lateral_accel` | `float` | Pass-through, m/s²; 0.0 if unavailable |
 | `frame_id`, `timestamp_ms` | `int` | The frame's stamp, carried from capture |
-| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts, not converted to distance (the packet has no m/s speed: it needs the counts per wheel revolution and the wheel diameter). 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
+| `left_wheel_cps`, `right_wheel_cps` | `float` | Pass-through: each wheel's encoder counts per second over the frame window, from the sensor hub's `SensorBatch` over `peripherals/drive.py`'s `EncoderReader.counts()`; + = forward. Raw counts per second (× `cm_per_count` for cm/s). 0.0 when the wheel is stopped or without encoders; the drivers' presence checks say whether they're connected |
+| `distance_cm` | `float \| None` | Odometry: floor cm the axle's midpoint has driven since the run's first encoder reading, + = forward (the mean of the wheels). `None` without encoders or without `calibration/odometry.json` |
+| `left_distance_cm`, `right_distance_cm` | `float \| None` | Each wheel's distance, the same way |
+| `yaw_deg`, `yaw_span_s` | `float \| None` | Pass-through: degrees turned over the frame's sensor window, integrated reading by reading, raw (the reader subtracts its gyro bias over `yaw_span_s` seconds). The intersection rule's heading counts it; `None` without an IMU reading in the window |
+| `stop_line_tilt_deg` | `float \| None` | The voted stop line's tilt in the image, deg from horizontal, + = its right end nearer the robot. This frame's measurement only, never held: `None` on a frame that missed the line, or unless `stop_line_detected`. The intersection rule reads the approach angle from it |
 | `obstacle_detected` | `bool` | Voted: something solid in the robot's path |
 | `obstacle_distance_px` | `float \| None` | Rows from the obstacle's base to the view bottom, held through a missed frame; 0 when clipped; `None` unless `obstacle_detected` |
 | `obstacle_distance_cm` | `float \| None` | Floor cm at its base, from the ground homography or the stop-line table (the robot's front edge); with `clipped`, the cm at the view bottom (~10.2): "this near or nearer". `None` with neither |
@@ -215,7 +234,7 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Not in Phase 3 (yet)
 
-- **Dead reckoning during a hold.** The hold repeats the last offset. The wheel encoders are wired (their counts per second ride in every packet), so odometry plus heading could propagate it instead; that isn't built yet (the `@TODO` in `LaneFilter.update()`).
+- **Dead reckoning during a hold.** The hold repeats the last offset. Odometry (`distance_cm`) plus heading could propagate it instead; that isn't built yet (the `@TODO` in `LaneFilter.update()`).
 - **Scene awareness.** Stop lines are voted and measured, but intersections, turns and orientation are not modeled as states. Where the scene state machine lives (estimation or navigation) is still open.
 - **Out-of-bounds recovery** (stop, localize, correct). Deferred until basic lane keeping works.
 - **Control.** Phase 3 ends at the packet. Steering and speed are navigation's.

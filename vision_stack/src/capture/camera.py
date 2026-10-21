@@ -35,6 +35,22 @@ CAMERA_CONTROL_NAMES = frozenset({
 })
 
 
+def orient(frame: np.ndarray) -> np.ndarray:
+    """
+    The appsink's frame turned upright: rotated 180 degrees when the camera is
+    mounted upside down (CAMERA_ROTATE_180), else the same array.
+
+    Purpose:
+        The turn was a videoflip in the pipeline. With the ISP handing over
+        BGR (no videoconvert since 2026-10-16), videoflip read the ISP's
+        buffer itself, back to front a pixel at a time, out of memory the ARM
+        doesn't cache: GStreamer's thread (task0) went from 25-35% of a core
+        to 100% (pi-load, 2026-10-20). Here it's one pass over the frame the
+        appsink already copied into ordinary memory.
+    """
+    return cv2.rotate(frame, cv2.ROTATE_180) if CAMERA_ROTATE_180 else frame
+
+
 def _now_ms() -> int:
     """Monotonic ms timestamp. Immune to NTP wall-clock steps; origin is arbitrary."""
     return time.monotonic_ns() // 1_000_000
@@ -157,7 +173,7 @@ class CameraSource:
 
         self._consecutive_failures = 0
         data = FrameData(
-            frame = frame,
+            frame = orient(frame),
             frame_id = self._frame_id,
             timestamp_ms = timestamp_ms,
         )
@@ -316,14 +332,11 @@ def build_gst_pipeline(
     """
     # ISP outputs BGR format instead of NV21x
     # sensor-config: pinned mode so field of view doesn't change with output size
-    # videoflip:     see CAMERA_ROTATE_180
+    # no videoflip:  the frames come out upside down; orient() turns them (see there for why)
     # appsink:       hold only the newest frame so a slow consumer never reads a stale backlog
-    flip = "videoflip method=rotate-180 ! " if CAMERA_ROTATE_180 else ""
     ctl = format_controls(CAMERA_CONTROLS if controls is None else controls)
     return (
         f'libcamerasrc sensor-config="{SENSOR_CONFIG}"{" " + ctl if ctl else ""} ! '
         f"video/x-raw,format={color_space},width={width},height={height},framerate={fps}/1 ! "
-        f"{flip}"
-        f"video/x-raw,format={color_space} ! "
         "appsink drop=true max-buffers=1 sync=false"
     )

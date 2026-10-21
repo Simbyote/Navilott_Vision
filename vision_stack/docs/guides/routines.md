@@ -196,6 +196,7 @@ Lift the robot to turn it if it doesn't slide, but keep it flat: a tilt puts som
 |---|---|
 | `light` (default) | red, yellow, green, off (or covered) |
 | `sign` | in place, taken away |
+| `line` | the stop line (one look per pose: it can't be taken away) |
 
 Each look is one trial, so the default is 5 gaps × 4 states = 20 trials. It reads:
 - **OK:** the vote at the end is the right one, and a lit light or a posted sign was seen in at least half the frames (a missed green votes "go" like a real one; the frames tell them apart);
@@ -207,6 +208,8 @@ Each row has the gap, the state, the frames, the share that saw the right thing,
 PASS needs both:
 - every trial within `need_cm` (20 cm) reads OK;
 - no WRONG read at any gap. A miss farther out only limits the range; a wrong read anywhere is a hazard.
+
+**Off the square pose:** `--set angles=-10,-5,0,5,10` (robot turned, deg, + = right) and `--set offsets=-4,0,4` (robot shifted, cm, + = right of center) look at every gap from every pose, so the trials map where each detection gives out; the prompt says how to place the robot, and the file name carries the pose (`attempt_NN_<gap>cm_<angle>deg_<offset>cm_<state>.jpg`). The summary adds a range per pose. With `target=line` and two or more angles it also fits the approach-angle correction and prints `TILT_ZERO_DEG` and `TILT_TO_HEADING` for `intersection.py` (navigation_linker.md, "Measuring TILT_TO_HEADING"). A look at another lane's line (a false line) is a session of its own, labelled with `--notes`.
 
 These are first guesses: the course's light and sign positions are still TBD in `course.md`. Settings: `--set target=sign`, `--set gaps=5,15,25`, `--set need_cm=...`, `--set frames=...`. The trial count follows the gaps and target.
 
@@ -268,6 +271,8 @@ PASS:
 - the brake decision is right at every gap more than 2 cm from the rule's 12 cm.
 
 The summary gives the range.
+
+**Off the middle:** `--set laterals=-10,-5,0,5,10` places the object at every gap at each offset (its center, cm, + = right of the lane's middle), so the trials map how wide the path the detector watches is. Only objects within `--set in_path_cm=...` of the middle (the robot's own path; 0 by default, the middle only) are judged; one farther out is mapped, not a fault. The summary adds, per gap, the widest offset every object read OK out to, both sides.
 
 **`obstacle-stop`.** Motors on, a straight route, from a start mark toward the object standing in the lane (`--set objects=5`). The robot should brake with the object about 10 cm away and wait. While it waits, the tester tapes the gap, then lifts the object away, and the robot should drive on about 1 s later (`OBSTACLE_CLEAR_MS`). The watch times that from the rule's clear wait to driving on, and ends the run a second later. Then `--set clear=2` drives the lane with nothing on it for `clear_s` (6): any obstacle brake there is a false alarm.
 

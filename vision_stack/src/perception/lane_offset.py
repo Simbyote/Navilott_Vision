@@ -95,6 +95,7 @@ class LaneOffsetResult:
     mode: str                       # "two_boundary" | "left_only" | "right_only" | "single_uncalibrated" | "none"
     frame_id: int
     timestamp_ms: int
+    other_side_offset: float | None = None  # single-sided modes: the offset were the boundary the lane's other side; None otherwise
 
 
 def foot_x(
@@ -287,6 +288,11 @@ def _single_sided(
         mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
 
     offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    # The side is a guess from which half of the ROI the line is in: once the
+    # robot has drifted past a boundary, its lane's right line sits left of
+    # center. Phase 3 takes this instead when the guess breaks continuity.
+    mirrored = implied_center + (2 * half if side == "right" else -2 * half)
+    other_side = clamp((center_x - mirrored) / center_x, -1.0, 1.0)
     return LaneOffsetResult(
         offset = round(offset, 4),
         left_x = left_x,
@@ -297,6 +303,7 @@ def _single_sided(
         mode = mode,
         frame_id = frame_id,
         timestamp_ms = timestamp_ms,
+        other_side_offset = round(other_side, 4),
     )
 
 def _project_single(
@@ -326,6 +333,8 @@ def _project_single(
         mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
 
     offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    mirrored = implied_center + (2 * half if side == "right" else -2 * half)
+    other_side = clamp((center_x - mirrored) / center_x, -1.0, 1.0)
     return LaneOffsetResult(
         offset = round(offset, 4),
         left_x = left_x,
@@ -336,6 +345,7 @@ def _project_single(
         mode = mode,
         frame_id = frame_id,
         timestamp_ms = timestamp_ms,
+        other_side_offset = round(other_side, 4),
     )
 
 

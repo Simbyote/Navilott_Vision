@@ -211,6 +211,18 @@ Or the full floor homography, from a checkerboard: `python3 -m src.scripts.calib
 
 ---
 
+## Odometry: cm per encoder count — [calibrate_odometry.md](calibrate_odometry.md)
+
+Push the robot a taped distance by hand (motors off), or drive it and tape-measure; needs `sudo pigpiod`:
+
+```
+make calib-odometry                          # push 100 cm, 3 trials
+make calib-odometry ARGS="--cm 150 --trials 5"
+make calib-odometry ARGS="--drive 3"         # drive 3 s at duty 0.40, then measure
+```
+
+---
+
 ## Pi diagnostics — [diagnostics.md](diagnostics.md)
 
 Record a run's threads, cores, throttling and memory from a separate process (the run is unchanged):
@@ -239,6 +251,7 @@ python3 -m src.analysis.<tool> --help
 | `stage_timing` | `artifacts/<run>` or `runs/nav_<run>` | where the frame time goes |
 | `jitter` | `artifacts/<run>` or `runs/nav_<run>` | frame-to-frame timing spread |
 | `gate_rejections` | `artifacts/<run>` | which gates reject candidates |
+| `sign_check` | `--frames runs/<run>/frames` or a routine folder | why a stop sign in view isn't detected (`make sign-check`) |
 | `compare_runs` | `artifacts/<a> artifacts/<b>` | what changed between two runs |
 | `stability` | `runs/<run>` | lane offset noise while still |
 | `state_timeline` | `runs/<run>` | lane and drive state over time; rule and stage on a navigation run |

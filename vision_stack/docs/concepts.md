@@ -137,7 +137,7 @@ The traffic light, the stop sign and the stop line each change state only when o
 
 ### Gyro bias and heading
 
-A gyro reports turn rate in degrees per second. At rest it should read 0 but doesn't: the reading at rest is its **bias**, −1.1 °/s on this robot (`GYRO_BIAS_DPS`). **Heading** is turn rate integrated over time, net of the bias:
+A gyro reports turn rate in degrees per second. At rest it should read 0 but doesn't: the reading at rest is its **bias**, −0.90 °/s on this robot (`GYRO_BIAS_DPS`). **Heading** is turn rate integrated over time, net of the bias:
 
 > heading += (yaw rate − bias) × dt
 
@@ -195,7 +195,7 @@ From light to a frame in Python (`guides/diagnostics.md` has the measured times)
 | **Bayer, debayer** | The sensor sees one color per pixel through a checkerboard of red, green and blue filters (a **Bayer** pattern); **debayering** fills in the other two colors at every pixel |
 | **ISP** | The Pi's image signal processor: debayers, applies the white balance and color correction, and scales to 480×270; libcamera's algorithms set exposure and white balance from its statistics; produces BGR |
 | **libcamera** | The Linux camera stack that drives the sensor and ISP |
-| **GStreamer** | A media pipeline framework: `libcamerasrc` brings the frames in, `videoflip` turns them right way up, `videoconvert` makes BGR |
+| **GStreamer** | A media pipeline framework: `libcamerasrc` brings the frames in, BGR from the ISP; OpenCV turns them right way up (`capture/camera.py`, `orient()`) |
 | **appsink** | GStreamer's handoff to the program; set to keep only the newest frame (`drop=true max-buffers=1`), so a slow frame skips stale ones instead of queueing them |
 
 The frame's id and **timestamp** are made once, when Python pulls the frame from the appsink, and carried unchanged through every stage after.

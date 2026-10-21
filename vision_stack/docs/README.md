@@ -36,6 +36,7 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 | Record how a run uses the Pi: threads, cores, throttling, memory | `guides/diagnostics.md` |
 | Calibrate the camera lens | `guides/calibrate_camera.md` |
 | Give the stop line a distance in cm (tape marks, no checkerboard) | `guides/calibrate_stop_line.md` |
+| Turn encoder counts into cm driven (odometry) | `guides/calibrate_odometry.md` |
 | Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
 | Calibrate the traffic-light colors from the real lamps | `guides/calibrate_lamps.md` |
 | Sweep the traffic-light floors and blob gates on labelled frames | `guides/sweep_lamps.md` |
@@ -56,6 +57,7 @@ docs/
         calibrate_camera.md     lens calibration
         calibrate_ground.md     ground-plane homography: floor distances in cm
         calibrate_stop_line.md  stop-line distance in cm from tape marks
+        calibrate_odometry.md   encoder cm per count, from a taped distance
         calibrate_lamps.md      traffic-light HSV bands from the real lamps
         sweep_lamps.md          traffic-light floors and blob gates swept on labelled frames
         phase2_linker.md        watching the pipeline, with video

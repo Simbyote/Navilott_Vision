@@ -15,7 +15,8 @@ import pytest
 
 from src.navigation.navigation_contract import STALL_DUTY, Command, command_problems
 from src.navigation.wheel_speed import (
-    CPS_PER_DUTY, GAIN_LIMITS, INTEGRAL_LIMIT, LEARN_ALPHA, WheelSpeed,
+    CPS_PER_DUTY, GAIN_LIMITS, INTEGRAL_LIMIT, INTEGRATE_BAND, KI, KP, LEARN_ALPHA, LEARN_MIN_DUTY,
+    LEARN_STEADY, WheelSpeed,
 )
 from src.tests.navigation_checks import packet
 
@@ -43,6 +44,15 @@ def run(ws, target, motor_gain, frames, observe=True):
         cmds.append(cmd)
         speeds.append(cps)
     return cmds, speeds
+
+
+@pytest.mark.software
+def test_the_constants():
+    # Simulated, not yet tuned on the mat: gains read as duty per full-scale error
+    assert CPS_PER_DUTY == 3000.0
+    assert (KP * CPS_PER_DUTY, KI * CPS_PER_DUTY) == pytest.approx((0.3, 3.0))
+    assert (INTEGRAL_LIMIT, INTEGRATE_BAND) == (0.25, 0.3)
+    assert (LEARN_MIN_DUTY, LEARN_STEADY, LEARN_ALPHA, GAIN_LIMITS) == (0.30, 0.02, 0.05, (0.6, 1.4))
 
 
 @pytest.mark.software

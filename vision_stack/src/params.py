@@ -14,6 +14,7 @@ Purpose:
 Main package:
     None; module-level constants only.
 """
+import math
 from pathlib import Path
 
 # --- Camera ---
@@ -46,6 +47,13 @@ MAX_FPS = 30
 # of a core, the workers' preemptions ~3,800 / 6 / 0 a second. Two keep
 # the parallel speedup and give back a quarter of a core
 OPENCV_THREADS = 2
+# Phase 2's color and obstacle branches on a side thread while the main
+# thread runs geometry (perception/parallel.py), so perception uses two
+# cores. Off until measured on the Pi against the serial flow: stage timing
+# shows branch_wait (the main thread waiting for the side); the linkers'
+# --parallel / --serial override it for one run. With it on, OPENCV_THREADS 1
+# may do as well (the side thread replaces OpenCV's own second worker)
+PARALLEL_PERCEPTION = False
 
 # Python's cyclic garbage collector off while a run drives (utils.GcWatch).
 # A collection holds the GIL, stopping every thread: 21 in the 2026-10-14
@@ -63,6 +71,7 @@ CAMERA_CALIB_PATH = CALIBRATION_DIR / "camera_calibration.json"
 HSV_RANGES_PATH = CALIBRATION_DIR / "hsv_ranges.json"
 GROUND_HOMOGRAPHY_PATH = CALIBRATION_DIR / "ground_homography.json"   # frame px -> floor cm; scripts/calibrate_ground.py
 STOP_LINE_TABLE_PATH = CALIBRATION_DIR / "stop_line_table.json"       # stop-line rows -> cm; scripts/calibrate_stop_line.py
+ODOMETRY_PATH = CALIBRATION_DIR / "odometry.json"                     # encoder counts -> cm; scripts/calibrate_odometry.py
 RUNS_DIR = PIPELINE_ROOT / "runs"                   # live_view output, one timestamped folder per run
 
 # --- GPIO (BCM numbers; Product Spec GPIO Table 7) ---
@@ -100,6 +109,18 @@ SENSOR_HISTORY_S = 2.0
 # brakes the motors on its own. 0.5 s = 10 missed frames: clear of any
 # frame the loop has taken in a run, short enough to stop within a few cm.
 MOTOR_WATCHDOG_S = 0.5
+
+# --- Wheels and encoders (estimation/odometry.py) ---
+# The nominal scale, used until scripts/calibrate_odometry.py writes
+# ODOMETRY_PATH: a 3.3 cm wheel, and 1400 counts per wheel turn (a 7-pulse
+# encoder behind the N20s' 200:1 gearbox, sold as 12 V, 140 RPM no load;
+# EncoderReader counts one edge per pulse). It agrees with the drive's own
+# numbers: CPS_PER_DUTY 3000 is ~130 RPM at full duty, and ~1166 counts/s
+# at 0.40 is ~50 RPM, ~8.6 cm/s. Measured beats this: tyres squash, and the
+# encoder's pulses per turn are assumed
+WHEEL_DIAMETER_CM = 3.3
+ENCODER_COUNTS_PER_REV = 1400
+NOMINAL_CM_PER_COUNT = math.pi * WHEEL_DIAMETER_CM / ENCODER_COUNTS_PER_REV     # ~0.0074
 
 # --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"

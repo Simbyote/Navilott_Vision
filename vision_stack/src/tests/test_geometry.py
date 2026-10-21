@@ -690,22 +690,25 @@ def test_redness_saturates_instead_of_wrapping():
 
 
 @pytest.mark.software
-def test_only_the_largest_red_blob_is_gated_and_the_rest_are_traced_as_not_largest():
+def test_the_largest_blob_that_passes_is_taken_and_smaller_ones_are_traced_as_not_largest():
     img = regular_polygon(8, radius=40, center=(80, 100))
     cv2.fillPoly(img, [polygon_pts(8, 20, (200, 60))], RED)           # a second, smaller octagon
     cands, dbg = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
     assert len(cands) == 1 and abs(cands[0].bbox[0] + cands[0].bbox[2] / 2 - 80) <= 2
-    assert [t["gate"] for t in dbg["trace"]] == ["not_largest", None]
+    assert [t["gate"] for t in dbg["trace"]] == [None, "not_largest"]     # largest first; the rest never gated
     assert_sign_counts(dbg["reject_counts"], 1)
     assert dbg["reject_counts"]["not_largest"] == 1
 
 
 @pytest.mark.software
-def test_a_largest_blob_that_fails_a_gate_yields_nothing_even_with_a_good_one_beside_it():
+def test_a_larger_blob_that_fails_a_gate_no_longer_hides_a_good_one_beside_it():
+    # Only the largest used to be gated: a red box in the ROI hid the sign (sign_check, 2026-10-20)
     img = regular_polygon(4, radius=60, center=(80, 100))              # large red square
     cv2.fillPoly(img, [polygon_pts(8, 25, (200, 60))], RED)
     cands, dbg = extract_sign_candidates(img, TEST_SIGN, 1, 2, False, True)
-    assert cands == [] and [t["gate"] for t in dbg["trace"]] == ["not_largest", "vertices"]
+    assert len(cands) == 1 and cands[0].vertex_count in (8, 9) and abs(cands[0].bbox[0] + cands[0].bbox[2] / 2 - 200) <= 2
+    assert [t["gate"] for t in dbg["trace"]] == ["vertices", None]
+    assert geo.find_sign_candidates(img, TEST_SIGN, 1, 2)[0].bbox == cands[0].bbox      # production agrees
 
 
 @pytest.mark.software
@@ -717,8 +720,8 @@ def test_closing_rejoins_a_sign_cut_in_two_by_a_thin_white_line():
     closed, _ = extract_sign_candidates(img, TEST_SIGN, 1, 2, False)
     split, dbg = extract_sign_candidates(img, replace(TEST_SIGN, close_kernel=0), 1, 2, False, True)
     assert len(closed) == 1 and closed[0].vertex_count == 8
-    # Unclosed, only the larger half is gated, and half an octagon has too few vertices
-    assert split == [] and [t["gate"] for t in dbg["trace"]] == ["not_largest", "vertices"]
+    # Unclosed, each half is gated, and half an octagon has too few vertices
+    assert split == [] and [t["gate"] for t in dbg["trace"]] == ["vertices", "vertices"]
 
 
 @pytest.mark.software

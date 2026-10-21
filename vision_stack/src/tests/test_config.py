@@ -65,6 +65,14 @@ def test_measured_keeps_the_swept_lane_gates():
 
 
 @pytest.mark.software
+def test_measured_takes_a_pair_as_a_lane_only_near_the_measured_width():
+    """Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line."""
+    lo = MEASURED.lane_offset
+    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (300.0, 400.0, 178.0)
+    assert lo.min_lane_width_px < 2 * lo.expected_half_lane_px < lo.max_lane_width_px
+
+
+@pytest.mark.software
 def test_bare_pipeline_config_is_each_stages_defaults():
     # run_chain's default; tests that mean "defaults" rely on it staying bare
     c = PipelineConfig()
@@ -81,9 +89,13 @@ def test_scene_config_is_measured_without_undistortion():
     assert SCENE_CONFIG.preprocess.calibration_path is None
     # Everything else, the HSV bands included, is MEASURED's; the cm
     # calibrations (ground plane, stop-line table) are left out on purpose,
-    # and the lamps get the scenes' own traffic ROI and blob gates
+    # the lamps get the scenes' own traffic ROI and blob gates, and the
+    # scenes' narrower lanes the default floor for a pair
     assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess, ground=MEASURED.ground,
-                   stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color) == MEASURED
+                   stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color,
+                   lane_offset=MEASURED.lane_offset) == MEASURED
+    assert replace(SCENE_CONFIG.lane_offset, min_lane_width_px=MEASURED.lane_offset.min_lane_width_px) \
+        == MEASURED.lane_offset
     assert SCENE_CONFIG.color.hsv_ranges == MEASURED.color.hsv_ranges
     assert replace(SCENE_CONFIG.roi, traffic=MEASURED.roi.traffic) == MEASURED.roi
     assert replace(SCENE_CONFIG.preprocess, calibration_path=MEASURED.preprocess.calibration_path) \
@@ -235,14 +247,28 @@ def test_the_route_file_config_points_at_loads():
 
 
 @pytest.mark.software
-def test_measured_takes_stop_lines_within_2_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
+def test_measured_takes_stop_lines_within_4_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
     assert MEASURED.geometry == GeometryConfig(
-        stop_line=StopLineFilter(max_tilt_deg=2.0),
-        sign=SignContourFilter(aspect_range=(0.6, 1.6), extent_range=(0.68, 0.92), min_letter_share=0.03))
+        stop_line=StopLineFilter(max_tilt_deg=4.0),                 # 2 until 2026-10-19
+        # aspect and extent lowered 2026-10-20 to the course's own sign (0.55-0.72, 0.63-0.75)
+        sign=SignContourFilter(aspect_range=(0.5, 1.6), extent_range=(0.6, 0.92), min_letter_share=0.03))
+
+
+@pytest.mark.software
+def test_measured_estimation_is_the_defaults_plus_the_gyro_bias_and_the_odometry_calibration():
+    from src.estimation.estimation import Phase3Config
+    from src.estimation.odometry import load_odometry
+    from src.params import NOMINAL_CM_PER_COUNT, ODOMETRY_PATH
+    assert config.MEASURED_ESTIMATION == Phase3Config(gyro_bias_dps=config.GYRO_BIAS_DPS,
+                                                      cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
+    # Uncalibrated, distances run on the wheel and gearbox's nominal scale; the
+    # distance rules stay timed until their *_CM settings are set
+    if not ODOMETRY_PATH.exists():
+        assert config.MEASURED_ESTIMATION.cm_per_count == NOMINAL_CM_PER_COUNT
 
 
 @pytest.mark.software
 def test_one_gyro_bias_for_phase_3_navigation_and_the_drive_trial():
     assert config.MEASURED_ESTIMATION.gyro_bias_dps == config.MANEUVER.gyro_bias_dps == config.GYRO_BIAS_DPS
-    assert config.GYRO_BIAS_DPS == -1.1          # the raw reading at rest; IMU_YAW_SIGN is 1
+    assert config.GYRO_BIAS_DPS == -0.90          # the raw reading at rest; IMU_YAW_SIGN is 1

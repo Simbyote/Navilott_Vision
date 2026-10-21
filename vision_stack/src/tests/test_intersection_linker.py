@@ -202,6 +202,16 @@ def test_the_watch_times_the_stages_integrates_the_heading_and_ends_once_settled
     assert f["heading_deg"] == pytest.approx(-5.3)                       # three rows at 0 against the 1 deg/s bias
 
 
+@pytest.mark.software
+def test_the_watch_uses_a_rows_integrated_turn_when_the_log_has_it():
+    w = il.SequenceWatch(gyro_bias_dps=1.0)
+    w(row(0.0, "intersection", STAGE_TO_LINE, "1/1 left"))
+    # a 2 s stalled row: the window's own 2 s of readings, not yaw_rate x the step
+    w({**row(2.0, "intersection", STAGE_TURN, "1/1 left", yaw=-44.0), "yaw_deg": -88.0, "yaw_span_s": 2.0})
+    w({**row(2.05, "intersection", STAGE_TURN, "1/1 left", yaw=-44.0), "yaw_deg": "", "yaw_span_s": ""})
+    assert w.heading == pytest.approx(-88.0 - 2.0 + (-45.0) * 0.05)    # a blank cell falls back to the rate
+
+
 # =============================================================================
 # The command line
 # =============================================================================

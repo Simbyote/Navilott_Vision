@@ -36,6 +36,7 @@ Main package:
     same(): field-by-field equality across dataclasses, containers and arrays.
 """
 from dataclasses import dataclass, fields, is_dataclass, replace
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -79,13 +80,16 @@ SYNTHETIC_STOP_LINE_TABLE = StopLineTable(a=800.0, b=160.0, c=-2.0, image_size=(
 # against the placeholder blob gates (the sizes in scene() and
 # drive_sequence()), glow mode off: not the course's bare LEDs, which
 # MEASURED's color mode and traffic ROI are fit to (config.py,
-# roi_crop.TRAFFIC, 2026-10-06)
+# roi_crop.TRAFFIC, 2026-10-06). Their lanes are drawn narrower (140 px), under
+# MEASURED's 300 px floor for a pair (fit to the course's 357 px lane), so a
+# pair is taken from the default 60 px
 SCENE_TRAFFIC_ROI = ROIBounds(x0 = 0.30, y0 = 0.00, x1 = 0.60, y1 = 0.35)
 SCENE_CONFIG = replace(
     MEASURED,
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
     roi = replace(MEASURED.roi, traffic = SCENE_TRAFFIC_ROI),
     color = replace(MEASURED.color, blob = BlobFilter(), glow = None),
+    lane_offset = replace(MEASURED.lane_offset, min_lane_width_px = 60.0),
     ground = None,
     stop_line_table = None,
 )
@@ -145,6 +149,7 @@ ALT_ESTIMATION = replace(
     gyro_bias_dps = 1.5,
     heading_limit_deg = 20.0,
     max_dt_s = 0.3,
+    cm_per_count = 0.02,
 )
 
 
@@ -345,7 +350,7 @@ SCENES = {
                                    stop_line_thickness=12),
     "stop_line_clipped": scene(stop_line=(120, 320, 76)),
     "stop_line_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=1.5),       # inside MEASURED's 2 deg
-    "stop_line_too_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=4.0),   # past it; steeper loses its edge pixels
+    "stop_line_too_tilted": scene(stop_line=(160, 280, 36), stop_line_tilt_deg=5.0),   # past it; steeper loses its edge pixels
     "stop_line_faint": _faint_stop_line(),
     "two_stop_lines": _two_stop_lines(),
     "intersection": scene(stop_line=(170, 270, 50), sign=True, lights=(RED_LAMP,)),
@@ -389,7 +394,8 @@ def drive_sequence() -> list[SequenceFrame]:
     and a sign below their gates, a lane dropout through hold into stale
     with the gyro turning, a frame gap inside the dropout, an offset jump,
     an approach to a stop line with one missed frame, noise, and frames with
-    no sensors or no yaw.
+    no sensors or no yaw. The encoders' cumulative counts follow each
+    frame's wheel speeds, so odometry moves too.
 
     Outputs:
         SequenceFrames with frame ids from 100 and timestamps FRAME_MS apart
@@ -438,12 +444,20 @@ def drive_sequence() -> list[SequenceFrame]:
         ("obstacle_clipped", with_obstacle(scene(), 190, 290, 160, 270), 3, steady),
         ("obstacle_gone", scene(), 4, steady),
     ]
-    out, fid, ts = [], 100, 10_000
+    out, fid, ts, counts = [], 100, 10_000, [0.0, 0.0]
     for segment, frame, count, sensors in segments:
         for _ in range(count):
+            dt_ms = FRAME_MS
             if segment == "gap":
                 ts += 900 - FRAME_MS
-            out.append(SequenceFrame(frame, fid, ts, sensors, segment))
+                dt_ms = 900
+            if sensors is not None:
+                counts = [counts[0] + (sensors.left_wheel_cps or 0.0) * dt_ms / 1000.0,
+                          counts[1] + (sensors.right_wheel_cps or 0.0) * dt_ms / 1000.0]
+                sensors_ = replace(sensors, left_count=int(counts[0]), right_count=int(counts[1]))
+            else:
+                sensors_ = None
+            out.append(SequenceFrame(frame, fid, ts, sensors_, segment))
             fid, ts = fid + 1, ts + FRAME_MS
     return out
 
@@ -556,7 +570,7 @@ def lens_distort(undistorted: np.ndarray, calibration_path: str, alpha: float = 
     where undistortion would send it. Resampling twice softens edges slightly.
     """
     import json
-    calib = json.loads(open(calibration_path).read())
+    calib = json.loads(Path(calibration_path).read_text())
     K, dist = np.array(calib["camera_matrix"]), np.array(calib["dist_coeffs"])
     h, w = undistorted.shape[:2]
     new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, (w, h), alpha, (w, h))

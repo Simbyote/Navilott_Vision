@@ -49,6 +49,16 @@ def feed(stage, values):
 
 
 @pytest.mark.software
+def test_the_defaults_the_robot_runs_with():
+    # MEASURED_ESTIMATION is these plus the gyro bias and cm_per_count (test_config)
+    c = Phase3Config()
+    assert (c.ema_alpha, c.max_offset_jump, c.hold_max_frames) == (0.35, 0.5, 7)    # 7 frames: ~350 ms at 20 FPS
+    assert (c.vote_window, c.min_confidence_traffic, c.min_confidence_sign) == (3, 0.40, 0.45)
+    assert (c.heading_limit_deg, c.max_dt_s) == (90.0, 0.5)
+    assert (c.gyro_bias_dps, c.cm_per_count, c.lane_roi_width_px, c.cm_per_px) == (0.0, None, None, None)
+
+
+@pytest.mark.software
 def test_lane_first_usable_frame_seeds_the_estimate():
     est = LaneFilter(Phase3Config()).update([lane(0.2)], [])
     assert (est.offset, est.status) == (0.2, LANE_VISION)
@@ -92,6 +102,44 @@ def test_lane_jump_beyond_gate_is_a_dropout():
     est = f.update([lane(0.8)], log)
     assert (est.offset, est.status) == (0.0, LANE_HOLD)
     assert any("[LANE] jump" in e for e in log)
+
+
+def single(offset, other, mode="left_only"):
+    """A one-boundary result: its offset as sided by the ROI's center, and the other side's."""
+    return LaneOffsetResult(offset, 10.0, None, None, 0.6, 1, mode, FID, TS, other_side_offset=other)
+
+
+@pytest.mark.software
+def test_lane_takes_one_boundary_as_the_other_side_when_its_side_breaks_continuity():
+    """
+    2026-10-20: the robot drifted right until its lane's right line crossed
+    the ROI's center; read as a left line (-0.73) against an estimate near
+    +0.8, it steered hard right and out. As the right line, it reads +0.92.
+    """
+    f = LaneFilter(Phase3Config())
+    f.update([lane(0.8)], [])
+    log = []
+    est = f.update([single(-0.73, 0.92)], log)
+    assert est.status == LANE_VISION
+    assert est.offset == pytest.approx(0.8 + 0.35 * (0.92 - 0.8), abs=1e-4)
+    assert any("taken as the other side" in e for e in log)
+
+
+@pytest.mark.software
+def test_lane_drops_one_boundary_that_fits_neither_side():
+    f = LaneFilter(Phase3Config())
+    f.update([lane(0.0)], [])
+    log = []
+    est = f.update([single(-0.8, 0.9)], log)
+    assert (est.offset, est.status) == (0.0, LANE_HOLD)
+    assert any("[LANE] jump" in e for e in log)
+
+
+@pytest.mark.software
+def test_lane_keeps_one_boundarys_own_side_when_it_fits():
+    f = LaneFilter(Phase3Config())
+    f.update([lane(-0.6)], [])
+    assert f.update([single(-0.7, 0.9)], []).offset == pytest.approx(-0.6 + 0.35 * -0.1, abs=1e-4)
 
 
 @pytest.mark.software
@@ -139,6 +187,14 @@ def test_heading_resets_when_vision_returns():
 def test_heading_is_clamped():
     h = HeadingTracker(Phase3Config(heading_limit_deg=10.0))
     assert h.update(LANE_STALE, 1000.0, 0.5, []) == 10.0
+
+
+@pytest.mark.software
+def test_heading_takes_the_windows_integrated_turn_less_the_bias_over_its_span():
+    h = HeadingTracker(Phase3Config(gyro_bias_dps=1.0))
+    # the frame step (clamped) doesn't matter: the window says how far it turned
+    assert h.update(LANE_HOLD, 11.0, 0.5, [], yaw_deg=16.5, yaw_span_s=1.5) == pytest.approx(15.0)
+    assert h.update(LANE_HOLD, None, 0.0, [], yaw_deg=1.0, yaw_span_s=0.0) == pytest.approx(16.0)
 
 
 @pytest.mark.software
@@ -240,6 +296,16 @@ def test_dt_is_clamped_on_a_long_gap():
     proc.process(p2(ts=0, lanes=[lane(ts=0)]))
     _, dbg = proc.process(p2(frame_id=2, ts=5000, lanes=[lane(frame_id=2, ts=5000)]))
     assert dbg["dt"] == 0.5
+
+
+@pytest.mark.software
+def test_a_stall_past_max_dt_still_counts_the_whole_turn_the_hub_kept():
+    proc = Phase3Processor(Phase3Config(hold_max_frames=5))
+    proc.process(p2(frame_id=1, ts=0, lanes=[lane(frame_id=1, ts=0)]), SensorSample(yaw_rate_dps=0.0))
+    stalled = SensorSample(yaw_rate_dps=30.0, yaw_deg=45.0, yaw_span_s=1.5)       # 1.5 s at 30 deg/s
+    pkt, dbg = proc.process(p2(frame_id=2, ts=1500, lanes=[]), stalled)
+    assert dbg["dt"] == 0.5 and pkt.heading_error == pytest.approx(45.0)        # the rate x dt gave 15
+    assert (pkt.yaw_deg, pkt.yaw_span_s) == (45.0, 1.5)                         # passed through for navigation
 
 
 @pytest.mark.software

@@ -198,19 +198,19 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 | Setting / gate | Default | Why |
 | --- | --- | --- |
 | `min_redness` | 20 | Otsu always splits the image, so a sign-free ROI thresholds its own noise (Otsu ≈ 1 there, with false blobs). The dimmest synthetic sign had Otsu at 22. Check on course frames |
-| `close_kernel` | 5 | Fills noise pinholes; rejoins a sign cut by a line up to ~2 px wide before blur. Wider cuts split it and only the larger half is gated |
-| `min_area` | 100 px² | Noise blobs; also decides which blobs compete for largest |
+| `close_kernel` | 5 | Fills noise pinholes; rejoins a sign cut by a line up to ~2 px wide before blur. Wider cuts split it, and each half fails the vertex gate |
+| `min_area` | 100 px² | Noise blobs; the blobs over it are gated largest first, and the first to pass all the gates is the sign |
 | `max_area` | 30000 px² | A red area bigger than any sign at range |
 | `vertices` | 8–9 after `approxPolyDP` on the hull | Red shapes that aren't octagons. On the hull, so letters and noise notches don't add vertices |
 | `hull` | hull area > 0 | Degenerate outlines |
 | `solidity` | contour area / hull area ≥ 0.80 | Ragged or concave blobs (measured on the raw contour; the hull alone is always 1.0) |
-| `aspect` | off; `MEASURED`: bounding box w / h 0.6–1.6 | Ghost signs: a leg's tall outline. An octagon is ~1 |
-| `extent` | off; `MEASURED`: contour area / box area 0.68–0.92 | Ghost signs: a chair back's boxy outline (a rectangle is 1.0, an octagon 0.83) |
+| `aspect` | off; `MEASURED`: bounding box w / h 0.5–1.6 (0.6 until 2026-10-20) | Ghost signs: a leg's tall outline (~0.3). An octagon square-on is ~1; the course's sign reads 0.55–0.72 |
+| `extent` | off; `MEASURED`: contour area / box area 0.6–0.92 (0.68 until 2026-10-20) | Ghost signs: a chair back's boxy outline (a rectangle is 1.0, an octagon 0.83; the course's sign reads 0.63–0.75) |
 | `letters` | off; `MEASURED`: ≥ 3% of the hull white (each channel ≥ 150, redness ≤ 60), for contours ≥ 2000 px² | Ghost signs: any red blob without the sign's white letters. A far sign's letters blur into its red, so small ones aren't held to it |
 
 The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
-With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the blobs set aside as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
+The blobs are gated largest first until one passes: until 2026-10-20 only the largest was gated, so a larger red thing in the sign ROI (a box, a chair), refused, hid the sign behind it (`make sign-check` on the detect-range looks found it). With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the smaller blobs never gated, a larger one having passed, as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 
 ---
 
@@ -280,7 +280,7 @@ The robot sits at the center of the lane ROI. Its lane is bounded by the **neare
 2. All anchors on one side (the robot has drifted out): take the two nearest center. They still describe the nearest lane, and the offset steers back.
 3. One anchor: single-boundary mode.
 
-Then the pair's spacing is checked. Closer than 60 px means one marking seen twice; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor.
+Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 300 px (~0.84 of the 357 px lane). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
 
 ### The offset
 
@@ -302,7 +302,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 

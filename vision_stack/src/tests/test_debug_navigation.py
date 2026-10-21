@@ -6,6 +6,7 @@ the right side of center and in the right color, DRIVE green and BRAKE red)
 and render_run() on a real run folder from navigation_linker.
 """
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -115,7 +116,7 @@ def test_the_strip_is_the_last_rows_of_each_image(run_dir):
 def test_missing_frames_are_skipped_and_counted(run_dir):
     rep, out = run_dir
     gone = [frame_path(str(out), r["frame_id"]) for r in list(read_records(str(out)))[2:4]]
-    saved = [open(p, "rb").read() for p in gone]
+    saved = [Path(p).read_bytes() for p in gone]
     for p in gone:
         os.remove(p)
     try:
@@ -123,7 +124,7 @@ def test_missing_frames_are_skipped_and_counted(run_dir):
         assert res["missing"] == 2 and res["rendered"] == rep["run"]["frames"] - 2
     finally:
         for p, data in zip(gone, saved):
-            open(p, "wb").write(data)
+            Path(p).write_bytes(data)
 
 
 @pytest.mark.software

@@ -65,6 +65,7 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLE
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 from src.utils import GcWatch
+from src.perception import parallel
 
 # The run's backstop: brake and end after this long, whatever the navigator
 # does. The only linker-level safety stop (decided 2026-09-30); a run that
@@ -83,9 +84,9 @@ REASON_CONTRACT = "contract"        # the linker braked: the navigator's command
 SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "step", "maneuver", "stage", "turn_end", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "approach_deg", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
-              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate",
+              "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "yaw_deg", "yaw_span_s", "distance_cm",
               "target_left_cps", "target_right_cps", "gain_left", "gain_right",
               "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
@@ -208,7 +209,8 @@ def summary_lines(report: dict) -> list[str]:
     return [
         f"[NAVIGATION] ended by {report['ended_by']}"
         + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
-        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}",
+        + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
+        + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
         f" decided by            {rules}",
@@ -372,9 +374,11 @@ def run(
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
                  "nav_ms": round(nav_ms, 3), "latency_ms": round(latency_ms, 2),
-                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""), "step": rec.get("step", ""),
-                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "",
-                 "turn_end": rec.get("turn_end") or "", "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
+                 "rule": rec.get("rule", ""), "phase": rec.get("phase", ""),
+                 "line_left_cm": None if rec.get("line_left_cm") is None else round(rec["line_left_cm"], 1),
+                 "step": rec.get("step", ""),
+                 "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "", "stage_cm": rec.get("stage_cm"),
+                 "turn_end": rec.get("turn_end") or "", "approach_deg": rec.get("approach_deg"), "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
@@ -383,6 +387,8 @@ def run(
                  "reason": reason, "source": rec.get("source", ""), "steer": rec.get("steer", 0.0),
                  "cmd_left": cmd.left, "cmd_right": cmd.right, "brake": int(cmd.brake),
                  "left_cps": pkt.left_wheel_cps, "right_cps": pkt.right_wheel_cps, "yaw_rate": pkt.yaw_rate,
+                 "yaw_deg": pkt.yaw_deg, "yaw_span_s": pkt.yaw_span_s,
+                 "distance_cm": pkt.distance_cm,
                  **wheel_columns(rec, getattr(navigator, "wheels", None)),
                  "imu_reads": None if batch is None else batch.imu_attempts,
                  "imu_read_ms": None if batch is None else batch.imu_read_ms_max,
@@ -444,6 +450,7 @@ def run(
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
                           "imu_failed": imu_failed}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "parallel_perception": parallel.enabled(),
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
               "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
@@ -520,7 +527,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--out", default=None, metavar="DIR")
+    parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
+    parallel.apply(args)
     try:
         camera_controls = parse_controls(args.camera_control)
     except ValueError as exc:
