@@ -67,6 +67,11 @@ def _step(label) -> int:
     return int(head) if head.isdigit() else 0
 
 
+def recording(value) -> bool:
+    """The record setting as a switch: 0 / off / no / false is off, anything else on."""
+    return str(value).strip().lower() not in ("0", "0.0", "off", "no", "false")
+
+
 class EightWatch:
     """
     Follows one run's nav.csv rows: ends it once `seconds` have passed and
@@ -138,7 +143,8 @@ class FigureEight(Routine):
               "turns_off_heading", "left_mean_deg", "right_mean_deg", "lap_s_mean", "lane_lost_s", "contract",
               "fps", "battery_start_v", "battery_end_v")
     needs = ("pigpiod",)
-    settings = {"minutes": f"how long the run lasts (default {MINUTES:.0f})"}
+    settings = {"minutes": f"how long the run lasts (default {MINUTES:.0f})",
+                "record": "1 saves every frame (the default), 0 saves none: the recorder-off A/B for stalls.csv"}
     instructions = """\
 The course: two blocks side by side; four lefts loop around one, four rights
 around the other, a figure 8 through the intersection they share. Start the
@@ -161,6 +167,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
             from src.diagnostics import battery_run
             self._open_battery = lambda: battery_run.open_battery(say=ctx.console.say)
         ctx.options.setdefault("minutes", MINUTES)
+        ctx.options.setdefault("record", 1)
 
     def trial(self, ctx, i):
         from src.config import MEASURED, MEASURED_ESTIMATION
@@ -183,7 +190,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
         try:
             report = self._run(source, sensors, motor, nav, MEASURED, MEASURED_ESTIMATION, str(attempt), None,
                                max_run_s=minutes * 60.0 + 30.0, motors_on=True, render=False, stop_when=watch,
-                               battery=battery)
+                               battery=battery, record=recording(ctx.options["record"]))
         finally:
             if battery is not None:
                 battery.cleanup()

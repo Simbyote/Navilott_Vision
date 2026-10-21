@@ -58,7 +58,7 @@ from src.debugger.live_view import Display
 from src.diagnostics import battery_run
 from src.diagnostics.pressure import StallLog
 from src.estimation.estimation import Phase3Config
-from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
+from src.linker_io import OPEN_ERRORS, FrameRecorder, NoRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
@@ -213,7 +213,8 @@ def summary_lines(report: dict) -> list[str]:
         + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
         + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
-        f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
+        f"camera drops {r['camera_drops']}, "
+        + (f"recorder dropped {r['recorder_dropped']}" if r.get("recorder", True) else "recorder off"),
     ] + ([] if "stalls" not in r else [
         f" stalls                {r['stalls']} gaps of {r['stall_ms']:.0f} ms or more between frames"
         + (" (stalls.csv)" if r["stalls"] else "")
@@ -269,6 +270,7 @@ def run(
         scale: int = 1,
         stop_when=None,
         battery=None,
+        record: bool = True,
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
@@ -295,6 +297,9 @@ def run(
             ended_by (intersection_linker ends a sequence this way).
         battery: diagnostics.battery.Power, or None: monitored from the
             start, logged per frame, and the run ends once it should_stop().
+        record: Save every frame and its record (frames/, records.pkl) for
+            the video; False writes neither, and nothing is rendered. The
+            CSVs and the report are written either way.
 
     Outputs:
         The findings, also written to report.json.
@@ -312,7 +317,7 @@ def run(
     n_file = open(os.path.join(out_dir, "nav.csv"), "w", newline="")
     n_log = csv.DictWriter(n_file, NAV_FIELDS, extrasaction="ignore")
     n_log.writeheader()
-    recorder = FrameRecorder(out_dir)
+    recorder = FrameRecorder(out_dir) if record else NoRecorder()
     stalls = StallLog(out_dir)
     camera_drops = 0
     ended_by, error = END_SOURCE, None
@@ -471,7 +476,7 @@ def run(
               "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
-                      "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
+                      "camera_drops": camera_drops, "recorder": record, "recorder_dropped": recorder.dropped,
                       "recorder_written": recorder.written,
                       "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
                       # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
@@ -536,6 +541,8 @@ def cli(argv: list[str] | None = None) -> int:
                     help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
     ap.add_argument("--no-render", action="store_true", help="skip the video; render later with --render")
+    ap.add_argument("--no-record", action="store_true",
+                    help="save no frames (no video): the CSVs and report only, nothing else on the SD card")
     ap.add_argument("--no-display", action="store_true", help="don't play the video afterwards")
     ap.add_argument("--scale", type=int, default=1)
     ap.add_argument("--width", type=int, default=FRAME_W)
@@ -606,7 +613,8 @@ def cli(argv: list[str] | None = None) -> int:
         run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
             out_dir, system,
             max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
-            render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery)
+            render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery,
+            record=not args.no_record)
     finally:
         if battery is not None:
             battery.cleanup()

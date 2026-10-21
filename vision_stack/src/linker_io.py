@@ -15,6 +15,7 @@ Main package:
     countdown(): the console "starting in 3, 2, 1" when there's no button.
     FrameRecorder: put(frame_id, frame, record) on a background thread;
         close() flushes. dropped, written.
+    NoRecorder: FrameRecorder's stand-in that writes nothing (--no-record).
     NoMotors: drive() / brake() / stop() that do nothing (--no-motors).
     chain_record(res): one frame's Phase 1-3 result without its images,
         what debug_maneuver.as_result() redraws the Phase 3 view from.
@@ -175,6 +176,21 @@ class FrameRecorder:
         self._records.close()
         if self._error is not None:
             raise RuntimeError(f"frame recorder failed: {self._error!r}") from self._error
+
+
+class NoRecorder:
+    """
+    --no-record: FrameRecorder's interface, writing nothing. For a run that
+    must not touch the SD card, e.g. to see whether the recorder's writes
+    are behind a stall (stalls.csv with and without).
+    """
+    dropped = written = 0
+
+    def put(self, frame_id: int, frame, record: dict) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
 
 
 class NoMotors:

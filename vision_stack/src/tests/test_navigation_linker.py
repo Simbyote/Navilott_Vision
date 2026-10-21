@@ -723,6 +723,18 @@ def test_a_late_frame_is_written_to_stalls_csv_and_named_in_its_event(tmp_path):
 
 
 @pytest.mark.software
+def test_record_off_saves_no_frames_but_keeps_the_logs(tmp_path):
+    rep, out, *_ = go(tmp_path, record=False, render=True)
+    assert not (out / "frames").exists() and not (out / "records.pkl").exists()
+    assert (out / "nav.csv").exists() and (out / "report.json").exists()
+    assert rep["run"]["recorder"] is False and rep["run"]["recorder_written"] == 0
+    assert "video_frames" not in rep["run"]                                # nothing to render
+    assert "recorder off" in (out / "summary.txt").read_text()
+    on, out2, *_ = go(tmp_path / "b")
+    assert on["run"]["recorder"] is True and (out2 / "records.pkl").exists()
+
+
+@pytest.mark.software
 def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
     rep, out, *_ = go(tmp_path)
     assert rep["run"]["stalls"] == 0 and not (out / "stalls.csv").exists()

@@ -130,9 +130,10 @@ class Battery:
 
 def fake_run(rows, log, wall=None):
     def run(source, sensors, motor, nav, config, p3, out_dir, system, max_run_s, motors_on, render, stop_when,
-            battery):
+            battery, record):
         log.append(("run", out_dir.rsplit("/", 1)[-1], max_run_s, len(nav.progress.route.maneuvers),
                     nav.progress.route.maneuvers[:8], motors_on, render, battery is not None))
+        log.append(("record", record))
         why = feed(stop_when, rows)
         return {"ended_by": why or "ended early (lane lost before the route was done)",
                 "run": {"wall_s": wall if wall is not None else stop_when.t}}
@@ -144,9 +145,18 @@ def routine(rows, log, battery=True):
                           open_battery=lambda: Battery(log) if battery else None)
 
 
-def go(r, person, tmp_path, minutes=0.5):
-    return h.run_routine(r, person.console(), tmp_path / "out", options={"minutes": minutes},
+def go(r, person, tmp_path, minutes=0.5, **options):
+    return h.run_routine(r, person.console(), tmp_path / "out", options={"minutes": minutes, **options},
                          conditions_fn=no_conditions)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("setting, on", [(None, True), (1, True), (0, False), ("off", False)])
+def test_the_record_setting_turns_the_frame_recorder_on_or_off(tmp_path, setting, on):
+    log = []
+    options = {} if setting is None else {"record": setting}
+    go(routine(lap_rows(laps=4), log), Person("", "0", "3", ""), tmp_path, **options)
+    assert ("record", on) in log
 
 
 @pytest.mark.software
