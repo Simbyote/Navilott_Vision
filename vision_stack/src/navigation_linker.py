@@ -56,6 +56,7 @@ from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import Display
 from src.diagnostics import battery_run
+from src.diagnostics.pressure import StallLog
 from src.estimation.estimation import Phase3Config
 from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
@@ -213,6 +214,11 @@ def summary_lines(report: dict) -> list[str]:
         + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
+    ] + ([] if "stalls" not in r else [
+        f" stalls                {r['stalls']} gaps of {r['stall_ms']:.0f} ms or more between frames"
+        + (" (stalls.csv)" if r["stalls"] else "")
+        + ("" if r["psi"] else "; PSI off, so no CPU / IO / memory split (setup.mk psi)"),
+    ]) + [
         f" decided by            {rules}",
         f" driving               {n['driving']} frames ({pct(n['driving']):.0f}%), steering by: {sources}",
         f" braked                {n['braked']} frames ({pct(n['braked']):.0f}%): {reasons}",
@@ -307,6 +313,7 @@ def run(
     n_log = csv.DictWriter(n_file, NAV_FIELDS, extrasaction="ignore")
     n_log.writeheader()
     recorder = FrameRecorder(out_dir)
+    stalls = StallLog(out_dir)
     camera_drops = 0
     ended_by, error = END_SOURCE, None
     last_reason = None
@@ -347,6 +354,9 @@ def run(
                 continue
 
             sample, batch = (None, None) if sensors is None else sensors.read()
+            stalled = stalls.frame(fid, arrived - t0, capture_ms,
+                                   None if batch is None else batch.imu_attempts,
+                                   None if batch is None else batch.imu_read_ms_max)
             if processor is None:
                 processor = make_processor(frame, fid, ts, config, p3_config)
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
@@ -363,6 +373,7 @@ def run(
             else:
                 motor.drive(cmd.left, cmd.right)
             latency_ms = (clock() - arrived) * 1000.0
+            stalls.worked(latency_ms)
 
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
@@ -371,6 +382,9 @@ def run(
             slow = slow_frame(res, gc_ms=gc_ms, gc_gen=gc_gen)
             if slow:
                 event = f"{event}; {slow}" if event else slow
+            if stalled:
+                note = "stall: see stalls.csv"
+                event = f"{event}; {note}" if event else note
             last_reason = reason
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
@@ -429,6 +443,7 @@ def run(
     finally:
         motor.stop()                                # first, whatever happened
         gc_watch.stop()
+        stalls.close()
         try:
             recorder.close()
         finally:
@@ -458,6 +473,7 @@ def run(
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
                       "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
                       "recorder_written": recorder.written,
+                      "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
                       # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
                       # Linux) a diagnostics recording lines up with it (analysis.pi_load --run)
                       "t0_monotonic": None if t0 is None else round(t0, 4)}}

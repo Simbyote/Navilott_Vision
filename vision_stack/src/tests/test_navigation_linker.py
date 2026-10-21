@@ -41,12 +41,13 @@ class Camera:
     """FrameSource stand-in: one scene per frame from a script, advancing the fake clock by DT per read."""
     fps, label = 20, "sim"
 
-    def __init__(self, clock, script=("two_boundary",), end_at=None, fail_at=None, drop_at=()):
+    def __init__(self, clock, script=("two_boundary",), end_at=None, fail_at=None, drop_at=(), late_at=None):
         self.clock, self.script, self.end_at, self.fail_at, self.drop_at = clock, script, end_at, fail_at, drop_at
+        self.late_at = late_at or {}            # {frame: extra seconds its read waits}
         self.i, self.closed = 0, False
 
     def read(self):
-        self.clock.now += DT
+        self.clock.now += DT + self.late_at.get(self.i + 1, 0.0)
         self.i += 1
         if self.i == self.fail_at:
             raise KeyboardInterrupt
@@ -704,6 +705,27 @@ def test_the_default_route_is_config_s(cli_env):
     nl.cli(["--frames", str(tmp)])
     assert got["navigator"].progress.route == load_route(ROUTE_PATH)
 
+
+
+@pytest.mark.software
+def test_a_late_frame_is_written_to_stalls_csv_and_named_in_its_event(tmp_path):
+    rep, out, *_ = go(tmp_path, cam={"end_at": 9, "late_at": {2: 1.0, 6: 0.4}})
+    stalls = rows(out / "stalls.csv")
+    assert [s["frame_id"] for s in stalls] == ["6"]                  # frame 2's gap follows the first frame: start-up
+    assert float(stalls[0]["gap_ms"]) == pytest.approx(450.0, abs=1.0)
+    assert float(stalls[0]["capture_ms"]) == pytest.approx(450.0, abs=1.0)
+    assert float(stalls[0]["outside_ms"]) == pytest.approx(0.0, abs=1.0)
+    assert rep["run"]["stalls"] == 1 and rep["run"]["stall_ms"] == 150.0
+    events = {r["frame_id"]: r["event"] for r in rows(out / "nav.csv")}
+    assert "stall: see stalls.csv" in events["6"] and "stall" not in events["2"]
+    assert " stalls                1 gaps of 150 ms or more between frames (stalls.csv)" in \
+        (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
+    rep, out, *_ = go(tmp_path)
+    assert rep["run"]["stalls"] == 0 and not (out / "stalls.csv").exists()
 
 
 @pytest.mark.software

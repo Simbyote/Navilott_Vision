@@ -28,7 +28,7 @@ DIAG_STAMP    := $(STAMP_DIR)/apt-diag
 I2C_STAMP     := $(STAMP_DIR)/i2c-enabled
 PIGPIO_STAMP  := $(STAMP_DIR)/pigpio-installed
 
-.PHONY: all setup help update base-deps camera-deps diag-deps check i2c rt-limits pigpio venv install reboot clean distclean
+.PHONY: all setup help update base-deps camera-deps diag-deps check i2c rt-limits psi pigpio venv install reboot clean distclean
 
 # --- Meta ------------------------------------------------------------------
 
@@ -43,13 +43,14 @@ help:
 	@echo "  make check         - verify camera stack is actually working"
 	@echo "  make i2c           - enable I2C via raspi-config"
 	@echo "  make rt-limits     - let $(RT_USER) run the sensor hub at real-time priority (log in again after)"
+	@echo "  make psi           - turn on the kernel's pressure counters for stalls.csv (reboot after)"
 	@echo "  make pigpio        - clone, build, install pigpiod as a service"
 	@echo "  make venv          - create venv + pip install -e . for this repo"
 	@echo "  make reboot        - reboot the Pi"
 	@echo "  make clean         - remove build artifacts (keeps venv)"
 	@echo "  make distclean     - clean + remove venv + stamps (full reset)"
 
-setup: update base-deps camera-deps diag-deps i2c rt-limits pigpio venv check
+setup: update base-deps camera-deps diag-deps i2c rt-limits psi pigpio venv check
 	@echo ""
 	@echo "==> Setup complete. Review 'make check' output above,"
 	@echo "    then run 'make reboot' when ready."
@@ -134,6 +135,28 @@ rt-limits:
 	@echo "$(RT_USER) - rtprio $(RT_PRIO)" | sudo tee $(RT_LIMITS) >/dev/null
 	@echo "==> $(RT_LIMITS): $(RT_USER) may use real-time priority up to $(RT_PRIO)"
 	@echo "    log out and back in, then check: ulimit -r"
+
+# --- Pressure stall information ----------------------------------------
+# The run loops' stalls.csv splits a stall into CPU, I/O and memory waits
+# from /proc/pressure (src/diagnostics/pressure.py). Raspberry Pi kernels can
+# build it in but leave it off; psi=1 on the kernel command line turns it on
+# at the next boot. cmdline.txt is one line: the flag is appended to it, and
+# the old file kept as cmdline.txt.bak.
+
+CMDLINE ?= $(firstword $(wildcard /boot/firmware/cmdline.txt /boot/cmdline.txt))
+
+psi:
+	@if cat /proc/pressure/io >/dev/null 2>&1; then \
+		echo "==> PSI is on (/proc/pressure reads)"; \
+	elif [ -z "$(CMDLINE)" ]; then \
+		echo "==> no cmdline.txt found; add psi=1 to the kernel command line by hand"; \
+	elif grep -qw "psi=1" $(CMDLINE); then \
+		echo "==> psi=1 is already in $(CMDLINE); reboot to turn it on"; \
+	else \
+		sudo cp $(CMDLINE) $(CMDLINE).bak; \
+		sudo sed -i '1 s/$$/ psi=1/' $(CMDLINE); \
+		echo "==> psi=1 added to $(CMDLINE) (old one: $(CMDLINE).bak); reboot to turn it on"; \
+	fi
 
 # --- pigpio --------------------------------------------------------------
 
