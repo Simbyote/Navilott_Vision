@@ -594,3 +594,110 @@ def test_a_batch_counts_its_imu_reads_failures_and_the_slowest():
     assert (b.imu_attempts, b.imu_failed, b.imu_read_ms_max, b.imu_count) == (4, 1, 4.0, 3)
     empty = h.drain()
     assert (empty.imu_attempts, empty.imu_failed, empty.imu_read_ms_max) == (1 - 1, 0, None)
+
+
+# =============================================================================
+# The IMU's FIFO: no thread, samples stamped by the chip's period
+# =============================================================================
+
+class FifoIMU:
+    """IMUReader in FIFO mode, stand-in: push() samples (raw yaw, accel); read_fifo() takes them all."""
+    fifo, period_s = True, 0.01
+
+    def __init__(self):
+        self.samples, self.resets, self.fail, self.fifo_overflows = [], 0, False, 0
+
+    def push(self, yaw, n=1, accel=0.0):
+        self.samples += [(yaw, accel)] * n
+
+    def read_fifo(self):
+        if self.fail:
+            raise OSError("simulated I2C error")
+        out, self.samples = self.samples, []
+        return out
+
+    def fifo_reset(self):
+        self.resets += 1
+        self.samples = []
+
+
+def clock_at(now):
+    clock = Clock()
+    clock.now = now
+    return clock
+
+
+@pytest.mark.software
+def test_a_fifo_hub_starts_no_thread_and_empties_the_fifo_first():
+    imu = FifoIMU()
+    imu.push(5.0, n=40)                           # built up since open: stale
+    h = SensorHub(imu, rt_priority=20)
+    h.start()
+    assert h._thread is None and imu.resets == 1 and not imu.samples
+    assert h.priority == "no thread (the IMU's FIFO)" and h.fifo_overflows == 0
+    h.stop()
+
+
+@pytest.mark.software
+def test_fifo_samples_are_stamped_a_period_apart_ending_now_and_the_windows_tile():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(30.0, n=5)
+    first = h.drain()
+    assert [round(r.t, 3) for r in first.readings] == [9.96, 9.97, 9.98, 9.99, 10.0]
+    assert {r.yaw_dps for r in first.readings} == {IMU_YAW_SIGN * 30.0}
+    clock.now = 10.05
+    imu.push(30.0, n=5)
+    second = h.drain()
+    assert [round(r.t, 3) for r in second.readings] == [10.01, 10.02, 10.03, 10.04, 10.05]
+    assert second.yaw_deg == pytest.approx(IMU_YAW_SIGN * 30.0 * 0.05)      # 5 periods, nothing lost
+    assert second.imu_attempts == 5 and second.imu_failed == 0
+    # Read late: the window still ends at the read, so the stamps follow real time and the chip's
+    # clock error can't build up; the gap before it takes the 2 ms
+    clock.now = 10.102
+    imu.push(30.0, n=5)
+    late = h.drain()
+    assert [round(r.t, 3) for r in late.readings] == [10.062, 10.072, 10.082, 10.092, 10.102]
+    # Read early: never before the previous window's last sample plus a period
+    clock.now = 10.145
+    imu.push(30.0, n=5)
+    early = h.drain()
+    assert round(early.readings[0].t, 3) == 10.112
+
+
+@pytest.mark.software
+def test_a_stall_shorter_than_the_fifo_loses_no_yaw():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(0.0, n=5)
+    h.drain()
+    clock.now = 10.6                              # a 600 ms frame: 60 samples waited in the FIFO
+    imu.push(90.0, n=60)
+    batch = h.drain()
+    assert batch.yaw_span_s == pytest.approx(0.6) and batch.yaw_deg == pytest.approx(IMU_YAW_SIGN * 54.0)
+
+
+@pytest.mark.software
+def test_a_failed_fifo_read_counts_once_and_its_samples_come_next_frame():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(10.0, n=5)
+    imu.fail = True
+    bad = h.drain()
+    assert (bad.imu_attempts, bad.imu_failed, h.read_errors) == (1, 1, 1)
+    imu.fail, clock.now = False, 10.05
+    assert h.drain().imu_count == 5
+
+
+@pytest.mark.software
+def test_a_fifo_hub_still_measures_the_wheels_at_each_drain():
+    imu, enc, clock = FifoIMU(), FakeEncoders(), clock_at(10.0)
+    h = SensorHub(imu, enc, clock=clock)
+    h.start()
+    clock.now, enc.left, enc.right = 10.05, 50, 40
+    imu.push(0.0, n=5)
+    batch = h.drain()
+    assert (batch.left_cps, batch.right_cps) == (pytest.approx(1000.0), pytest.approx(800.0))

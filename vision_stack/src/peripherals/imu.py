@@ -1,4 +1,4 @@
-"""MPU-6050 gyro Z and lateral accel: one reading on request, for the sensor hub.
+"""MPU-6050 gyro Z and lateral accel: one reading on request, or every sample its FIFO holds, for the sensor hub.
 
 Purpose:
     The IMU driver and nothing above it. sensing.SensorHub calls read() at
@@ -15,23 +15,36 @@ Purpose:
     100 kHz, and the sensor hub's thread giving up and retaking the GIL for
     every one of them.
 
+    With fifo (params.IMU_FIFO), the chip does the sampling instead: it
+    writes gyro Z and the accel into its 1 KB FIFO at IMU_RATE_HZ on its
+    own clock, and read_fifo() takes every sample it holds in two
+    transfers (the count, then the samples). The sensor hub calls it once
+    per frame, so no thread has to wake 100 times a second on time, and
+    the samples are exactly 1 / IMU_RATE_HZ apart whatever the scheduler
+    did. 8 bytes a sample: 128 samples, 1.28 s, before the FIFO overflows;
+    an overflow is reset and counted (fifo_overflows), and those samples
+    are lost.
+
 Main package:
     IMUReader: read() -> (gyro Z deg/s, accel Y m/s^2) in the driver's
         frame (Z up: + = turning LEFT; this robot's mount is upside down,
-        which sensing's IMU_YAW_SIGN accounts for), calibrate().
+        which sensing's IMU_YAW_SIGN accounts for), calibrate();
+        with fifo: read_fifo() -> [(gyro Z, accel Y), ...] oldest first,
+        fifo_reset(), period_s, fifo_overflows.
 
 Flow:
     1. IMUReader() opens I2C, sets the on-chip low-pass filter and reads
-       the gyro and accel ranges.
+       the gyro and accel ranges; with fifo, sets the sample rate and
+       starts the FIFO.
     2. Optionally calibrate(), robot still: later reads subtract the bias.
-    3. read(), as often as the caller samples.
+    3. read(), as often as the caller samples; or read_fifo() once per frame.
 """
 
 import struct
 import time
 import logging
 
-from src.params import IMU_I2C_ADDRESS, IMU_RATE_HZ
+from src.params import IMU_FIFO, IMU_I2C_ADDRESS, IMU_RATE_HZ
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +61,20 @@ GYRO_LSB_PER_DPS = (131.0, 65.5, 32.8, 16.4)
 ACCEL_LSB_PER_G = (16384.0, 8192.0, 4096.0, 2048.0)
 STANDARD_GRAVITY = 9.80665                          # m/s^2 per g, as the Adafruit driver converts
 
+# The FIFO (register map rev 4.2). The sample rate is the gyro's output rate
+# / (1 + SMPLRT_DIV): 1 kHz with the low-pass filter on (CONFIG's DLPF_CFG
+# 1-6), 8 kHz with it off (0 or 7)
+SMPLRT_DIV, CONFIG, FIFO_EN, USER_CTRL = 0x19, 0x1A, 0x23, 0x6A
+FIFO_COUNTH, FIFO_R_W = 0x72, 0x74
+FIFO_EN_ZG_ACCEL = 0x10 | 0x08                      # gyro Z and the accel into the FIFO, nothing else
+USER_CTRL_FIFO_EN, USER_CTRL_FIFO_RESET = 0x40, 0x04
+FIFO_BYTES = 1024
+# A FIFO sample, in register order: accel X Y Z, gyro Z (the enabled
+# outputs only; temperature and gyro X Y aren't written)
+FIFO_FORMAT = ">4h"
+FIFO_SAMPLE_BYTES = struct.calcsize(FIFO_FORMAT)    # 8
+FIFO_ACCEL_Y, FIFO_GYRO_Z = 1, 3
+
 
 class IMUReader:
     """
@@ -55,10 +82,13 @@ class IMUReader:
 
     Inputs:
         address: I2C address; 0x68 with AD0 low, 0x69 with it high.
-        rate_hz: calibrate()'s sampling rate.
+        rate_hz: calibrate()'s sampling rate, and the FIFO's.
         mpu: An Adafruit MPU6050, or a stand-in with its .i2c_device,
             .gyro_range and .accelerometer_range, to test without
             hardware. None opens the real sensor.
+        fifo: Sample into the chip's FIFO (read_fifo()). None: IMU_FIFO
+            for the real sensor, off for a stand-in. A chip that won't
+            take the setup leaves it off (fifo False), with a warning.
 
     Side effects:
         With mpu None, opens I2C and sets the sensor's on-chip low-pass
@@ -70,7 +100,9 @@ class IMUReader:
             address: int   = IMU_I2C_ADDRESS,
             rate_hz: float = IMU_RATE_HZ,
             mpu            = None,
+            fifo: bool | None = None,
     ) -> None:
+        opened = mpu is None
         if mpu is None:
             import board
             import busio
@@ -89,6 +121,76 @@ class IMUReader:
         self._buf         = bytearray(SAMPLE_BYTES)
         self._rate_hz     = rate_hz
         self._gz_bias_dps = 0.0
+        self.period_s       = 1.0 / rate_hz
+        self.fifo_overflows = 0
+        self._count_buf     = bytearray(2)
+        want_fifo = (IMU_FIFO and opened) if fifo is None else fifo
+        self.fifo = want_fifo and self._fifo_setup()
+
+    def _write(self, reg: int, value: int) -> None:
+        with self._dev as dev:
+            dev.write(bytes((reg, value)))
+
+    def _read_reg(self, reg: int) -> int:
+        buf = bytearray(1)
+        with self._dev as dev:
+            dev.write_then_readinto(bytes((reg,)), buf)
+        return buf[0]
+
+    def _fifo_setup(self) -> bool:
+        """Sample rate, what goes into the FIFO, and a fresh FIFO. False (with a warning) if the chip won't take it."""
+        try:
+            dlpf = self._read_reg(CONFIG) & 0x07
+            gyro_hz = 8000.0 if dlpf in (0, 7) else 1000.0
+            div = max(0, min(255, round(gyro_hz / self._rate_hz) - 1))
+            self.period_s = (1 + div) / gyro_hz
+            self._write(SMPLRT_DIV, div)
+            self._write(FIFO_EN, FIFO_EN_ZG_ACCEL)
+            self.fifo_reset()
+        except Exception as exc:
+            log.warning("IMU FIFO not set up (%s); the sensor hub polls instead", exc)
+            return False
+        return True
+
+    def fifo_reset(self) -> None:
+        """Empty the FIFO and keep it filling: what's in it now is stale (or misaligned, after an overflow)."""
+        self._write(USER_CTRL, USER_CTRL_FIFO_RESET)
+        self._write(USER_CTRL, USER_CTRL_FIFO_EN)
+
+    def read_fifo(self) -> list[tuple[float, float]]:
+        """
+        Every whole sample in the FIFO, oldest first, each as read() gives
+        one: (bias-corrected gyro Z in deg/s, accel Y in m/s^2), spaced
+        period_s apart on the chip's clock. Two transfers: the count, then
+        the samples. A full FIFO has overflowed: it is reset, counted in
+        fifo_overflows, and [] returned (its oldest samples are gone and
+        the rest may be misaligned).
+
+        Raises:
+            Whatever the driver raises on a failed I2C read; the samples
+            stay in the FIFO for the next call.
+        """
+        with self._dev as dev:
+            dev.write_then_readinto(bytes((FIFO_COUNTH,)), self._count_buf)
+        count = (self._count_buf[0] << 8) | self._count_buf[1]
+        if count >= FIFO_BYTES:
+            self.fifo_overflows += 1
+            log.warning("IMU FIFO overflowed (%d so far): reset, %.2f s of samples lost",
+                        self.fifo_overflows, FIFO_BYTES / FIFO_SAMPLE_BYTES * self.period_s)
+            self.fifo_reset()
+            return []
+        n = count // FIFO_SAMPLE_BYTES
+        if n == 0:
+            return []
+        buf = bytearray(n * FIFO_SAMPLE_BYTES)
+        with self._dev as dev:
+            dev.write_then_readinto(bytes((FIFO_R_W,)), buf)
+        out = []
+        for i in range(n):
+            s = struct.unpack_from(FIFO_FORMAT, buf, i * FIFO_SAMPLE_BYTES)
+            out.append((s[FIFO_GYRO_Z] / self._gyro_lsb - self._gz_bias_dps,
+                        s[FIFO_ACCEL_Y] / self._accel_lsb * STANDARD_GRAVITY))
+        return out
 
     def _sample(self) -> tuple[float, float]:
         """One I2C transfer: (raw gyro Z in deg/s, accel Y in m/s^2), before the bias."""

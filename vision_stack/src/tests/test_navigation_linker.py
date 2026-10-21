@@ -431,6 +431,11 @@ def test_the_sensor_hubs_priority_reaches_the_report_and_the_summary(tmp_path):
     rep, out, *_ = go(tmp_path, sensors=sensors)
     assert rep["sensors"]["hub_priority"] == sensors.priority
     assert f"failed; hub {sensors.priority}" in (out / "summary.txt").read_text()
+    fifo = TimedSensors()
+    fifo.priority, fifo.fifo_overflows = "no thread (the IMU's FIFO)", 0
+    rep3, out3, *_ = go(tmp_path / "c", sensors=fifo)
+    assert rep3["sensors"]["fifo_overflows"] == 0
+    assert "hub no thread (the IMU's FIFO), FIFO overflows 0" in (out3 / "summary.txt").read_text()
     plain, out2, *_ = go(tmp_path / "b", sensors=TimedSensors())          # sensors that don't say: no mention
     assert plain["sensors"]["hub_priority"] is None and "; hub " not in (out2 / "summary.txt").read_text()
 

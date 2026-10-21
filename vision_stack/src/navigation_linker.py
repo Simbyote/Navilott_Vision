@@ -235,6 +235,8 @@ def summary_lines(report: dict) -> list[str]:
         + f"{report['sensors']['imu_reads_per_frame']:g} a frame (median; expect {SENSOR_RATE_HZ / FPS:g}), "
         f"{report['sensors']['imu_failed']} failed"
         + ("" if not report["sensors"].get("hub_priority") else f"; hub {report['sensors']['hub_priority']}")
+        + ("" if report["sensors"].get("fifo_overflows") is None else
+           f", FIFO overflows {report['sensors']['fifo_overflows']}")
     ]) + ([] if not report.get("battery") else [
         " battery               start {start_v} V, lowest {min_v} V, end {end_v} V; {state}".format(**report["battery"])
         + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")
@@ -483,7 +485,8 @@ def run(
                           "read_ms": read_stats(battery.read_ms())}
     if t0 is not None and imu_reads:
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
-                          "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None)}
+                          "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None),
+                          "fifo_overflows": getattr(sensors, "fifo_overflows", None)}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
               "motor_watchdog": None if not hasattr(motor, "watchdog_status") else
               {"status": motor.watchdog_status, "trips": motor.watchdog_trips},

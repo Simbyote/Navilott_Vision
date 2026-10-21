@@ -86,6 +86,13 @@ IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
 # --- Battery monitor (src/diagnostics/battery.py) ---
 ADS1115_I2C_ADDRESS = 0x48  # ADS1115 with ADDR tied to GND; A0 reads the 4:1 V-Sense divider
 IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 44 Hz to match
+# The MPU-6050 samples gyro Z and accel at IMU_RATE_HZ on its own clock into
+# its FIFO, and the sensor hub reads the FIFO once per frame (2 transfers)
+# instead of polling the IMU from a 100 Hz thread (src/peripherals/imu.py).
+# The samples are spaced by the IMU's clock, not by when a thread woke, and
+# a stall shorter than the FIFO's 1.28 s loses none of them. False: the hub
+# polls, as before
+IMU_FIFO = True
 # Multiplies raw gyro Z so yaw reads + = turning right, Estimation's convention.
 # The driver reads + = left for a Z-up IMU; this robot's is mounted upside
 # down, so its raw gyro Z already reads + for a RIGHT turn (checked on the

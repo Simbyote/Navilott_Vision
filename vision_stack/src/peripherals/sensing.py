@@ -23,7 +23,10 @@ Main package:
         nothing), and the window's IMU reads: attempted, failed, the slowest.
     SensorHub: the sampling thread, its buffer, and drain(). Over the real
         sensors (open()) the thread asks for real-time priority
-        (SENSOR_HUB_RT_PRIORITY); priority says what it got.
+        (SENSOR_HUB_RT_PRIORITY); priority says what it got. With an IMU
+        sampling into its own FIFO (IMUReader.fifo, params.IMU_FIFO) there
+        is no thread: drain() reads the FIFO, each sample stamped by the
+        chip's own period.
     Sensors: what a frame loop uses (src/main.py and every linker): opens and
         starts a hub, then one read() / sample() per frame.
 
@@ -199,7 +202,9 @@ class SensorHub:
 
     Inputs:
         imu: An object with read() -> (raw yaw deg/s, lateral accel m/s^2),
-            like peripherals.imu.IMUReader; None without an IMU.
+            like peripherals.imu.IMUReader; None without an IMU. One with
+            fifo True also has read_fifo(), fifo_reset(), period_s and
+            fifo_overflows, and the hub reads it per drain instead.
         encoders: An object with counts() -> (left, right), like
             peripherals.drive.EncoderReader; None without encoders.
         rate_hz: Readings per second.
@@ -237,6 +242,8 @@ class SensorHub:
         self._dropped = 0
         self._closers: list = []
         self.read_errors = 0
+        self._fifo = bool(getattr(imu, "fifo", False))
+        self._fifo_t: float | None = None       # the last FIFO sample's stamp
 
     @classmethod
     def open(cls, imu: bool = False, encoders: bool = False, **kw) -> "SensorHub":
@@ -277,6 +284,9 @@ class SensorHub:
         if self._thread is not None and self._thread.is_alive():
             return
         self._base = self._counts_reading()
+        if self._fifo:
+            self._start_fifo()
+            return
         self._stop_evt.clear()
         self._thread = threading.Thread(target=self._worker, daemon=True, name="sensor-hub")
         self._thread.start()
@@ -319,6 +329,49 @@ class SensorHub:
         self._keep(reading)
         return reading
 
+    def _start_fifo(self) -> None:
+        """No thread: empty the FIFO of what built up since it opened, so the first window starts now."""
+        try:
+            self._imu.fifo_reset()
+        except Exception as exc:
+            log.warning("IMU FIFO reset failed: %s", exc)
+        self._fifo_t = None
+        self.priority = "no thread (the IMU's FIFO)"
+        log.info("SensorHub started on the IMU's FIFO (%.0f Hz on the chip's clock, encoders=%s)",
+                 1.0 / self._imu.period_s, self._encoders is not None)
+
+    @property
+    def fifo_overflows(self) -> int | None:
+        """Times the IMU's FIFO filled and was reset (samples lost); None without one."""
+        return getattr(self._imu, "fifo_overflows", None) if self._fifo else None
+
+    def _drain_fifo(self) -> None:
+        """
+        Every sample in the IMU's FIFO into the buffer, newest stamped now and
+        each earlier one a period before; never before the previous drain's
+        last, so the windows tile. A failed read keeps one reading with no
+        yaw (counted as failed); its samples wait in the FIFO for the next.
+        """
+        now, r0 = self._clock(), self._timer()
+        try:
+            samples = self._imu.read_fifo()
+        except Exception as exc:
+            self.read_errors += 1
+            if self.read_errors % 100 == 1:
+                log.warning("IMU FIFO read error #%d: %s", self.read_errors, exc)
+            self._keep(SensorReading(now, None, None, None, None, round((self._timer() - r0) * 1000.0, 3)))
+            return
+        ms = round((self._timer() - r0) * 1000.0, 3)
+        if not samples:
+            return
+        dt = self._imu.period_s
+        start = now - (len(samples) - 1) * dt
+        if self._fifo_t is not None:
+            start = max(start, self._fifo_t + dt)
+        for i, (raw_yaw, accel) in enumerate(samples):
+            self._keep(SensorReading(start + i * dt, self._yaw_sign * raw_yaw, accel, None, None, ms))
+        self._fifo_t = start + (len(samples) - 1) * dt
+
     def drain(self) -> SensorBatch:
         """
         Every reading since the previous drain, as one batch.
@@ -329,8 +382,10 @@ class SensorHub:
 
         Side effects:
             Empties the buffer; the batch's last reading becomes the next
-            batch's base.
+            batch's base. With the IMU's FIFO, reads it first.
         """
+        if self._fifo:
+            self._drain_fifo()
         if self._encoders is not None:
             self._keep(self._counts_reading())
         with self._lock:
@@ -420,6 +475,11 @@ class Sensors:
     def priority(self) -> str:
         """The hub thread's scheduling, as SensorHub.priority says it."""
         return self._hub.priority
+
+    @property
+    def fifo_overflows(self) -> int | None:
+        """The IMU FIFO's overflows, as SensorHub.fifo_overflows says; None without one."""
+        return self._hub.fifo_overflows
 
     def sample(self) -> SensorSample | None:
         """This frame window's readings; None with no sensors."""
