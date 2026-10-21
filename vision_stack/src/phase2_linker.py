@@ -11,6 +11,8 @@ Purpose:
 Main package:
     ChainResult: every stage's output and debug data for one frame, ending in
     the Phase2Output handed to Phase 3, plus per-stage timings.
+    warm_up(frame, config): one frame through the chain, thrown away, so a
+    run's first real frame doesn't pay the stages' first-call costs.
 
 Flow:
     FrameData -> preprocess_frame -> crop_rois -> run_geometry_stage
@@ -163,6 +165,26 @@ def run_chain(
                        sign_debug, fusion, fusion_debug, phase2, timings,
                        traffic, traffic_debug, stop_line, stop_line_debug,
                        obstacle, obstacle_debug, side_ms)
+
+
+def warm_up(frame_bgr: np.ndarray, config: PipelineConfig = PipelineConfig()) -> float:
+    """
+    Run one frame through the chain and throw the result away.
+
+    A process's first frame pays costs no later frame does: undistortion's
+    maps (cached), OpenCV's worker threads and buffers, the side thread with
+    parallel perception. The 2026-10-20 runs' frame 0 took 1.4-1.5 s
+    (obstacle alone 1,089 ms), and the first motor command came from it.
+    The run loops call this before the start button, so the cost is paid
+    standing still. Phase 2 keeps nothing between frames (Phase 3 does), so
+    the frame leaves no trace in the run.
+
+    Outputs:
+        How long it took, ms.
+    """
+    t0 = time.perf_counter()
+    run_chain(frame_bgr, 0, 0, config)
+    return (time.perf_counter() - t0) * 1000.0
 
 
 def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,

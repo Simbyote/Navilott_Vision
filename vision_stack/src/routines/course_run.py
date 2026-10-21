@@ -143,7 +143,7 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             report = self._run(source, sensors, motor, nav, MEASURED, MEASURED_ESTIMATION,
                                str(Path(ctx.out_dir) / f"attempt_{ctx.attempt + 1:02d}"), system,
                                max_run_s=float(ctx.options["max_s"]), motors_on=True, render=False,
-                               stop_when=watch, battery=battery)
+                               stop_when=watch, battery=battery, warmup=True)
         finally:
             if battery is not None:
                 battery.cleanup()

@@ -735,6 +735,15 @@ def test_record_off_saves_no_frames_but_keeps_the_logs(tmp_path):
 
 
 @pytest.mark.software
+def test_warm_up_takes_one_frame_before_the_start_and_logs_none_of_it(tmp_path):
+    cold, *_ = go(tmp_path / "cold")
+    warm, out, *_ = go(tmp_path / "warm", warmup=True)
+    assert cold["run"]["warmup_ms"] is None and warm["run"]["warmup_ms"] is not None
+    assert warm["run"]["frames"] == cold["run"]["frames"] - 1
+    assert rows(out / "nav.csv")[0]["frame_id"] == "2"                  # frame 1 was the warm-up's
+
+
+@pytest.mark.software
 def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
     rep, out, *_ = go(tmp_path)
     assert rep["run"]["stalls"] == 0 and not (out / "stalls.csv").exists()

@@ -64,6 +64,7 @@ from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
 from src.perception.color_branch import load_hsv_ranges
+from src.phase2_linker import warm_up
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
 from src.utils import GcWatch
 from src.perception import parallel
@@ -271,6 +272,7 @@ def run(
         stop_when=None,
         battery=None,
         record: bool = True,
+        warmup: bool = False,
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
@@ -300,6 +302,10 @@ def run(
         record: Save every frame and its record (frames/, records.pkl) for
             the video; False writes neither, and nothing is rendered. The
             CSVs and the report are written either way.
+        warmup: Before the start, read one frame and run it through Phase 2
+            (phase2_linker.warm_up), so the first driving frame doesn't pay
+            the first-call costs. For the live camera; a replay would lose
+            its first frame.
 
     Outputs:
         The findings, also written to report.json.
@@ -324,8 +330,14 @@ def run(
     last_reason = None
     t0 = None
     gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)
+    warmup_ms = None
 
     try:
+        if warmup:
+            item = source.read()
+            if item is not None and item[0] is not None:
+                warmup_ms = warm_up(item[0], config)
+                print(f"warmed up: one frame through Phase 2 in {warmup_ms:.0f} ms")
         if system is not None:
             system.wait_for_start()
             system.run_countdown()
@@ -478,6 +490,7 @@ def run(
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
                       "camera_drops": camera_drops, "recorder": record, "recorder_dropped": recorder.dropped,
                       "recorder_written": recorder.written,
+                      "warmup_ms": None if warmup_ms is None else round(warmup_ms, 1),
                       "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
                       # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
                       # Linux) a diagnostics recording lines up with it (analysis.pi_load --run)
@@ -614,7 +627,7 @@ def cli(argv: list[str] | None = None) -> int:
             out_dir, system,
             max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
             render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery,
-            record=not args.no_record)
+            record=not args.no_record, warmup=args.camera)
     finally:
         if battery is not None:
             battery.cleanup()

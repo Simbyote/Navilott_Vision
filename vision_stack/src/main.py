@@ -36,7 +36,9 @@ Flow:
     1. load_route(), print the plan; open the camera, sensors, motors and
        display; build the Pipeline. A bad route or missing hardware exits 2
        before anything moves; so does a critical pack at rest.
-    2. "St N" until the button, then the countdown.
+    2. One frame through Phase 2 and thrown away (Pipeline.warm_up), so
+       the first driving frame skips the first-call costs; then "St N" until
+       the button, then the countdown.
     3. Per frame: camera -> Pipeline.step(frame, sensors) -> motors; time on
        the display; until Navigation finishes, the cap, a critical battery,
        Ctrl-C or an error.
@@ -125,7 +127,8 @@ def halt(motor, sleep=time.sleep) -> None:
 
 
 def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
-        clock=time.monotonic, sleep=time.sleep, max_run_s: float = MAX_RUN_S, battery=None) -> RunResult:
+        clock=time.monotonic, sleep=time.sleep, max_run_s: float = MAX_RUN_S, battery=None,
+        warmup: bool = True) -> RunResult:
     """
     One run, from the start button to the halt.
 
@@ -141,6 +144,8 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         max_run_s: Brake and end once this long has passed since GO.
         battery: diagnostics.battery.Power, or None: monitored from GO, and
             the run ends once it should_stop() (CRITICAL).
+        warmup: Before the start screen, one frame through Phase 2, thrown
+            away (Pipeline.warm_up).
 
     Outputs:
         The RunResult. The display is left for end_screen().
@@ -151,6 +156,9 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
     """
     ended_by, error, frames, t0, gc_watch = END_INTERRUPT, None, 0, None, None
     try:
+        fd = camera.read() if warmup else None          # one frame through Phase 2, standing still: the
+        if fd is not None:                              # first driving frame then skips the first-call costs
+            pipeline.warm_up(fd.frame)
         system.wait_for_start(step_text(route))
         system.run_countdown()
         sensors.sample()                                # start the first window at GO

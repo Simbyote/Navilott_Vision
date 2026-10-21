@@ -32,6 +32,8 @@ Flow:
     Stage timing is opt-in (Pipeline(timing=True)); off, the flow pays one
     branch per stage and last_timings_ms stays empty.
 """
+import time
+
 import numpy as np
 
 from src.capture.camera import FrameData
@@ -125,6 +127,21 @@ class Pipeline:
     def finished(self) -> bool:
         """Navigation has ended the run (navigation.outcome says how); every command since is BRAKE."""
         return self.navigation.finished
+
+    def warm_up(self, frame_bgr: np.ndarray) -> float:
+        """
+        Run one frame through Phases 1-2 and throw the result away, so the
+        first driving frame doesn't pay the stages' first-call costs (the
+        2026-10-20 runs' frame 0 took 1.4-1.5 s, obstacle alone 1,089 ms).
+        Phase 2 keeps nothing between frames; Phase 3 and navigation aren't
+        touched, so the run starts exactly as without it.
+
+        Outputs:
+            How long it took, ms.
+        """
+        t0 = time.perf_counter()
+        self.perceive(frame_bgr, 0, 0)
+        return (time.perf_counter() - t0) * 1000.0
 
     def perceive(
             self,

@@ -118,12 +118,14 @@ def fake_run(scripts, log):
     attempts = iter(scripts)
 
     def run(source, sensors, motor, nav, config, p3, out_dir, system, max_run_s, motors_on, render, stop_when,
-            battery):
+            battery, warmup):
         rows, ended, wall = next(attempts)
+        run.warmups.append(warmup)
         log.append(("run", out_dir.rsplit("/", 1)[-1], nav.progress.route.maneuvers, system is not None, max_run_s,
                     motors_on, render, battery is not None))
         feed(stop_when, rows)
         return {"ended_by": ended, "run": {"wall_s": wall}}
+    run.warmups = []
     return run
 
 
@@ -153,6 +155,16 @@ DONE = (course(hold_at=1, red_at=2), END_COURSE, 1.5)
 
 def said(completed="y", stopwatch="1.6", touches="0", violations="0"):
     return ["", completed, stopwatch, touches, violations, ""]
+
+
+@pytest.mark.software
+def test_each_run_warms_up_before_the_start(tmp_path, route_file):
+    log = []
+    run = fake_run([DONE], log)
+    r = cr.CourseRun(open_rig=Rig(log), navigation_run=run, open_battery=lambda: Battery(log))
+    h.run_routine(r, Person(*said()).console(), tmp_path / "out", trials=1, options={"route": route_file},
+                  conditions_fn=no_conditions)
+    assert run.warmups == [True]
 
 
 @pytest.mark.software

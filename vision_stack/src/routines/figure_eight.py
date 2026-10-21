@@ -190,7 +190,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
         try:
             report = self._run(source, sensors, motor, nav, MEASURED, MEASURED_ESTIMATION, str(attempt), None,
                                max_run_s=minutes * 60.0 + 30.0, motors_on=True, render=False, stop_when=watch,
-                               battery=battery, record=recording(ctx.options["record"]))
+                               battery=battery, record=recording(ctx.options["record"]), warmup=True)
         finally:
             if battery is not None:
                 battery.cleanup()

@@ -130,10 +130,11 @@ class Battery:
 
 def fake_run(rows, log, wall=None):
     def run(source, sensors, motor, nav, config, p3, out_dir, system, max_run_s, motors_on, render, stop_when,
-            battery, record):
+            battery, record, warmup):
         log.append(("run", out_dir.rsplit("/", 1)[-1], max_run_s, len(nav.progress.route.maneuvers),
                     nav.progress.route.maneuvers[:8], motors_on, render, battery is not None))
         log.append(("record", record))
+        log.append(("warmup", warmup))
         why = feed(stop_when, rows)
         return {"ended_by": why or "ended early (lane lost before the route was done)",
                 "run": {"wall_s": wall if wall is not None else stop_when.t}}
@@ -156,7 +157,7 @@ def test_the_record_setting_turns_the_frame_recorder_on_or_off(tmp_path, setting
     log = []
     options = {} if setting is None else {"record": setting}
     go(routine(lap_rows(laps=4), log), Person("", "0", "3", ""), tmp_path, **options)
-    assert ("record", on) in log
+    assert ("record", on) in log and ("warmup", True) in log
 
 
 @pytest.mark.software

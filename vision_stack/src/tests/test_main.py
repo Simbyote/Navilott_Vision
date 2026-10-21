@@ -114,14 +114,14 @@ class System:
 
 
 def go(route=Route(("left",)), max_run_s=main.MAX_RUN_S, system_kw=None, motor_kw=None, battery=None,
-       **camera_kw):
+       warmup=False, **camera_kw):
     clock, log = FakeClock(), []
     camera = Camera(clock, log, **camera_kw)
     sensors, motor, system = Sensors(camera, log), Motor(log, **(motor_kw or {})), System(log, **(system_kw or {}))
     pipeline = Pipeline(SCENE_CONFIG, route=route)
     sleeps = []
     result = main.run(camera, sensors, motor, pipeline, system, route, clock=clock, sleep=sleeps.append,
-                      max_run_s=max_run_s, battery=battery)
+                      max_run_s=max_run_s, battery=battery, warmup=warmup)
     return result, motor, system, log, pipeline, sleeps
 
 
@@ -204,6 +204,24 @@ def test_a_healthy_battery_or_one_that_wont_start_changes_nothing():
     plain, _, _, _, _, _ = go()
     assert healthy.ended_by == broken.ended_by == plain.ended_by == main.END_FINISHED
     assert healthy.frames == broken.frames == plain.frames
+
+
+@pytest.mark.software
+def test_a_warm_up_frame_runs_before_the_start_and_changes_nothing_after():
+    # The warm-up takes the course's first frame, so the run proper starts on the second; it must
+    # drive exactly as a run started on that frame with no warm-up
+    warm, motor, system, log, pipeline, _ = go(warmup=True)
+    cold, motor_cold, *_ = go(sequence=COURSE[1:])
+    assert warm.frames == cold.frames and motor.commands == motor_cold.commands
+    assert pipeline.processor is not None and warm.ended_by == cold.ended_by
+
+
+@pytest.mark.software
+def test_warm_up_is_phase_2_only():
+    pipeline = Pipeline(SCENE_CONFIG, route=Route(("left",)))
+    before = (pipeline.last_packet, pipeline.navigation.progress.step, pipeline.last_timings_ms)
+    ms = pipeline.warm_up(COURSE[0].frame)
+    assert ms > 0 and (pipeline.last_packet, pipeline.navigation.progress.step, pipeline.last_timings_ms) == before
 
 
 @pytest.mark.software
@@ -332,6 +350,9 @@ def hardware(monkeypatch):
             if made.get("camera_fails"):
                 raise CaptureError("no camera")
             return self
+
+        def read(self):
+            return None                  # no frame yet: the warm-up is skipped
 
         def release(self):
             log.append("camera released")
