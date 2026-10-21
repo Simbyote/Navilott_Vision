@@ -230,3 +230,51 @@ def test_the_read_history_keeps_only_the_newest(monkeypatch):
     p._voltage_ema = 12.0
     loop(monkeypatch, p, 5)
     assert p.read_ms() == [3.0, 4.0, 5.0]
+
+
+# =============================================================================
+# The ADS1115 in continuous mode
+# =============================================================================
+
+def fake_ads_modules(monkeypatch, with_mode=True):
+    """board, busio and adafruit_ads1x15 stand-ins; returns the list each ADS1115 made is appended to."""
+    import sys
+    import types
+    made = []
+
+    class ADS1115:
+        def __init__(self, i2c, address):
+            self.i2c, self.address, self.mode = i2c, address, 0x0100       # the library's default: single-shot
+            made.append(self)
+
+    class AnalogIn:
+        def __init__(self, ads, pin):
+            self.ads, self.pin, self.voltage = ads, pin, 3.0
+
+    mods = {"board": types.SimpleNamespace(SCL="SCL", SDA="SDA"),
+            "busio": types.SimpleNamespace(I2C=lambda scl, sda: types.SimpleNamespace(deinit=lambda: None)),
+            "adafruit_ads1x15": types.ModuleType("adafruit_ads1x15"),
+            "adafruit_ads1x15.ads1115": types.SimpleNamespace(ADS1115=ADS1115),
+            "adafruit_ads1x15.analog_in": types.SimpleNamespace(AnalogIn=AnalogIn)}
+    if with_mode:
+        mods["adafruit_ads1x15.ads1x15"] = types.SimpleNamespace(Mode=types.SimpleNamespace(CONTINUOUS=0x0000,
+                                                                                           SINGLE=0x0100))
+    for name, mod in mods.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+    if not with_mode:
+        monkeypatch.setitem(sys.modules, "adafruit_ads1x15.ads1x15", None)            # import fails
+    return made
+
+
+def test_the_real_adc_is_opened_in_continuous_mode_on_a0(monkeypatch):
+    made = fake_ads_modules(monkeypatch)
+    pwr = Power()
+    (ads,) = made
+    assert ads.mode == 0x0000 and pwr._chan.pin == 0
+    assert pwr._read_battery_voltage() == pytest.approx(12.0)
+
+
+def test_a_library_without_continuous_mode_stays_single_shot_and_still_reads(monkeypatch):
+    made = fake_ads_modules(monkeypatch, with_mode=False)
+    pwr = Power()
+    assert made[0].mode == 0x0100 and pwr._read_battery_voltage() == pytest.approx(12.0)

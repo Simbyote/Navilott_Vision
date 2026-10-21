@@ -12,12 +12,20 @@ Main package:
                     on_warning / on_critical / on_recovered / on_fault take
                     callbacks that run on the sampling thread (keep them short);
                     preflight() is a resting-voltage check before a run;
-                    read_ms() is how long each monitoring read took (the
-                    ADS1115's single-shot conversion and its I2C).
+                    read_ms() is how long each monitoring read took (one
+                    I2C fetch of the ADS1115's latest conversion).
 
 Hardware:
     Battery -> 30k/10k divider (4:1) -> ADS1115 A0, I2C bus 1, address from
     params.ADS1115_I2C_ADDRESS. Shares the bus with the MPU-6050.
+
+    The ADS1115 runs in continuous mode: it converts A0 on its own, 128
+    times a second, and a read fetches the latest result, one 2-byte I2C
+    read. In single-shot mode (the library's default) each read started a
+    conversion and polled its status register until it finished: 11-30
+    transfers over ~9 ms a reading (make i2c-trace, 2026-10-20), on the
+    bus the IMU shares, from a Python thread holding the GIL between them.
+    Only the first read after opening waits, two conversions (~16 ms).
 
 Usage:
     pwr = Power()
@@ -36,6 +44,23 @@ from src.diagnostics.battery_state import BatteryState, BatteryStateMachine
 from src.params import ADS1115_I2C_ADDRESS
 
 log = logging.getLogger(__name__)
+
+
+def continuous(ads) -> bool:
+    """
+    Put an Adafruit ADS1x15 into continuous conversion. A library without
+    Mode (older than 2.x) stays single-shot, which reads correctly, only slower.
+
+    Outputs:
+        True if it's continuous now.
+    """
+    try:
+        from adafruit_ads1x15.ads1x15 import Mode
+        ads.mode = Mode.CONTINUOUS
+    except (ImportError, AttributeError, ValueError) as exc:
+        log.info("ADS1115 stays single-shot: %s", exc)
+        return False
+    return True
 
 
 class Power:
@@ -83,6 +108,7 @@ class Power:
 
             self._i2c = busio.I2C(board.SCL, board.SDA)
             ads = ADS1115(self._i2c, address=ADS1115_I2C_ADDRESS)
+            continuous(ads)
             channel = AnalogIn(ads, 0)  # A0 = V-Sense divider
         self._chan = channel
 
