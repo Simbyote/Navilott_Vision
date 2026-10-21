@@ -21,7 +21,9 @@ Main package:
     SensorBatch: one frame window's readings, what Phase 3 needs from them
         (the yaw integrated reading by reading, so a long window loses
         nothing), and the window's IMU reads: attempted, failed, the slowest.
-    SensorHub: the sampling thread, its buffer, and drain().
+    SensorHub: the sampling thread, its buffer, and drain(). Over the real
+        sensors (open()) the thread asks for real-time priority
+        (SENSOR_HUB_RT_PRIORITY); priority says what it got.
     Sensors: what a frame loop uses (src/main.py and every linker): opens and
         starts a hub, then one read() / sample() per frame.
 
@@ -39,9 +41,9 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from src.diagnostics.threads import name_os_thread
+from src.diagnostics.threads import name_os_thread, set_realtime
 from src.estimation.estimation import SensorSample
-from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
+from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_HUB_RT_PRIORITY, SENSOR_RATE_HZ
 
 log = logging.getLogger(__name__)
 
@@ -204,6 +206,9 @@ class SensorHub:
         yaw_sign: Multiplies the IMU's yaw into + = turning right.
         history_s: Seconds of readings kept between drains; older ones are
             dropped and counted.
+        rt_priority: SCHED_FIFO priority the thread asks for; None (the
+            default, for fakes and tests) stays at normal priority. open()
+            passes SENSOR_HUB_RT_PRIORITY.
         clock: Seconds, time.monotonic's clock (the camera stamps with
             time.monotonic_ns, so batches line up with frames).
         timer: Seconds, for timing each IMU read (time.perf_counter).
@@ -215,10 +220,13 @@ class SensorHub:
             rate_hz: float = SENSOR_RATE_HZ,
             yaw_sign: int = IMU_YAW_SIGN,
             history_s: float = SENSOR_HISTORY_S,
+            rt_priority: int | None = None,
             clock=time.monotonic,
             timer=time.perf_counter,
         ) -> None:
         self._imu, self._encoders = imu, encoders
+        self._rt_priority = rt_priority
+        self.priority = "not started"            # the thread's: "SCHED_FIFO 20", "normal" or "normal (why)"
         self._rate_hz, self._yaw_sign, self._clock, self._timer = rate_hz, yaw_sign, clock, timer
         self._buf: deque[SensorReading] = deque(maxlen=max(1, int(rate_hz * history_s)))
         self._lock = threading.Lock()
@@ -239,7 +247,8 @@ class SensorHub:
             imu: Open the MPU-6050 (IMU_I2C_ADDRESS). It isn't calibrated
                 here, so its gyro bias is left to Phase3Config.gyro_bias_dps.
             encoders: Open the encoders; needs the pigpio daemon (sudo pigpiod).
-            kw: SensorHub's other arguments.
+            kw: SensorHub's other arguments; rt_priority defaults to
+                SENSOR_HUB_RT_PRIORITY here.
         Side effects:
             Opens I2C and / or a pigpio connection; stop() releases them.
         """
@@ -254,6 +263,7 @@ class SensorHub:
             pi = pigpio.pi()
             enc_reader = EncoderReader(pi)
             closers += [enc_reader.cancel, pi.stop]
+        kw.setdefault("rt_priority", SENSOR_HUB_RT_PRIORITY)
         hub = cls(imu_reader, enc_reader, **kw)
         hub._closers = closers
         return hub
@@ -348,6 +358,7 @@ class SensorHub:
     def _worker(self) -> None:
         """tick() every period until stop(), on deadline pacing like the IMU's own thread."""
         name_os_thread("sensor-hub")            # top, ps and diagnostics.monitor show it by name
+        self._take_priority()
         interval = 1.0 / self._rate_hz
         next_t = time.perf_counter()
         while not self._stop_evt.is_set():
@@ -358,6 +369,16 @@ class SensorHub:
                 self._stop_evt.wait(sleep_t)
             else:
                 next_t = time.perf_counter()          # fell behind; resync
+
+
+    def _take_priority(self) -> None:
+        """Ask for SCHED_FIFO for this thread; say once what it got."""
+        if self._rt_priority is None:
+            self.priority = "normal"
+            return
+        why = set_realtime(self._rt_priority)
+        self.priority = f"SCHED_FIFO {self._rt_priority}" if not why else f"normal ({why})"
+        (log.info if not why else log.warning)("SensorHub thread: %s", self.priority)
 
 
 class Sensors:
@@ -394,6 +415,11 @@ class Sensors:
             return None, None
         batch = self._hub.drain()
         return SensorSample.from_batch(batch), batch
+
+    @property
+    def priority(self) -> str:
+        """The hub thread's scheduling, as SensorHub.priority says it."""
+        return self._hub.priority
 
     def sample(self) -> SensorSample | None:
         """This frame window's readings; None with no sensors."""

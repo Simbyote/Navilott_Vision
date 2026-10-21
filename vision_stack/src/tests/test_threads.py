@@ -197,3 +197,34 @@ def comm_of(thread, timeout_s=2.0):
         time.sleep(0.01)
         name = path.read_text().strip()
     return name
+
+
+# =============================================================================
+# Real-time priority
+# =============================================================================
+
+@pytest.mark.software
+def test_set_realtime_asks_for_fifo_on_the_calling_thread(monkeypatch):
+    calls = []
+    monkeypatch.setattr(th.os, "sched_setscheduler", lambda pid, policy, param: calls.append(
+        (pid, policy, param.sched_priority)), raising=False)
+    monkeypatch.setattr(th.os, "SCHED_FIFO", 1, raising=False)
+    assert th.set_realtime(20) == ""
+    assert calls == [(0, 1, 20)]                     # pid 0: this thread only
+
+
+@pytest.mark.software
+def test_set_realtime_says_why_not_and_never_raises(monkeypatch):
+    def denied(pid, policy, param):
+        raise PermissionError(1, "Operation not permitted")
+    monkeypatch.setattr(th.os, "SCHED_FIFO", 1, raising=False)
+    monkeypatch.setattr(th.os, "sched_setscheduler", denied, raising=False)
+    assert th.set_realtime(20).startswith("not permitted: Operation not permitted (rtprio limit ")
+
+    def bad(pid, policy, param):
+        raise OSError(22, "Invalid argument")
+    monkeypatch.setattr(th.os, "sched_setscheduler", bad)
+    assert th.set_realtime(500).startswith("refused: ")
+
+    monkeypatch.delattr(th.os, "sched_setscheduler")
+    assert th.set_realtime(20) == "not supported here"

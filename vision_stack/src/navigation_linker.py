@@ -224,6 +224,7 @@ def summary_lines(report: dict) -> list[str]:
         " IMU reads             {p50:.2f} ms p50, {p95:.2f} p95, {max:.2f} max; ".format(**report["sensors"]["imu_read_ms"])
         + f"{report['sensors']['imu_reads_per_frame']:g} a frame (median; expect {SENSOR_RATE_HZ / FPS:g}), "
         f"{report['sensors']['imu_failed']} failed"
+        + ("" if not report["sensors"].get("hub_priority") else f"; hub {report['sensors']['hub_priority']}")
     ]) + ([] if not report.get("battery") else [
         " battery               start {start_v} V, lowest {min_v} V, end {end_v} V; {state}".format(**report["battery"])
         + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")
@@ -448,7 +449,7 @@ def run(
                           "read_ms": read_stats(battery.read_ms())}
     if t0 is not None and imu_reads:
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
-                          "imu_failed": imu_failed}
+                          "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None)}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
               "parallel_perception": parallel.enabled(),
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),

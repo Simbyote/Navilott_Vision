@@ -100,6 +100,15 @@ SENSOR_RATE_HZ = IMU_RATE_HZ
 # Readings kept between drains. Once per frame (~50 ms) empties it; 2 s only
 # fills if the frame loop stalls, and then the oldest readings are dropped
 SENSOR_HISTORY_S = 2.0
+# The hub's thread runs at real-time priority (SCHED_FIFO) at this level: its
+# 10 ms tick is the robot's tightest deadline. During a course run a
+# normal-priority thread woke up to 5.4 ms late (p99.9 1.6 ms) against 0.22 ms
+# at SCHED_FIFO (make sched-latency, 2026-10-20). The hub sleeps between
+# reads, so it can't starve the others. 20 sits under the kernel's IRQ
+# threads (50) and cyclictest's 80. Needs root or an rtprio limit
+# (make -f setup.mk rt-limits); without it the hub runs at normal priority,
+# as before. None: never asks
+SENSOR_HUB_RT_PRIORITY = 20
 
 # --- Motor watchdog (src/peripherals/drive.py) ---
 # The run loops command the motors once per frame (~50 ms at FPS; p95 54 ms

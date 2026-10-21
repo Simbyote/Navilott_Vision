@@ -12,8 +12,25 @@ import types
 
 import pytest
 
-from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
+import src.peripherals.sensing as sensing
+from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_HUB_RT_PRIORITY, SENSOR_RATE_HZ
 from src.peripherals.sensing import MAX_YAW_GAP_S, SensorBatch, SensorHub, SensorReading, Sensors
+
+
+@pytest.fixture(autouse=True)
+def realtime(monkeypatch):
+    """
+    set_realtime stand-in for every test here: no test thread ever really
+    goes SCHED_FIFO. Records each priority asked for; answer is what it
+    returns ("" = granted).
+    """
+    rt = types.SimpleNamespace(asked=[], answer="")
+
+    def fake(priority):
+        rt.asked.append(priority)
+        return rt.answer
+    monkeypatch.setattr(sensing, "set_realtime", fake)
+    return rt
 
 
 class FakeIMU:
@@ -359,6 +376,63 @@ def test_stop_before_start_is_safe_and_closes_once():
     h.stop()
     h.stop()
     assert closed == [1]
+
+
+# =============================================================================
+# The thread's priority
+# =============================================================================
+
+def started(hub, timeout_s=2.0):
+    """Start hub and wait until its thread has settled its priority."""
+    hub.start()
+    end = time.perf_counter() + timeout_s
+    while hub.priority == "not started" and time.perf_counter() < end:
+        time.sleep(0.005)
+    return hub
+
+
+@pytest.mark.software
+def test_a_hub_stays_at_normal_priority_unless_asked(realtime):
+    h = started(SensorHub(FakeIMU()))
+    h.stop()
+    assert h.priority == "normal" and realtime.asked == []
+
+
+@pytest.mark.software
+def test_a_hub_asked_for_real_time_gets_it_on_its_own_thread(realtime):
+    h = started(SensorHub(FakeIMU(), rt_priority=20))
+    time.sleep(0.03)
+    batch = h.drain()
+    h.stop()
+    assert h.priority == "SCHED_FIFO 20" and realtime.asked == [20]
+    assert batch.imu_attempts > 0                                  # and it reads as before
+
+
+@pytest.mark.software
+def test_a_hub_refused_real_time_says_why_and_keeps_reading(realtime):
+    realtime.answer = "not permitted: Operation not permitted (rtprio limit 0)"
+    h = started(SensorHub(FakeIMU(), rt_priority=20))
+    time.sleep(0.03)
+    batch = h.drain()
+    h.stop()
+    assert h.priority == "normal (not permitted: Operation not permitted (rtprio limit 0))"
+    assert batch.imu_attempts > 0
+
+
+@pytest.mark.software
+def test_the_real_sensors_ask_for_the_configured_priority_and_sensors_report_it(realtime, monkeypatch):
+    assert SensorHub.open()._rt_priority == SENSOR_HUB_RT_PRIORITY
+    assert SensorHub.open(rt_priority=None)._rt_priority is None
+    imu_mod = types.ModuleType("src.peripherals.imu")
+    imu_mod.IMUReader = FakeIMU
+    monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
+    sensors = Sensors(imu=True)
+    end = time.perf_counter() + 2.0
+    while sensors.priority == "not started" and time.perf_counter() < end:
+        time.sleep(0.005)
+    sensors.stop()
+    assert sensors.priority == f"SCHED_FIFO {SENSOR_HUB_RT_PRIORITY}"
+    assert realtime.asked == [SENSOR_HUB_RT_PRIORITY]
 
 
 # =============================================================================

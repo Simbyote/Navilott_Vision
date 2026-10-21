@@ -19,6 +19,7 @@ Purpose:
 Main package:
     name_os_thread(name, thread): the kernel name of a thread (default: the
         calling one). name_pigpio_threads(): names pigpio's callback threads.
+    set_realtime(priority): the calling thread onto SCHED_FIFO, or why not.
     read_tasks(pid) -> {tid: TaskTimes}; read_core_times() -> {core: CoreTimes}.
     ThreadSampler: rows of per-thread and per-core rates between two reads.
 
@@ -103,6 +104,40 @@ def name_pigpio_threads() -> int:
     """
     return sum(name_os_thread(PIGPIO_CALLBACK, t) for t in threading.enumerate()
                if type(t).__name__ == "_callback_thread")
+
+
+def set_realtime(priority: int) -> str:
+    """
+    Put the calling thread on SCHED_FIFO at priority: it then runs the
+    moment it wakes, ahead of every normal thread, until it blocks again.
+
+    On Linux, sched_setscheduler() with pid 0 changes only the calling
+    thread, not the process. It needs CAP_SYS_NICE (root) or an rtprio
+    limit at least as high (setup.mk rt-limits).
+
+    Outputs:
+        "" if the kernel took it; otherwise why not ("not permitted: ...",
+        "not supported here"). Never raises: a thread that can't get the
+        priority runs as before.
+    """
+    if not hasattr(os, "sched_setscheduler") or not hasattr(os, "SCHED_FIFO"):
+        return "not supported here"
+    try:
+        os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+    except PermissionError as exc:
+        return f"not permitted: {exc.strerror or exc} (rtprio limit {_rtprio_limit()})"
+    except (OSError, ValueError) as exc:
+        return f"refused: {exc}"
+    return ""
+
+
+def _rtprio_limit() -> str:
+    """The process's soft RLIMIT_RTPRIO, as text; "?" where it can't be read."""
+    try:
+        import resource
+        return str(resource.getrlimit(resource.RLIMIT_RTPRIO)[0])
+    except (ImportError, AttributeError, OSError, ValueError):
+        return "?"
 
 
 # =============================================================================

@@ -424,6 +424,17 @@ def test_imu_read_times_and_reads_per_frame_reach_nav_csv_the_report_and_the_sum
 
 
 @pytest.mark.software
+def test_the_sensor_hubs_priority_reaches_the_report_and_the_summary(tmp_path):
+    sensors = TimedSensors()
+    sensors.priority = "normal (not permitted: Operation not permitted (rtprio limit 0))"
+    rep, out, *_ = go(tmp_path, sensors=sensors)
+    assert rep["sensors"]["hub_priority"] == sensors.priority
+    assert f"failed; hub {sensors.priority}" in (out / "summary.txt").read_text()
+    plain, out2, *_ = go(tmp_path / "b", sensors=TimedSensors())          # sensors that don't say: no mention
+    assert plain["sensors"]["hub_priority"] is None and "; hub " not in (out2 / "summary.txt").read_text()
+
+
+@pytest.mark.software
 def test_without_imu_timing_there_is_no_sensors_line(tmp_path):
     rep, out, *_ = go(tmp_path, sensors=Sensors(SensorSample(yaw_rate_dps=0.0)))      # batches aren't kept: None
     assert rep["sensors"] is None and "IMU reads" not in (out / "summary.txt").read_text()
