@@ -149,12 +149,14 @@ def test_imu_characterization(request, artifacts):
     hub = SensorHub(imu=r)                   # the path the robot reads the IMU through
     hub.start()
     hub.drain()                              # the first window starts now
+    t0 = time.perf_counter()
     try:
         for i in range(n):
             time.sleep(period_s)
             b = hub.drain()
             rows.append((i, b.imu_count, b.mean_yaw_dps, b.peak_lateral_accel))
     finally:
+        elapsed_s = time.perf_counter() - t0
         hub.stop()
 
     counts = [row[1] for row in rows]
@@ -167,6 +169,9 @@ def test_imu_characterization(request, artifacts):
     artifacts.json("summary.json", {
         "bias_dps": bias_dps, "rate_hz": IMU_RATE_HZ, "frame_fps": FPS,
         "expected_samples_per_window": expected, "read_errors": hub.read_errors,
+        # samples over the time they came in: the chip's own rate with the FIFO (its clock may be a few % off)
+        "measured_rate_hz": sum(counts) / elapsed_s if elapsed_s > 0 else None,
+        "window_ms_mean": 1000.0 * elapsed_s / n if n else None,
         "samples_per_window": summarize(counts),
         "yaw_rate_dps": summarize(yaws), "lateral_accel_mps2": summarize(accels),
     })

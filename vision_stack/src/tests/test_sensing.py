@@ -639,12 +639,12 @@ def test_a_fifo_hub_starts_no_thread_and_empties_the_fifo_first():
 
 
 @pytest.mark.software
-def test_fifo_samples_are_stamped_a_period_apart_ending_now_and_the_windows_tile():
+def test_fifo_samples_are_spread_over_the_time_that_passed_and_the_windows_tile():
     imu, clock = FifoIMU(), clock_at(10.0)
     h = SensorHub(imu, clock=clock)
     h.start()
     imu.push(30.0, n=5)
-    first = h.drain()
+    first = h.drain()                             # the first window: a nominal period apart, back from now
     assert [round(r.t, 3) for r in first.readings] == [9.96, 9.97, 9.98, 9.99, 10.0]
     assert {r.yaw_dps for r in first.readings} == {IMU_YAW_SIGN * 30.0}
     clock.now = 10.05
@@ -653,17 +653,33 @@ def test_fifo_samples_are_stamped_a_period_apart_ending_now_and_the_windows_tile
     assert [round(r.t, 3) for r in second.readings] == [10.01, 10.02, 10.03, 10.04, 10.05]
     assert second.yaw_deg == pytest.approx(IMU_YAW_SIGN * 30.0 * 0.05)      # 5 periods, nothing lost
     assert second.imu_attempts == 5 and second.imu_failed == 0
-    # Read late: the window still ends at the read, so the stamps follow real time and the chip's
-    # clock error can't build up; the gap before it takes the 2 ms
-    clock.now = 10.102
+    clock.now = 10.102                            # read 2 ms late: the 5 samples share the 52 ms
     imu.push(30.0, n=5)
     late = h.drain()
-    assert [round(r.t, 3) for r in late.readings] == [10.062, 10.072, 10.082, 10.092, 10.102]
-    # Read early: never before the previous window's last sample plus a period
-    clock.now = 10.145
-    imu.push(30.0, n=5)
-    early = h.drain()
-    assert round(early.readings[0].t, 3) == 10.112
+    assert [round(r.t, 4) for r in late.readings] == [10.0604, 10.0708, 10.0812, 10.0916, 10.102]
+
+
+@pytest.mark.software
+def test_a_chip_clock_running_fast_doesnt_drift_the_stamps_or_the_heading():
+    # The chip samples 4% fast: 104 samples a second, read every 50 ms. Stamped a nominal 10 ms apart,
+    # the stamps would run ahead of real time and a turn would read 4% long
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    made = 0.0
+    turned = span = 0.0
+    for k in range(1, 201):                       # 10 s of frames
+        clock.now = 10.0 + 0.05 * k
+        due = int(5.2 * k) - int(made)
+        made = 5.2 * k
+        imu.push(90.0, n=due)
+        b = h.drain()
+        assert b.readings[-1].t <= clock.now + 1e-9, "stamped in the future"
+        if b.yaw_deg is not None:
+            turned += b.yaw_deg
+            span += b.yaw_span_s
+    assert span == pytest.approx(10.0, abs=0.06)                         # the time that passed
+    assert turned == pytest.approx(IMU_YAW_SIGN * 90.0 * 10.0, rel=0.006)  # 900 deg, not 936
 
 
 @pytest.mark.software

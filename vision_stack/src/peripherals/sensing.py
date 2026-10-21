@@ -55,6 +55,11 @@ log = logging.getLogger(__name__)
 # during a stall): the turn made in them can't be recovered, so it isn't
 # guessed at either
 MAX_YAW_GAP_S = 0.1
+# The IMU FIFO's samples are spaced by the time that passed between drains,
+# held within these fractions of the nominal period: wide enough for the
+# chip's clock and a drain's timing, narrow enough that a stall or an
+# overflow's lost time isn't spread over the samples that survived
+FIFO_STEP = (0.8, 1.2)
 
 
 @dataclass(frozen=True)
@@ -347,10 +352,18 @@ class SensorHub:
 
     def _drain_fifo(self) -> None:
         """
-        Every sample in the IMU's FIFO into the buffer, newest stamped now and
-        each earlier one a period before; never before the previous drain's
-        last, so the windows tile. A failed read keeps one reading with no
-        yaw (counted as failed); its samples wait in the FIFO for the next.
+        Every sample in the IMU's FIFO into the buffer, spread evenly over
+        the time since the previous drain's last sample, the newest stamped
+        now. So the windows tile, and the time the yaw is integrated over is
+        the time that passed, whatever the chip's own clock does: its
+        oscillator can run a few percent off its nominal period, which
+        stamping each sample one nominal period apart would turn into the
+        same error in every turn. The step is held within FIFO_STEP of the
+        nominal period: after an overflow or a stall, the lost time isn't
+        spread over the samples that survived. The first drain after start()
+        stamps one nominal period apart, back from now. A failed read keeps
+        one reading with no yaw (counted as failed); its samples wait in the
+        FIFO for the next.
         """
         now, r0 = self._clock(), self._timer()
         try:
@@ -364,13 +377,16 @@ class SensorHub:
         ms = round((self._timer() - r0) * 1000.0, 3)
         if not samples:
             return
-        dt = self._imu.period_s
-        start = now - (len(samples) - 1) * dt
-        if self._fifo_t is not None:
-            start = max(start, self._fifo_t + dt)
+        n, nominal = len(samples), self._imu.period_s
+        if self._fifo_t is None:
+            step, first = nominal, now - (n - 1) * nominal
+        else:
+            lo, hi = FIFO_STEP
+            step = min(max((now - self._fifo_t) / n, lo * nominal), hi * nominal)
+            first = self._fifo_t + step
         for i, (raw_yaw, accel) in enumerate(samples):
-            self._keep(SensorReading(start + i * dt, self._yaw_sign * raw_yaw, accel, None, None, ms))
-        self._fifo_t = start + (len(samples) - 1) * dt
+            self._keep(SensorReading(first + i * step, self._yaw_sign * raw_yaw, accel, None, None, ms))
+        self._fifo_t = first + (n - 1) * step
 
     def drain(self) -> SensorBatch:
         """
