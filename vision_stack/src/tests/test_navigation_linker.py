@@ -744,6 +744,15 @@ def test_warm_up_takes_one_frame_before_the_start_and_logs_none_of_it(tmp_path):
 
 
 @pytest.mark.software
+def test_the_motor_watchdogs_status_and_trips_reach_the_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(Motor, "watchdog_status", "python + pigpiod", raising=False)
+    monkeypatch.setattr(Motor, "watchdog_trips", 2, raising=False)
+    rep, out, *_ = go(tmp_path)
+    assert rep["motor_watchdog"] == {"status": "python + pigpiod", "trips": 2}
+    assert "watchdog python + pigpiod, 2 trips" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
 def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
     rep, out, *_ = go(tmp_path)
     assert rep["run"]["stalls"] == 0 and not (out / "stalls.csv").exists()

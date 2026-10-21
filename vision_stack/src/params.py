@@ -118,6 +118,13 @@ SENSOR_HUB_RT_PRIORITY = 20
 # brakes the motors on its own. 0.5 s = 10 missed frames: clear of any
 # frame the loop has taken in a run, short enough to stop within a few cm.
 MOTOR_WATCHDOG_S = 0.5
+# A second copy of the watchdog runs inside pigpiod as a pigpio script
+# (drive.DaemonWatchdog): it brakes on the same timeout even when the whole
+# Python process is stalled or dead. The 2026-10-20 figure eight had a
+# 1,558 ms frame through which the wheels kept the turn's command: the
+# Python watchdog, a thread in the stalled process, never braked. False:
+# the Python watchdog alone
+MOTOR_DAEMON_WATCHDOG = True
 
 # --- Wheels and encoders (estimation/odometry.py) ---
 # The nominal scale, used until scripts/calibrate_odometry.py writes

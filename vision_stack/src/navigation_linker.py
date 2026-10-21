@@ -212,7 +212,9 @@ def summary_lines(report: dict) -> list[str]:
         f"[NAVIGATION] ended by {report['ended_by']}"
         + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
         + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
-        + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
+        + ("   perception PARALLEL" if report.get("parallel_perception") else "")
+        + ("" if not report.get("motor_watchdog") else
+           "   watchdog {status}, {trips} trips".format(**report["motor_watchdog"])),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
         f"camera drops {r['camera_drops']}, "
         + (f"recorder dropped {r['recorder_dropped']}" if r.get("recorder", True) else "recorder off"),
@@ -483,6 +485,8 @@ def run(
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
                           "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None)}
     report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "motor_watchdog": None if not hasattr(motor, "watchdog_status") else
+              {"status": motor.watchdog_status, "trips": motor.watchdog_trips},
               "parallel_perception": parallel.enabled(),
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
               "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,

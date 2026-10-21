@@ -19,6 +19,9 @@ Main package:
         A watchdog thread brakes the motors when drive() goes quiet for
         MOTOR_WATCHDOG_S while they're driving: a stuck run loop (a camera
         that stops delivering frames) can't leave the robot driving blind.
+    DaemonWatchdog: the same watchdog as a pigpio script inside pigpiod, so
+        it brakes even when the Python process is stalled or gone.
+        MotorController runs one alongside its thread (MOTOR_DAEMON_WATCHDOG).
 
 Flow:
     1. Instantiate pigpio.pi connection and check daemon status.
@@ -36,7 +39,7 @@ import time
 import pigpio
 
 from src.diagnostics.threads import name_os_thread, name_pigpio_threads
-from src.params import MOTOR_WATCHDOG_S
+from src.params import MOTOR_DAEMON_WATCHDOG, MOTOR_WATCHDOG_S
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +140,129 @@ class EncoderReader:
 
 
 # =============================================================================
+# The watchdog inside pigpiod
+# =============================================================================
+
+# How often the script looks, ms: it brakes 0-1 look after the timeout
+DAEMON_CHECK_MS = 100
+DAEMON_INIT_S = 1.0             # how long a stored script may take to be ready to run
+PARAM_MAX = 0x7FFFFFFF          # the heartbeat wraps here (pigpio script params are 32-bit)
+
+# The script, in pigpio's script language (pigs commands plus registers):
+# p0 the heartbeat (drive() bumps it), p1 armed (1 driving, 0 after a brake
+# or stop); v0 the heartbeat last seen, v1 looks since it moved. Armed and
+# p0 unchanged for `looks` looks in a row: short brake (as
+# MotorController._short_brake), then wait for p0 to move before watching
+# again. CMP sets F = A - x, and the jumps test F.
+_DAEMON_SCRIPT = """
+ld v0 p0 ld v1 0
+tag 1 mils {check_ms}
+lda p1 cmp 0 jz 3
+lda p0 cmp v0 jnz 3
+inr v1 lda v1 cmp {looks} jm 1
+w {stby} 1 w {ain1} 1 w {ain2} 1 w {bin1} 1 w {bin2} 1
+hp {pwma} {freq} 1000000 hp {pwmb} {freq} 1000000
+tag 2 mils {check_ms}
+lda p0 cmp v0 jz 2
+tag 3 ld v0 p0 ld v1 0 jmp 1
+"""
+
+
+def daemon_script(pins: dict, freq: int, timeout_s: float, check_ms: int = DAEMON_CHECK_MS) -> str:
+    """The watchdog script for these TB6612 pins (stby, ain1, ain2, bin1, bin2, pwma, pwmb)."""
+    looks = max(1, round(timeout_s * 1000.0 / check_ms))
+    return " ".join(_DAEMON_SCRIPT.format(check_ms=check_ms, looks=looks, freq=freq, **pins).split())
+
+
+class DaemonWatchdog:
+    """
+    The motor watchdog as a pigpio script running inside pigpiod.
+
+    The Python watchdog is a thread in the robot's process: when the whole
+    process stalls (2026-10-20: a 1,558 ms frame with the IMU thread held
+    too) or dies, it stalls or dies with it and the hardware PWM keeps the
+    last command on the wheels. pigpiod is its own process, so a script
+    there keeps watching: beat() on every drive() moves a parameter, and
+    when it stops moving for timeout_s while armed, the script short-brakes
+    the TB6612 itself.
+
+    Inputs:
+        pi: A connected pigpio.pi.
+        pins: The TB6612 pins by name (stby, ain1, ain2, bin1, bin2, pwma, pwmb).
+        freq: The PWM frequency the brake sets (MotorController.pwm_freq).
+        timeout_s: Quiet this long while armed brakes.
+
+    on: The script is stored and running. status: "running", or "off (why)".
+
+    Never raises: a pigpiod without scripts, or a script it refuses, leaves
+    on False and the Python watchdog alone, with a warning.
+    """
+    def __init__(self, pi, pins: dict, freq: int, timeout_s: float, sleep=time.sleep) -> None:
+        self._pi, self._sleep = pi, sleep
+        self._sid = None
+        self._beat = 0
+        self.status = "off"
+        try:
+            self._sid = pi.store_script(daemon_script(pins, freq, timeout_s).encode())
+            why = self._ready()
+            if why:
+                raise RuntimeError(why)
+            pi.run_script(self._sid, [0, 0])
+        except Exception as exc:                # pigpio.error, an old pigpiod, a refused script
+            self._delete()
+            self.status = f"off ({exc})"
+            log.warning("motor watchdog in pigpiod not running: %s; the Python watchdog only", exc)
+            return
+        self.status = "running"
+
+    @property
+    def on(self) -> bool:
+        return self._sid is not None
+
+    def _ready(self) -> str:
+        """Wait for the stored script to finish initialising; "" when it can run, else why not."""
+        end = time.monotonic() + DAEMON_INIT_S
+        while True:
+            status = self._pi.script_status(self._sid)[0]
+            if status == pigpio.PI_SCRIPT_FAILED:
+                return "pigpiod failed the script"
+            if status != pigpio.PI_SCRIPT_INITING:
+                return ""
+            if time.monotonic() > end:
+                return "the script never finished initialising"
+            self._sleep(0.01)
+
+    def beat(self) -> None:
+        """drive() happened: move the heartbeat and arm."""
+        if self._sid is not None:
+            self._beat = self._beat % PARAM_MAX + 1
+            self._pi.update_script(self._sid, [self._beat, 1])
+
+    def disarm(self) -> None:
+        """A brake or stop: the motors are safe however long the loop is gone."""
+        if self._sid is not None:
+            self._pi.update_script(self._sid, [self._beat, 0])
+
+    def close(self) -> None:
+        """Stop and delete the script; on is False after."""
+        if self._sid is not None:
+            try:
+                self._pi.stop_script(self._sid)
+            except Exception:
+                pass
+        self._delete()
+        self.status = "off"
+
+    def _delete(self) -> None:
+        if self._sid is not None:
+            try:
+                self._pi.delete_script(self._sid)
+            except Exception:
+                pass
+        self._sid = None
+
+
+# =============================================================================
 # Motor Controller Class (TB6612 Driver & Closed-Loop Control)
 # =============================================================================
 class MotorController:
@@ -150,7 +276,9 @@ class MotorController:
     trip in watchdog_trips. The next drive() drives again: a loop that was
     only slow carries on, a dead one stays braked. Every pin sequence runs
     under one lock, so a brake from the watchdog never interleaves with a
-    drive() from the loop.
+    drive() from the loop. With daemon_watchdog, a DaemonWatchdog in
+    pigpiod does the same from outside the process (daemon says whether
+    it runs); stop() deletes it and the next drive() starts it again.
     """
 
     def __init__(
@@ -166,6 +294,7 @@ class MotorController:
         pwm_freq: int = 1000,
         watchdog_s: float | None = MOTOR_WATCHDOG_S,
         clock=time.monotonic,
+        daemon_watchdog: bool = MOTOR_DAEMON_WATCHDOG,
     ) -> None:
         """
         Inputs:
@@ -175,6 +304,8 @@ class MotorController:
             watchdog_s: Brake after this long without a drive(); None or 0
                 turns the watchdog off.
             clock: Monotonic seconds; tests pass a fake.
+            daemon_watchdog: Also run the watchdog inside pigpiod
+                (DaemonWatchdog); only with watchdog_s.
         """
         self._pi = pi
         if not self._pi.connected:
@@ -199,6 +330,10 @@ class MotorController:
 
         self._init_gpio()
         name_pigpio_threads()
+        self._use_daemon = bool(daemon_watchdog and self.watchdog_s)
+        self._daemon_why = ""
+        self.daemon: DaemonWatchdog | None = None
+        self._start_daemon()
 
     def _init_gpio(self) -> None:
         """Configure TB6612 pin modes on startup."""
@@ -225,6 +360,10 @@ class MotorController:
             self._pi.write(self.bin1, 1 if right_speed > 0 else 0)
             self._pi.write(self.bin2, 1 if right_speed < 0 else 0)
             self._driven_at = self._clock()
+            if self.daemon is None:
+                self._start_daemon()
+            if self.daemon is not None:
+                self.daemon.beat()
         self._start_watchdog()
 
     def stop(self) -> None:
@@ -238,6 +377,9 @@ class MotorController:
             self._pi.write(self.bin2, 0)
             self._pi.write(self.stby, 0)
             self._driven_at = None
+            if self.daemon is not None:
+                self.daemon.close()
+                self.daemon = None
         self._stop_watchdog()
 
     def brake(self) -> None:
@@ -255,6 +397,29 @@ class MotorController:
         with self._lock:
             self._short_brake()
             self._driven_at = None
+            if self.daemon is not None:
+                self.daemon.disarm()
+
+    @property
+    def watchdog_status(self) -> str:
+        """Which watchdogs run: "python + pigpiod", "python (pigpiod: off (why))", "python" or "off"."""
+        if self.watchdog_s is None:
+            return "off"
+        if self.daemon is not None:
+            return "python + pigpiod"
+        return f"python (pigpiod: {self._daemon_why})" if self._daemon_why else "python"
+
+    def _start_daemon(self) -> None:
+        """Start the pigpiod watchdog if it's wanted and not running; a refusal is remembered, not retried."""
+        if not self._use_daemon or self.daemon is not None:
+            return
+        d = DaemonWatchdog(self._pi, {"stby": self.stby, "ain1": self.ain1, "ain2": self.ain2, "bin1": self.bin1,
+                                      "bin2": self.bin2, "pwma": self.pwma, "pwmb": self.pwmb},
+                           self.pwm_freq, self.watchdog_s)
+        if d.on:
+            self.daemon = d
+        else:
+            self._use_daemon, self._daemon_why = False, d.status
 
     def check(self) -> bool:
         """
@@ -277,6 +442,8 @@ class MotorController:
             self._short_brake()
             self._driven_at = None
             self.watchdog_trips += 1
+            if self.daemon is not None:
+                self.daemon.disarm()
         log.warning("motor watchdog: no drive() for %.2f s (limit %.2f s), motors braked: "
                     "the run loop is stuck (a camera that stopped delivering frames?)",
                     quiet, self.watchdog_s)
