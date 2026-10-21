@@ -72,7 +72,7 @@ def test_done_commands_stop_forever():
 # =============================================================================
 
 @pytest.mark.software
-@pytest.mark.parametrize("bias", [-1.1, 0.0, 2.5])
+@pytest.mark.parametrize("bias", [-0.90, 0.0, 2.5])
 def test_settle_measures_the_gyro_bias_and_the_accel_baseline(bias):
     m, _, _ = trial(bias_dps=bias, accel_baseline=-0.85)
     s = m.report()["settle"]
@@ -85,7 +85,7 @@ def test_settle_measures_the_gyro_bias_and_the_accel_baseline(bias):
 @pytest.mark.software
 def test_a_wrong_configured_bias_is_replaced_by_the_measured_one():
     # Configured far off: the turn would be wrong by bias x time if it were used
-    m, bot, _ = trial(cfg=replace(CFG, gyro_bias_dps=+8.0), bias_dps=-1.1)
+    m, bot, _ = trial(cfg=replace(CFG, gyro_bias_dps=+8.0), bias_dps=-0.90)
     assert m.report()["turn"]["success"] and bot.heading_deg == pytest.approx(CFG.turn_target_deg, abs=5)
 
 

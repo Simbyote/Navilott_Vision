@@ -182,11 +182,11 @@ if MEASURED.ground is None and MEASURED.stop_line_table is None:
 # Gyro Z at rest, deg/s, in the sensor hub's frame (+ = turning right, after
 # IMU_YAW_SIGN): the one bias every yaw reading is corrected by before it's
 # integrated, in Phase 3's heading, the intersection's heading hold and the
-# drive trial. The 2026-09-29 phase3_linker run read -1.1 raw at rest; it was
+# drive trial. The 2026-09-29 phase3_linker run read -0.90 raw at rest; it was
 # +1.1 while IMU_YAW_SIGN was -1, and with IMU_YAW_SIGN = 1 (2026-10-01) the
 # hub frame is the raw one. Re-measure, robot still: maneuver_linker prints
 # it ("gyro bias at rest ... measured"), as does test_imu --hardware (bias_dps)
-GYRO_BIAS_DPS = -1.1
+GYRO_BIAS_DPS = -0.90
 
 # Phase 3: estimation.Phase3Config's defaults until course runs tune them,
 # with this robot's gyro bias and odometry scale (calibration/odometry.json;

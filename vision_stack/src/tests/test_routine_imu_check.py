@@ -102,7 +102,7 @@ def results(tmp_path):
 @pytest.mark.software
 def test_rest_stats_bias_noise_drift_rate_time_and_errors():
     rs = rest(bias=-1.0, noise=0.1, seconds=2.0, fail={5}) + [SensorReading(2.5, None, None, 3, 4, None)]
-    s = ic.rest_stats(rs, configured_bias=-1.1)
+    s = ic.rest_stats(rs, configured_bias=-0.90)
     assert s["reads"] == 201 and s["rate_hz"] == 100.0 and s["read_errors"] == 1
     assert s["bias_dps"] == pytest.approx(-1.0, abs=0.001) and s["noise_dps"] == pytest.approx(0.1, abs=0.001)
     assert s["drift_deg"] == pytest.approx(0.2, abs=0.01)             # 0.1 deg/s over 2 s
@@ -113,13 +113,13 @@ def test_rest_stats_bias_noise_drift_rate_time_and_errors():
 def test_rest_stats_of_nothing_and_of_one_reading():
     assert ic.rest_stats([]) == {"reads": 0, "rate_hz": None, "read_errors": 0, "read_ms_p95": None,
                                  "bias_dps": None, "noise_dps": None, "drift_deg": None}
-    one = ic.rest_stats(reads(-1.1, seconds=0.0))
-    assert (one["reads"], one["rate_hz"], one["bias_dps"], one["noise_dps"], one["drift_deg"]) == (1, None, -1.1, None, 0.0)
+    one = ic.rest_stats(reads(-0.90, seconds=0.0))
+    assert (one["reads"], one["rate_hz"], one["bias_dps"], one["noise_dps"], one["drift_deg"]) == (1, None, -0.90, None, 0.0)
 
 
 @pytest.mark.software
 def test_heading_integrates_net_of_bias_and_skips_failed_reads():
-    assert ic.heading(turn(90.0, bias=-1.1), -1.1) == pytest.approx(90.0)
+    assert ic.heading(turn(90.0, bias=-0.90), -0.90) == pytest.approx(90.0)
     assert ic.heading(turn(-45.0, seconds=0.5, bias=0.0), 0.0) == pytest.approx(-45.0)
     assert ic.heading(turn(90.0, fail={50}), GYRO_BIAS_DPS) == pytest.approx(90.0)   # bridged across the gap
     assert ic.heading(reads(2.0, seconds=0.0), 0.0) == 0.0

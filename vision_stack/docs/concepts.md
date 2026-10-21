@@ -137,7 +137,7 @@ The traffic light, the stop sign and the stop line each change state only when o
 
 ### Gyro bias and heading
 
-A gyro reports turn rate in degrees per second. At rest it should read 0 but doesn't: the reading at rest is its **bias**, −1.1 °/s on this robot (`GYRO_BIAS_DPS`). **Heading** is turn rate integrated over time, net of the bias:
+A gyro reports turn rate in degrees per second. At rest it should read 0 but doesn't: the reading at rest is its **bias**, −0.90 °/s on this robot (`GYRO_BIAS_DPS`). **Heading** is turn rate integrated over time, net of the bias:
 
 > heading += (yaw rate − bias) × dt
 
