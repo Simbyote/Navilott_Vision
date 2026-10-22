@@ -230,3 +230,122 @@ def test_the_read_history_keeps_only_the_newest(monkeypatch):
     p._voltage_ema = 12.0
     loop(monkeypatch, p, 5)
     assert p.read_ms() == [3.0, 4.0, 5.0]
+
+
+# =============================================================================
+# ContinuousADC: the ADS1115 in continuous mode, the pointer set on every read
+# =============================================================================
+
+from src.diagnostics import battery as bat  # noqa: E402
+
+
+class ADS1115Chip:
+    """
+    An ADS1115 on a busio-like bus: one pointer register shared by every
+    client. A write sets the pointer (and, with data, the register); a read
+    returns the register the pointer names. Logs each transfer.
+    """
+    def __init__(self, pin_v=3.0):
+        self.regs = {bat.REG_CONVERSION: 0, bat.REG_CONFIG: 0x8583}     # the chip's power-on config
+        self.pointer = bat.REG_CONVERSION
+        self.pin_v = pin_v
+        self.transfers = []
+        self.locked = False
+
+    def try_lock(self):
+        if self.locked:
+            return False
+        self.locked = True
+        return True
+
+    def unlock(self):
+        self.locked = False
+
+    def _convert(self):
+        if self.regs[bat.REG_CONFIG] & 0x0100 == 0:                     # continuous: always a fresh result
+            self.regs[bat.REG_CONVERSION] = round(self.pin_v / bat.FULL_SCALE_V * 32768) & 0xFFFF
+
+    def writeto(self, addr, data):
+        self.transfers.append(("write", bytes(data)))
+        self.pointer = data[0]
+        if len(data) == 3:
+            self.regs[self.pointer] = data[1] << 8 | data[2]
+
+    def readfrom_into(self, addr, buf):
+        """A read with no pointer write: the Adafruit library's continuous-mode "fast" read."""
+        self.transfers.append(("read", None))
+        self._convert()
+        v = self.regs[self.pointer]
+        buf[0], buf[1] = v >> 8, v & 0xFF
+
+    def writeto_then_readfrom(self, addr, out, buf):
+        self.transfers.append(("combined", bytes(out)))
+        self.pointer = out[0]
+        self._convert()
+        v = self.regs[self.pointer]
+        buf[0], buf[1] = v >> 8, v & 0xFF
+
+
+def adc(chip):
+    waits = []
+    a = bat.ContinuousADC(chip, sleep=waits.append)
+    return a, waits
+
+
+def test_opening_sets_continuous_a0_and_waits_two_conversions():
+    chip = ADS1115Chip()
+    _, waits = adc(chip)
+    assert chip.regs[bat.REG_CONFIG] == bat.ADC_CONFIG and chip.regs[bat.REG_CONFIG] & 0x0100 == 0
+    assert waits == [pytest.approx(2 / 128)]
+
+
+def test_a_read_is_the_pin_voltage_from_two_combined_transfers():
+    chip = ADS1115Chip(pin_v=3.0)
+    a, _ = adc(chip)
+    chip.transfers.clear()
+    assert a.voltage == pytest.approx(3.0, abs=1e-3)
+    assert [t[0] for t in chip.transfers] == ["combined", "combined"]           # config, then the result
+    assert Power(channel=a)._read_battery_voltage() == pytest.approx(12.0, abs=4e-3)
+
+
+def test_another_client_moving_the_pointer_does_not_change_the_reading():
+    # The Adafruit library's fast read trusts the pointer: after another client
+    # touches the config register, it reads the config as if it were a voltage
+    chip = ADS1115Chip(pin_v=3.0)
+    a, _ = adc(chip)
+    chip.writeto(0x48, bytes([bat.REG_CONFIG]))                                 # someone else's pointer write
+    buf = bytearray(2)
+    chip.readfrom_into(0x48, buf)
+    fast = (buf[0] << 8 | buf[1]) * bat.FULL_SCALE_V / 32768
+    assert abs(fast - 3.0) > 0.1
+    chip.writeto(0x48, bytes([bat.REG_CONFIG]))
+    assert a.voltage == pytest.approx(3.0, abs=1e-3) and a.reconfigured == 0
+
+
+def test_a_config_someone_else_changed_is_rewritten_before_reading():
+    chip = ADS1115Chip(pin_v=3.0)
+    a, waits = adc(chip)
+    chip.regs[bat.REG_CONFIG] = 0x8583                                          # single-shot, A0-A1, +-2.048 V
+    chip.regs[bat.REG_CONVERSION] = 0x1234                                      # its stale result
+    assert a.voltage == pytest.approx(3.0, abs=1e-3)
+    assert a.reconfigured == 1 and chip.regs[bat.REG_CONFIG] == bat.ADC_CONFIG and len(waits) == 2
+
+
+def test_a_negative_result_reads_negative():
+    chip = ADS1115Chip(pin_v=-0.5)
+    a, _ = adc(chip)
+    assert a.voltage == pytest.approx(-0.5, abs=1e-3)
+
+
+def test_the_power_monitor_opens_the_continuous_adc_when_enabled(monkeypatch):
+    import sys
+    import types
+    chip = ADS1115Chip(pin_v=3.0)
+    chip.deinit = lambda: None
+    monkeypatch.setitem(sys.modules, "board", types.SimpleNamespace(SCL=3, SDA=2))
+    monkeypatch.setitem(sys.modules, "busio", types.SimpleNamespace(I2C=lambda scl, sda: chip))
+    monkeypatch.setattr(bat, "ADS1115_CONTINUOUS", True)
+    p = Power()
+    assert isinstance(p._chan, bat.ContinuousADC)
+    assert p._read_battery_voltage() == pytest.approx(12.0, abs=4e-3)
+    p.cleanup()

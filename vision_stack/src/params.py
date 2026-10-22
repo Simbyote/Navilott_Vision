@@ -85,6 +85,12 @@ IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
 
 # --- Battery monitor (src/diagnostics/battery.py) ---
 ADS1115_I2C_ADDRESS = 0x48  # ADS1115 with ADDR tied to GND; A0 reads the 4:1 V-Sense divider
+# The ADS1115 converts A0 on its own (continuous mode) and a battery read is
+# two combined I2C transfers, the config checked and the latest result
+# fetched, each naming its register. Single-shot reads were 11-30 transfers
+# over ~9 ms on the bus the IMU shares (make i2c-trace, 2026-10-20).
+# False: the Adafruit library's single-shot reads, as before
+ADS1115_CONTINUOUS = True
 IMU_RATE_HZ = 100.0         # background sampling; the on-chip filter is set to 44 Hz to match
 # The MPU-6050 samples gyro Z and accel at IMU_RATE_HZ on its own clock into
 # its FIFO, and the sensor hub reads the FIFO once per frame (2 transfers)

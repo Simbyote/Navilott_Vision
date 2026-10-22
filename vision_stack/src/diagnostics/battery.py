@@ -13,11 +13,24 @@ Main package:
                     callbacks that run on the sampling thread (keep them short);
                     preflight() is a resting-voltage check before a run;
                     read_ms() is how long each monitoring read took (the
-                    ADS1115's single-shot conversion and its I2C).
+                    ADS1115's I2C, and the conversion in single-shot mode).
+    ContinuousADC   the ADS1115 converting A0 on its own; .voltage fetches
+                    the latest result (params.ADS1115_CONTINUOUS).
 
 Hardware:
     Battery -> 30k/10k divider (4:1) -> ADS1115 A0, I2C bus 1, address from
     params.ADS1115_I2C_ADDRESS. Shares the bus with the MPU-6050.
+
+    The ADS1115 has one pointer register saying which register the next
+    read returns, shared by everything that talks to the chip. The Adafruit
+    library's continuous mode reads the result without setting the pointer,
+    trusting it still names the conversion register. Anything else that
+    talks to the chip (a second process opening the ADC) can move it, and
+    the "voltage" is then another register: most likely why that version
+    read 9.44 V for a 12 V pack (2026-10-21; reverted in 85ddf2d). ContinuousADC sets the pointer in every read, as one combined
+    transfer (write then read, no stop between), so nothing can move it in
+    between, and checks the config each read so a chip someone else
+    reconfigured is put back before its result is trusted.
 
 Usage:
     pwr = Power()
@@ -33,9 +46,69 @@ from collections import deque
 from typing import Callable, List, Tuple
 
 from src.diagnostics.battery_state import BatteryState, BatteryStateMachine
-from src.params import ADS1115_I2C_ADDRESS
+from src.params import ADS1115_CONTINUOUS, ADS1115_I2C_ADDRESS
 
 log = logging.getLogger(__name__)
+
+# ADS1115 registers (datasheet SBAS444, 8.6): the pointer byte picks one
+REG_CONVERSION, REG_CONFIG = 0x00, 0x01
+# Config: A0 against GND (MUX 100), +-4.096 V full scale (PGA 001; the pin
+# reads 12.6 / 4 = 3.15 V at most), continuous (MODE 0), 128 SPS (DR 100),
+# comparator off (COMP_QUE 11). OS, bit 15, reads as status, so it's masked
+ADC_CONFIG = (0b100 << 12) | (0b001 << 9) | (0 << 8) | (0b100 << 5) | 0b11
+CONFIG_MASK = 0x7FFF
+FULL_SCALE_V = 4.096
+DATA_RATE_SPS = 128
+
+
+class ContinuousADC:
+    """
+    The ADS1115 converting A0 on its own; .voltage is the pin's volts from
+    the latest conversion. Same interface as the Adafruit AnalogIn.
+
+    Inputs:
+        i2c: A busio.I2C (or anything with try_lock / unlock / writeto /
+            writeto_then_readfrom).
+        address: The ADS1115's.
+        sleep: For the wait after (re)configuring, swapped in tests.
+
+    reconfigured: Times a read found the config changed and rewrote it.
+    """
+    def __init__(self, i2c, address: int = ADS1115_I2C_ADDRESS, sleep=time.sleep) -> None:
+        self._i2c, self._addr, self._sleep = i2c, address, sleep
+        self._buf = bytearray(2)
+        self.reconfigured = 0
+        self._configure()
+
+    def _locked(self, fn):
+        while not self._i2c.try_lock():
+            pass
+        try:
+            return fn()
+        finally:
+            self._i2c.unlock()
+
+    def _register(self, reg: int) -> int:
+        """One register, the pointer set in the same transfer as the read."""
+        self._locked(lambda: self._i2c.writeto_then_readfrom(self._addr, bytes([reg]), self._buf))
+        return self._buf[0] << 8 | self._buf[1]
+
+    def _configure(self) -> None:
+        """Write the config, then wait two conversions so the result is this config's."""
+        out = bytes([REG_CONFIG, ADC_CONFIG >> 8, ADC_CONFIG & 0xFF])
+        self._locked(lambda: self._i2c.writeto(self._addr, out))
+        self._sleep(2.0 / DATA_RATE_SPS)
+
+    @property
+    def voltage(self) -> float:
+        if self._register(REG_CONFIG) & CONFIG_MASK != ADC_CONFIG:
+            self.reconfigured += 1
+            log.warning("ADS1115 config changed under us; rewritten (%d times)", self.reconfigured)
+            self._configure()
+        raw = self._register(REG_CONVERSION)
+        if raw & 0x8000:
+            raw -= 1 << 16
+        return raw * FULL_SCALE_V / 32768.0
 
 
 class Power:
@@ -78,12 +151,15 @@ class Power:
         if channel is None:
             import board
             import busio
-            from adafruit_ads1x15.ads1115 import ADS1115
-            from adafruit_ads1x15.analog_in import AnalogIn
 
             self._i2c = busio.I2C(board.SCL, board.SDA)
-            ads = ADS1115(self._i2c, address=ADS1115_I2C_ADDRESS)
-            channel = AnalogIn(ads, 0)  # A0 = V-Sense divider
+            if ADS1115_CONTINUOUS:
+                channel = ContinuousADC(self._i2c)
+            else:
+                from adafruit_ads1x15.ads1115 import ADS1115
+                from adafruit_ads1x15.analog_in import AnalogIn
+                ads = ADS1115(self._i2c, address=ADS1115_I2C_ADDRESS)
+                channel = AnalogIn(ads, 0)  # A0 = V-Sense divider
         self._chan = channel
 
         self._voltage_ema = 0.0
