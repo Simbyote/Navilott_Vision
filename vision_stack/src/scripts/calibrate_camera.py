@@ -90,6 +90,21 @@ def open_camera(width: int, height: int) -> cv2.VideoCapture:
     return cap
 
 
+def grab_upright(cap, n: int) -> list[np.ndarray]:
+    """
+    n frames from open_camera's capture, turned upright as CameraSource delivers them.
+
+    The pipeline hands frames over upside down; orient() turns them (camera.py has why).
+    A frame used without it puts the near floor at the top of the view, outside every ROI.
+    """
+    frames = []
+    while len(frames) < n:
+        ok, frame = cap.read()
+        if ok:
+            frames.append(orient(frame))
+    return frames
+
+
 def parse_pattern(text: str) -> tuple[int, int]:
     """"9x6" -> (9, 6): inner corners, cols x rows. Exits on anything else."""
     try:

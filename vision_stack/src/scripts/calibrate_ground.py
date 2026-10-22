@@ -45,7 +45,7 @@ from src.params import CALIBRATION_DIR, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH
 from src.perception.ground import GroundHomography, fit_ground_homography, lens_id
 from src.perception.preprocess import PreprocessParams, preprocess_frame
 from src.perception.roi_crop import resolve
-from src.scripts.calibrate_camera import FIND_FLAGS, SUBPIX_CRITERIA, open_camera, parse_pattern
+from src.scripts.calibrate_camera import FIND_FLAGS, SUBPIX_CRITERIA, grab_upright, open_camera, parse_pattern
 
 DEFAULT_DEBUG = CALIBRATION_DIR / "ground_debug.png"
 DEFAULT_RAW = CALIBRATION_DIR / "ground_raw.png"
@@ -316,15 +316,10 @@ def grab_frames(args) -> list[np.ndarray]:
             sys.exit(f"ERROR: could not read {', '.join(missing)}")
         return frames
     cap = open_camera(FRAME_W, FRAME_H)
-    frames = []
     try:
-        while len(frames) < args.frames:
-            ok, frame = cap.read()
-            if ok:
-                frames.append(frame)
+        return grab_upright(cap, args.frames)
     finally:
         cap.release()
-    return frames
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments, fit, and write the JSON and the debug image."""

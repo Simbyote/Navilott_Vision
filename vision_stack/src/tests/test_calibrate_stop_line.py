@@ -8,6 +8,7 @@ load_stop_line_table. No camera.
 """
 import json
 
+import cv2
 import numpy as np
 import pytest
 
@@ -103,6 +104,49 @@ def test_a_mark_the_detector_cannot_see_is_not_recorded():
     marks, said = interactive(["3", "5", "6", "10", ""], lambda cm: frames[cm])
     assert [m["cm"] for m in marks] == [3.0, 6.0, 10.0]
     assert any("not recorded" in s for s in said)
+
+
+# =============================================================================
+# The camera
+# =============================================================================
+
+class UpsideDownCamera:
+    """open_camera's capture: hands over the frame as the pipeline does, upside down."""
+    def __init__(self, upright):
+        self.frame = cv2.rotate(upright, cv2.ROTATE_180)
+        self.released = False
+
+    def read(self):
+        return True, self.frame.copy()
+
+    def release(self):
+        self.released = True
+
+
+@pytest.mark.software
+def test_camera_frames_are_turned_upright_before_measuring():
+    # Since the pipeline stopped flipping (ac99b10), a frame used as read puts
+    # the tape at the top of the view, outside the lane ROI: 0 of 15 frames
+    cam = UpsideDownCamera(tape(30))
+    assert cs.measure_mark([cam.read()[1]] * 3, SCENE_CONFIG)["seen"] == 0
+    from src.scripts.calibrate_camera import grab_upright
+    m = cs.measure_mark(grab_upright(cam, 3), SCENE_CONFIG)
+    assert m["seen"] == 3 and m["rows"] == cs.measure_mark([tape(30)], SCENE_CONFIG)["rows"]
+
+
+@pytest.mark.software
+def test_main_grabs_upright_frames_from_the_camera(monkeypatch):
+    import src.scripts.calibrate_camera as cc
+    cam = UpsideDownCamera(tape(30))
+    monkeypatch.setattr(cc, "open_camera", lambda w, h: cam)
+    grabbed = {}
+
+    def collect(grab, ask, say, config, n):
+        grabbed["frames"] = grab(2)
+        return cs.parse_marks(marks_text())
+    monkeypatch.setattr(cs, "collect_marks", collect)
+    assert cs.main(["--out", "/dev/null"], say=lambda s: None) == 0
+    assert all(np.array_equal(f, tape(30)) for f in grabbed["frames"]) and cam.released
 
 
 # =============================================================================

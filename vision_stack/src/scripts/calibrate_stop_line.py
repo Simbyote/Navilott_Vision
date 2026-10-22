@@ -247,16 +247,11 @@ def main(argv: list[str] | None = None, grab=None, ask=input, say=print) -> int:
     else:
         cap = None
         if grab is None:
-            from src.scripts.calibrate_camera import open_camera
+            from src.scripts.calibrate_camera import grab_upright, open_camera
             cap = open_camera(FRAME_W, FRAME_H)
 
             def grab(n):
-                frames = []
-                while len(frames) < n:
-                    ok, frame = cap.read()
-                    if ok:
-                        frames.append(frame)
-                return frames
+                return grab_upright(cap, n)
         say(f"Measure every mark from {args.reference}.")
         try:
             marks = collect_marks(grab, ask, say, config, args.frames)
