@@ -3,10 +3,13 @@ Output helpers for --hardware runs: CSV, JSON, PNG and, optionally, graphs.
 
 Everything here is write-only and cheap. Hardware tests should buffer rows in
 memory during the frame loop and call these AFTER the loop, so file I/O never
-lands inside the timing window on the Pi.
+lands inside the timing window on the Pi. The exception is a run long enough
+that losing it to a crash costs more: CsvStream writes as it goes, outside
+each frame's timed work, flushed every FLUSH_S into the page cache.
 """
 import csv
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -30,6 +33,47 @@ def summarize(values) -> dict:
     }
 
 
+# A streamed CSV reaches the OS at least this often: a crash loses at most this much
+FLUSH_S = 1.0
+
+
+class CsvStream:
+    """
+    A CSV written row by row, so a run that dies mid-way keeps what it had.
+    Rows go to Python's buffer; it's flushed to the OS at most every
+    flush_s seconds (one small write a second, not one a frame).
+
+    Use: with artifacts.csv_stream(name, header) as out: out.row([...])
+    rows: How many were written. path: The file.
+    """
+    def __init__(self, path: Path, header: list, flush_s: float = FLUSH_S, clock=time.monotonic) -> None:
+        self.path, self.rows = path, 0
+        self._f = open(path, "w", newline="")
+        self._w = csv.writer(self._f)
+        self._w.writerow(header)
+        self._f.flush()
+        self._flush_s, self._clock = flush_s, clock
+        self._flushed = clock()
+
+    def row(self, values: list) -> None:
+        self._w.writerow(values)
+        self.rows += 1
+        now = self._clock()
+        if now - self._flushed >= self._flush_s:
+            self._f.flush()
+            self._flushed = now
+
+    def close(self) -> None:
+        if not self._f.closed:
+            self._f.close()
+
+    def __enter__(self) -> "CsvStream":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.close()
+
+
 class Artifacts:
     """One output directory per test; every method returns the path written."""
 
@@ -44,6 +88,10 @@ class Artifacts:
             w.writerow(header)
             w.writerows(rows)
         return out
+
+    def csv_stream(self, name: str, header: list, **kw) -> CsvStream:
+        """A CSV written as rows come (CsvStream); close it, or use it as a context manager."""
+        return CsvStream(self.path / name, header, **kw)
 
     def json(self, name: str, obj) -> Path:
         out = self.path / name

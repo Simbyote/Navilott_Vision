@@ -173,10 +173,12 @@ def test_soak(request, frames, artifacts):
     replay = request.config.getoption("--replay") is not None
     deadline_s = minutes * 60.0
 
-    rows, interrupted = [], False
+    interrupted = False
     processor = Phase3Processor()
     monitor = SystemMonitor().start()
     source = looping(frames, replay)
+    # Written as the run goes: a 15-minute run that crashes or loses power keeps its frames
+    out = artifacts.csv_stream("soak_frames.csv", list(FRAME_FIELDS))
     try:
         n = 0
         while True:
@@ -191,31 +193,49 @@ def test_soak(request, frames, artifacts):
             res = run_phase3_chain(fd.frame, fd.frame_id, fd.timestamp_ms, processor, None,
                                    MEASURED, (t_frame - t_start) * 1000.0)
             t = res.timings_ms
-            rows.append([n, fd.frame_id, fd.timestamp_ms, round(t_start - monitor.t0, 3),
-                         round(t["capture"], 3), round(t["phase2"], 3), round(t["phase3"], 3),
-                         round(t["total"], 3), round((time.perf_counter() - t_start) * 1000.0, 3)])
+            out.row([n, fd.frame_id, fd.timestamp_ms, round(t_start - monitor.t0, 3),
+                     round(t["capture"], 3), round(t["phase2"], 3), round(t["phase3"], 3),
+                     round(t["total"], 3), round((time.perf_counter() - t_start) * 1000.0, 3)])
             n += 1
     except KeyboardInterrupt:
         interrupted = True
     finally:
         source.close()                   # releases the camera
         monitor.stop()
+        out.close()
 
-    if not rows:
+    if not out.rows:
         pytest.skip("no frames delivered")
     samples = monitor.rows()
     assert len(samples) >= 2, "system monitor recorded fewer than 2 samples"
 
-    frames_path = artifacts.csv("soak_frames.csv", list(FRAME_FIELDS), rows)
+    frames_path = out.path
     system_path = artifacts.csv("system.csv", list(FIELDS), [[s[k] for k in FIELDS] for s in samples])
     result = soak.analyze(Table(system_path), Table(frames_path))
     artifacts.json("summary.json", {**result, "minutes_requested": minutes, "interrupted": interrupted,
-                                    "frames": len(rows), "replay": replay})
+                                    "frames": out.rows, "replay": replay})
     soak.figure(Table(system_path), result, f"Soak: {request.node.name}", artifacts.path / "soak.png")
 
     for line in result["findings"]:
         if line.startswith(("throttling", "memory grows", "loop p95")):
             warnings.warn(line)
+
+
+@pytest.mark.software
+def test_streamed_rows_are_on_disk_before_the_file_is_closed(tmp_path):
+    from src.tests.artifacts import Artifacts
+    now = [0.0]
+    out = Artifacts(tmp_path).csv_stream("soak_frames.csv", list(FRAME_FIELDS), clock=lambda: now[0])
+    out.row([0] * len(FRAME_FIELDS))
+    out.row([1] * len(FRAME_FIELDS))
+    assert (tmp_path / "soak_frames.csv").read_text().count("\n") == 1        # the header; rows still buffered
+    now[0] = 1.0
+    out.row([2] * len(FRAME_FIELDS))                                            # a second passed: flushed
+    with open(tmp_path / "soak_frames.csv") as f:
+        assert [r[0] for r in csv.reader(f)] == ["n", "0", "1", "2"]
+    out.close()
+    out.close()
+    assert out.rows == 3
 
 
 @pytest.mark.software
