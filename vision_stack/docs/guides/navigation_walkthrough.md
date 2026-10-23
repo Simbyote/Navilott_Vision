@@ -105,7 +105,7 @@ Why it moved:
 | --- | --- | --- |
 | How hard / wide a turn is | `src/navigation/intersection.py` | `LEFT_TURN`, `RIGHT_TURN` |
 | How far a turn goes | `src/navigation/intersection.py` | `TURN_TARGET_DEG` (85) |
-| When the robot counts as "at the line" (turn start, sign stops) | `src/navigation/stop_line.py` | `STOP_DELAY_MS` (1500) |
+| When the robot counts as "at the line" (turn start, sign stops) | `src/navigation/stop_line.py` | `REACH_CM` (9.0 cm by odometry; `STOP_DELAY_MS`, 0, without it) |
 | When lane keeping takes back over after a crossing | `src/navigation/intersection.py` | `TWO_BOUNDARY_FRAMES`, `ONE_BOUNDARY_FRAMES`, `MAX_CROSS_MS` |
 | Which way at each intersection | `route.json` | `maneuvers` |
 | Lane-keeping speed and steering | `src/navigation/lane_keeping.py` | `BASE_SPEED`, `KP_*` |

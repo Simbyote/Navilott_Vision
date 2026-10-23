@@ -208,10 +208,10 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 | --- | --- | --- |
 | `lane_offset` | Robot right of lane center | `lane_offset.py` |
 | `heading_error`, `yaw_rate` | Turning right | `estimation.py`, applied by `sensing.py` |
-| Raw gyro Z (per `imu.py`) | Counter-clockwise, turning **left**, for a flat Z-up mount. **On this robot the raw reading is + for a left turn** (measured) | `imu.py` |
+| Raw gyro Z (per `imu.py`) | Counter-clockwise, turning **left**, for a flat Z-up mount. **This robot's IMU is mounted upside down, so its raw reading is + for a right turn** (measured 2026-10-01), and `IMU_YAW_SIGN` is 1 | `imu.py` |
 | Accel Y (per `imu.py`) | Accelerating left | `imu.py` |
 
-**Resolved (2026-09-30).** The raw gyro on this robot reads + for a left turn (`maneuver_linker`'s spin pulses measure it every run). `SensorHub` multiplies it by `IMU_YAW_SIGN = -1`, so `yaw_rate` and `heading_error` read + = turning right as `estimation.py` documents. `IMU_YAW_SIGN` is per robot: a different mount needs its own measurement. To check on the bench: `phase3_linker --camera --imu`, cover the lens so vision drops to `hold`, turn the robot right by hand, and `hd` should go positive.
+**Resolved (2026-10-01).** The raw gyro on this robot reads + for a right turn (`maneuver_linker`'s spin pulses measure it every run; the 2026-09-30 reading of + for a left turn was taken with the motor sides swapped). `SensorHub` multiplies it by `IMU_YAW_SIGN = 1`, so `yaw_rate` and `heading_error` read + = turning right as `estimation.py` documents. `IMU_YAW_SIGN` is per robot: a different mount needs its own measurement. To check on the bench: `phase3_linker --camera --imu`, cover the lens so vision drops to `hold`, turn the robot right by hand, and `hd` should go positive.
 
 ---
 
@@ -249,7 +249,7 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Open items
 
-- **Stop-sign gate.** The stop sign reaches the vote at 0.45 on untuned geometry. Keep the gate high, or have navigation ignore `stop_sign_detected`, until the sign branch is tuned on course frames.
+- **Stop-sign gate.** The stop sign reaches the vote at `min_confidence_sign` (0.45). The sign's shape gates were fit to the course's sign on run frames (2026-10-20, `config.py`), but the gate itself hasn't been checked against course runs: `make routine-detect-range ARGS="--set target=sign"` and `make routine-stop-sign` measure it.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
 - **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement: `make routine-lane-offset` measures it and says the value to set.
 - **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior, the pass-through ambiguity above, and whether the packet carries cumulative encoder counts.

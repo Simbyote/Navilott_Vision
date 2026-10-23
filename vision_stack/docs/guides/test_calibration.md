@@ -1,6 +1,6 @@
 # Verifying the Camera Calibration
 
-Checks that `calibration/camera_calib.json` is valid for this camera and actually straightens the image, using `src/tests/test_calibration.py`. Run it after every calibration (`calibrate_camera.md`) and before trusting lane offsets on the course.
+Checks that `calibration/camera_calibration.json` is valid for this camera and actually straightens the image, using `src/tests/test_calibration.py`. Run it after every calibration (`calibrate_camera.md`) and before trusting lane offsets on the course.
 
 The check has two parts:
 
@@ -9,7 +9,7 @@ The check has two parts:
 
 ## Requirements
 
-- `calibration/camera_calib.json` from a completed calibration
+- `calibration/camera_calibration.json` from a completed calibration
 - `calib_frames/` still holding the frames that calibration was solved from (for the coverage check)
 - The same printed 9 × 6 checkerboard used to calibrate
 - Camera not in use by `phase2_linker`, `live_view` or `rpicam-hello`
@@ -47,7 +47,7 @@ Three tests run. All three must pass:
 
 A skip is not a pass. `pytest.ini` prints why a test skipped:
 
-- `no camera_calib.json yet`: calibrate first.
+- `no camera_calibration.json yet`: calibrate first.
 - `calib_frames no longer holds the frames this calibration used`: the coverage check can't run. Recalibrate, or restore the frames from `calib_results.tgz`.
 
 To also confirm the calibration code itself still solves a known lens correctly (about 15 s, no hardware):
@@ -106,7 +106,7 @@ A board close to the frame edge can come back with no undistorted score: undisto
 ## 5. Results
 
 ```
-tar -czf calib_check.tgz calibration/camera_calib.json holdout_frames artifacts/<YYYYMMDD_HHMMSS>
+tar -czf calib_check.tgz calibration/camera_calibration.json holdout_frames artifacts/<YYYYMMDD_HHMMSS>
 ```
 
 Send `calib_check.tgz` with the terminal output of steps 2 and 3.

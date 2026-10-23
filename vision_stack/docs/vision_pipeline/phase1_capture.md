@@ -50,7 +50,7 @@ appsink drop=true max-buffers=1 sync=false
 
 **Output is 480×270.** That's 16:9, matching the sensor, so the ISP scales without cropping or stretching. It replaced 480×360 when the IMX219 was swapped for the IMX290.
 
-**The image is flipped in GStreamer, not in Python.** The camera is mounted upside down (`CAMERA_ROTATE_180`). Flipping in the pipeline means every consumer, from the perception stages to recordings and the calibration script, sees the same upright frame.
+**The image is turned upright once, at capture.** The camera is mounted upside down (`CAMERA_ROTATE_180`). `CameraSource.read()` turns every frame before handing it on, so every consumer, from the perception stages to recordings and the calibration script, sees the same upright frame. Every calibration (lens, ground, stop-line table) is tied to that orientation: changing `CAMERA_ROTATE_180` means recalibrating.
 
 **Exposure and white balance are the camera's own unless set.** `CAMERA_CONTROLS` (`params.py`) passes libcamerasrc controls as properties on the element, e.g. `{"ae-constraint-mode": "highlight", "exposure-value": -1.0, "awb-mode": "daylight"}`; empty, the camera's auto exposure and white balance run as they always have. The names the robot's camera takes are in `capture/camera.CAMERA_CONTROL_NAMES` (from `gst-inspect-1.0 libcamerasrc`), and an unknown one fails by name when the source is built, not as GStreamer's "unable to start pipeline". The driving linkers take `--camera-control KEY=VALUE` (repeatable) over these for one run, to try values before setting them. Why it matters: in a dim room the auto exposure brightens the scene until the traffic lamps blow out to white (`calibrate_lamps.md`), and the white balance follows the room's light. Any change also changes how the lanes look, so re-check lane detection with it.
 
@@ -94,7 +94,7 @@ All in `src/params.py`:
 | `FPS` | 20 | Requested frame rate |
 | `CAMERA_CONTROLS` | `{}` | libcamerasrc controls (exposure, white balance); empty is the camera's auto |
 | `MIN_FPS`, `MAX_FPS` | 5, 30 | Warning band |
-| `CAMERA_CALIB_PATH` | `calibration/camera_calib.json` | Lens calibration for this mode |
+| `CAMERA_CALIB_PATH` | `calibration/camera_calibration.json` | Lens calibration for this mode |
 
 If you change the camera, the mode, the output size or the flip, the lens calibration is invalid. `test_calibration.py` catches the mismatch; see `guides/test_calibration.md`.
 

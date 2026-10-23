@@ -210,7 +210,7 @@ It runs the robot's exact pipeline string, appsink swapped for a silent fakesink
 Also kept: `uname.txt`, `v4l2_devices.txt`, `cameras.txt` (`rpicam-hello --list-cameras`), `gst_libcamerasrc.txt` (every control the camera takes). Graphviz (`sudo apt install graphviz`) draws the `.dot` files; without it they stay text. `media-ctl` and `v4l2-ctl` come with `v4l-utils`. A missing tool is listed under "not available here" and the rest still records.
 
 Findings it reports:
-- **videoconvert + videoflip over 2 ms a frame.** That is software work on the ARM cores. The ISP can output BGR, and the IMX290 can flip in hardware, which would make both copies go away.
+- **videoconvert + videoflip over 2 ms a frame.** That is software work on the ARM cores. Neither is in the pipeline now (the ISP outputs BGR since 2026-10-16, and `orient()` turns the frame), so this finding means one came back.
 - **Fewer fps than asked for.**
 - **The CMA pool under 10% free.** Camera buffers are allocated from it.
 - **No frame at all.** Usually the camera is open in another process.

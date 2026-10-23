@@ -67,7 +67,7 @@ Moving the mount changes the height, tilt or position, which invalidates the len
 | Setting | Current value | Where it should come from |
 | --- | --- | --- |
 | Lane ROI | Bottom 30% of the frame, 5–95% across | The rows showing the road just ahead of the robot at this height and tilt |
-| Minimum plausible lane width | 60 px | Well under one lane width in px |
+| Minimum plausible lane width | 300 px (MEASURED; 60 the default) | ~0.84 of the measured 357 px lane: pairs 61–65 px apart (a line and something beside it) were taken for a lane and flipped the estimate's sign (2026-10-20) |
 | Maximum plausible lane width | 400 px | Between one lane and a full street, in px |
 | Lane center from one visible line | 178 px (MEASURED; 228 hand-set until 2026-10-12) | Half the lane width in px: the median two-boundary width over the 2026-10-12 runs, 350–357 px |
 | Ground scale | Not set | 14 cm ÷ lane width in px, measured at the bottom of the lane ROI |

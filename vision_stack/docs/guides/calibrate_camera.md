@@ -85,10 +85,10 @@ Next, for floor distances in cm: `calibrate_stop_line.md` (the stop line, from t
 
 
 ```
-tar -czf calib_results.tgz calibration/camera_calib.json calib_frames calib_verify
+tar -czf calib_results.tgz calibration/camera_calibration.json calib_frames calib_verify
 ```
 
-Send `calib_results.tgz` and the `artifacts/<YYYYMMDD_HHMMSS>` folder from step 4, or commit `calibration/camera_calib.json` and push.
+Send `calib_results.tgz` and the `artifacts/<YYYYMMDD_HHMMSS>` folder from step 4, or commit `calibration/camera_calibration.json` and push.
 
 ## Troubleshooting
 

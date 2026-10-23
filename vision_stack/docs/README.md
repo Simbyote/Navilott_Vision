@@ -88,6 +88,7 @@ docs/
     concepts.md                 the ideas the docs use, explained once
     course.md                   course dimensions and camera geometry
     README.md                   this page
+    _DOCUMENTATION.md           how code is documented: headers, docstrings, comments, tests
     requirements.md             requirements, how each is checked, status
 ```
 

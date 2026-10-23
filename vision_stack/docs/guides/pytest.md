@@ -45,7 +45,7 @@ Expect every test to pass. Skips are normal until their input exists, and `pytes
 | Skip reason | Goes away when |
 | --- | --- |
 | `no recorded dataset in tests/data/frames` | A dataset is recorded (step 3) |
-| `no camera_calib.json yet` | The camera is calibrated (`calibrate_camera.md`) |
+| `no camera_calibration.json yet` | The camera is calibrated (`calibrate_camera.md`) |
 | `calib_frames ... no longer holds the frames this calibration used` | The frames the calibration was solved from are back in `calib_frames/`; a fresh clone does not have them (`test_calibration.md`) |
 
 Narrower runs:
@@ -109,7 +109,7 @@ pytest --hardware src/tests/test_imu.py
 | `test_system_monitor` | A Pi | Checks one real sample reads temperature, clock and memory |
 | `test_monitor` | A Pi (`vcgencmd`) | Records a 2 s child with `diagnostics.monitor`: temperature, clock and throttle flags every second, every core |
 | `test_stage_timing` | Camera or `--replay` | `stage_timing.csv` (every stage plus capture wait and loop time), `summary.json`, `timing_budget.png`, `timing_per_frame.png` |
-| `test_calibration` | `camera_calib.json`; checkerboard in view | Raw vs undistorted images, straightness per region. Use frames the solver never saw |
+| `test_calibration` | `camera_calibration.json`; checkerboard in view | Raw vs undistorted images, straightness per region. Use frames the solver never saw |
 | `test_imu` | MPU-6050; **robot still** | Samples per window, stationary yaw noise |
 | `test_system` | `pigpiod`; **watch the display** | Shows `rdy`, counts down, ticks the clock; checks the button reads low at rest |
 
