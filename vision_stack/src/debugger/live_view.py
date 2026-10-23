@@ -241,8 +241,8 @@ def stage_timing_report(stage_ms: dict[str, list[float]], exclude=()) -> list[st
             "stage.part" name is a part of that stage (geometry.lanes): it's
             printed indented under the stage, by its full dotted name, and
             not added to the total, since the stage's own time already holds
-            it. The dot keeps it out of parsers that read a stage line as a
-            plain name then "med" (the report project's ^\s*(\w+)\s+med).
+            it. The dot keeps it out of parsers that read a stage line as one
+            word then "med" (the report project's nav_budget.py).
         exclude: Stages printed but left out of the total (phase3_linker's
             render, which the robot never pays).
     """
