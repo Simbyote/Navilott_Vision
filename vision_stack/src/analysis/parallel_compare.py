@@ -1,24 +1,23 @@
-"""
-parallel_compare.py  --  serial against parallel perception, on the same frames
+"""Serial against parallel perception, on the same frames.
 
 Purpose:
     perception/parallel.py runs Phase 2's color and obstacle branches on a
     side thread while the main thread runs geometry. Whether that wins on
     the Pi depends on how much of each branch is inside OpenCV (which
-    releases the GIL) and how much is Python (which takes turns), so it's
-    measured here rather than assumed.
+    releases the GIL), so it's measured rather than assumed
+    (docs/guides/analysis.md, "Parallel perception").
 
-    The frames are loaded into memory first, so file reads don't add to
-    the timings, then run through Pipeline.perceive() in blocks that
-    alternate serial and parallel (heat and the clock governor hit both
-    alike). Optionally each mode also runs at several OpenCV thread counts.
+Main package:
+    compare.json in --out: per mode, Phase 2 wall ms per frame, the main
+    thread's branch_wait, the side thread's own times, and CPU in cores;
+    the verdict is parallel p50 against serial p50.
 
-Output (printed, and compare.json in --out):
-    Per mode: Phase 2 wall ms per frame (p50, p95, max), the main thread's
-    branch_wait (how long it waited for the side thread), the side thread's
-    own color and obstacle times, and CPU: process CPU time / wall time, in
-    cores (1.0 = one core busy the whole time). The verdict line is the
-    parallel p50 against the serial p50.
+Flow:
+    1. Frames loaded into memory (--frames, a video, or --camera), so file
+       reads don't add to the timings.
+    2. Pipeline.perceive() in blocks alternating serial and parallel, at
+       each --opencv-threads count.
+    3. Statistics per mode; print, JSON.
 
 Usage (from vision_stack/, on the Pi, with the robot's pipeline stopped if --camera):
     python3 -m src.analysis.parallel_compare --frames runs/nav_<time>/frames

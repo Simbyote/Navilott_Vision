@@ -2,20 +2,19 @@
 
 Purpose:
     Linux isn't a real-time OS, so a steady median can sit on top of late
-    frames that Navigation feels as steering hiccups. This reads per-frame
-    intervals and reports the tail (p95, p99, max), how many frames missed
-    the budget and in how long a streak, and whether the spikes are
-    periodic, which points at a timer-driven cause (log flush, recorder
-    write, a background service) rather than scene load.
+    frames that navigation feels as steering hiccups. This reports the tail
+    (p95, p99, max), the frames over budget and their streaks, and whether
+    the spikes are periodic, which points at a timer-driven cause (log
+    flush, recorder write, a background service) rather than scene load.
 
 Main package:
-    analyze()      the numbers, plain dict
-    jitter.png     interval per frame with the budget and spike markers,
-                   beside a histogram of intervals
+    analyze(): the numbers, a plain dict. jitter.png draws the interval per
+    frame, with the budget and spike markers, beside a histogram.
 
-Input:
-    Any CSV with interval_ms (measured loop), dt_ms (test_capture's
-    frames.csv), dt_s (p3.csv) or timestamp_ms. See common.interval_ms.
+Flow:
+    1. Per-frame intervals from any CSV with interval_ms, dt_ms, dt_s or
+       timestamp_ms (common.interval_ms).
+    2. analyze(); print, figure, JSON.
 """
 
 import argparse

@@ -37,6 +37,7 @@ A folder is searched for the tool's CSV names, directly inside it first, then in
 | `routine_report` | a routine folder's `results.json` (`runs/routine_<name>_<time>`; `samples.csv` for power-profile; `attempt_NN/nav.csv`) | `routine_report.png`, `routine_report.json`; `nav_run.png`, `.json` in each attempt | Each criterion as a gauge (pass region shaded, value marked), the routine's own plot, every changing field per trial; `make routine-report RUN=...` |
 | `hw_report` | a `pytest --hardware` run folder (`artifacts/<time>`) | each tool's own figures and JSON beside each CSV it read; `hw_report.txt` in the run folder | Every analysis the run can feed in one call: `stage_timing` and `jitter` on each `stage_timing.csv`, `stages.csv` and capture `frames.csv`, `stability` on `lane_offset_timing.csv`, `gate_rejections` on the geometry and color CSVs, `soak` on `system.csv`; `make hw-report RUN=artifacts/...` |
 | `parallel_compare` | frames: a run's `frames/` folder, a video, or `--camera` | `runs/parallel_<time>/compare.json` | Serial against parallel perception on the same frames held in memory: Phase 2 p50 / p95 / max, the main thread's `branch_wait`, the side thread's color and obstacle, CPU in cores, and the gain at p50; `make compare-parallel ARGS=...` |
+| `parallel_ab` | nothing: it runs them (`navigation_linker`, serial and parallel in turn), or `--compare` on runs made before | `runs/ab_<time>/ab.json` | Serial against parallel over whole runs: frame rate, time between frames, Phase 2, the share over budget, frame-to-motor latency; whether every parallel run beat every serial one; `make ab-parallel RUNS=4 SECONDS=60` |
 | `nav_run` | `nav.csv` from `navigation_linker` / `intersection_linker` | `nav_run.png`, `nav_run.json` | The findings list; each intersection's turn end and the 2 s after it; weaving; wheel imbalance |
 
 **Navigation runs in the older tools.** Given a `navigation_linker` or `intersection_linker` folder, `stage_timing`, `jitter` and `state_timeline` read its `nav.csv` before its `p3.csv`. `nav.csv` adds navigation's own time (`nav_ms`) and the real loop interval (from `t`; `p3.csv`'s `dt_s` is clamped). `latency_ms` (frame to motor command) isn't a stage, so `stage_timing` leaves it out; `nav_run` reports it. `state_timeline` follows `rule`, `stage`, `lane_status` and `drive_state` there, with a blank stage (outside an intersection) labeled `-`. `soak` reads a diagnostics recording's `system.csv` as-is.
@@ -168,6 +169,25 @@ make compare-parallel ARGS="--frames runs/nav_<time>/frames --opencv-threads 1,2
 ```
 
 Frames are held in memory and the modes alternate every 20 frames, so heat and the clock governor hit both alike. Read `p50 ms` (Phase 2 per frame), `wait p50` (the main thread waiting for the side thread: near 0 means geometry is the long pole, as expected), and `cores` (CPU time over wall time). Then confirm on a course run with `--parallel`: nav.csv's `phase2_ms`, `summary.txt`'s `[TIMING]` (`branch_wait`, `side_color`, `side_obstacle`), and a `make diag-nav` recording, where the side thread shows as `p2-side`. The results are identical either way (`test_parallel`).
+
+`parallel_compare` times Phase 2 alone. On the robot, perception also shares the four cores and the GIL with the sensor hub, the recorder, Phase 3 and navigation, so whether parallel wins is a whole-run question. `parallel_ab` answers it with whole navigation runs, serial and parallel in turn (S, P, S, P, ...) so heat and the battery affect both alike, each with a `--label`:
+
+```
+make ab-parallel RUNS=4 SECONDS=60                          # dry: live camera, motors off, robot on the bench
+make ab-parallel RUNS=4 SECONDS=60 ARGS=--motors            # drives each run; Enter before each to put the robot back
+python3 -m src.analysis.parallel_ab --compare runs/ab_<time>/*
+```
+
+The verdict compares the modes' means, and says whether every parallel run beat every serial run on the time between frames. If the runs overlap, parallel isn't shown to help, whatever the means say.
+
+**Stop sign misses (`sign_check`):** the sign detector (`perception/geometry_sign.py`) takes the red pixels in the sign ROI and gates the blobs largest first: area, vertex count, solidity, then the ghost-sign gates (aspect, extent, letters); the first that passes is the sign. Until 2026-10-20 it gated only the largest, so a larger red thing in the ROI, refused, hid the sign; this check found that, and still counts those frames ("lost behind a larger red blob"). Run it on the frames of a run that missed a sign, or on a `detect-range` session's saved looks:
+
+```
+make sign-check ARGS="--frames runs/nav_<time>/frames"
+python3 -m src.analysis.sign_check --frames runs/routine_detect-range_<time>
+```
+
+Per frame it gives the largest red blob's gate and values, which edges of the sign ROI it touches (a sign cut off by the ROI loses its corners: an octagon cut across the top reads 6 vertices), whether a smaller blob passes, and which gates, relaxed one at a time, would pass it. The summary's last lines are the frames each relaxed gate adds: the gate to look at first.
 
 ## Cautions
 

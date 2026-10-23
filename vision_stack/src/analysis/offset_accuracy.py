@@ -1,28 +1,21 @@
 """Offset accuracy against ground truth: does the reported offset match where the robot really is?
 
 Purpose:
-    The other interpreters show offsets are produced and steady; this one
-    checks they're right. Park the robot at measured lateral positions (for
-    example -4, -2, 0, +2, +4 cm from lane center), record a short still run
-    at each, and give the runs with their true positions. The result is the
-    error at each position, the fitted scale and zero, and a verdict against
-    the +/-2 cm spec.
+    The other interpreters show offsets are produced and steady; this checks
+    they're right. Given one still run per ruler-measured position, it gives
+    the error at each, the fitted scale and zero, and a verdict against the
+    +/-2 cm spec. true_cm uses lane_offset_cm's sign: a negative slope means
+    the two disagree, which fails on its own.
 
 Main package:
-    analyze()             per-position bias, spread and share within spec;
-                          overall fit (slope 1 and intercept 0 are perfect),
-                          RMS bias, worst bias, verdict
-    offset_accuracy.png   measured vs true with +/-1 std bars, the ideal line
-                          and the spec band, beside the bias at each position
+    analyze(): per-position bias, spread and share within spec; the overall
+    fit, RMS and worst bias, the verdict. offset_accuracy.png draws measured
+    against true, beside the bias at each position.
 
-Input:
-    One run per position, read like stability.py (p3.csv's lane_offset_cm on
-    vision frames, or a normalized offset). Positions come from a manifest
-    CSV with columns true_cm,run (run relative to the manifest's folder), or
-    from --at TRUE_CM RUN, repeated. A normalized offset needs --cm-per-unit.
-
-Sign convention: true_cm uses the same sign as lane_offset_cm. A negative
-slope means the two disagree, which the verdict reports on its own.
+Flow:
+    1. The runs and positions, from a manifest (true_cm,run) or --at.
+    2. Each run read as stability.py does (--cm-per-unit for a normalized offset).
+    3. analyze(); print, figure, JSON; exit 0 PASS, 2 FAIL.
 """
 
 import argparse

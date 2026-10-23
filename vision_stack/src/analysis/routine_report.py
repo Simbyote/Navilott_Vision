@@ -2,26 +2,21 @@
 
 Purpose:
     A routine (src/routines/) writes its verdict and trials as text and
-    tables: summary.txt, trials.csv, results.json. This draws them, so a
-    run can be read at a glance and put in a report: how far each criterion
-    sat from its limit, what every trial measured, and the plot the routine's
-    question asks for. That's a stop's gap against its band, a reported offset
-    against the ruler, a read rate against the distance, or the pack's volts
-    through each stage. Driving routines keep each attempt's
-    navigation_linker folder (attempt_NN/nav.csv); each gets nav_run's
-    report beside it.
+    tables. This draws them, so a run can be read at a glance and put in a
+    report: how far each criterion sat from its limit, every trial, and the
+    plot the routine's question asks for. Driving routines' attempts each
+    get nav_run's report beside them.
 
 Main package:
-    analyze()            verdict, each criterion with its margin (+ = inside
-                         the limit), each numeric field's stats, the attempts
-    routine_report.png   the criteria as gauges (the pass region shaded, the
-                         value marked), the routine's own plot where it has
-                         one (KEY_PLOTS), then every numeric field per trial
-    attempt_NN/nav_run.png, .json   nav_run on each attempt that has a nav.csv
+    analyze(): the verdict, each criterion with its margin (+ = inside the
+    limit), each numeric field's stats, the attempts. routine_report.png
+    draws the criteria as gauges, the routine's own plot (KEY_PLOTS), then
+    every numeric field per trial.
 
-Input:
-    A routine folder, runs/routine_<name>_<time>/, with results.json (rows
-    included). Without an argument, the newest one under runs/.
+Flow:
+    1. runs/routine_<name>_<time>/results.json (the newest without an argument).
+    2. analyze(); print, figure, JSON.
+    3. nav_run on each attempt_NN/ with a nav.csv.
 """
 
 import argparse
@@ -58,10 +53,6 @@ Run from vision_stack/, venv active:
 """
 
 
-# =============================================================================
-# Reading
-# =============================================================================
-
 def find_run(arg, roots=common.SEARCH_ROOTS) -> Path:
     """A routine folder: the one given (or a results.json in it), else the newest under roots."""
     if arg:
@@ -81,10 +72,6 @@ def load(folder) -> tuple:
     result = json.loads((Path(folder) / RESULTS).read_text())
     return result, list(result.get("rows", []))
 
-
-# =============================================================================
-# Numbers
-# =============================================================================
 
 def _number(v):
     """v as a float when it's a number (not a bool), else None."""
@@ -149,10 +136,6 @@ def analyze(result: dict, rows: list, folder=None) -> dict:
             "trials_planned": result.get("trials_planned"), "criteria": criteria, "fields": fields,
             "attempts": attempts}
 
-
-# =============================================================================
-# The routines' own plots
-# =============================================================================
 
 def _criterion(result: dict, name_start: str):
     return next((c for c in result.get("criteria", []) if c["name"].startswith(name_start)), None)
@@ -395,10 +378,6 @@ KEY_PLOTS = {
     "stop-sign": _plot_stop_sign,
 }
 
-
-# =============================================================================
-# The figure
-# =============================================================================
 
 def _gauge(ax, c: dict) -> None:
     """One criterion: its pass region shaded, the limit(s) drawn, the value marked."""

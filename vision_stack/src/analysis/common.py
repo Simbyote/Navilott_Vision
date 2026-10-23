@@ -4,16 +4,13 @@ Purpose:
     Every interpreter reads a CSV a run or a hardware test wrote, reduces it
     to numbers, prints them and draws figures next to the input. The parts
     they share live here so each interpreter is only its own arithmetic.
+    No pandas: the Pi's environment has numpy and the standard library only.
 
 Main package:
-    Table        a CSV as columns: numeric() parses on demand (blank and
-                 non-numeric cells become NaN), text() keeps strings.
-    find_csv()   a CSV from a file, a folder, or the newest run that has one.
-    stats()      NaN-aware n / mean / std / min / p50 / p95 / p99 / max.
-    pyplot()     matplotlib on the headless backend, or None: every figure is
-                 optional, the numbers never are.
-
-No pandas: the Pi's environment has numpy and the standard library only.
+    Table: a CSV as columns; numeric() parses on demand (blank and
+    non-numeric cells become NaN), text() keeps strings. Beside it,
+    find_csv(), stats() and pyplot() (None without matplotlib: every figure
+    is optional, the numbers never are).
 """
 
 import csv
@@ -28,10 +25,6 @@ ARTIFACTS_DIR = PIPELINE_ROOT / "artifacts"      # pytest --hardware output root
 SEARCH_ROOTS = (RUNS_DIR, ARTIFACTS_DIR)
 BUDGET_MS = 1000.0 / FPS
 
-
-# =============================================================================
-# Reading
-# =============================================================================
 
 class Table:
     """
@@ -166,10 +159,6 @@ def read_manifest(path, key: str) -> list:
     return [(float(r[key]), path.parent / r["run"].strip()) for r in rows]
 
 
-# =============================================================================
-# Numbers
-# =============================================================================
-
 def stats(values) -> dict:
     """NaN-aware summary; every field None when there are no values."""
     v = np.asarray(values, dtype=np.float64)
@@ -198,10 +187,6 @@ def runs_of(labels) -> list:
             out.append([lb, i, 1])
     return [tuple(r) for r in out]
 
-
-# =============================================================================
-# Output
-# =============================================================================
 
 def pyplot():
     """matplotlib.pyplot on the headless backend, or None when not installed."""

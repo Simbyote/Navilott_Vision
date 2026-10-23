@@ -2,21 +2,20 @@
 
 Purpose:
     A 30-second bench run can't show thermal throttling or a slow leak; a
-    10-30 minute run can. This lines up the system samples (temperature,
-    clock, throttle flags, memory) with the loop timings on one clock and
-    reports the three things that go wrong over time: throttling, memory
-    growth, and a loop that slows as the run goes on.
+    10-30 minute run can. This lines up the system samples with the loop
+    timings on one clock and reports the three things that go wrong over
+    time: throttling, memory growth, and a loop that slows as the run goes on.
 
 Main package:
-    analyze()   temperature rise, clock, throttle events, RSS leak rate
-                (MB/min, fitted after warm-up), per-window loop timing and
-                its drift, and a findings list in plain words
-    soak.png    temperature, CPU clock, memory and loop time on one time axis
+    analyze(): temperature rise, clock, throttle events, RSS leak rate
+    (MB/min, fitted after WARMUP_S), per-window loop timing and its drift,
+    and findings. soak.png puts temperature, clock, memory and loop time on
+    one time axis.
 
-Input (a soak artifact folder, or any folder holding these):
-    system.csv        SystemMonitor rows, required
-    soak_frames.csv   per-frame elapsed_s and interval_ms / *_ms, optional;
-                      without it only the system side is reported
+Flow:
+    1. system.csv (required) and soak_frames.csv (optional: without it, the
+       system side only), from a soak artifact or a diagnostics recording.
+    2. analyze(); print, figure, JSON.
 """
 
 import argparse

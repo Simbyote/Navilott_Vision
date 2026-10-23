@@ -2,22 +2,19 @@
 
 Purpose:
     A hardware run (artifacts/<YYYYMMDD_HHMMSS>) holds one folder per test,
-    and several of them wrote a CSV some analysis tool reads: stage timing,
-    frame intervals, lane-offset stability, gate rejections, a soak. Each
-    tool picks one CSV per call, so graphing a whole run meant a call per
-    file. This finds every input under the run and runs each tool that
-    reads it, with the CSV itself as the argument, so each figure lands
-    next to the CSV it came from. Nothing new is computed: these are the
-    tools' own outputs.
+    several with a CSV some tool reads, and each tool takes one CSV per call.
+    This finds every input under the run and runs each tool that reads it,
+    so each figure lands next to the CSV it came from. Nothing new is
+    computed: these are the tools' own outputs.
 
 Main package:
-    plan(): (tool, CSV) pairs for a run folder.
-    report(): run them; one line per run with what it wrote, or why it didn't.
+    report(): hw_report.txt in the run folder, per tool and CSV the headline
+    lines and the figures (plan() gives the (tool, CSV) pairs).
 
 Flow:
     1. For each tool in TOOLS, every file under the run named one of its CSV_NAMES.
-    2. tool.main([csv]); its printout is kept, and the figures and JSON it wrote are listed.
-    3. hw_report.txt in the run folder: per tool, per CSV, the headline lines and the figures.
+    2. tool.main([csv]); its printout kept, the figures and JSON it wrote listed.
+    3. hw_report.txt.
 """
 import argparse
 import contextlib

@@ -2,22 +2,19 @@
 
 Purpose:
     After a tuning change or a new commit, the question is what moved. This
-    matches the JSON summaries of two runs file by file, flattens every
-    numeric value to a dotted key (stage_ms.p95, gate_totals.lane.area, ...)
-    and lists the ones that changed by more than a threshold. It doesn't
-    judge direction: a lower stage_ms is good and a lower frames_with_lane
-    isn't, and only the reader knows which is which.
+    flattens every numeric value of two runs' JSON summaries to a dotted key
+    (stage_ms.p95, gate_totals.lane.area, ...) and lists those that changed
+    by more than a threshold. It doesn't judge direction: only the reader
+    knows whether lower is better (docs/guides/analysis.md).
 
 Main package:
-    flatten()    nested JSON to {dotted.key: number}
-    compare()    rows of base, new, delta and percent change per key
-    compare.csv  every compared key, written to --out
+    compare(): rows of base, new, delta and percent change per key, written
+    to compare.csv.
 
-Input:
-    Two JSON files, or two folders (artifacts/<stamp>, runs/<stamp>): every
-    *.json under the first is matched to the same relative path under the
-    second. run_meta.json isn't compared; its git commits are printed so
-    the comparison says which code produced each side.
+Flow:
+    1. Two JSON files, or two folders: every *.json under the first matched
+       to the same path under the second (run_meta.json only for its commits).
+    2. flatten() each side; compare(); print largest change first.
 """
 
 import argparse

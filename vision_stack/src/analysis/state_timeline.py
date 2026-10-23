@@ -2,23 +2,20 @@
 
 Purpose:
     Navigation acts on lane_status, drive_state and stop_sign_detected, so
-    how those change over a run matters as much as their per-frame values:
+    how they change over a run matters as much as their per-frame values:
     how long the lane is held or stale before vision returns, whether a stop
-    latches cleanly or chatters, which Phase 2 mode tends to precede a
-    hold. This reads a per-frame log and reports, per field, each value's
-    share of the run, how many episodes it had and how long they lasted,
-    and every transition between values.
+    latches cleanly or chatters, which Phase 2 mode precedes a hold.
 
 Main package:
-    analyze()            per field: values, episodes, dwell, transitions
-    state_timeline.png   one colored band per field across the run
+    analyze(): per field, each value's share, episodes, dwell and every
+    transition. state_timeline.png draws one colored band per field.
 
-Input:
-    p3.csv by default (fields lane_status, drive_state, stop_sign_detected,
-    p2_mode), or navigation_linker's nav.csv (rule, stage, lane_status,
-    drive_state; a blank stage is labeled "-"); --fields picks others from
-    any CSV with one row per frame. Durations come from the frame intervals
-    (common.interval_ms: timestamp_ms, or nav.csv's t), else frames at --fps.
+Flow:
+    1. p3.csv (lane_status, drive_state, stop_sign_detected, p2_mode) or
+       nav.csv (rule, stage, lane_status, drive_state; a blank stage is
+       "-"); --fields picks others.
+    2. Durations from the frame intervals, else frames at --fps.
+    3. analyze(); print, figure, JSON.
 """
 
 import argparse
@@ -92,6 +89,11 @@ def analyze_field(values, durations_ms) -> dict:
 
 
 def analyze(table: Table, fields, fps: float = FPS) -> dict:
+    """
+    Per field present in the table: values, episodes, dwell and transitions
+    (analyze_field). Durations from the frame intervals, else 1/fps a frame.
+    ValueError when none of the fields are there.
+    """
     present = [f for f in fields if table.has(f)]
     if not present:
         raise ValueError(f"{table.path.name}: none of {', '.join(fields)}")

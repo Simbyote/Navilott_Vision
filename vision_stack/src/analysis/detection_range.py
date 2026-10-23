@@ -1,28 +1,22 @@
 """Detection range: how far away a stop sign or traffic light is still detected, reliably.
 
 Purpose:
-    Navigation needs warning: the distance at which a sign is first seen,
-    minus the robot's stopping distance, is its margin. Place the target at
-    measured distances in front of the robot, record a short still run at
-    each, and give the runs with their distances. The result is the
-    detection rate at every distance and the reliable range: the farthest
-    distance out to which every measured distance, starting from the
-    nearest, is detected in at least --threshold of frames.
+    The distance at which a sign is first seen, minus the robot's stopping
+    distance, is navigation's margin. Given one still run per measured
+    distance, this gives the detection rate at each and the reliable range:
+    the farthest distance out to which every distance, from the nearest, is
+    detected in at least --threshold of frames (docs/guides/analysis.md).
 
 Main package:
-    analyze()              per target and distance: frames, detection rate,
-                           longest run of missed frames; reliable range,
-                           farthest distance seen at all
-    detection_range.png    detection rate against distance, per target,
-                           with the threshold and the reliable range marked
+    analyze(): per target and distance, frames, detection rate and longest
+    miss; the reliable range and the farthest seen. detection_range.png
+    draws it.
 
-Input:
-    One run per distance, p3.csv (p2_stop, p2_traffic) or test_feature_fusion's
-    fusion_timing.csv (n_stop_sign, n_traffic_light); a frame counts as
-    detected when its count is above zero. Distances come from a manifest
-    CSV with columns distance_cm,run (run relative to the manifest), or from
-    --at DISTANCE_CM RUN, repeated. Measure to the target from the same
-    point on the robot every time, such as the lens.
+Flow:
+    1. The runs and distances, from a manifest (distance_cm,run) or --at.
+    2. Each run's p3.csv (p2_stop, p2_traffic) or fusion_timing.csv; a frame
+       is detected when its count is above zero.
+    3. analyze(); print, figure, JSON.
 """
 
 import argparse

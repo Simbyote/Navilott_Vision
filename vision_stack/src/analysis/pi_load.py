@@ -1,40 +1,22 @@
 """Pi load: how a run used the Pi's cores, threads, clock and memory, from a diagnostics recording.
 
 Purpose:
-    src.diagnostics.monitor records a run from outside: every thread's CPU,
-    core and context switches, every core's load, and temperature, clock,
-    throttling and memory. Its summary.txt gives the averages; this reads
-    the recording over time and interprets it: whether the frame loop is
-    CPU-bound, whether the work runs in parallel or mostly in one thread
-    (Python's GIL and a serial pipeline look alike from outside), whether
-    the sensor thread keeps its 100 Hz, whether threads are preempted or
-    hop between cores, and what heat, the clock and memory did (soak.py's
-    analysis, on the same system.csv). Given the run's own folder
-    (--run), it lines the run's frames up with the recording on the
-    monotonic clock, judges the threads, cores and system over the run's
-    own time only (a recording also holds the imports, the camera opening
-    and the countdown before it, and the shutdown after, which would
-    otherwise pass for the run's load), and says what the slow frames
-    coincided with: a clock drop, a busy frame loop, or neither. The rest
-    of the Pi (os_counters: interrupts, other processes, the SD card,
-    pressure stalls, the camera's memory pool and the ISP clock) is
-    summarized over the same window.
+    src.diagnostics.monitor records a run from outside; its summary.txt
+    gives averages. This reads the recording over time: whether the frame
+    loop is CPU-bound, whether work runs in parallel or in one thread, the
+    sensor hub's cadence, preemption, heat, clock and memory, the rest of the
+    Pi, and what slow frames coincided with. What each finding means:
+    docs/guides/analysis.md, "Pi load".
 
 Main package:
-    analyze(...) -> dict: threads, process, cores, system, window, aligned, findings.
-    report_lines(res): the printed report.
-    python_native(rows), thread_lanes(rows): the two views of how the
-        threads share the Pi, as data the figure draws.
-    pi_load.json, pi_load.png (CPU per thread; Python vs native CPU against
-    the one core the GIL allows Python; one lane per thread colored by the
-    core it ran on; core load, temperature and clock, memory, and the run's
-    frame intervals when aligned).
+    analyze(...) -> dict: threads, process, cores, system, window, aligned,
+    findings. pi_load.json and pi_load.png (the panels are in the guide).
 
-Input:
-    A runs/diag_<time> folder (threads.csv, cores.csv, system.csv,
-    irqs.csv, procs.csv, meta.json; recordings from before the OS
-    counters have no os part). --run: the navigation_linker folder recorded, for lining
-    up (its report.json keeps t0_monotonic).
+Flow:
+    1. A runs/diag_<time> folder; --run, the run it recorded.
+    2. With --run, the run's frames lined up on the monotonic clock, and
+       only the run's own time judged (not the imports or shutdown).
+    3. analyze(); report_lines() printed; figure, JSON.
 """
 
 import argparse
@@ -103,10 +85,6 @@ Run from vision_stack/, venv active:
 """
 
 
-# =============================================================================
-# Reading
-# =============================================================================
-
 def thread_rows(threads: Table) -> list[dict]:
     """threads.csv as the dict rows diagnostics.monitor.thread_summary() takes."""
     cols = ("elapsed_s", "tid", "core", "cpu_pct", "vol_ctx_s", "invol_ctx_s")
@@ -127,10 +105,6 @@ def by_sample(rows: list[dict]) -> tuple[np.ndarray, dict]:
         cpu[r["name"]][index[r["elapsed_s"]]] += r["cpu_pct"]
     return np.array(times), dict(cpu)
 
-
-# =============================================================================
-# Analysis
-# =============================================================================
 
 def process_load(rows: list[dict]) -> dict:
     """The process's total CPU per sample, main's p95, and how much of the total the busiest thread did."""
@@ -251,6 +225,13 @@ def os_load(system: Table | None, irqs: Table | None, procs: Table | None) -> di
 def analyze(threads: Table, cores: Table | None = None, system: Table | None = None,
             nav: Table | None = None, diag_t0: float | None = None, nav_t0: float | None = None,
             irqs: Table | None = None, procs: Table | None = None) -> dict:
+    """
+    A diagnostics recording's tables reduced to threads, process, cores,
+    system, window, aligned and findings. With nav and both t0s (the
+    monotonic start each side kept), only the run's own time is judged and
+    its frames are aligned with the samples. ValueError when threads isn't a
+    threads.csv.
+    """
     missing = [c for c in ("tid", "name", "core", "cpu_pct") if not threads.has(c)]
     if missing:
         raise ValueError(f"{threads.path.name}: not a diagnostics threads.csv (no {', '.join(missing)})")
@@ -292,6 +273,7 @@ def _named(res: dict, name: str) -> list[dict]:
 
 
 def findings(res: dict) -> list[str]:
+    """analyze()'s result in plain words: each threshold passed, one line each."""
     out = []
     main = _named(res, MAIN_THREAD)
     duration_min = None
@@ -367,6 +349,7 @@ def _dash(v, digits: int) -> str:
 
 
 def report_lines(res: dict) -> list[str]:
+    """The printed report of analyze()'s result, one line per item."""
     p = res["process"]
     w = res.get("window")
     lines = []
@@ -407,10 +390,6 @@ def report_lines(res: dict) -> list[str]:
     lines += [f"  (note: {n})" for n in res.get("notes", [])]
     return lines
 
-
-# =============================================================================
-# How the threads share the Pi
-# =============================================================================
 
 def is_python_thread(name: str) -> bool:
     return name in PYTHON_THREADS
@@ -507,10 +486,6 @@ def _draw_lanes(ax, lanes: dict) -> None:
         ax.text(1.0, -0.02, f"+{lanes['idle']} idle threads not shown", transform=ax.transAxes, fontsize=7,
                 ha="right", va="top", color="#777777")
 
-
-# =============================================================================
-# Figure and command line
-# =============================================================================
 
 def figure(threads: Table, cores: Table | None, system: Table | None, res: dict, title: str, out_path,
            nav: Table | None = None, offset_s: float | None = None) -> Path | None:

@@ -1,26 +1,22 @@
-"""
-sign_check.py  --  why a stop sign in view isn't detected: which gate, and what relaxing it would find
+"""Why a stop sign in view isn't detected: which gate, and what relaxing it would find.
 
 Purpose:
-    The sign detector (perception/geometry.py) takes the red pixels in the
-    sign ROI and gates the blobs largest first: area, vertex count,
-    solidity, then the ghost-sign gates (aspect, extent, letters); the first
-    that passes is the sign. Until 2026-10-20 it gated only the largest, so
-    something larger and red in the ROI, refused, hid the sign; this check
-    found it, and still counts those frames (found behind a larger blob).
+    The sign detector gates the red blobs in the sign ROI largest first,
+    and the first that passes is the sign. This replays recorded frames
+    through Phases 1-2 with the run's tuning and gates every red blob on its
+    own, then again with one gate relaxed at a time, so the gate whose
+    relaxing brings the sign back is named, with the frames it would add
+    (docs/guides/analysis.md, "Stop sign misses").
 
-    This replays recorded frames through Phase 1-2 with the run's tuning
-    and, per frame, gates every red blob on its own: the largest's gate, and
-    whether a smaller one would have passed. Then it gates them again with
-    one gate relaxed at a time, so the gate whose relaxing brings the sign
-    back is named, with the frames it would add.
+Main package:
+    sign_check.csv (per frame: red blobs, the largest's gate and values, the
+    ROI edges it touches, whether a smaller blob passes, which relaxed gates
+    pass it) and sign_check.json (the totals).
 
-Output (printed, and sign_check.csv + sign_check.json in --out):
-    Per frame: red blobs, the largest's area, gate and measured values,
-    which edges of the sign ROI it touches (a sign cut off by the ROI loses
-    its corners: an octagon cut across the top reads 6 vertices), whether a
-    smaller blob passes, and which relaxed gates would pass the largest. The summary: frames with a red blob, detected as it stands,
-    lost behind a larger red blob, and the frames each relaxed gate adds.
+Flow:
+    1. Frames from --frames (a run's, or a routine's saved looks) or --video.
+    2. Phases 1-2 per frame; every red blob gated, then each gate relaxed.
+    3. Per-frame rows and the summary.
 
 Usage (from vision_stack/, on the Pi or a laptop with the frames):
     python3 -m src.analysis.sign_check --frames runs/nav_<time>/frames

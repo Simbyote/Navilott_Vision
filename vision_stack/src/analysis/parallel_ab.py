@@ -1,27 +1,22 @@
-"""
-parallel_ab.py  --  serial against parallel perception over whole runs, alternated
+"""Serial against parallel perception over whole runs, alternated.
 
 Purpose:
-    parallel_compare times Phase 2 alone on frames held in memory. A run
-    is more than that: the sensor hub's thread, the recorder writing to the
-    SD card, Phase 3 and navigation all share the four cores and the GIL
-    with perception's side thread. Whether parallel perception wins on the
-    robot is a whole-run question, so this runs whole runs: navigation
-    runs (navigation_linker), serial and parallel in turn (S, P, S, P, ...)
-    so heat and the battery affect both alike, each with a --label, then
-    compares them from their own nav.csv and report.json.
+    parallel_compare times Phase 2 alone on frames held in memory; a run
+    also shares the four cores and the GIL with the sensor hub, the
+    recorder, Phase 3 and navigation. So this runs whole navigation runs,
+    serial and parallel in turn (S, P, S, P, ...) so heat and the battery
+    affect both alike, and compares them (docs/guides/analysis.md).
 
-    Dry by default: live camera, motors off, the robot on the bench
-    looking at the course. --motors drives each run instead, and waits for
-    Enter before each so the robot can be put back.
+Main package:
+    ab.json in --out: per run and mode, the frame rate, time between frames,
+    Phase 2, the share over budget and frame-to-motor latency; the verdict,
+    including whether every parallel run beat every serial one.
 
-Output (printed, and ab.json in --out):
-    Per run and per mode: frames per second, time between frames (p50,
-    p95), Phase 2 (p50, p95), the share of frames whose Phase 2 + 3 went
-    over the 50 ms budget, and frame-in to motors latency (p50, p95). The
-    verdict compares the modes' means, and says whether every parallel run
-    beat every serial run on the time between frames, or the runs overlap
-    (then it's not shown to help, whatever the means say).
+Flow:
+    1. --runs navigation runs, each --seconds, alternating modes, each with
+       a --label; dry by default, --motors waits for Enter before each.
+    2. Each run's nav.csv and report.json read; modes compared.
+    (--compare reads runs made before instead.)
 
 Usage (from vision_stack/, on the Pi, pigpiod running):
     python3 -m src.analysis.parallel_ab                       # 4 runs of 60 s, dry

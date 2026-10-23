@@ -2,21 +2,20 @@
 
 Purpose:
     Each detector passes candidates through a chain of gates (area, aspect,
-    intensity, ...), and every candidate lands in exactly one bucket: the
-    gate that rejected it, or accepted. When a detector finds too little,
-    the gate with the largest share is the first threshold to look at; when
-    it finds too much, the accepted share says how permissive the chain is.
+    intensity, ...), and every candidate lands in one bucket: the gate that
+    rejected it, or accepted. When a detector finds too little, the gate
+    with the largest share is the first threshold to look at; when it finds
+    too much, the accepted share says how permissive the chain is.
 
 Main package:
-    analyze()            per group: candidates seen, and per gate the total,
-                         share of seen and frames it fired on, largest first
-    gate_rejections.png  one bar chart per group, largest gate at the top
+    analyze(): per group, candidates seen and per gate the total, share and
+    frames it fired on, largest first. gate_rejections.png draws one bar
+    chart per group.
 
-Input:
-    geometry_timing.csv (groups lane, sign) and color_timing.csv (groups red,
-    yellow, green) from the hardware tests; any CSV works whose groups have a
-    <group>_seen column and <group>_<gate> count columns. Give files, run
-    folders (searched recursively) or nothing for the newest of each.
+Flow:
+    1. geometry_timing.csv (lane, sign) and color_timing.csv (red, yellow,
+       green), or any CSV with <group>_seen and <group>_<gate> columns.
+    2. analyze() per file; print, figure, JSON.
 """
 
 import argparse

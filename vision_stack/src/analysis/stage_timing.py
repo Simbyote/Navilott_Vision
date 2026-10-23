@@ -2,35 +2,24 @@
 """Stage timing figures: where each frame's time goes, against the frame budget.
 
 Purpose:
-    Reads per-frame stage timings and draws them against the 1000/FPS frame
-    budget. Stages timed inside run_chain add up to total_ms; stages a run
-    also times outside it (capture wait, HUD, recording) are drawn as their
-    own segments. Whatever the loop's wall time still doesn't explain is
-    drawn as "outside pipeline", so a slow loop shows where to look even
-    before every part of it has a timer.
+    Draws per-frame stage timings against the 1000/FPS budget. Stages
+    timed outside run_chain (capture wait, HUD, recording) are their own
+    segments, and whatever the loop's wall time still doesn't explain is
+    "outside pipeline", so a slow loop shows where to look before every part
+    of it has a timer. Stage columns are found by name (*_ms), so a new
+    timer shows up with no change here.
 
 Main package:
-    breakdown()           median / p95 / share of budget per stage, plus the
-                          unaccounted and outside-pipeline remainders. Plain
-                          numbers, no plotting, so tests and summaries use it.
-    timing_budget.png     one bar across the budget: median per stage, the
-                          remainders, then headroom. Pipeline and loop p95
-                          are markers, since p95s of separate stages don't add.
-    timing_per_frame.png  stages stacked per frame across the run, with the
-                          loop time and the budget line, for spikes and drift.
+    breakdown(): median, p95 and share of budget per stage, plus the
+    remainders, as plain numbers. timing_budget.png (one bar across the
+    budget) and timing_per_frame.png (stages stacked per frame).
 
-Input:
-    Any CSV with a *_ms column per stage: live_view's stages.csv, the
-    stage_timing.csv test_stage_timing writes, phase3_linker's p3.csv
-    (capture, phase2, phase3), or navigation_linker's nav.csv (those plus
-    nav; its loop interval comes from t). Stage columns are found by name, so a new
-    timer shows up with no change here. Blank cells (a stage a run didn't
-    time) are ignored, not read as zero. Whether total_ms already includes
-    the external stages differs by writer (p3.csv's does, the others' don't)
-    and is detected from the numbers.
-
-matplotlib is optional, as for the test histograms: without it the figure
-functions return None and breakdown() still works.
+Flow:
+    1. Any CSV with *_ms stage columns (stages.csv, stage_timing.csv, p3.csv,
+       nav.csv); blank cells ignored, not read as zero.
+    2. breakdown(); whether total_ms already holds the external stages is
+       read from the numbers (p3.csv's does, the others' don't).
+    3. Print and figures.
 """
 
 import argparse
@@ -76,10 +65,6 @@ Options take their value with "=" or a space: --fps=30, --skip 0.
 """
 
 
-# =============================================================================
-# Loading
-# =============================================================================
-
 def stage_names(columns) -> list:
     """
     Stage names from CSV column names: every *_ms column except the
@@ -109,10 +94,6 @@ def read_timing_csv(path, skip: int = WARMUP_FRAMES) -> dict:
         cols["interval_ms"] = iv
     return cols
 
-
-# =============================================================================
-# Breakdown
-# =============================================================================
 
 def _stats(values: np.ndarray) -> dict:
     v = values[~np.isnan(values)]
@@ -201,10 +182,6 @@ def breakdown(cols: dict, budget_ms: float) -> dict:
         "headroom_ms": budget_ms - sum(ms for _, ms in segments),
     }
 
-
-# =============================================================================
-# Figures
-# =============================================================================
 
 _pyplot = common.pyplot       # module-level name so tests can patch it
 
@@ -331,10 +308,6 @@ def per_frame_figure(cols: dict, budget_ms: float, title: str, out_path) -> Path
     plt.close(fig)
     return out_path
 
-
-# =============================================================================
-# CLI
-# =============================================================================
 
 def find_csv(arg, roots=common.SEARCH_ROOTS) -> Path:
     """A timing CSV from a file, a run folder, or (None) the newest run that has one."""

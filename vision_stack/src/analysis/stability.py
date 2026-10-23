@@ -1,24 +1,21 @@
 """Still-scene stability: offset noise and lane-mode flicker with nothing moving.
 
 Purpose:
-    Park the robot centered in the lane and record. Anything that changes
-    is the pipeline, not the world: the offset's spread is the measurement
-    noise floor Navigation steers through, and every lane-mode change is a
-    flicker (two_boundary -> left_only -> two_boundary) that would jolt a
-    controller. Run it again after tuning to see whether the floor dropped.
+    With the robot parked centered in the lane, anything that changes is the
+    pipeline, not the world: the offset's spread is the noise floor
+    navigation steers through, and every lane-mode change is a flicker that
+    would jolt a controller. Run it again after tuning to see whether the
+    floor dropped.
 
 Main package:
-    analyze()        the numbers, plain dict
-    stability.png    offset per frame over a lane-mode strip, beside the
-                     offset histogram
+    analyze(): the numbers, a plain dict. stability.png draws the offset per
+    frame over a lane-mode strip, beside its histogram.
 
-Input (first match wins):
-    p3.csv                   lane_offset_cm on frames with lane_status
-                             "vision" (a held value repeated for frames would
-                             understate the spread); p2_mode for the modes
-    lane_offset_timing.csv,
-    stages.csv               offset and mode, normalized units
-    --normalized uses the normalized offset even when cm are available.
+Flow:
+    1. load(): p3.csv's lane_offset_cm on vision frames only (a held value
+       repeated would understate the spread), else lane_offset_timing.csv or
+       stages.csv in normalized units (--normalized forces those).
+    2. analyze(); print, figure, JSON.
 """
 
 import argparse

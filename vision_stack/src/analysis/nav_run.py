@@ -2,27 +2,20 @@
 
 Purpose:
     navigation_linker and intersection_linker write nav.csv, one row per
-    frame with the rule that decided it, the intersection stage, the lane
-    state, the steering and the commands, the wheel speeds and the yaw.
-    Reading it by hand answers one question at a time; this reduces a run
-    to the numbers that say whether the robot drove well and where it
-    didn't: how its time split between rules, how centered and how steady
-    lane keeping was (weaving is steering that keeps changing sign), each
-    intersection's stages, turn and heading, the 2 s after each crossing
-    (where the robot has been seen to veer), whether the wheels turn alike
-    at equal duty, and the frame-to-motor latency. Findings are listed in
-    plain words against starting thresholds.
+    frame. Reading it by hand answers one question at a time; this reduces a
+    run to whether the robot drove well and where it didn't, with findings
+    in plain words against starting thresholds. What each part measures:
+    docs/guides/analysis.md, "Navigation runs".
 
 Main package:
     analyze(table) -> dict: run, rules, braking, lane_keeping,
-        intersections, wheel_balance, latency, findings.
-    report_lines(res): the printed report.
-    nav_run.json, nav_run.png (rule / stage / lane strips over
-    offset, steering, yaw and commands on one time axis).
+    intersections, wheel_balance, latency, findings. nav_run.json and
+    nav_run.png (rule / stage / lane strips over offset, steering, yaw and
+    commands on one time axis).
 
-Input:
-    nav.csv (navigation_linker's NAV_FIELDS). For an intersection_linker
-    run, give one maneuver's folder (runs/intersection_<time>/left).
+Flow:
+    1. nav.csv (for an intersection_linker run, one maneuver's folder).
+    2. analyze(); report_lines() printed; figure, JSON.
 """
 
 import argparse
@@ -81,10 +74,6 @@ Run from vision_stack/, venv active:
     python3 -m src.analysis.nav_run runs/intersection_20261003_101500/left
 """
 
-
-# =============================================================================
-# Pieces
-# =============================================================================
 
 def frame_s(table: Table) -> np.ndarray:
     """Each frame's duration in seconds: its interval from the previous frame's t, the median for the first."""
@@ -266,11 +255,13 @@ def latency(table: Table, dt: np.ndarray) -> dict:
     return out
 
 
-# =============================================================================
-# The whole run
-# =============================================================================
-
 def analyze(table: Table, after_s: float = AFTER_S, gyro_bias_dps: float = GYRO_BIAS_DPS) -> dict:
+    """
+    A nav.csv reduced to its report: run, rules, braking, lane_keeping,
+    intersections (each with its after_s window), wheel_balance, latency and
+    findings. gyro_bias_dps nets the bias out of the gyro's turn angle.
+    ValueError when the table isn't a nav.csv.
+    """
     missing = [c for c in ("rule", "lane_status", "steer", "brake") if not table.has(c)]
     if missing:
         raise ValueError(f"{table.path.name}: not a nav.csv (no {', '.join(missing)})")
@@ -333,6 +324,7 @@ def findings(res: dict) -> list[str]:
 
 
 def report_lines(res: dict) -> list[str]:
+    """The printed report of analyze()'s result, one line per item."""
     r, lk, wb = res["run"], res["lane_keeping"], res["wheel_balance"]
     lines = [f"run           {r['frames']} frames, {r['seconds']} s, {r['fps']} FPS",
              "rules         " + ", ".join(f"{k} {100 * v['share']:.0f}% ({v['episodes']}x)"
@@ -364,10 +356,6 @@ def report_lines(res: dict) -> list[str]:
     lines += ["", "findings"] + ([f"  - {f}" for f in res["findings"]] or ["  none: nothing past the thresholds"])
     return lines
 
-
-# =============================================================================
-# Figure and command line
-# =============================================================================
 
 def figure(table: Table, res: dict, title: str, out_path) -> Path | None:
     plt = common.pyplot()
