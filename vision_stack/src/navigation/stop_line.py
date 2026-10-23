@@ -38,8 +38,9 @@ STOP_DELAY_MS = 0
 # left ahead of the stop-line table's reference point (the front edge), so
 # 0 stops on it. The line leaves the view ~10 cm ahead, and a crossing needs
 # one frame past that, so anything near 10 or more is STOP_DELAY_MS 0 again.
-# None: by STOP_DELAY_MS. Set from left_cm on reached frames (nav.csv's
-# line_left_cm, 2026-10-20)
+# None: by STOP_DELAY_MS. A guess (2026-10-20) from how far ahead a stop line
+# still shows before it leaves the view: the robot has to stop as soon as it
+# can, while the hanging traffic light is still in view
 REACH_CM: float | None = 9.0
 # Fresh tilts (the packet's stop_line_tilt_deg) the approach angle is the
 # median of: the last ones before the line leaves the view, the nearest and

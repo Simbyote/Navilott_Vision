@@ -60,14 +60,14 @@ def test_extract_finds_the_lane_candidates_lane_offset_skipped():
 
 @pytest.mark.software
 def test_each_top_edge_is_graded_pass_low_or_rejected_with_its_gate():
-    view = StopLineView(conf_threshold=0.62)
-    sm = view._summary(data("stop_line_tilted", view))         # 1.5 deg, conf 0.513: accepted but below
+    view = StopLineView(conf_threshold=0.66)                    # between the two lines below
+    sm = view._summary(data("stop_line_tilted", view))         # 1.5 deg, conf 0.635: accepted but below
     assert (sm["passed"], sm["low"], sm["rejected"]) == (0, 1, 0)
-    sm = view._summary(data("stop_line_wide", view))           # 0.704
+    sm = view._summary(data("stop_line_wide", view))           # 0.686
     assert (sm["passed"], sm["low"], sm["rejected"]) == (1, 0, 0)
     blob = view._summary(data("horizontal_blob", view))
     assert blob["rejected"] == 1 and blob["entries"][0]["gate"] == "short"
-    steep = view._summary(data("stop_line_too_tilted", view))  # 5 deg: past MEASURED's 4
+    steep = view._summary(data("stop_line_too_tilted", view))  # 6 deg: past MEASURED's 5
     assert steep["rejected"] == 1 and steep["entries"][0]["gate"] == "tilt"
 
 
