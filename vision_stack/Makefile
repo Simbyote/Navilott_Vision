@@ -46,6 +46,9 @@ BASE      ?=
 NEW       ?=
 # soak length
 MINUTES   ?= 15
+# ab-parallel: runs in all (alternating serial, parallel) and each one's seconds
+RUNS      ?= 4
+SECONDS   ?= 60
 # frames per hardware test
 HW_FRAMES ?= 100
 # calib-lamps / sweep-lamps: "red=runs/lamp_red green=runs/nav_X:0-86 ..."
@@ -69,7 +72,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel \
+        jitter gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -168,6 +171,9 @@ timing: ## where each frame's time goes, against the 50 ms budget
 
 compare-parallel: ## serial vs parallel perception on the same frames (ARGS="--frames runs/nav_<time>/frames" or "--camera")
 	$(PY) -m src.analysis.parallel_compare $(ARGS)
+
+ab-parallel: $(HW) ## serial vs parallel over whole dry runs, alternated (RUNS=4 SECONDS=60; ARGS=--motors to drive)
+	$(PY) -m src.analysis.parallel_ab --runs $(RUNS) --seconds $(SECONDS) $(ARGS)
 
 jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 	$(PY) -m src.analysis.jitter $(strip $(RUN)) $(ARGS)
