@@ -1,21 +1,15 @@
-"""The parked robot's camera through Phases 1-3, for routines that judge what it sees without driving.
+"""The parked robot's camera through Phases 1-3, for the routines that judge what it sees without driving.
 
 Purpose:
-    detect-range and lane-offset place the robot, then ask what the
-    pipeline makes of the scene for a second or two. Eyes holds the camera
-    open for the whole routine and runs each look through the same chain a
-    run uses (phase3_linker.run_phase3_chain, MEASURED tuning) with a fresh
-    Phase 3 processor, so a look's votes and filters start from nothing,
-    as they would arriving at a new scene. Each frame comes back as a plain
-    dict of what the routines compare (Seen), and the look's last frame is
-    kept to save beside the row, so a wrong answer can be looked at.
+    detect-range, lane-offset and obstacle-check place the robot, then ask
+    what the pipeline makes of the scene for a second or two. Each look runs
+    the same chain a run uses (phase3_linker.run_phase3_chain, MEASURED
+    tuning) with a fresh Phase 3 processor, so its votes and filters start
+    from nothing, as they would arriving at a new scene.
 
 Main package:
-    Eyes: open(), look(n) -> (list of Seen dicts, last frame),
-        roi_width_px(frame), close().
-    seen(res, p3): one Phase3Result as a Seen dict.
-    save_frame(path, frame): the frame as a JPEG; False when it can't.
-    parse_numbers(v): a --set list ("0,10,20", or one number) as floats.
+    Eyes.look(n): n frames as Seen dicts (what the routines compare), and
+    the last frame, saved beside the row so a wrong answer can be looked at.
 
 Flow (a look):
     read frames until n have gone through (drops skipped, at most

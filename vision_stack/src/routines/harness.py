@@ -1,42 +1,23 @@
 """Routine harness: a hardware test a teammate runs by following prompts, judged PASS or FAIL.
 
 Purpose:
-    A routine answers one question about the robot on the real hardware
-    (how far from the line does it stop; how much does the pack sag with
-    the motors on) by repeating a trial and comparing what it measured, or
-    what the tester measured by hand, with pass criteria agreed up front.
-    The people running it shouldn't need to know which linker, which flags
-    or where files go: the routine prompts each step on the console, asks
-    for the hand measurements, checks the answers, and writes one folder
-    with every trial, the conditions it ran under, and a verdict. This
-    module is what every routine shares; a routine itself (routines/*.py)
-    is a question, its trial and its criteria.
-
-    A routine is built from a test request card (docs/routines/request_card.md):
-    the question, the requirement it closes, how ground truth is measured,
-    the conditions, how many trials, the pass criteria.
+    A routine repeats a trial and compares what it measured, or what the
+    tester measured by hand, with pass criteria agreed up front. The tester
+    shouldn't need to know which linker, which flags or where files go: the
+    routine prompts each step, checks the answers, and writes one folder.
+    This module is what every routine shares; a routine itself is a
+    question, its trial and its criteria (docs/guides/routines.md).
 
 Main package:
-    Console: the prompts. ask(), ask_number() (checked against limits),
-        wait(); "q" at any prompt stops the routine cleanly.
-    Routine: the base class: name, title, question, requirement, trials,
-        fields, needs, instructions; setup(), trial(), teardown(), judge().
-    criterion(): one pass criterion's result.
-    conditions(): what the run was under: time, commit, host, tester,
-        temperature, clock, throttling, battery volts.
-    run_routine(): the whole flow; check_needs(): what the hardware must
-        have running first; stats(): n, mean, sd, min, max for judge().
+    run_routine(): one routine run, its folder runs/routine_<name>_<time>/
+    (trials.csv, results.json, summary.txt) and its verdict: PASS, FAIL,
+    INCOMPLETE (stopped early) or RECORDED (no criteria).
 
 Flow:
-    1. needs checked (pigpiod running...); the routine's question and
-       instructions shown; conditions recorded.
-    2. Each trial: the routine's trial() (its prompts and measurements),
-       its row shown, then keep it, redo it, discard it or stop.
-    3. teardown() whatever happened; conditions again at the end; judge()
-       on the kept trials.
-    4. trials.csv, results.json and summary.txt in runs/routine_<name>_<time>/;
-       the verdict PASS, FAIL, INCOMPLETE (stopped early) or RECORDED
-       (no criteria: a characterization).
+    1. needs checked (pigpiod running...); question and instructions shown;
+       conditions recorded.
+    2. Each trial: trial(), its row shown, then keep, redo, discard or stop.
+    3. teardown() whatever happened; conditions again; judge() on the kept trials.
 """
 import csv
 import json
@@ -56,10 +37,6 @@ KEEP, REDO, DISCARD = "keep", "redo", "discard"
 class Quit(Exception):
     """The tester stopped the routine at a prompt."""
 
-
-# =============================================================================
-# The console
-# =============================================================================
 
 class Console:
     """
@@ -125,10 +102,6 @@ class Console:
                 return DISCARD
             self.say("  Enter, r, d or q")
 
-
-# =============================================================================
-# Routines and criteria
-# =============================================================================
 
 def criterion(name: str, value: float | None, op: str, limit, unit: str = "") -> dict:
     """
@@ -223,10 +196,6 @@ class Context:
     attempt: int = 0
 
 
-# =============================================================================
-# Conditions and needs
-# =============================================================================
-
 def read_battery_volts() -> float | None:
     """One resting reading of the pack, or None without the ADC (a laptop, or no I2C)."""
     from src.diagnostics import battery_run
@@ -280,10 +249,6 @@ def check_needs(needs: tuple, checks: dict = NEEDS) -> list[str]:
             out.append(why)
     return out
 
-
-# =============================================================================
-# Running a routine
-# =============================================================================
 
 def verdict(criteria: list[dict], complete: bool) -> str:
     """PASS / FAIL on the criteria; INCOMPLETE when stopped early; RECORDED with no criteria."""
@@ -407,4 +372,3 @@ def _write(out: Path, routine: Routine, rows: list[dict], result: dict) -> None:
 def default_out_dir(name: str, runs_dir=None) -> Path:
     from src.params import RUNS_DIR
     return Path(runs_dir or RUNS_DIR) / f"routine_{name}_{time.strftime('%Y%m%d_%H%M%S')}"
-

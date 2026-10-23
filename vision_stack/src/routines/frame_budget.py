@@ -1,29 +1,16 @@
 """Frame budget: does the whole chain keep 20 FPS, answer within 50 ms, and fit in the Pi's CPU and memory?
 
 Purpose:
-    P1, P2 and R4, judged, the pipeline-timing and CPU tests the IDR
-    promised (slide 7). Each trial is one run of the whole chain with the
-    navigation in the loop and the motors off (navigation_linker.run, as
-    power-profile's pipeline stage), `seconds` long, the robot parked on a
-    lane so lane keeping has work to do. BudgetWatch follows every nav.csv
-    row: Phases 2 + 3 against the frame period (the budget), the time from
-    a frame's arrival to its motor command (latency_ms: P2 from appsink,
-    the part the code controls), the frame rate. A Sampler thread reads the
-    CPU's busy share, this process's memory (the pipeline runs in it) and
-    the temperature every SAMPLE_S, and the throttle flags at the start and
-    end; it reads /proc and the thermal zone only, so the timing it watches
-    isn't disturbed (vcgencmd only at the ends).
-
-    Pass (each run): at least TARGET_FPS (P1); at most OVER_BUDGET_PCT of
-    frames over the budget ("near 0", a first guess); p95 latency at most
-    LATENCY_MS (P2); CPU at most CPU_MAX_PCT on average and memory at most
-    RSS_MAX_MB (R4); ran the whole time. Heat and throttling are reported;
-    power-profile judges them.
+    P1, P2 and R4, judged. Each trial is one run of the whole chain with
+    navigation deciding and the motors off, parked on a lane so lane keeping
+    has work. The sampler reads only /proc and the thermal zone (vcgencmd
+    only at the ends), so it doesn't disturb the timing it watches. Pass:
+    docs/guides/routines.md, section 2; card docs/routines/requests/frame-budget.md.
 
 Main package:
-    BudgetWatch: navigation_linker.run's stop_when for one run.
-    Sampler: CPU, memory and heat on a thread; throttling at the ends.
-    FrameBudget: the routine (make routine-frame-budget).
+    FrameBudget: the routine (make routine-frame-budget). BudgetWatch reads
+    each nav.csv row (budget, latency_ms, frame rate); Sampler reads CPU,
+    memory and heat on a thread.
 
 Flow (per trial):
     rig opened (camera, sensors; no motors, no button) -> Enter -> the

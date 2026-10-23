@@ -1,32 +1,22 @@
 """Stop distance: how far before a stop line the robot stops, and how consistently.
 
 Purpose:
-    Built from the request card's filled example (docs/routines/request_card.md,
-    stop-distance). Each trial is a short run of the whole chain with the
-    motors on (navigation_linker.run, as intersection_linker drives a
-    sequence): from a start mark the robot keeps its lane toward an
-    intersection with a stop sign (or a red light), and navigation brakes
-    for the line. StopWatch follows the run and ends it once the robot is
-    braked for the line and its wheels read stopped. The tester tapes the
-    gap from the line's near edge to the bumper; the row keeps it beside
-    what the robot last reported for the line (stop_line_cm), its speed as
-    it began braking, and the pack's volts, since speed (and so the stop)
-    falls with the battery.
-
-    Pass (the card's first guesses, to refine after the first runs): it
-    stopped before the line every trial, the mean gap within GAP_RANGE_CM,
-    and the gaps' spread at most MAX_SPREAD_CM.
+    D4, the navigation side. Each trial drives toward an intersection with a
+    stop sign (or a red light) until navigation has braked for the line and
+    the wheels read stopped; the tester tapes the gap. The row keeps it
+    beside the last reported stop_line_cm, the speed as braking began and
+    the pack's volts, since the stop falls with the battery. Pass:
+    docs/guides/routines.md, section 2; card docs/routines/requests/stop-distance.md.
 
 Main package:
-    StopWatch: navigation_linker.run's stop_when for one approach.
-    StopDistance: the routine (make routine-stop-distance).
+    StopDistance: the routine (make routine-stop-distance). StopWatch ends
+    each approach once it is stopped at the line.
 
 Flow (per trial):
     1. The rig opened (camera, sensors, motors; no start button).
     2. The tester places the robot on the start mark: Enter drives.
     3. navigation_linker.run with a one-step straight route until StopWatch
-       ends it (stopped at the line) or TRIAL_MAX_S; motors stop, the run
-       folder lands in attempt_NN/ (a redone trial keeps both).
+       ends it or TRIAL_MAX_S; the run folder lands in attempt_NN/.
     4. The tester enters the taped gap (negative: past the line).
 """
 from src.navigation.stop_sign import REASON_HOLD, REASON_STOPPING, STOPPED_CPS

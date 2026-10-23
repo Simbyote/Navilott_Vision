@@ -1,46 +1,16 @@
 """Obstacle check: does the parked robot see an object in its lane, how far away does it say it is, and nothing when the lane is clear?
 
 Purpose:
-    Obstacle detection (perception/obstacle.py) was tuned on one day's
-    runs with one can. This checks it with the robot parked and an object
-    placed at taped distances in its lane: the share of frames that saw it,
-    the vote at the end, the distance it reported against the tape, and
-    whether the obstacle rule would brake for it there. Trials with the lane
-    clear (the object taken away) count false alarms. Each trial is one look
-    (camera_look.Eyes: Phases 1-3 with a fresh processor, `frames` frames,
-    ~2 s); the look's last frame is saved beside the row.
-
-    The distance is the floor cm from the robot's front edge (the
-    stop-line table's reference) to where the object meets the floor. The
-    camera's view starts ~10.2 cm ahead, so an object nearer than that has
-    no base in view: it reads clipped ("at the view bottom or nearer"),
-    which the rule always brakes for; its distance isn't judged.
-
-    A present trial reads OK when the vote says obstacle, at least
-    SEEN_MIN_PCT of the frames saw it, and its reported distance (the
-    median over the frames that measured it) is within tolerance_cm of
-    the tape. MISSED: the vote never said so. OFF: seen, but the distance is
-    out of tolerance. A clear trial reads OK unless the vote said obstacle
-    (WRONG: a false alarm; the robot would brake on an empty lane).
-
-    laterals places the object off the lane's middle as well: every gap
-    at every lateral offset (cm, + = right of the middle), so the trials map
-    how wide the path the detector watches really is. Only objects within
-    in_path_cm of the middle (the robot's own path; 0 = the middle only)
-    are judged: one farther out is outside the path, and seeing it or not
-    is the map, not a fault. The summary gives, per gap, the widest offset
-    up to which every object, both sides, read OK.
-
-    Pass (first guesses, to refine after the first runs): every object up
-    to need_cm seen and its distance within tolerance; no false alarm on a
-    clear lane; the brake decision right at every gap more than
-    BRAKE_MARGIN_CM from the rule's stop distance. The summary gives the
-    range: the largest gap up to which every present trial read OK.
+    Obstacle detection was tuned on one day's runs with one can. This parks
+    the robot and places an object at taped gaps (and lateral offsets) in
+    its lane: the share of frames that saw it, the vote, the reported
+    distance against the tape, and whether the obstacle rule would brake
+    there. Clear-lane trials count false alarms. Read rules and pass:
+    docs/guides/routines.md, section 2.
 
 Main package:
-    ObstacleCheck: the routine (make routine-obstacle-check).
-    read_look(frames, gap_cm, present, tolerance_cm): one look's numbers and its result.
-    seen_width(results): per gap, the widest offset every object read OK out to.
+    ObstacleCheck: the routine (make routine-obstacle-check). Its summary
+    gives the range and, per gap, the widest offset every object read OK out to.
 
 Flow (per trial):
     present trials, nearest gap first, each gap at every lateral offset,

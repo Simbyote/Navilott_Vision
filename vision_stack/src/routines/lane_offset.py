@@ -1,28 +1,17 @@
 """Lane offset: does the robot's reported position in the lane match a ruler, to within 2 cm?
 
 Purpose:
-    P3, as requirements.md's procedure, prompted. The robot is parked at
-    measured offsets from the lane's center and looks (camera_look.Eyes:
-    Phases 1-3, `frames` frames, fresh filters) at a straight lane; the
-    reported offset (the mean filtered lane_offset over the frames on
-    vision) in cm is compared with the tester's ruler. The cm need the
-    ground scale, which isn't configured yet (MEASURED_ESTIMATION has no
-    cm_per_px), so the first trial measures it, as the procedure's step 1
-    does: centered, scale = LANE_CM / the median lane width in px. That
-    look's offset spread is also the noise floor (step 2). The summary
-    says the scale to put in config.py.
-
-    It also makes recover-offset possible: once this passes, the robot's
-    own offset reading is a trustworthy measure while it drives.
-
-    Pass (P3): every position's reported offset within TOLERANCE_CM of the
-    measured one; a position with no frames on vision has no reading and
-    fails.
+    P3, as requirements.md's procedure, prompted: the robot parked at
+    measured offsets from the lane's center, its reported offset in cm
+    against the ruler. The first, centered look measures the ground scale
+    (LANE_CM / the lane's median width in px) and the noise floor. Once it
+    passes, recover-offset can trust the robot's own offset. Pass and
+    settings: docs/guides/routines.md, section 2; card
+    docs/routines/requests/lane-offset.md.
 
 Main package:
-    LaneOffset: the routine (make routine-lane-offset).
-    offset_look(frames): one look's offset, its spread, the lane's width.
-    to_cm(offset, roi_width_px, cm_per_px): a [-1, 1] offset in cm.
+    LaneOffset: the routine (make routine-lane-offset). Its summary gives
+    the cm_per_px to put in config.py.
 
 Flow (per trial):
     1. The robot placed at the trial's planned offset (the first: centered);

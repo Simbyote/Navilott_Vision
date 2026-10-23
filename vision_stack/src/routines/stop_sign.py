@@ -1,29 +1,16 @@
 """Stop sign: does the robot come to a full stop at a stop sign's line, hold, drive on, and not stop when there's no sign?
 
 Purpose:
-    detect-range (target=sign) asks whether the parked robot sees the sign;
-    stop-distance asks where it stops. This asks the whole behaviour: each
-    trial is a short run of the whole chain with the motors on
-    (navigation_linker.run, as stop-distance drives), a straight route,
-    from a start mark toward an intersection's stop line. With the sign
-    posted, the stop sign rule (navigation/stop_sign.py) should brake at the
-    line until the wheels stop, hold STOP_SIGN_HOLD_TIME_MS, and drive on
-    across. With the sign taken away, the robot should cross without
-    stopping. SignWatch follows the run's nav.csv rows and ends it
-    EXIT_DRIVE_S after the robot is across (the intersection's exit stage).
-
-    Each row says whether the sign was ever voted on the way (sign_seen):
-    a missing stop with sign_seen False is the detector; with it True, the
-    navigation (the sign seen too early for SIGN_MEMORY_MS, or the line
-    never reached).
-
-    Pass (first guesses): every sign trial stopped, held within
-    HOLD_TOLERANCE_S of the rule's hold, and drove on across; no stop for a
-    sign on a trial without one.
+    detect-range asks whether the parked robot sees the sign; stop-distance
+    asks where it stops. This asks the whole behaviour: brake at the line,
+    hold STOP_SIGN_HOLD_TIME_MS, drive on across; and with the sign taken
+    away, cross without stopping. sign_seen tells a missing stop's cause:
+    False is the detector, True is navigation. Pass: docs/guides/routines.md,
+    section 2.
 
 Main package:
-    SignWatch: navigation_linker.run's stop_when for one trial.
-    StopSign: the routine (make routine-stop-sign).
+    StopSign: the routine (make routine-stop-sign). SignWatch ends each run
+    EXIT_DRIVE_S into the intersection's exit stage.
 
 Flow (per trial):
     sign trials first, then the trials without it: the rig opened; the

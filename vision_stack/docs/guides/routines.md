@@ -144,6 +144,7 @@ The robot measures voltage, not current, so there are no watts. A current sensor
 - **Start:** the robot at that intersection's stop line, about to turn left.
 - **One trial:** one continuous run with the motors on, the route `left ×4, right ×4` repeated.
 - **Ends:** after `minutes` (10 by default), or earlier on Ctrl-C, a critical battery, an error, or the lane lost (off the loop).
+- **During the run:** the tester presses Enter in the terminal at each touch; each press is logged with where the robot was (lap, step, maneuver, stage, rule).
 - **Afterwards:** the tester enters how many times they touched the robot and how many laps they saw.
 
 Each trial's row has:
@@ -151,14 +152,19 @@ Each trial's row has:
 - intersections entered;
 - laps the robot counted (eight finished turns each) and laps seen;
 - touches;
-- turns not ended on the gyro, and turns off their ±90° by more than 20°;
+- turns not ended on the gyro, and turns off their ±90° by more than 20° (the heading a turn ended on plus what the exit drifted from it);
+- slip spots: where the chassis didn't turn the way its wheels did (below);
 - the mean left and right heading, side by side: an asymmetry shows here;
 - mean lap time, lane-lost seconds, contract brakes, frame rate;
 - the pack at the start and end.
 
 The run's folder is `attempt_NN/`, with `nav.csv` and the frames, plus:
 - `intersections.csv`: each intersection's maneuver, turn end, heading and offset, lane back, volts;
-- `laps.csv`: each lap's time and volts.
+- `laps.csv`: each lap's time and volts;
+- `touches.csv`: each Enter press;
+- `slips.csv`: each slip spot, with the gyro's and the wheels' turn rate.
+
+A slip spot is a run of frames, driving, where the gyro's turn rate is far from what the wheels' speed difference predicts. The prediction is a line fitted to the run's own turn frames, then refitted without the frames it put off the line, since the slips would pull it toward them. This is the turn-3 signature of 2026-10-20: reported per intersection (`slip_s`) and in `slips.csv`, not judged.
 
 PASS needs all five:
 - no touches;
@@ -257,6 +263,8 @@ Afterwards the tester answers what a judge would:
 
 The row puts beside those: how the run ended, the robot's own run time (what the display shows: the stopwatch against it checks the elapsed-time display too), the route steps reached, stop sign holds and red-light waits, time off vision, contract brakes, the frame rate, the pack at start and end.
 
+PASS, each run: completed (the tester says so **and** the robot ended on the route's finish); no touches; no stop sign or red light run. The times are the result, not judged: the summary gives the best and mean of the completed runs. Setting: `--set max_s=...` (300 s, the production run's cap). Motors on: walk beside it.
+
 **`obstacle-check`.** The robot parked in a straight lane and left there; the object (a can, a box) moved to taped gaps from the robot's front edge to its nearest point, nearest first (`--set gaps=10,15,20,25,30`), then `--set clear=3` looks with the lane clear. Each trial is one ~2 s look through Phases 1-3 with a fresh processor, as in `detect-range`:
 - how many frames saw the object;
 - the vote at the end;
@@ -264,6 +272,13 @@ The row puts beside those: how the run ended, the robot's own run time (what the
 - whether the obstacle rule would brake there.
 
 Gaps under ~10 cm sit below the camera's view: they read clipped, with no distance, and the rule always brakes for them.
+
+A trial with the object reads:
+- **OK:** the vote says obstacle, at least half the frames saw it, and its distance is within tolerance of the tape;
+- **MISSED:** the vote never said obstacle;
+- **OFF:** seen, but the distance is out of tolerance.
+
+A clear-lane trial reads OK unless the vote said obstacle: **WRONG**, a false alarm, the robot would brake on an empty lane.
 
 PASS:
 - every object up to `need_cm` (25) is seen, its distance within `tolerance_cm` (3);
@@ -281,14 +296,11 @@ PASS:
 - it drove on every time, within the clear time plus 0.5 s;
 - no false brake.
 
-**`stop-sign`.** Motors on, a straight route, from a start mark about 60 cm before an intersection's stop line, with its stop sign posted (`--set signs=5`), then with the sign taken away (`--set no_signs=3`). The watch counts stop-sign brakes and times the hold from its first frame to the first frame after it. It ends the run a second into the intersection's exit stage. Each row also says whether the sign was ever voted on the way: a missing stop with `sign_seen` false is the detector; with it true, navigation.
+**`stop-sign`.** Motors on, a straight route, from a start mark about 60 cm before an intersection's stop line, with its stop sign posted (`--set signs=5`), then with the sign taken away (`--set no_signs=3`). The watch counts stop-sign brakes and times the hold from its first frame to the first frame after it. It ends the run a second into the intersection's exit stage. Each row also says whether the sign was ever voted on the way: a missing stop with `sign_seen` false is the detector; with it true, navigation (the sign seen too early for `SIGN_MEMORY_MS`, or the line never reached).
 
 PASS:
 - every sign trial stopped, held within 0.3 s of `STOP_SIGN_HOLD_TIME_MS` (2 s), and drove on across;
 - no stop on a trial without the sign.
-
-
-PASS, each run: completed (the tester says so **and** the robot ended on the route's finish); no touches; no stop sign or red light run. The times are the result, not judged: the summary gives the best and mean of the completed runs. Setting: `--set max_s=...` (300 s, the production run's cap). Motors on: walk beside it.
 
 ---
 

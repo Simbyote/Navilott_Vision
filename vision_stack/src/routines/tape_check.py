@@ -1,14 +1,11 @@
 """Tape check: how repeatable the tester's own hand measurement is.
 
 Purpose:
-    Every accuracy routine compares the robot with a hand measurement (a
-    tape from the stop line, a ruler from the lane center). That
-    measurement has its own spread, and a routine can't judge the robot
-    more finely than it: a 0.5 cm tolerance means nothing if the tape reads
-    differ by 1 cm. So, before accuracy routines, each tester measures the
-    same fixed distance a few times, taking the tape away in between. The
-    spread is their measurement floor, recorded with their name. It also
-    rehearses a routine's prompts with no hardware involved.
+    Every accuracy routine compares the robot with a hand measurement, and
+    can't judge it more finely than that measurement's spread. Each tester
+    measures one fixed distance a few times, taking the tape away in
+    between; the spread is their floor, recorded with their name. It also
+    rehearses the prompts with no hardware.
 
 Main package:
     TapeCheck: the routine. Pass: the readings span at most MAX_SPREAD_CM.

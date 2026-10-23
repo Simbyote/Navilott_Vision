@@ -1,29 +1,19 @@
 """Course run: the Design Day rehearsal, the whole course from the start button to the finish, judged.
 
 Purpose:
-    D2's competition is one thing: complete a predetermined course at the
-    best possible speed, keeping the lane and obeying the lights and signs.
-    Each trial is that, once: the route file (config.ROUTE_PATH unless
-    set), the start button and countdown, the motors on, the battery
-    watched (navigation_linker.run, recording every frame). CourseWatch
-    follows the run: the route steps reached, the stop sign holds and red
-    light waits, time off vision, contract brakes. Afterwards the tester
-    says what a judge would: did it complete the course as planned, how
-    many times they touched it, how many stop signs or red lights it ran,
-    and the stopwatch time from GO to the finish. The stopwatch against the
-    robot's own run time also checks the elapsed-time display.
-
-    Pass (each run): completed (the tester says so and the robot ended on
-    the route's finish); no touches; no stop sign or red light run. The
-    times are the result, not judged: the summary gives the best and mean.
+    D2's competition, once per trial: the route file, the start button and
+    countdown, the motors on, every frame recorded. Afterwards the tester
+    answers what a judge would (completed, touches, signs or lights run, the
+    stopwatch time); the stopwatch against the robot's own run time also
+    checks the elapsed-time display. Pass and settings:
+    docs/guides/routines.md, section 2; card docs/routines/requests/course-run.md.
 
 Main package:
-    CourseWatch: navigation_linker.run's stop_when for one run (never ends it).
-    CourseRun: the routine (make routine-course-run).
+    CourseRun: the routine (make routine-course-run); CourseWatch follows
+    each run (route steps, holds, waits, time off vision, contract brakes).
 
 Flow (per trial):
-    1. Rig (camera, sensors, motors, start button) and battery opened;
-       the robot on the start; Enter arms it.
+    1. Rig and battery opened; the robot on the start; Enter arms it.
     2. The start button, the countdown, the run until the route's finish
        (or ended early, the cap, a critical battery, Ctrl-C).
     3. The tester's answers; the row. The run folder is attempt_NN/.

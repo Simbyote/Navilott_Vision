@@ -2,44 +2,21 @@
 
 Purpose:
     Stop distance asks how accurately one maneuver lands; this asks whether
-    the robot keeps working: every rule (lane keeping, stop lines, left and
-    right turns, exits) over many intersections, the left and right turns
-    side by side (an asymmetry shows), and what builds up over minutes (the
-    pack sagging, heat). On a grid, four lefts loop around one block and
-    four rights around the next: a figure 8 through the intersection the
-    two loops share, where the robot starts. One trial is one continuous
-    run (navigation_linker.run, motors on) with the route LEFT x4, RIGHT x4
-    repeated, ended after `minutes`, or by Ctrl-C, a critical battery, an
-    error or the lane lost (end_of_course: off the loop). EightWatch follows
-    every frame: each intersection's maneuver, how its turn ended (the gyro
-    or the time limit), the heading turned against -90 / +90 (the heading
-    the turn ended on plus what the exit drifted from it), whether the
-    lane came back, each lap's time and pack volts. The tester presses
-    Enter in the terminal at each touch (TouchKeys), logged with where the
-    robot was; afterwards they say how many times they touched it and how
-    many laps they saw. After the run, EightWatch.slips() finds where the
-    chassis didn't turn the way its wheels did (the gyro against the wheels'
-    speed difference), the turn-3 signature of 2026-10-20: reported per
-    intersection and in slips.csv, not judged.
-
-    Pass: no touches; ran the whole time; the laps the robot counted are
-    the laps seen; every finished turn ended on the gyro, within
-    HEADING_TOLERANCE_DEG of its maneuver (intersection_linker's tolerance).
-    The pack and the heat are reported, not judged: power-profile judges
-    them.
+    the robot keeps working: every rule over many intersections, left and
+    right turns side by side (an asymmetry shows), and what builds up over
+    minutes (the pack, heat). Turns, touches, laps and slip spots:
+    docs/guides/routines.md, section 2; card docs/routines/requests/figure-eight.md.
 
 Main package:
-    EightWatch: navigation_linker.run's stop_when for one run.
-    TouchKeys: Enter presses on the terminal during the run, one per touch.
-    FigureEight: the routine (make routine-figure-eight).
-    ROUTE_LAP: one lap's maneuvers.
+    FigureEight: the routine (make routine-figure-eight). EightWatch follows
+    each run; TouchKeys logs an Enter press per touch.
 
 Flow (per trial):
     1. Rig and battery opened; the robot at the shared intersection's stop
        line, about to turn left; Enter drives.
     2. One run until the time is up (or it ends otherwise); motors stop.
-    3. The tester's touches and laps seen; intersections.csv, laps.csv and
-       touches.csv, slips.csv for the attempt; the trial's row.
+    3. The tester's touches and laps seen; intersections.csv, laps.csv,
+       touches.csv and slips.csv for the attempt; the trial's row.
 """
 import csv
 import os

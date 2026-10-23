@@ -2,29 +2,15 @@
 
 Purpose:
     obstacle-check asks what the parked robot sees; this asks what the
-    driving robot does. Each trial is a short run of the whole chain with
-    the motors on (navigation_linker.run, as stop-distance drives), a
-    straight route, from a start mark toward an object standing in the lane.
-    The obstacle rule (navigation/obstacle.py) should brake with the
-    object's base about OBSTACLE_STOP_CM away, and hold while it's there.
-    The tester tapes the gap from the front edge to the object while the
-    robot waits, then lifts the object away: once nothing has been seen for
-    OBSTACLE_CLEAR_MS the robot should drive on by itself. ObstacleWatch
-    follows the run's nav.csv rows and ends it RESUME_DRIVE_S after the
-    robot drives on.
-
-    Clear trials run the same lane with nothing on it for clear_s: any
-    brake for an obstacle there is a false alarm, the robot stopping on an
-    empty lane.
-
-    Pass (first guesses, to refine after the first runs): it stopped for
-    the object every trial, without touching it, with every gap within
-    GAP_RANGE_CM; it drove on every time, within the clear time plus
-    RESUME_SLACK_S of the object going; no false brake on a clear lane.
+    driving robot does. The obstacle rule should brake with the object about
+    OBSTACLE_STOP_CM away, hold while it's there, and drive on
+    OBSTACLE_CLEAR_MS after it's lifted away. Clear trials drive the empty
+    lane: any obstacle brake is a false alarm. Pass: docs/guides/routines.md,
+    section 2.
 
 Main package:
-    ObstacleWatch: navigation_linker.run's stop_when for one trial.
-    ObstacleStop: the routine (make routine-obstacle-stop).
+    ObstacleStop: the routine (make routine-obstacle-stop). ObstacleWatch
+    ends each run RESUME_DRIVE_S after the robot drives on.
 
 Flow (per trial):
     1. The rig opened (camera, sensors, motors; no start button).

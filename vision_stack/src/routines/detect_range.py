@@ -1,48 +1,17 @@
 """Detect range: from how far before the stop line does the robot read the traffic light (or the stop sign, or the line itself) right?
 
 Purpose:
-    D3 (light colour) and D2 (stop sign) have never been checked on the
-    robot. Navigation acts on the votes, so this asks what the votes say
-    with the robot parked at taped gaps before an intersection's stop line,
-    the light or sign posted as on the course, for every state the tester
-    can set: the light red, yellow, green and off; the sign there and taken
-    away. Each trial is one look (camera_look.Eyes: Phases 1-3 with a fresh
-    processor, `frames` frames, ~2 s): the share of frames that saw the
-    right thing, the frames that saw something else, and the vote at the
-    end. The look's last frame is saved beside the row.
-
-    target=line asks the same of the stop line: the vote, the share of
-    frames that found it, and the voted line's tilt.
-
-    angles and offsets park the robot off the square, centered pose at
-    each gap: turned so many degrees (+ = right of square) and shifted so
-    many cm (+ = right of the lane's center). Every gap is looked at from
-    every pose, so the trials map where each detection gives out: the
-    summary gives the range per pose. With target=line and two or more
-    angles, the tilts measure the approach-angle correction: TILT_ZERO_DEG
-    (the tilt a square robot reads) and TILT_TO_HEADING (degrees turned per
-    degree of tilt), for navigation/intersection.py.
-
-    A trial reads OK when the final vote is the expected one and, for a lit
-    light or a posted sign, at least SEEN_MIN_PCT of the frames saw it (a
-    missed green votes "go" like a real one: the frames tell them apart).
-    It's WRONG when the vote names something that isn't there (red read as
-    yellow, a light that's off read as any colour, a sign that isn't there),
-    or when it's wrong and at least SEEN_MIN_PCT of the frames saw a colour
-    that isn't there: red read as green votes "go", as seeing nothing does.
-    Anything else is MISSED (the vote fell back to "go" / no sign).
-
-    Pass (first guesses: the course's sign and light positions are TBD in
-    course.md): every trial at a gap up to `need_cm` reads OK; no WRONG
-    read at any gap. A miss farther out only limits the range; a wrong read
-    anywhere is a hazard (a red read as green runs the light). The summary
-    gives the range: the largest gap up to which every trial read OK.
+    Navigation acts on the votes, so this asks what they say with the robot
+    parked at taped gaps before a stop line, for every state the tester can
+    set (the light red, yellow, green, off; the sign posted or taken away).
+    Each look reads OK, WRONG or MISSED; a wrong read anywhere is a hazard,
+    a miss farther out only limits the range. Read rules, poses and pass:
+    docs/guides/routines.md, section 2; card docs/routines/requests/detect-range.md.
 
 Main package:
-    DetectRange: the routine (make routine-detect-range).
-    read_look(seen, target, state): one look's numbers and its result.
-    tilt_fit(rows): TILT_ZERO_DEG and TILT_TO_HEADING from line looks at
-        several angles.
+    DetectRange: the routine (make routine-detect-range). With target=line
+    at several angles, tilt_fit() gives TILT_ZERO_DEG and TILT_TO_HEADING
+    for navigation/intersection.py.
 
 Flow (per trial):
     each gap, each pose (angle, offset), each state: the robot moved at a

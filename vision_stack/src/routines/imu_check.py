@@ -1,36 +1,17 @@
 """IMU check: is the gyro's bias still the configured one, does a real 90 degrees read 90, and what do the motors add.
 
 Purpose:
-    Every turn ends when the gyro says TURN_TARGET_DEG, and every heading
-    hold subtracts config.GYRO_BIAS_DPS (measured once, 2026-09-29) before
-    integrating. If the bias has moved, the heading drifts (0.3 deg/s is
-    18 deg a minute); if the gyro's scale is off, a turn ends early or late;
-    if IMU_YAW_SIGN is wrong, it turns the wrong way. test_imu --hardware
-    measures bias and noise; this checks them against what the robot uses,
-    through the same sensor hub, plus what the bench can't: real turns.
-
-    Ten trials, three parts:
-        rest (trial 1)        REST_S still on the floor: bias against
-                              GYRO_BIAS_DPS, noise, the heading's drift over
-                              the time with the configured bias, read rate,
-                              read time, errors, temperature
-        turns (trials 2-9)    the tester turns the robot 90 deg by hand,
-                              lined up on the mat's grid, alternating left
-                              and right: the gyro's heading (net of the rest
-                              bias) against -90 / +90; the sign and the scale
-        vibration (trial 10)  VIB_S wheels up at base duty: the noise with
-                              the motors on, against rest
-
-    Pass: the bias within BIAS_TOLERANCE_DPS of GYRO_BIAS_DPS; the rest
-    drift under DRIFT_MAX_DEG; every turn within TURN_TOLERANCE_DEG of 90
-    with the right sign; no read errors. The vibration noise is reported,
-    not judged. The summary says the bias to put in config.py, the left and
-    right scale, and whether IMU_YAW_SIGN looks flipped (both directions the
-    wrong way).
+    Every turn ends on the gyro and every heading hold subtracts
+    config.GYRO_BIAS_DPS first: a moved bias drifts the heading, a scale
+    error ends turns early or late, a wrong IMU_YAW_SIGN turns the wrong way.
+    This checks them through the same sensor hub, plus what the bench can't:
+    real turns. Parts and pass: docs/guides/routines.md, section 2; card
+    docs/routines/requests/imu-check.md.
 
 Main package:
-    ImuCheck: the routine (make routine-imu-check).
-    rest_stats(readings, configured_bias), heading(readings, bias): the numbers.
+    ImuCheck: the routine (make routine-imu-check). Its summary gives the
+    bias to put in config.py, each direction's scale, and whether
+    IMU_YAW_SIGN looks flipped.
 
 Flow (per trial):
     rest: drain, wait REST_S, drain; turns: Enter at the start line-up,

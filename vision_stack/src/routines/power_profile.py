@@ -1,38 +1,21 @@
 """Power profile: how the pack's voltage, the Pi's load and its heat respond to each part of the robot running.
 
 Purpose:
-    The robot measures its battery's voltage (ADS1115, diagnostics.battery),
-    not its current, so this can't give watts. What voltage does give: how
-    far the pack sags under each load against resting, how fast it drains,
-    whether it stays above the warning level, and whether the Pi's own 5 V
-    supply dips (vcgencmd's under-voltage flag) or the SoC throttles. Each
-    trial is one stage, run for stage_s while a sampler reads the pack's
-    raw (unsmoothed) volts, the CPU's busy share, the temperature and the
-    throttle flags every SAMPLE_S:
-
-        rest       nothing but this routine: the baseline
-        camera     the camera capturing at 20 FPS, frames thrown away
-        pipeline   the whole chain, motors off (navigation_linker.run, dry)
-        motors     the wheels turning at BASE_SPEED, wheels up, no camera
-        full       the pipeline and the wheels together
-
-    A current sensor (an INA219 / INA226 on the I2C bus) would turn the
-    same stages into watts.
-
-    Pass: the pack's lowest reading under any load stayed above
-    Power.VOLTAGE_WARNING, and no stage saw the Pi's under-voltage or
-    throttling.
+    The robot measures its battery's voltage (ADS1115), not its current, so
+    there are no watts: this gives each load's sag against rest, the drain,
+    whether the pack stays above the warning level, and whether the Pi's
+    supply dips or the SoC throttles. One trial per stage (rest, camera,
+    pipeline, motors, full). Stages and pass: docs/guides/routines.md,
+    section 2; card docs/routines/requests/power-profile.md.
 
 Main package:
-    PowerProfile: the routine (make routine-power-profile).
-    stage_row(name, samples, rest_v): one stage's numbers from its samples.
-    cpu_busy(prev, cur): the CPU's busy % between two /proc/stat reads.
+    PowerProfile: the routine (make routine-power-profile), one row per
+    stage (stage_row) and every sample in samples.csv.
 
 Flow (per trial = per stage, in STAGES order):
     1. The stage's set-up said (wheels up for the driving stages); Enter starts it.
     2. Its load runs on a thread for stage_s; the sampler reads every SAMPLE_S.
-    3. The load stops (motors first); the stage's row; samples.csv gets its
-       samples, every attempt's (a redone stage's too, by attempt number).
+    3. The load stops (motors first); the stage's row; its samples, by attempt.
 """
 import csv
 import statistics
@@ -221,6 +204,7 @@ stage; q stops after keeping the stage just run."""
 
 
 # ── the loads: each runs until stop is set (or seconds pass) ──────────
+
 
 def _rest(ctx, seconds, stop):
     stop.wait(seconds)

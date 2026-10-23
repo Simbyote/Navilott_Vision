@@ -1,31 +1,16 @@
 """Recover offset: from how far off the lane's center does the robot steer back, and how well does it hold a straight?
 
 Purpose:
-    Ignacio's two lane-keeping tests from the IDR (slide 10), on the robot:
-    the maximum recoverable offset, and the mean distance from the lane's
-    center on a straight run. Each trial is a short run of the whole chain,
-    motors on (navigation_linker.run, as stop-distance drives), on a
-    straight lane, from a start offset the tester measured with a ruler.
-    RecoverWatch follows the run through the robot's own lane_offset_cm:
-    that's a measurement only once lane-offset has passed (P3), so this
-    needs the ground scale lane-offset measured (--set cm_per_px=..., or
-    cm_per_px set in config.py).
-
-    A start of 0 is the straight run: STRAIGHT_S of lane keeping, reporting
-    the mean and largest distance from the center. Any other start ends
-    once the robot's offset has stayed within BAND_CM for HOLD_S (or at
-    max_s); the tester then measures where it stopped. The ruler decides
-    whether it recovered (|end| within BAND_CM); the robot's trace gives
-    how long it took and how far it overshot.
-
-    Pass (first guesses): every start up to need_cm recovered; the straight
-    run never more than BAND_CM off the center (by the robot's reading).
-    The summary gives the maximum recoverable offset: the largest start
-    up to which every trial, left and right, recovered.
+    The IDR's two lane-keeping tests (slide 10) on the robot: the maximum
+    recoverable offset, and the mean distance from the center on a straight.
+    It follows the robot's own lane_offset_cm, a measurement only once
+    lane-offset has passed, so it needs that routine's cm_per_px. The ruler
+    at the end decides whether a start recovered. Pass and settings:
+    docs/guides/routines.md, section 2; card docs/routines/requests/recover-offset.md.
 
 Main package:
-    RecoverWatch: navigation_linker.run's stop_when for one trial.
-    RecoverOffset: the routine (make routine-recover-offset).
+    RecoverOffset: the routine (make routine-recover-offset). RecoverWatch
+    ends each run once the offset has held within BAND_CM for HOLD_S.
 
 Flow (per trial):
     1. The rig opened; the tester places the robot at the planned offset,
