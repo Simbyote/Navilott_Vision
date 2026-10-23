@@ -115,7 +115,7 @@ def _undistort_maps(
         warnings.warn(
             f"preprocess: calibration {calib_file} not found; "
             "undistortion is OFF for this run. "
-            "Run tools/calibrate_camera.py to create it.",
+            "Create it: python3 -m src.scripts.calibrate_camera (make calib-camera).",
             stacklevel=2,
         )
         return None

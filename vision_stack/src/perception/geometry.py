@@ -25,24 +25,38 @@ import numpy as np
 from src.perception.roi_crop import ROICropResult
 # The detectors and what they share, each in its own module; every name is
 # re-exported here so callers (and tests) import from geometry as before
-from src.perception.geometry_shared import (  # noqa: F401
+from src.perception.geometry_shared import (
     CannyParams, GeometryBranchResult, GeometryConfig, LaneCandidate, LaneContourFilter, SignCandidate,
     SignContourFilter, StopLineCandidate, StopLineFilter, _canny, _close_edges, _contours, _horizontal_edges,
     _mean_contour_intensity, contour_foot_x,
 )
-from src.perception.geometry_lanes import (  # noqa: F401
+from src.perception.geometry_lanes import (
     _extract_lane_candidates, _extreme_points, _filter_lane_contours, _lane_confidence, _merge_collinear,
     _strip_horizontal_lines, extract_lane_candidates, find_lane_candidates,
 )
-from src.perception.geometry_stop_line import (  # noqa: F401
+from src.perception.geometry_stop_line import (
     _EdgeSegment, _edge_segments, _fit_segment, _stop_line_confidence, _stop_line_from,
     extract_stop_line_candidates, find_stop_line_candidates,
 )
-from src.perception.geometry_sign import (  # noqa: F401
+from src.perception.geometry_sign import (
     TRACE_MIN_BBOX_FRAC, _extract_sign_candidates, _filter_sign_contours, _gate_sign, _letter_share,
     _red_mask, _redness, _shape_gate, _sign_candidate, _sign_confidence, _sign_polygon, _trace_entry,
     extract_sign_candidates, find_sign_candidates,
 )
+# pyflakes reads __all__ as use, so the re-exports above aren't flagged as unused
+__all__ = [
+    "CannyParams", "GeometryBranchResult", "GeometryConfig", "LaneCandidate", "LaneContourFilter",
+    "SignCandidate", "SignContourFilter", "StopLineCandidate", "StopLineFilter", "_canny", "_close_edges",
+    "_contours", "_horizontal_edges", "_mean_contour_intensity", "contour_foot_x", "_extract_lane_candidates",
+    "_extreme_points", "_filter_lane_contours", "_lane_confidence", "_merge_collinear",
+    "_strip_horizontal_lines", "extract_lane_candidates", "find_lane_candidates", "_EdgeSegment",
+    "_edge_segments", "_fit_segment", "_stop_line_confidence", "_stop_line_from",
+    "extract_stop_line_candidates", "find_stop_line_candidates", "TRACE_MIN_BBOX_FRAC",
+    "_extract_sign_candidates", "_filter_sign_contours", "_gate_sign", "_letter_share", "_red_mask", "_redness",
+    "_shape_gate", "_sign_candidate", "_sign_confidence", "_sign_polygon", "_trace_entry",
+    "extract_sign_candidates", "find_sign_candidates", "GEOMETRY_PARTS", "run_geometry_branch",
+    "run_geometry_stage", "detect_geometry",
+]
 
 
 # The parts a geometry call times when given timings={}: the edges every

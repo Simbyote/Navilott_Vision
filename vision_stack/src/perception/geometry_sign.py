@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from src.params import STOP_SIGN
 from src.utils import clamp
 
-from src.perception.geometry_shared import SignCandidate, SignContourFilter, _close_edges, _contours  # noqa: F401
+from src.perception.geometry_shared import SignCandidate, SignContourFilter, _contours
 
 
 def _sign_confidence(
