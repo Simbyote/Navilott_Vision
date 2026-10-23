@@ -315,6 +315,7 @@ class Phase3Stats:
         for k, v in res.timings_ms.items():
             self.timings.setdefault(k, []).append(v)
         stages = {**res.chain.timings_ms, **{f"side_{k}": v for k, v in res.chain.side_timings_ms.items()},
+                  **{f"geometry.{k}": v for k, v in res.chain.geometry_timings_ms.items()},
                   **res.p3_debug.get("timings_ms", {})}
         if "render" in res.timings_ms:
             stages["render"] = res.timings_ms["render"]

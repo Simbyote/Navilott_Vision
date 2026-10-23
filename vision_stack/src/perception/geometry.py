@@ -31,6 +31,8 @@ Purpose:
 
 Main package:
     detect_geometry(): production, one frame's result.
+    GEOMETRY_PARTS: what each call can time (timings=): the shared edges
+        (Canny and the gradient split), then each detector.
     run_geometry_branch() / run_geometry_stage(): the same with traces, for
         the debug views and tests.
     GeometryBranchResult: one frame's accepted LaneCandidates,
@@ -53,6 +55,8 @@ Flow:
        (a chair, a box) refused no longer hides the sign behind it.
     6. Package the three candidate lists with the frame identity.
 """
+import time
+
 import numpy as np
 
 from src.perception.roi_crop import ROICropResult
@@ -76,6 +80,26 @@ from src.perception.geometry_sign import (  # noqa: F401
     _red_mask, _redness, _shape_gate, _sign_candidate, _sign_confidence, _sign_polygon, _trace_entry,
     extract_sign_candidates, find_sign_candidates,
 )
+
+
+# The parts a geometry call times when given timings={}: the edges every
+# lane-ROI detector reads (Canny and the gradient split), then each detector
+GEOMETRY_PARTS = ("edges", "lanes", "stop_line", "sign")
+
+
+class _PartClock:
+    """Wall ms per part into timings, as each part ends; nothing at all when timings is None."""
+    __slots__ = ("_timings", "_mark")
+
+    def __init__(self, timings: dict | None) -> None:
+        self._timings = timings
+        self._mark = time.perf_counter() if timings is not None else 0.0
+
+    def lap(self, name: str) -> None:
+        if self._timings is not None:
+            now = time.perf_counter()
+            self._timings[name] = (now - self._mark) * 1000.0
+            self._mark = now
 
 
 def _splits(lane_roi, lane_edges, lane_filter: LaneContourFilter, stop_filter: StopLineFilter):
@@ -114,6 +138,7 @@ def run_geometry_branch(
     draw_overlays: bool = True,
     trace: bool = False,
     stop_filter: StopLineFilter = StopLineFilter(),
+    timings: dict | None = None,
 ) -> tuple[GeometryBranchResult, dict, dict]:
     """
     Run lane, stop-line and sign detection on loose ROI arrays.
@@ -131,6 +156,7 @@ def run_geometry_branch(
             and the lane contour trace (see extract_lane_candidates).
         stop_filter: Stop-line gates. Stop lines read the lane ROI's Canny
             edges and never change the lane or sign results.
+        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
 
     Outputs:
         (result, lane_debug, sign_debug). lane_debug["stop_line"] holds the
@@ -141,9 +167,11 @@ def run_geometry_branch(
             wrong shape. The message names the offending ROI.
     """
     _validate_rois("run_geometry_branch", lane_roi, sign_color_roi)
+    clock = _PartClock(timings)
 
     lane_edges = _canny(lane_roi, canny_params)     # shared by lanes and stop lines
     stop_split, lane_split = _splits(lane_roi, lane_edges, lane_filter, stop_filter)
+    clock.lap("edges")
 
     lane_candidates, lane_debug = extract_lane_candidates(
         lane_roi,
@@ -156,6 +184,7 @@ def run_geometry_branch(
         horizontal_split = lane_split,
         trace = trace,
     )
+    clock.lap("lanes")
 
     stop_line_candidates, lane_debug["stop_line"] = extract_stop_line_candidates(
         lane_roi,
@@ -165,6 +194,7 @@ def run_geometry_branch(
         timestamp_ms,
         split = stop_split,
     )
+    clock.lap("stop_line")
 
     sign_candidates, sign_debug = extract_sign_candidates(
         sign_color_roi,
@@ -174,6 +204,7 @@ def run_geometry_branch(
         draw_overlays,
         trace
     )
+    clock.lap("sign")
 
     result = GeometryBranchResult(
         lane_candidates,
@@ -191,6 +222,7 @@ def run_geometry_stage(
         config: GeometryConfig = GeometryConfig(),
         draw_overlays: bool = False,
         trace: bool = False,
+        timings: dict | None = None,
     ) -> tuple[GeometryBranchResult, dict, dict]:
     """
     Stage entry point: run the geometry branch on one ROICropResult.
@@ -205,6 +237,7 @@ def run_geometry_stage(
             so building them would cost allocations nothing reads. The
             dataset harness passes True.
         trace: Off by default. Records the sign trace for the debug views.
+        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
 
     Outputs:
         (result, lane_debug, sign_debug), with frame_id and timestamp_ms
@@ -221,15 +254,20 @@ def run_geometry_stage(
         draw_overlays = draw_overlays,
         trace = trace,
         stop_filter = config.stop_line,
+        timings = timings,
     )
 
 
 def detect_geometry(
         roi: ROICropResult,
         config: GeometryConfig = GeometryConfig(),
+        timings: dict | None = None,
     ) -> GeometryBranchResult:
     """
     Production twin of run_geometry_stage(): same stage, result only.
+
+    Inputs:
+        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
 
     Outputs:
         GeometryBranchResult, with frame_id and timestamp_ms carried from roi.
@@ -239,9 +277,11 @@ def detect_geometry(
             wrong shape. The message names the offending ROI.
     """
     _validate_rois("detect_geometry", roi.lane_roi, roi.sign_color_roi)
+    clock = _PartClock(timings)
 
     lane_edges = _canny(roi.lane_roi, config.canny)     # shared by lanes and stop lines
     stop_split, lane_split = _splits(roi.lane_roi, lane_edges, config.lane, config.stop_line)
+    clock.lap("edges")
 
     lane_candidates = find_lane_candidates(
         roi.lane_roi,
@@ -252,6 +292,7 @@ def detect_geometry(
         edges_raw = lane_edges,
         horizontal_split = lane_split,
     )
+    clock.lap("lanes")
 
     stop_line_candidates = find_stop_line_candidates(
         roi.lane_roi,
@@ -261,6 +302,7 @@ def detect_geometry(
         roi.timestamp_ms,
         split = stop_split,
     )
+    clock.lap("stop_line")
 
     sign_candidates = find_sign_candidates(
         roi.sign_color_roi,
@@ -268,6 +310,7 @@ def detect_geometry(
         roi.frame_id,
         roi.timestamp_ms,
     )
+    clock.lap("sign")
 
     return GeometryBranchResult(
         lane_candidates,

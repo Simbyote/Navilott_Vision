@@ -172,6 +172,10 @@ def test_timing_on_records_run_chains_stages_and_changes_nothing():
     assert all(v >= 0.0 for v in first.values())
     timed.perceive(frame, 4, 200)
     assert timed.last_timings_ms is not first          # a caller holding the old dict keeps it
+    assert list(timed.last_geometry_ms) == list(run_chain(frame, 4, 200, SCENE_CONFIG).geometry_timings_ms) \
+        == ["edges", "lanes", "stop_line", "sign"]
+    assert sum(timed.last_geometry_ms.values()) <= timed.last_timings_ms["geometry"] + 0.5      # inside it
+    assert plain.last_geometry_ms == {}
 
 
 # =============================================================================

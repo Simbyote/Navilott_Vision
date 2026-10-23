@@ -237,19 +237,33 @@ def stage_timing_report(stage_ms: dict[str, list[float]], exclude=()) -> list[st
     summary.txt's [TIMING] section: median and p95 per stage, then the summed medians as FPS.
 
     Inputs:
-        stage_ms: stage name -> per-frame ms, in the order to print.
+        stage_ms: stage name -> per-frame ms, in the order to print. A
+            "stage.part" name is a part of that stage (geometry.lanes): it's
+            printed indented under the stage and not added to the total,
+            since the stage's own time already holds it.
         exclude: Stages printed but left out of the total (phase3_linker's
             render, which the robot never pays).
     """
     out = ["[TIMING] per stage, ms:"]
     ms = lambda v: f"{v:6.1f}" if v >= 0.1 else f"{v:6.3f}"     # Phase 3's stages run in microseconds
+    parts = {}
+    for name in stage_ms:
+        if "." in name:
+            parts.setdefault(name.split(".", 1)[0], []).append(name)
+    order = []
+    for name in stage_ms:
+        if "." not in name:
+            order += [name] + parts.pop(name, [])
+    order += [n for names in parts.values() for n in names]              # parts of a stage not timed
     total_med = 0.0
-    for name, vals in stage_ms.items():
-        v = sorted(vals)
+    for name in order:
+        v = sorted(stage_ms[name])
         med, p95 = v[len(v)//2], v[min(int(0.95*len(v)), len(v)-1)]
-        if name not in exclude:
+        part = "." in name
+        if name not in exclude and not part:
             total_med += med
-        out.append(f" {name:<22} med {ms(med)}  p95 {ms(p95)}"
+        label = f"  {name.split('.', 1)[1]}" if part else name
+        out.append(f" {label:<22} med {ms(med)}  p95 {ms(p95)}"
                    + ("   (not in total)" if name in exclude else ""))
     out.append(f" {'TOTAL (median)':<22}     {total_med:6.1f}  "
                f"-> {1000/max(total_med, 0.001):5.1f} FPS")

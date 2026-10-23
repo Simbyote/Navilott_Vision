@@ -98,6 +98,9 @@ class Pipeline:
             thread's only (color and obstacle replaced by branch_wait, so
             they still add up to the frame), and last_side_ms has the side
             thread's own color and obstacle times.
+        last_geometry_ms: With timing on, the latest frame's geometry split
+            into its parts (geometry.GEOMETRY_PARTS: the shared edges, then
+            each detector), inside last_timings_ms["geometry"]; {} with timing off.
     """
 
     def __init__(
@@ -112,6 +115,7 @@ class Pipeline:
         self.config = config
         self.parallel = parallel_enabled(parallel)
         self.last_side_ms: dict = {}
+        self.last_geometry_ms: dict = {}
         self.estimation = with_lane_roi_width(estimation, config.roi, frame_size)
         # A derived width holds every frame to the size it was derived at
         self._frame_size = None if self.estimation is estimation else tuple(frame_size)
@@ -184,7 +188,7 @@ class Pipeline:
         if self.parallel:
             return self._perceive_parallel(roi, cfg, laps)
 
-        geo = detect_geometry(roi, cfg.geometry)
+        geo = detect_geometry(roi, cfg.geometry, self._geometry_timings(laps))
         if laps:
             laps.lap("geometry")
 
@@ -214,13 +218,20 @@ class Pipeline:
             self.last_timings_ms = laps.times
         return phase2
 
+    def _geometry_timings(self, laps) -> dict | None:
+        """A fresh dict for detect_geometry to time its parts into, kept as last_geometry_ms; None untimed."""
+        if not laps:
+            return None
+        self.last_geometry_ms = {}
+        return self.last_geometry_ms
+
     def _perceive_parallel(self, roi, cfg: PipelineConfig, laps) -> Phase2Output:
         """perceive() from the ROIs on: color and obstacle on the side thread, the rest here."""
         side = side_pool().submit(run_side, [
             ("color", lambda: detect_color(roi, cfg.color)),
             ("obstacle", lambda: estimate_obstacle(roi, cfg.obstacle, cfg.ground, cfg.stop_line_table)),
         ])
-        geo = detect_geometry(roi, cfg.geometry)
+        geo = detect_geometry(roi, cfg.geometry, self._geometry_timings(laps))
         if laps:
             laps.lap("geometry")
         offset = estimate_lane_offset(geo, roi, cfg.lane_offset)

@@ -25,6 +25,7 @@ import numpy as np
 import pytest
 
 import src.analysis.stage_timing as st
+from src.tests.artifacts import summarize
 from src.debugger.live_view import StageLog
 from src.params import FPS
 from src.config import MEASURED
@@ -308,6 +309,7 @@ def test_stage_timing_characterization(request, frames, artifacts):
     n = request.config.getoption("--frames")
     it = iter(frames(n))
     rows, stages = [], None
+    parts = {}                          # geometry's parts per frame: inside geometry_ms, so kept apart from it
 
     while True:
         t_start = time.perf_counter()
@@ -323,6 +325,8 @@ def test_stage_timing_characterization(request, frames, artifacts):
             stages = list(chain.timings_ms)
         missing = [s for s in stages if s not in chain.timings_ms]
         assert not missing, f"frame_id={fd.frame_id}: no timing for {missing}"
+        for k, v in chain.geometry_timings_ms.items():
+            parts.setdefault(k, []).append(v)
         rows.append([fd.frame_id, fd.timestamp_ms,
                      round((t_frame - t_start) * 1000, 3),
                      *[round(chain.timings_ms[s], 3) for s in stages],
@@ -340,7 +344,8 @@ def test_stage_timing_characterization(request, frames, artifacts):
     cols = st.read_timing_csv(path, skip=skip)
     bd = st.breakdown(cols, BUDGET)
     artifacts.json("summary.json", {**bd, "warmup_frames_skipped": skip,
-                                    "replay": request.config.getoption("--replay")})
+                                    "replay": request.config.getoption("--replay"),
+                                    "geometry_parts": {k: summarize(v[skip:]) for k, v in parts.items()}})
     st.budget_figure(bd, f"Stage timing: {request.node.name}", artifacts.path / "timing_budget.png")
     st.per_frame_figure(cols, BUDGET, f"Stage time per frame: {request.node.name}",
                         artifacts.path / "timing_per_frame.png")

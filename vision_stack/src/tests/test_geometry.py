@@ -1314,3 +1314,25 @@ def test_the_letter_share_counts_white_inside_the_hull_only():
     pink = img.copy()
     pink[25:35, 20:40] = (170, 170, 255)                # bright but red: the blur's pink, not a letter
     assert geo._letter_share(pink, hull, GHOST) == 0.0
+
+
+# =============================================================================
+# Timing each part (timings=)
+# =============================================================================
+
+@pytest.mark.software
+def test_each_part_of_geometry_is_timed_on_request_and_the_result_is_the_same():
+    from src.perception.roi_crop import crop_rois
+    from src.perception.preprocess import preprocess_frame
+    from src.capture.camera import FrameData
+    from src.tests.scenes import SCENE_CONFIG, scene
+    roi = crop_rois(preprocess_frame(FrameData(scene(stop_line=(120, 320, 30)), 7, 350), SCENE_CONFIG.preprocess),
+                    SCENE_CONFIG.roi)
+    plain = geo.detect_geometry(roi, SCENE_CONFIG.geometry)
+    t1, t2 = {}, {}
+    timed = geo.detect_geometry(roi, SCENE_CONFIG.geometry, timings=t1)
+    staged, _, _ = geo.run_geometry_stage(roi, SCENE_CONFIG.geometry, timings=t2)
+    import pickle
+    assert pickle.dumps(timed) == pickle.dumps(plain) == pickle.dumps(staged)       # holds arrays: compare bytes
+    assert list(t1) == list(t2) == list(geo.GEOMETRY_PARTS)
+    assert all(v >= 0.0 for v in (*t1.values(), *t2.values()))

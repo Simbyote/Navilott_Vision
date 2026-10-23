@@ -69,6 +69,7 @@ class ChainResult:
     obstacle: ObstacleResult | None = None              # nearest obstacle in the robot's path
     obstacle_debug: dict = field(default_factory=dict)  # compute_obstacle's debug summary: masks, every blob's fate
     side_timings_ms: dict = field(default_factory=dict) # parallel only: color and obstacle as the side thread timed them
+    geometry_timings_ms: dict = field(default_factory=dict)  # geometry's parts (geometry.GEOMETRY_PARTS): inside timings_ms["geometry"]
 
 
 def run_chain(
@@ -101,6 +102,8 @@ def run_chain(
         color and obstacle are the side thread's own times (side_timings_ms)
         and timings_ms has branch_wait in their place, the main thread's time
         waiting for them, so timings_ms still adds up to the frame.
+        geometry_timings_ms splits timings_ms["geometry"] into its parts
+        (the shared edges, then each detector); they're inside it, not added.
     """
     timings = {}
     mark = [time.perf_counter()]    # a list so lap() can update it without nonlocal
@@ -118,7 +121,7 @@ def run_chain(
     roi = crop_rois(pre, config.roi)
     lap("roi")
 
-    side_ms = {}
+    side_ms, geo_ms = {}, {}
     if parallel_enabled(parallel):
         # color and obstacle read only the ROIs: the side thread runs them
         # while geometry and what needs it run here (perception/parallel.py)
@@ -126,7 +129,7 @@ def run_chain(
             ("color", lambda: run_color_stage(roi, config.color, trace)),
             ("obstacle", lambda: compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)),
         ])
-        geo, lane_debug, sign_debug = run_geometry_stage(roi, config.geometry, draw_overlays, trace)
+        geo, lane_debug, sign_debug = run_geometry_stage(roi, config.geometry, draw_overlays, trace, geo_ms)
         lap("geometry")
         offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
         lap("lane_offset")
@@ -138,7 +141,7 @@ def run_chain(
         (traffic, traffic_debug), (obstacle, obstacle_debug) = results["color"], results["obstacle"]
     else:
         geo, lane_debug, sign_debug = run_geometry_stage(
-            roi, config.geometry, draw_overlays, trace
+            roi, config.geometry, draw_overlays, trace, geo_ms
         )
         lap("geometry")
 
@@ -164,7 +167,7 @@ def run_chain(
     return ChainResult(fd, pre, roi, geo, offset, lane_debug, offset_debug,
                        sign_debug, fusion, fusion_debug, phase2, timings,
                        traffic, traffic_debug, stop_line, stop_line_debug,
-                       obstacle, obstacle_debug, side_ms)
+                       obstacle, obstacle_debug, side_ms, geo_ms)
 
 
 def warm_up(frame_bgr: np.ndarray, config: PipelineConfig = PipelineConfig()) -> float:
