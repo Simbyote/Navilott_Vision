@@ -44,7 +44,7 @@ class Navigator(Protocol):
 | `lane_offset` | + = robot **right** of lane center, so correcting it means steering **left** (left duty < right duty) |
 | `lane_status` | Steer by `lane_offset` only on `vision` or `hold`. On `stale`, the offset is an old value: **creep at slow speed, then stop**. A lane that stays lost is the end of the course (decided 2026-10-01) |
 | `drive_state` | `stop` (red) **stops the robot at a stop line**, not before it and not without one; `go` and `caution` drive on (decided 2026-10-01) |
-| `stop_line_detected`, `stop_line_distance_px` | A stop line says an intersection is coming. It stops the robot only with a stop sign or a red light, once the robot reaches it: 1.5 s after it leaves the bottom of the view |
+| `stop_line_detected`, `stop_line_distance_px` | A stop line says an intersection is coming. It stops the robot only with a stop sign or a red light, once the robot reaches it: with `REACH_CM` (9.0 cm) of it left ahead by odometry, or as it leaves the bottom of the view without |
 | `lane_mode` | Phase 2's mode this frame; `two_boundary` = both lane boundaries seen |
 | `obstacle_detected`, `obstacle_distance_cm` / `_px`, `obstacle_clipped` | Something in the path within reach (12 cm from the front edge, or 24 rows with no cm, or clipped) **brakes the robot, and it stays braked until nothing has been seen for 1 s**; then it drives on (decided 2026-10-12). Ahead of every other rule. The lane it hides doesn't count toward the end of the course |
 | `heading_error`, `yaw_rate` | Estimation's convention is **+ = turning right**. See "Yaw sign" below |
@@ -79,7 +79,7 @@ Measured on this robot with `maneuver_linker`, 2026-09-30:
 | `BRAKE` | Stops sharply. With it, a gyro target of **171°** gives a real **180°** turn |
 | Below 0.25 duty | Stalls under load |
 
-Gyro bias at rest is about −1.0 °/s raw in these trials (`config.GYRO_BIAS_DPS` holds −0.90, from the 2026-09-29 `phase3_linker` run); with `IMU_YAW_SIGN` 1, the hub's frame is the raw one. It is measured again at every start and shouldn't be trusted as a constant. Lateral acceleration reads about −0.9 m/s² at rest from the mount's tilt, so only changes in it mean anything.
+Gyro bias at rest is about −1.0 °/s raw in these trials (`config.GYRO_BIAS_DPS` holds −0.90, from the 2026-09-29 `phase3_linker` run, found a bit better than the trials' −1.0); with `IMU_YAW_SIGN` 1, the hub's frame is the raw one. It is measured again at every start and shouldn't be trusted as a constant. Lateral acceleration reads about −0.9 m/s² at rest from the mount's tilt, so only changes in it mean anything.
 
 ---
 
@@ -193,7 +193,7 @@ The first rule that speaks wins. Every rule still sees every frame, told whether
 - **Turns at intersections.** Built (2026-10-02); tune `TURN_TARGET_DEG` and the duties on the mat with `intersection_linker` (`guides/intersection_linker.md`).
 - **End of course.** A lost lane ends the run; measure the roll-out past the lane's end on the mat and tune `END_STALE_MS`. A final stop line, if the course gets one, is the route's `stop_line` finish.
 - **Counting intersections.** Every stop line passing under the view counts as one. A missed line (glare) or a false one shifts every later maneuver; watch the `step` column in `nav.csv`.
-- **Tuning on the mat:** `REACH_CM` (9.0 cm, set 2026-10-20 from `line_left_cm` on reached frames; `STOP_DELAY_MS`, 0, is the fallback without odometry), `ADVANCE_CM` (22.3 cm, from `stage_cm` where timed advances ended; `ADVANCE_MS`, 2.5 s, without odometry), `MAX_CROSS_CM` (49.7 cm; `MAX_CROSS_MS`, 5.5 s, without odometry), `SIGN_MEMORY_MS` (5 s), `SIGN_LEAD_MS` (2 s), `RED_MEMORY_MS` (0.5 s), `RELEASE_MS` (0.25 s), `STOPPED_CPS` (20), `TWO_BOUNDARY_FRAMES` (10), `ONE_BOUNDARY_FRAMES` (40). The traffic light runs glow mode, tuned on the course's LEDs (2026-10-06, `phase2_perception.md`). The stop sign's shape gates were fit to the course's sign on run frames (2026-10-20, `config.py`); its range and Phase 3's 0.45 vote gate aren't measured yet (`requirements.md`, D2).
+- **Tuning on the mat:** `REACH_CM` (9.0 cm, a guess from how far ahead a stop line still shows before it leaves the view: the robot stops as soon as it can so the hanging traffic light stays in view; `STOP_DELAY_MS`, 0, is the fallback without odometry), `ADVANCE_CM` (22.3 cm) and `MAX_CROSS_CM` (49.7 cm), both from the odometry's `stage_cm` where the timed advances and exits ended (2026-10-20; `ADVANCE_MS`, 2.5 s, and `MAX_CROSS_MS`, 5.5 s, without odometry), `SIGN_MEMORY_MS` (5 s), `SIGN_LEAD_MS` (2 s), `RED_MEMORY_MS` (0.5 s), `RELEASE_MS` (0.25 s), `STOPPED_CPS` (20), `TWO_BOUNDARY_FRAMES` (10), `ONE_BOUNDARY_FRAMES` (40). The traffic light runs glow mode, tuned on the course's LEDs (2026-10-06, `phase2_perception.md`). The stop sign's shape gates were fit to the course's sign on run frames (2026-10-20, `config.py`); its range and Phase 3's 0.45 vote gate aren't measured yet (`requirements.md`, D2).
 
 - **Distance.** The maneuver trial measured leg length with cumulative encoder counts. The packet carries only counts per second, so Navigation integrates `cps × dt` itself. Whether the packet should carry cumulative counts is a contract change to agree on.
 - **`0.0` pass-throughs** can mean zero or unavailable (`phase3_estimation.md`).

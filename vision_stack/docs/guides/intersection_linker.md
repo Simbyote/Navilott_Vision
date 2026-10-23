@@ -14,9 +14,9 @@ The intersection rule drives three stages from the moment the stop line leaves t
 
 | Stage | What the robot does | Ends |
 | --- | --- | --- |
-| `to_line` | Straight to the line, holding its heading on the gyro | At the line, `STOP_DELAY_MS` (0: the next frame) after the line left the view; turns then `advance` for `ADVANCE_MS` (2.5 s), or `ADVANCE_CM` of odometry when set |
-| `turn` (left/right only) | Left: `(0.36, 0.63)`, a wide arc into the far lane. Right: `(0.45, 0.0)`, a pivot on the right wheel | The gyro reads 85° turned that way (`TURN_TARGET_DEG`), or the time limit (left 4.1 s, right 2.4 s) |
-| `exit` | Straight on the new heading | Both lane lines for 3 frames, one for 6, or 3 s; then lane keeping |
+| `to_line` | Straight to the line, holding its heading on the gyro | At the line: `REACH_CM` (9.0 cm) of it left ahead by odometry, or without it `STOP_DELAY_MS` (0: the next frame) after the line left the view; turns then `advance` `ADVANCE_CM` (22.3 cm), or `ADVANCE_MS` (2.5 s) without odometry |
+| `turn` (left/right only) | Left: `(0.48, 0.73)`, a wide arc into the far lane. Right: `(0.78, 0.25)`, a tighter arc into the near lane | The gyro reads 85° turned that way (`TURN_TARGET_DEG`), or the time limit (left 4.1 s, right 2.4 s) |
+| `exit` | Straight on the new heading | Both lane lines for 10 frames (`TWO_BOUNDARY_FRAMES`), at least one for 40 (`ONE_BOUNDARY_FRAMES`), or `MAX_CROSS_CM` (49.7 cm; `MAX_CROSS_MS`, 5.5 s, without odometry); then lane keeping |
 
 A stop sign or red light at the line stops the robot first; the turn starts after.
 

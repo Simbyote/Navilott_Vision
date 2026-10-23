@@ -173,7 +173,7 @@ The kept edges split by polarity: a **top** edge (brightness rising going down, 
 | Gate | Default | Rejects |
 | --- | --- | --- |
 | `short` | length ≥ 60 px | Anything as short as a lane-tape width (up to ~41 px), such as the end of a dash |
-| `tilt` | ≤ 20° (`MEASURED`: 4°) | Edges fitted steeper than the split allowed. `MEASURED` uses 4°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run); 2° (2026-10-07) missed a real line approached a little off square (2026-10-19). A line approached more than 4° off square is missed (`config.py`) |
+| `tilt` | ≤ 20° (`MEASURED`: 5°) | Edges fitted steeper than the split allowed. `MEASURED` uses 5°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run). Tighter (2° from 2026-10-07, 4° from 2026-10-19) missed real lines approached a little off square; at 5°, parts of the intersection itself have passed for stop lines (2026-10-05), so watch `nav.csv`'s `step` column (`config.py`) |
 | `unpaired` | a bottom edge 3–40 px below, overlapping half the shorter edge | Single edges, and bars thicker than tape |
 | `intensity` | mean between the edges ≥ 70 | Shadow edges and dim patches |
 
@@ -482,12 +482,12 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 
 ## Open items
 
-- **Undistortion** on the IMX290: cost against improvement, measured with the calibration test.
 - **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
-- **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
+- **Traffic and sign ROI bounds** need a small re-tune on the track: both were set from one day's frames (2026-10-06, 2026-10-20). `make phase2 VIEWS=traffic,stop` shows them on a run.
+- **Stop-sign range.** The shape gates are tuned on the course's sign (2026-10-20); the range, and Phase 3's 0.45 vote gate, are measured by `make routine-detect-range ARGS="--set target=sign"`.
 - **`expected_half_lane_px`** re-measured whenever the mount moves (178 px from the 2026-10-12 runs' two-boundary widths).
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Obstacle gates on real frames:** the not-floor thresholds against the mats under the venue's light, `open_px` against the widest tape, the false-alarm rate on a clear course, and what a stop sign low in the corridor does (`make phase2 VIEWS=obstacle`, then `test_obstacle --hardware --obstacle-cm`).
-- **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
+- **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and `MEASURED`'s 5° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
 - **`distance_px` to cm:** needs a ground homography or a stop-line table, not `cm_per_px`.
 - **Offset accuracy on hardware:** the sign (+ = robot right of center) is what lane keeping steers by on every run; the accuracy against a ruler (P3) is `make routine-lane-offset`.

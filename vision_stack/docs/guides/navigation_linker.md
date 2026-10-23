@@ -21,8 +21,8 @@ Each frame, in order:
 What `Navigation` does (`navigation_contract.md`, "The navigation subsystem"):
 
 - **Lane keeping:** 0.40 duty, steering against the lane offset, or against the heading while vision is lost.
-- **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until the lane boundaries are back (both for 3 frames, or one for 6), or 3 s past the line. No new stop line is taken up while it crosses.
-- **1.5 s after the line leaves the view** the robot is at it:
+- **A stop line** says an intersection is coming. From the moment it leaves the bottom of the view, the robot drives **straight on the gyro** until the lane boundaries are back (both for 10 frames, or one for 40), or 49.7 cm past the line (5.5 s without odometry). No new stop line is taken up while it crosses.
+- **With 9.0 cm of the line left ahead** (`REACH_CM`, by odometry; without it, as the line leaves the view) the robot is at it:
   - with a **stop sign** seen in the last 5 s, and no more than 2 s before the line came into view, it stops, holds 2 s, and goes;
   - with a **red light**, it waits for the light to change.
 - **Otherwise it crosses.** A red light with no stop line doesn't stop it.
@@ -116,7 +116,7 @@ Re-render a run's video later with `python3 -m src.navigation_linker --render ru
 ## 5. Known limits
 
 - **End of course:** a lost lane ends the run after ~1.35 s (Phase 3's hold, then 1 s creeping). Glare or a sharp curve that loses the lane that long ends it too; check `lane_stale_slow` in `nav.csv` and measure how far past the lane's end the robot rolls.
-- **Stop line timing:** the robot reaches a stop line `STOP_DELAY_MS` (0, `src/navigation/stop_line.py`) after it leaves the view: it stops as the line leaves, so the hanging traffic light stays in view. Turns then drive `ADVANCE_MS` (2.5 s, `intersection.py`) into the intersection first. If it stops short or long of the line, tune the first; if turns cut the corner or overshoot, the second. With odometry calibrated, both can go by cm instead (`REACH_CM` in `stop_line.py`, `ADVANCE_CM`): nav.csv's `line_left_cm` (cm of the line still ahead, by the encoders) and `stage_cm` show what the timed versions gave, which is what to set them to.
+- **Stop line timing:** the robot has to stop as soon as it can at a stop line, so the hanging traffic light stays in view. With odometry (calibrated) it goes by cm: it is at the line when `REACH_CM` (9.0, `src/navigation/stop_line.py`) of it is left ahead, a guess from how far ahead a line still shows before it leaves the view. Turns then drive `ADVANCE_CM` (22.3, `intersection.py`) into the intersection first, set from `stage_cm` where the timed advances ended. Without odometry the same two go by time: `STOP_DELAY_MS` (0: stop as the line leaves the view) and `ADVANCE_MS` (2.5 s). If it stops short or long of the line, tune the first; if turns cut the corner or overshoot, the second. nav.csv's `line_left_cm` (cm of the line still ahead, by the encoders) and `stage_cm` show where each landed.
 - **Turns:** tested one intersection at a time with `intersection_linker` (`intersection_linker.md`); tune `TURN_TARGET_DEG` there.
 - **Angled approaches:** a robot that comes at a stop line off square carries the angle through the crossing unless `TILT_TO_HEADING` (`intersection.py`) is set; then the crossing's heading starts at the approach angle the line's tilt gives (`approach_deg` in nav.csv), the heading hold squares the robot to the street, and a turn's 85° is measured from the street. See "Measuring `TILT_TO_HEADING`" below.
 - **Intersection count:** a missed or false stop line shifts the route; check `step` in `nav.csv`.

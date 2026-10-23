@@ -469,8 +469,8 @@ stateDiagram-v2
 
 | Stage | Command | Ends |
 | --- | --- | --- |
-| `to_line` | Base duty, steering only against the heading turned (gyro) | At the line, 1.5 s after it left the view |
-| `turn` | Left `(0.36, 0.63)`, a wide arc; right `(0.45, 0.0)`, a pivot on the right wheel | 85° on the gyro, or the time limit |
+| `to_line` | Base duty, steering only against the heading turned (gyro) | At the line: `REACH_CM` (9.0 cm) left by odometry, or `STOP_DELAY_MS` (0) after it left the view; turns then advance `ADVANCE_CM` (22.3 cm) |
+| `turn` | Left `(0.48, 0.73)`, a wide arc; right `(0.78, 0.25)`, a tighter arc | 85° on the gyro, or the time limit |
 | `exit` | Heading hold on the heading the turn ended on | The lane is back; lane keeping takes over |
 
 While it's active, the tracker takes up no new stop line, so marks inside the intersection can't restart the crossing or count as another intersection.

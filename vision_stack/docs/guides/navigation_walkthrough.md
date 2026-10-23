@@ -82,9 +82,9 @@ stop line leaves the view                    the line (next frame); turns advanc
 
 | In `turning_sequences.py` | Now |
 | --- | --- |
-| `drive_left_turn(0.36, 0.63)` | `LEFT_TURN = Command(0.36, 0.63)` in `intersection.py` |
-| `drive_right_turn(0.45, 0.0)` | `RIGHT_TURN = Command(0.45, 0.0)` |
-| Forward 1.3 s after the stop line, then turn | Stage `to_line`: straight until the line is reached (`STOP_DELAY_MS`, 1.5 s, in `stop_line.py`) |
+| `drive_left_turn(0.36, 0.63)` | `LEFT_TURN` in `intersection.py`, retuned since to `(0.48, 0.73)` |
+| `drive_right_turn(0.45, 0.0)` | `RIGHT_TURN`, retuned since to `(0.78, 0.25)` |
+| Forward 1.3 s after the stop line, then turn | Stage `to_line`: straight until the line is reached (`REACH_CM`, 9.0 cm, in `stop_line.py`), then the advance (`ADVANCE_CM`, 22.3 cm) |
 | Turn for 2.75 s (left) / 1.62 s (right) | Turn until the **gyro** reads 85° (`TURN_TARGET_DEG`). Your times plus half are the backstop (`LEFT_TURN_MAX_MS`, `RIGHT_TURN_MAX_MS`) |
 | `is_stop_line_crossing()` | The tracker's `phase == CROSSING`. The tracker owns "where is the line" |
 | Which maneuver to do | `route.json` → `RouteProgress` → the rule |
