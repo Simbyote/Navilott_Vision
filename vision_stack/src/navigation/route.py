@@ -1,33 +1,21 @@
 """Route: the course plan, one maneuver per intersection, and how the run finishes.
 
 Purpose:
-    The robot runs a programmed course: at the first intersection turn
-    left, at the second go straight, and so on. Every intersection has a
-    stop line on the robot's approach, so each stop line passing under the
-    view is one intersection (StopLineTracker.entered). The plan lives in a
-    JSON file (config.ROUTE_PATH) so it can be changed between runs without
-    touching code; it's read and checked once, at startup, before the start
-    button, so a typo stops the run there and not halfway round the course:
-
-        {"maneuvers": ["left", "straight", "right"], "finish": "edge"}
-
-    How the run finishes:
-        FINISH_EDGE: after the last maneuver, the lane running out (the
-            mat's edge) is the finish. A lane lost before then is off
-            course: the run ends early (end_of_course.py).
-        FINISH_STOP_LINE: the first stop line after the last maneuver is the
-            finish line: the robot stops at it.
-    Intersections past the plan, with FINISH_EDGE, are crossed straight.
+    The robot runs a programmed course: at the first intersection turn left,
+    at the second go straight, and so on, each stop line passing under the
+    view being one intersection. The plan is a JSON file (config.ROUTE_PATH),
+    read and checked once at startup, so it changes between runs without
+    code, and a typo stops the run before the start, not halfway round
+    (docs/vision_pipeline/navigation_contract.md, "The route").
 
 Main package:
-    Route: the plan; load_route() reads and checks the file; RouteError.
-    RouteProgress: where the run is in the plan, advanced once per intersection.
-    MANEUVERS: STRAIGHT, LEFT, RIGHT (intersection.py drives each).
+    Route: the maneuvers and the finish (the mat's edge, or a finish stop
+    line); RouteProgress says where the run is in it.
 
 Flow:
-    1. load_route(path) at startup; describe() for the startup screen.
-    2. RouteProgress.enter() on each intersection: the step it is.
-    3. done / at_finish_line tell end_of_course how the run ends.
+    1. load_route() at startup; describe() for the startup screen.
+    2. RouteProgress.enter() at each intersection: the step it is.
+    3. done and at_finish_line tell end_of_course how the run ends.
 """
 import json
 from dataclasses import dataclass

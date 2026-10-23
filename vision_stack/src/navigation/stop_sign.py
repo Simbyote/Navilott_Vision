@@ -1,24 +1,22 @@
 """Stop sign rule: at a stop line with a stop sign, come to a full stop, hold, then go.
 
 Purpose:
-    A stop line alone only says an intersection is coming; it stops the
-    robot only with a stop sign (or a red light, traffic_light.py). When the
-    shared StopLineTracker says the robot has reached the line and a stop
-    sign was seen within SIGN_MEMORY_MS before that, this rule brakes until
-    the wheels have stopped, holds the brake STOP_SIGN_HOLD_TIME_MS, and
-    lets go. Signs are often seen before the line comes into view, hence the
-    memory. All timing is on packet timestamps, so replays behave the same.
+    A stop line alone only says an intersection is coming. With a stop sign
+    seen shortly before the line came into view (signs are often seen first,
+    hence the memory), this rule brakes at the line until the wheels stop,
+    holds, and lets go. All timing is on packet timestamps, so replays behave
+    the same.
 
 Main package:
     StopSignRule: update(packet, held) -> BRAKE while stopping or holding,
-        None otherwise (navigation.Navigation falls through to the next rule).
+    None otherwise.
 
 Flow:
     1. Remember when a stop sign was last seen.
     2. On the tracker's reached frame: a sign seen within SIGN_MEMORY_MS, and
-       no more than SIGN_LEAD_MS before that line came into view, starts the stop.
-    3. Brake; once the wheels read stopped (or STOP_SETTLE_MAX_MS has passed),
-       hold STOP_SIGN_HOLD_TIME_MS more, then release.
+       no more than SIGN_LEAD_MS before the line came into view, starts the stop.
+    3. Brake until the wheels read stopped (or STOP_SETTLE_MAX_MS), hold
+       STOP_SIGN_HOLD_TIME_MS, release.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import BRAKE, Command

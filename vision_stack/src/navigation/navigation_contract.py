@@ -1,26 +1,21 @@
 """Navigation contract: what Navigation receives each frame and what it must give back.
 
 Purpose:
-    The handoff between the vision stack and Navigation, fixed before
-    Navigation exists so both sides build against the same thing. Everything
-    stated here was proven on the robot by maneuver_linker (2026-09-30): the
-    packet fields, their signs and units, the frame rate, and how the drive
-    responds to a command. This module holds only the interface and the
-    command type, so every navigation rule can import it without importing
-    the orchestrator (src/navigation/navigation.py, which re-exports all of it).
-    docs/vision_pipeline/navigation_contract.md is the full per-field contract.
+    The handoff between the vision stack and Navigation, fixed so both sides
+    build against the same thing; every field's sign, unit and rate was
+    proven on the robot (maneuver_linker, 2026-09-30). It holds only the
+    interface and the command type, so every rule can import it without
+    importing the orchestrator (docs/vision_pipeline/navigation_contract.md).
 
 Main package:
-    Command: one frame's motor instruction, per-wheel duty or a short brake.
-    Navigator: the interface a Navigation implementation provides:
-    update(EstimationPacket) -> Command once per frame, and reset().
-    command_problems(): every way a Command breaks the rules.
-    enforce(): the command to drive: the navigator's, or BRAKE if it breaks
-        them. The pipeline and navigation_linker both drive through it.
+    Command: one frame's motor instruction, a duty per wheel or a short
+    brake. Navigator is the interface that produces it; enforce() turns any
+    Command that breaks the rules into BRAKE.
 
 Flow:
-    Once per camera frame (~20 FPS on the Pi): the pipeline hands the frame's
-    EstimationPacket to Navigator.update(), and drives the Command it returns.
+    1. Once per camera frame, the loop hands Navigator.update() the frame's EstimationPacket.
+    2. enforce() checks the Command it returns (command_problems()).
+    3. The loop drives the Command, or BRAKE.
 """
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable

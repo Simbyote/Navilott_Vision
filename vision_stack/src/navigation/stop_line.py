@@ -1,53 +1,22 @@
 """Stop line tracking: when the robot has reached a stop line, from the line leaving the camera's view.
 
 Purpose:
-    The camera's view of the floor ends about 10 cm ahead of the robot
-    (2026-09-30 stop-line table), so a stop line is out of sight before the
-    robot gets to it. Braking the moment it disappears stopped the robot
-    short. This tracker follows one stop line per intersection through the
-    packets: seen (APPROACH), gone from the bottom of the view (CROSSING),
-    and STOP_DELAY_MS later the robot is at it (reached, one frame). The
-    navigation rules (stop sign, traffic light, intersection) all read this
-    one tracker, which navigation.Navigation updates once per frame.
-
-    "Leaving the view" is the line's near edge reaching the view's bottom
-    (CROSS_ON_CLIP): from there it reads clipped, 0 px, until the tape's
-    far edge has passed too, so waiting for it to vanish braked a tape's
-    width late (stop-distance, 2026-10-20: ten stops 1.0 cm from the line).
-    A line that drops out while still far up the image is flicker or a lost
-    detection, not the robot driving over it: only a line last seen within
-    NEAR_BOTTOM_ROWS of the lane ROI's bottom counts as passing under the view.
-
-    A stop line on its own decides nothing; it says an intersection is
-    coming. What happens there is the rules' call.
-
-    By distance, with odometry: every fresh sighting puts the line at an
-    odometry position (distance_cm + stop_line_distance_cm), and once it
-    has left the view the robot has reached it when REACH_CM of it is left
-    ahead, by the encoders. Where in a frame the line happened to leave the
-    view no longer matters, and a frame is judged on the stop it would give:
-    reached when less than half the last frame's travel is left to the mark,
-    so the robot stops within half a frame's travel of it instead of up to a
-    whole frame past. Without REACH_CM, odometry or a cm for the line, it's
-    STOP_DELAY_MS as before. left_cm is logged either way (nav.csv's
-    line_left_cm), which is how REACH_CM is measured: run with it None and
-    read left_cm on the reached frames.
-
-    The approach angle: the line's tilt in the image says how far off square
-    the robot is coming at it. The tracker keeps the median of the last
-    TILT_FRAMES fresh tilts while approaching, as approach_tilt_deg, from
-    the frame the line leaves the view until it's reached; the intersection
-    rule turns it into a heading (intersection.TILT_TO_HEADING).
+    The camera's view of the floor ends about 10 cm ahead of the robot, so a
+    stop line is out of sight before the robot gets to it. This tracker
+    follows one line per intersection from first sight to the robot being on
+    it, by time or odometry, and the angle it was approached at. The sign, light and
+    intersection rules all read this one tracker (navigation_contract.md, item 1).
 
 Main package:
-    StopLineTracker: update(packet) once per frame; phase, reached, lost_ms.
-    IDLE, APPROACH, CROSSING: its phases.
+    StopLineTracker: its phase (IDLE, APPROACH, CROSSING), entered (a new
+    intersection, one frame), reached (at the line, one frame) and
+    approach_tilt_deg.
 
 Flow:
-    IDLE -> APPROACH (line voted in, when accept_new) -> CROSSING (clipped at the
-    view bottom, or voted out near it: entered, one intersection) -> reached on the frame STOP_DELAY_MS after it
-    left (or, by distance, REACH_CM short of it) -> IDLE.
-    APPROACH -> IDLE when it's voted out far away.
+    1. IDLE -> APPROACH when a line is voted in.
+    2. APPROACH -> CROSSING when its near edge reaches the view's bottom: entered.
+    3. Reached STOP_DELAY_MS later, or REACH_CM short of it by odometry -> IDLE.
+    4. A line voted out far up the view is flicker: back to IDLE.
 """
 from collections import deque
 from statistics import median
@@ -69,8 +38,8 @@ STOP_DELAY_MS = 0
 # left ahead of the stop-line table's reference point (the front edge), so
 # 0 stops on it. The line leaves the view ~10 cm ahead, and a crossing needs
 # one frame past that, so anything near 10 or more is STOP_DELAY_MS 0 again.
-# None: by STOP_DELAY_MS. Set it from left_cm on reached frames (nav.csv's
-# line_left_cm) once odometry is calibrated
+# None: by STOP_DELAY_MS. Set from left_cm on reached frames (nav.csv's
+# line_left_cm, 2026-10-20)
 REACH_CM: float | None = 9.0
 # Fresh tilts (the packet's stop_line_tilt_deg) the approach angle is the
 # median of: the last ones before the line leaves the view, the nearest and

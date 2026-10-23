@@ -1,38 +1,20 @@
 """Wheel speed: drive each wheel at counts per second instead of a duty, whatever the battery reads.
 
 Purpose:
-    A duty is a share of the battery's voltage, so the same duty turns the
-    N20s slower as the pack drains (12.6 V full, 9.9 V critical): a turn
-    tuned as duties on a fresh pack draws a smaller, slower arc on a tired
-    one, and its inner wheel stalls sooner. The encoders measure what the
-    wheels actually do, so this asks for a speed and finds the duty:
-
-        duty = target / gain  +  kp * error  +  integral of ki * error
-
-    gain (counts/s per unit duty) is the feedforward, and it's learned while
-    the robot drives: on every steady frame of lane keeping the measured
-    speed over the commanded duty updates it, so by the time a turn starts it
-    already reflects today's voltage and the floor. The PI trim then takes
-    out what's left. Without encoders (every reading 0.0 while driving) it's
-    the feedforward alone at the configured gain: the same duties as before.
-
-    The measured speed in a packet is over the frame window that ends with
-    it, so it answers the command sent the frame before; observe() is given
-    that command.
+    A duty is a share of the battery's voltage, so a turn tuned as duties on
+    a fresh pack draws a smaller, slower arc on a tired one. The encoders
+    measure what the wheels actually do, so this asks for a speed and finds
+    the duty: a learned feedforward plus a PI trim; without encoders, the
+    feedforward alone (docs/vision_pipeline/navigation_contract.md, "Wheel speed").
 
 Main package:
-    WheelSpeed: observe(previous command, packet) every frame; start() at the
-        start of a controlled stretch; drive(left_cps, right_cps, packet) ->
-        Command. gains, encoders, record.
-    CPS_PER_DUTY: the starting gain, measured.
+    WheelSpeed: drive(left_cps, right_cps, packet) -> Command, from each
+    wheel's learned gain (counts/s per unit duty) and the PI trim.
 
 Flow, each frame:
-    1. observe(): encoders seen? a steady frame? then each wheel's gain moves
-       LEARN_ALPHA toward measured / duty, kept within GAIN_LIMITS.
-    2. drive(): per wheel, feedforward at the learned gain, plus the PI trim
-       when there are encoders; the integral only runs once the error is
-       within INTEGRATE_BAND of the target (no wind-up while the wheel spins
-       up); a driven wheel gets at least STALL_DUTY.
+    1. observe(): on a steady frame, each wheel's gain moves toward measured / duty.
+    2. drive(): per wheel, the feedforward plus the PI trim when there are
+       encoders; a driven wheel gets at least STALL_DUTY.
 """
 from dataclasses import dataclass
 

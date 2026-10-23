@@ -157,7 +157,6 @@ def _lane_confidence(
     return round(clamp(score, 0.0, 1.0), 4)
 
 
-# @TODO split each gate into its own function, the way _mean_contour_intensity is
 def _extract_lane_candidates(
     contours: Sequence[np.ndarray],
     lane_filter: LaneContourFilter,
@@ -189,7 +188,6 @@ def _extract_lane_candidates(
     candidates = []
     roi_h, roi_w = roi_shape
 
-    # @TODO move reject counting into a dedicated debug/logging path
     rc = reject_counts if reject_counts is not None else {}
     for _k in ("seen", "area", "degenerate", "too_few_pts",
                 "aspect", "w_span", "h_span", "intensity", "accepted"):
@@ -401,7 +399,6 @@ def extract_lane_candidates(
     candidates = _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])
     reject_counts["merged_into"] = len(candidates)
 
-    # @TODO move debug output to a dedicated debug operation
     debug_images = {
         "lane_roi": lane_roi,
         "edges": edges,

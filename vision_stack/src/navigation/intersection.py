@@ -1,74 +1,22 @@
 """Intersection rule: cross an intersection straight, left or right, as the route says, then hand back to lane keeping.
 
 Purpose:
-    Everything the robot does inside an intersection lives here, so one
-    record (nav.csv's intersection rows) shows the whole crossing.
-    Lane keeping goes wrong entering an intersection: a boundary on the
-    right that crosses the robot's path pulls the offset to the left
-    (2026-10-01 runs). So from the moment the stop line leaves the bottom of
-    the view (the shared StopLineTracker's CROSSING) this rule drives, in
-    four stages:
-
-        STAGE_TO_LINE  straight to the line on a gyro heading hold (base
-                       duty, steering only against the heading turned).
-        STAGE_ADVANCE  left or right only, from the line (the tracker's
-                       reached, STOP_DELAY_MS later): on into the
-                       intersection on the heading hold for ADVANCE_CM of
-                       odometry, or ADVANCE_MS of driving without it, since
-                       the stop lines sit back in the street.
-        STAGE_TURN     left or right only, after the advance: fixed wheel
-                       duties (LEFT_TURN, RIGHT_TURN, with their history)
-                       until the gyro has turned TURN_TARGET_DEG that way,
-                       or the turn's time limit if it never does.
-        STAGE_EXIT     straight on the new heading until the lane is back:
-                       both boundaries for TWO_BOUNDARY_FRAMES frames in a
-                       row, at least one for ONE_BOUNDARY_FRAMES, or
-                       MAX_CROSS_CM of odometry (MAX_CROSS_MS of driving
-                       without it). Then lane keeping takes over.
-    The approach angle: the heading is counted from the street, not from
-    the robot. A robot that comes at the line off square carries that angle
-    through the crossing: zeroed at the line, a turn of TURN_TARGET_DEG ends
-    off square by the same angle, and a straight crossing goes diagonally.
-    So the crossing starts its heading at the approach angle, read from the
-    stop line's tilt in the image (the tracker's approach_tilt_deg less
-    TILT_ZERO_DEG, x TILT_TO_HEADING, at most MAX_APPROACH_DEG): the heading hold then
-    straightens the robot to the street, and the turn's TURN_TARGET_DEG is
-    measured from the street. Without TILT_TO_HEADING, or a tilt, it starts
-    at 0 as before.
-    Distance or time: a stage goes by distance when its _CM is set and the
-    packet has odometry (distance_cm: encoders and calibration/odometry.json);
-    otherwise by time, as before odometry. Every crossing record carries
-    stage_cm, the distance driven in the stage so far, which is how the _CM
-    values are measured: run with them None and read what the timed stages
-    covered in nav.csv.
-
-    Straight goes from STAGE_TO_LINE to STAGE_EXIT at the line, with no
-    advance. Which way to go comes from the route (route.py) through the
-    RouteProgress that
-    navigation.Navigation advances as each intersection is entered; past
-    the plan, or at the finish line, it's straight. A stop sign or red light
-    at the line (a higher-priority rule) holds the robot first: held frames
-    advance no timer, so the turn starts once the robot is let go.
-
-    While a crossing is active, Navigation keeps the tracker from taking up
-    a new stop line, so a line-like mark inside the intersection can't
-    restart it.
+    Lane keeping goes wrong entering an intersection: the crossing street's
+    lines pull the offset sideways. So from the moment the stop line leaves
+    the view, this rule drives, on a gyro heading counted from the street
+    (the approach angle) rather than from the robot, until the new lane is
+    back. Everything the robot does inside an intersection lives here, so
+    one record shows the whole crossing (docs/vision_pipeline/navigation_contract.md, item 5).
 
 Main package:
-    IntersectionRule: update(packet, held) -> the crossing's command,
-        None when not crossing. active, stage.
+    IntersectionRule: update(packet, held) -> a Command for each frame of the
+    crossing, None outside one; record has the stage, heading and turn_end.
 
-Flow (each frame while active):
-    0. On the crossing's first frame: the heading starts at the approach angle.
-    1. Add the frame's turn (net of the gyro bias) to the heading: the
-       packet's yaw_deg, integrated reading by reading, or yaw_rate x the
-       frame step without it.
-    2. At the line: STAGE_ADVANCE for left / right, else STAGE_EXIT.
-    3. STAGE_ADVANCE: the heading hold for ADVANCE_CM (ADVANCE_MS); then STAGE_TURN.
-    4. STAGE_TURN: the turn's duties until the heading reaches the target
-       or the time limit; then STAGE_EXIT, holding the heading it ended on.
-    5. STAGE_EXIT: count boundary frames and distance (driving time); end on any limit.
-    Every stage before the end returns a command and a record.
+Flow:
+    1. to_line: straight to the line on the heading hold.
+    2. advance (left / right): on into the intersection, by distance or time.
+    3. turn (left / right): wheel speeds until the gyro reads TURN_TARGET_DEG, or the time limit.
+    4. exit: straight on the new heading until the lane is back.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.lane_keeping import KP_HEADING, LaneKeepingNavigator
@@ -78,25 +26,23 @@ from src.navigation.route import LEFT, RIGHT, STRAIGHT, RouteProgress
 from src.navigation.stop_line import CROSSING, StopLineTracker
 from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 
-# Both boundaries this many frames in a row ends the crossing (~0.5 s at
-# 20 FPS). 3 ended it as soon as the far side's lane lines showed, and the
-# next lane's stop line was taken up right after a straight crossing; the
-# crossing keeps new stop lines out while it lasts (2026-10-05)
+# Both boundaries this many frames in a row ends the crossing (~0.5 s at 20 FPS).
+# Fewer (3) ended it as soon as the far side's lane lines showed, and the next
+# lane's stop line was taken up right after; the crossing keeps new stop lines
+# out while it lasts (2026-10-05)
 TWO_BOUNDARY_FRAMES = 10
-# At least one boundary (two, or left_only / right_only) this many frames in
-# a row also ends it: past some intersections the camera sees only one lane
-# line, and the crossing never ended (2026-10-01 run: right_only for 5 s,
-# the robot pressed against the right line). Longer than TWO_BOUNDARY_FRAMES,
-# since one line is weaker evidence than two (~1 s at 20 FPS; 6 until
-# 2026-10-05, raised with it)
+# At least one boundary (two, or left_only / right_only) this many frames in a
+# row also ends it: past some intersections the camera sees only one lane line,
+# and the crossing never ended (2026-10-01 run: right_only for 5 s, the robot
+# pressed against the right line). Longer than TWO_BOUNDARY_FRAMES, since one
+# line is weaker evidence than two (~2 s at 20 FPS; tuned on the mat 2026-10-19)
 ONE_BOUNDARY_FRAMES = 40
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
-# Driving time in STAGE_EXIT before lane keeping takes over anyway; a guess
-# at crossing one intersection, tuned on the mat (3 s 2026-10-01, 4 s
-# 2026-10-05 with the longer boundary counts, 5.5 s 2026-10-19)
+# Driving time in STAGE_EXIT before lane keeping takes over anyway: crossing
+# one intersection, tuned on the mat with the boundary counts (2026-10-19)
 MAX_CROSS_MS = 5500
-# ... or this far, by odometry. None: by MAX_CROSS_MS. Set it from a run's
-# stage_cm at the end of timed exits (nav.csv), once odometry is calibrated
+# ... or this far, by odometry; None: by MAX_CROSS_MS. From a run's stage_cm at
+# the end of timed exits (nav.csv, 2026-10-20)
 MAX_CROSS_CM: float | None = 49.7
 # Longest packet gap integrated as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
@@ -110,13 +56,12 @@ MAX_DT_MS = 500
 ADVANCE_MS = 2500
 # The advance by odometry instead: floor cm from the line. A time moves with
 # the speed, and the speed with the battery (the heading hold drives a duty);
-# a distance doesn't. None: by ADVANCE_MS. Set it from a run's stage_cm at
-# the end of timed advances (nav.csv), once odometry is calibrated
+# a distance doesn't. None: by ADVANCE_MS. From a run's stage_cm at the end of
+# timed advances (nav.csv, 2026-10-20)
 ADVANCE_CM: float | None = 22.3
 
 # Turn duties (left, right): left is a wide arc into the far lane, right a
-# tight arc around the right wheel. Measured on the mat 2026-10-01 as
-# (0.36, 0.63) and (0.45, 0.0); raised 2026-10-06 (motor recalibration).
+# tight arc around the right wheel, tuned on the mat (2026-10-19).
 # They're the arcs as tuned, at ~11.7 V: with the wheel-speed control
 # (wheel_speed.py) the turn asks for these duties' wheel speeds at that
 # voltage (x CPS_PER_DUTY), and finds whatever duty gets them on the day's
@@ -133,8 +78,8 @@ TURN_TARGET_DEG = 85.0
 # this is larger than 1, and negative: a robot turned right sees the line's
 # left end nearer. Measured, not computed (guides/navigation_linker.md,
 # "Measuring TILT_TO_HEADING": park at a known angle to a line, read
-# stop_line_tilt_deg). None: no
-# correction, the heading starts at 0. -4.3: detect-range target=line, 10 cm,
+# stop_line_tilt_deg). None: no correction, the heading starts at 0.
+# -4.3: detect-range target=line, 10 cm,
 # -6..6 deg (2026-10-20): tilts +1.39, +1.26, +0.03, -0.49, -1.22, redone
 # looks within 0.1-0.3 deg. Check the sign on the robot before trusting it
 # (an angled start's approach_deg reads + when turned right): wrong, it

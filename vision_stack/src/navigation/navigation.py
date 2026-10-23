@@ -1,40 +1,22 @@
-"""Navigation: the subsystem's orchestrator, one Command per frame from its rules and lane keeping.
+"""Navigation: one Command per frame, from the rules in priority order, else lane keeping.
 
 Purpose:
-    Each navigation decision lives in its own file, as a rule with one job.
-    This is the one place that says in which order they're asked: every
-    frame the shared stop-line tracker advances, then each rule in priority
-    order says either a Command or None ("nothing to say"), and the first
-    Command wins. With no rule speaking, lane keeping steers. Navigation is
-    the Navigator the pipeline and navigation_linker drive with.
-
-    The contract types (Command, BRAKE, STALL_DUTY, Navigator,
-    command_problems) live in navigation_contract.py, so the rules can use
-    them without importing this module; they're re-exported here.
+    Each navigation decision lives in its own file as a rule with one job;
+    this is the one place that says in which order they're asked. The first
+    rule with a Command wins, and lane keeping steers when none speaks.
+    Every rule still sees every frame (held: a higher one decided), so its state
+    stays current (docs/vision_pipeline/navigation_contract.md, "The navigation subsystem").
 
 Main package:
-    Navigation: update(packet) -> Command, reset(), record, finished,
-        outcome, end_step; progress (the route).
-    RULE_*: which part decided a frame, in record["rule"].
+    Navigation: the Navigator the pipeline and the linkers drive with:
+    update(packet) -> Command, plus record (which rule decided, and why),
+    finished, outcome and end_step.
 
 Flow, every frame:
-    1. StopLineTracker.update(packet): has the robot reached a stop line?
-       A line leaving the view is the next intersection: RouteProgress.enter().
-       While an intersection is being crossed, no new line is taken up.
-    2. ObstacleRule      something in the path within reach: brake, wait
-                         until it's gone, go on
-    3. StopSignRule      stop sign at the line: stop, hold, go
-    4. TrafficLightRule  red light at the line: wait for it
-    5. IntersectionRule  from the line leaving the view: straight to the line,
-                         the route's turn there (left / right), then out on
-                         the new heading until the lane is back
-    6. EndOfCourseRule   lane stale: creep; stale too long: brake, finished
-                         (or ended early, before the route is done); the
-                         route's finish line: brake, finished
-    7. LaneKeepingNavigator, when none of them spoke.
-    Once finished, every frame is BRAKE and the run's loop ends on it.
-    Every rule sees every frame (held = a higher rule already decided it),
-    so each keeps its own state current whether or not it's the one heard.
+    1. StopLineTracker: has the robot reached a stop line? (a new one: the next intersection)
+    2. ObstacleRule, StopSignRule, TrafficLightRule, IntersectionRule,
+       EndOfCourseRule, in that order; the first Command wins.
+    3. LaneKeepingNavigator when none spoke. Once finished, every frame is BRAKE.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.end_of_course import EndOfCourseRule
@@ -48,6 +30,8 @@ from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 from src.navigation.wheel_speed import WheelSpeed
 
+# The contract types live in navigation_contract.py, so the rules can use them
+# without importing this module; re-exported here for everyone else
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
            "RULE_OBSTACLE", "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
            "RULE_LANE_KEEPING"]

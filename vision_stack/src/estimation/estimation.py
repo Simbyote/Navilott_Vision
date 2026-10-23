@@ -330,7 +330,6 @@ class LaneFilter:
             self._missed = 0
             status = LANE_VISION
         else:
-            # @TODO dead-reckon from wheel odometry during the hold (the encoders' counts reach the sensor sample)
             self._missed += 1
             if self._missed <= cfg.hold_max_frames:
                 status = LANE_HOLD

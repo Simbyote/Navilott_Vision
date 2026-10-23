@@ -271,7 +271,6 @@ def _contours(
     return contours
 
 
-# @TODO integrate into _extract_lane_candidates. Kept separate so it can be tested in isolation.
 def _mean_contour_intensity(
         gray: np.ndarray,
         contour: np.ndarray

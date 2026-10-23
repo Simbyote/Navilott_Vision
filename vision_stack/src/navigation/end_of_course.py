@@ -1,36 +1,21 @@
 """End of course: finish the run at the route's finish, or end it early on a lane lost off course.
 
 Purpose:
-    How a run ends depends on the route (route.py, decided 2026-10-01):
-        - finish "edge": after the last maneuver, a lane that stays lost is
-          the mat's edge, the course's end: OUTCOME_FINISHED.
-        - finish "stop_line": the robot stops at the first stop line after
-          the last maneuver (the tracker's reached): OUTCOME_FINISHED.
-        - A lane that stays lost before then is off course: a safety stop,
-          OUTCOME_EARLY, with the step it got to.
-    Phase 3 marks the lane stale after a short hold (hold_max_frames, about
-    0.35 s). From then on this rule slows to SLOW_DUTY, steering by the
-    heading turned since vision was lost, as lane keeping does; if the lane
-    is still stale after END_STALE_MS of that, it brakes and ends the run.
-    The lane coming back (vision or hold) cancels it all.
-
-    The count pauses while a higher-priority rule holds the frame: crossing
-    an intersection (no lane boundaries in the middle of one) and stopped at
-    a stop sign or red light aren't the end of the course.
+    How a run ends depends on the route's finish (route.py): at the edge, a
+    lane that stays lost after the last maneuver is the course's end; with a
+    finish line, the first stop line after it. A lane that stays lost before
+    then is a safety stop. The count pauses while a higher rule holds the
+    frame: inside an intersection, or stopped at a sign or a light.
 
 Main package:
-    EndOfCourseRule: update(packet, held) -> a slow command, BRAKE once
-        finished, None while the lane is fine. finished: the run is over;
-        outcome: OUTCOME_FINISHED or OUTCOME_EARLY; end_step: the step it
-        ended on.
+    EndOfCourseRule: update(packet, held) -> a creeping command, BRAKE once
+    finished, None while the lane is fine; and how the run ended (outcome,
+    end_step).
 
 Flow:
-    lane vision / hold -> nothing to say, count reset
-    lane stale, not held -> creep at SLOW_DUTY; count the time
-    count >= END_STALE_MS -> BRAKE, finished: OUTCOME_FINISHED if the route
-                             is done and finishes at the edge, else OUTCOME_EARLY
-    the finish line reached -> BRAKE, finished: OUTCOME_FINISHED
-    (BRAKE from then on)
+    1. Lane on vision or hold: nothing to say; the count resets.
+    2. Lane stale, not held: creep at SLOW_DUTY on the heading; count the time.
+    3. END_STALE_MS of that, or the finish line reached: BRAKE, finished, from then on.
 """
 from src.estimation.estimation import LANE_STALE, EstimationPacket
 from src.navigation.lane_keeping import SOURCE_HEADING, LaneKeepingNavigator

@@ -1,24 +1,19 @@
 """Lane keeping: proportional differential steering on the lane.
 
 Purpose:
-    Turns each frame's EstimationPacket into a motor Command under the
-    Navigation contract (src/navigation/navigation_contract.py): drives at a base duty and steers
-    against the lane offset (on vision) or the heading turned since vision
-    was lost (on hold / stale). Pure logic: it never imports pigpio or the
-    motor driver, so it runs and tests anywhere; whoever runs the loop drives
-    the Command it returns (main.py and navigation_linker on the robot).
+    The fallback every frame no rule speaks for: drive at a base duty and
+    steer against the lane offset, or, once vision is lost, against the
+    heading turned since. Pure logic, with no pigpio or motor driver, so it
+    runs and tests anywhere; whoever runs the loop drives what it returns.
 
 Main package:
-    LaneKeepingNavigator: the navigator. update(packet) -> Command, reset().
-        Steering gain grows with the offset (variable gain scaling), so
-        small offsets get gentle corrections and large ones firm ones.
-    REASON_*: why a frame's command is what it is, in LaneKeepingNavigator.record.
+    LaneKeepingNavigator: update(packet) -> Command, with record saying why
+    (REASON_*). Its steer() is shared by the intersection and end-of-course rules.
 
 Flow:
-    1. Steering: lane_offset_cm (or lane_offset without a scale) on vision,
-       times a gain that grows with |offset|; heading_error on hold / stale;
-       clamped to max_steering_adj.
-    2. Left = base - steering, right = base + steering, each kept at or above
+    1. Steering: the offset on vision, times a gain that grows with |offset|;
+       the heading turned on hold or stale; clamped to max_steering_adj.
+    2. Left = base - steering, right = base + steering, each at least
        STALL_DUTY; anything the contract rejects becomes BRAKE.
 """
 from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
@@ -109,8 +104,8 @@ class LaneKeepingNavigator:
                 offset = packet.lane_offset
                 steering_adj = offset * self.kp_norm * (1.0 + self.gain_scale * abs(offset) * NORM_TO_CM)
         elif packet.lane_status in (LANE_HOLD, LANE_STALE):
-            # @TODO (open): the contract says don't drive forward on a stale
-            # lane; this keeps driving on heading. Decide which is wanted.
+            # On a stale lane the contract says creep, then stop: EndOfCourseRule does
+            # that ahead of this rule in Navigation; alone, lane keeping holds the heading
             steering_adj = packet.heading_error * self.kp_heading
             source = SOURCE_HEADING
         return self.steer(steering_adj, source)

@@ -1,39 +1,21 @@
 """Obstacle rule: something in the robot's path within reach: brake, wait until it's gone, then go on.
 
 Purpose:
-    The robot's first rule, above the stop sign: nothing else it does is
-    worth hitting something for. When Phase 3's obstacle vote says there is
-    something in the path and its base is within OBSTACLE_STOP_CM (or, with
-    no cm, OBSTACLE_STOP_PX rows of the view bottom; or its base is already
-    out of view), this rule brakes. It keeps braking until no obstacle has
-    been seen at all, at any distance, for OBSTACLE_CLEAR_MS: an object the
-    robot stopped just short of reads a little beyond the stop distance, and
-    releasing on "not near" would creep the robot into it a stop at a time.
-    Then it says nothing, and lane keeping (or the rule below) drives on.
-
-    The distance comes from the stop-line table (perception/obstacle.py),
-    measured from the robot's front edge. The camera's view starts ~10.2 cm
-    ahead of it, so "within 10 cm" can't be seen as a distance: the stop
-    distance sits just beyond the view's edge instead, so the brake starts
-    while the base is still in view, and the coast past a zero duty
-    (~0.15-0.18 s, 2026-09-30) plus a frame or two of vote ends the robot
-    near 10 cm. A clipped obstacle (base out of view) is always within it.
-
-    While it brakes, the rules below see held=True: the end of course
-    doesn't count a lane hidden behind the obstacle as the course ending,
-    and an intersection crossing's timers wait. All timing is on packet
-    timestamps, so replays behave the same.
+    The first rule, above the stop sign: nothing else the robot does is
+    worth hitting something for. It releases only once no obstacle has been
+    seen at any distance for a while, so an object the robot stopped just
+    short of can't creep it closer a stop at a time. Why the stop distance
+    sits just past the view's edge: docs/vision_pipeline/navigation_contract.md.
 
 Main package:
     ObstacleRule: update(packet, held) -> BRAKE while an obstacle is near or
-        hasn't been clear long enough, None otherwise. blocked: it is braking.
+    hasn't been clear for OBSTACLE_CLEAR_MS, None otherwise.
 
 Flow:
-    1. near = an obstacle voted, and clipped or within the stop distance.
-    2. near -> blocked; the clear timer resets.
-    3. blocked and no obstacle at all this frame -> the clear timer runs;
-       OBSTACLE_CLEAR_MS of it releases. An obstacle seen at any distance
-       resets it.
+    1. Near: an obstacle voted, and clipped or within the stop distance.
+    2. Near -> brake; the clear timer resets.
+    3. Braking with no obstacle at all this frame -> the clear timer runs;
+       OBSTACLE_CLEAR_MS of it releases.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import BRAKE, Command
