@@ -1,5 +1,4 @@
-"""
-test_intersection.py  --  src/navigation/intersection.py
+"""test_intersection.py  --  src/navigation/intersection.py
 
 The intersection rule against a real tracker and lane keeper: it drives
 straight from the moment the line leaves the view, steers against the
@@ -17,6 +16,8 @@ hold squares the robot to the street and a turn ends square to it; without
 a scale or a tilt it starts at 0. With odometry and a distance set (ADVANCE_CM, MAX_CROSS_CM),
 the advance and the exit go by cm instead; without either, by time; every
 record carries the stage's cm.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import math
 
@@ -235,10 +236,6 @@ def test_the_record_names_the_route_step_and_maneuver(maneuver):
     assert (out[LOST][1]["step"], out[LOST][1]["maneuver"]) == (f"1/1 {maneuver}", maneuver)
 
 
-# =============================================================================
-# Turns
-# =============================================================================
-
 # Turning at 60 deg/s: TURN_TARGET_DEG takes ~1.4 s
 YAW_DPS = 60.0
 TURN_FRAMES = int(TURN_TARGET_DEG / YAW_DPS * 1000) // MS + 1
@@ -377,10 +374,6 @@ def test_straight_and_no_route_never_turn():
         assert STAGE_TURN not in stages(out) and STAGE_EXIT in stages(out)
 
 
-# =============================================================================
-# By distance, when there's odometry
-# =============================================================================
-
 def rolling(n, cm_per_frame, start=0, **fields):
     """n frames after the line, the odometry rising cm_per_frame each from the line's frames."""
     base = (len(LINE) + start) * cm_per_frame
@@ -424,10 +417,6 @@ def test_the_exit_ends_on_distance_when_set():
     assert active(out)[-1] == exit_ + 19                    # 40 cm at 2 cm a frame
     assert out[exit_ + 19][1]["stage_cm"] == 38.0
 
-
-# =============================================================================
-# The approach angle, from the stop line's tilt
-# =============================================================================
 
 # This file's scale: a robot turned right of square sees the line's left end
 # nearer (a negative tilt), and the line looks 3x flatter than it is

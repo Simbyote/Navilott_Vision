@@ -53,10 +53,6 @@ class FakeClock:
         self.now += s + (self.late.pop(0) if self.late else 0.0) / 1e6
 
 
-# =============================================================================
-# Measuring
-# =============================================================================
-
 @pytest.mark.software
 def test_the_python_probe_measures_each_wake_ups_lateness_on_a_fixed_grid():
     clock = FakeClock([50.0, 120.0, 30.0, 2000.0, 10.0])
@@ -107,10 +103,6 @@ def test_the_preemption_model_comes_from_uname_v(version, model):
     assert sl.preemption_model(version) == model
 
 
-# =============================================================================
-# Statistics and findings
-# =============================================================================
-
 @pytest.mark.software
 def test_percentiles_from_a_histogram_with_overflows_as_late_as_the_max():
     hist = {k: 1 for k in range(1, 1001)}                       # 1..1000 us, one each
@@ -155,10 +147,6 @@ def test_a_kernel_without_preempt_rt_says_an_rt_kernel_would_help():
     r["preemption"] = "PREEMPT"
     assert sl.findings(r)[-1].startswith("the kernel isn't PREEMPT_RT")
 
-
-# =============================================================================
-# measure(), output and the command line
-# =============================================================================
 
 def fake_python(seconds, interval_us):
     return [10.0] * 990 + [500.0] * 9 + [1500.0]
@@ -229,10 +217,6 @@ def test_the_figure_draws_each_case_and_skips_without_data(tmp_path):
     assert png.exists() and png.stat().st_size > 10_000
     assert sl.figure({"hist": {}, "label": ""}, tmp_path / "g.png") is None
 
-
-# =============================================================================
-# On the Pi
-# =============================================================================
 
 @pytest.mark.hardware
 def test_scheduling_latency_on_the_pi(artifacts):

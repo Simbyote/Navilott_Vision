@@ -1,26 +1,12 @@
-"""
-test_production_parity.py  --  production twins in src/perception/
+"""test_production_parity.py  --  the production twins in src/perception/
 
-geometry.py, color_branch.py, lane_offset.py and feature_fusion.py each carry
-a debug-free twin next to every function that does debug work:
-
-    geometry        _extract_lane_candidates -> _filter_lane_contours
-                    extract_lane_candidates  -> find_lane_candidates
-                    _extract_sign_candidates -> _filter_sign_contours
-                    extract_sign_candidates  -> find_sign_candidates
-                    run_geometry_stage       -> detect_geometry
-    color_branch    _blobs_to_candidates     -> _filter_blobs
-                    extract_traffic_light_candidates -> find_traffic_light_candidates
-                    run_color_stage          -> detect_color
-    lane_offset     _usable                  -> _is_usable
-                    _single_sided            -> _project_single
-                    compute_lane_offset      -> estimate_lane_offset
-    feature_fusion  _best_candidate          -> _pick_best
-                    fuse_detections          -> fuse
-    obstacle        compute_obstacle         -> estimate_obstacle
-
-The twins repeat the gate logic, so they are only correct while they agree
-with the debug path. Every test here pins that agreement.
+Every perception function that does debug work has a debug-free twin
+beside it that the robot runs (run_geometry_stage -> detect_geometry,
+compute_lane_offset -> estimate_lane_offset, ...). The twins repeat the
+gate logic, so they are only correct while they agree with the debug path;
+every test here pins that agreement, on scenes that reach every detection
+type and offset mode, a threshold sweep, and branches the shipped configs
+never reach.
 
 --software  Both chains on synthetic scenes, compared field by field. No camera.
 """
@@ -52,6 +38,7 @@ CONFIGS = {"default": PipelineConfig(), "scene": SCENE_CONFIG, "alt": ALT_CONFIG
 def _roi(frame_bgr, config, frame_id=7):
     return crop_rois(preprocess_frame(FrameData(frame_bgr, frame_id, frame_id * 50), config.preprocess), config.roi)
 
+
 def _run_debug(roi, config, color):
     """The chain through the debug functions, the way phase2_linker.run_chain() runs it."""
     g, _, _ = geo.run_geometry_stage(roi, config.geometry)
@@ -61,6 +48,7 @@ def _run_debug(roi, config, color):
     obstacle, _ = ob.compute_obstacle(roi, config.obstacle, config.ground, SYNTHETIC_STOP_LINE_TABLE)
     fusion, _ = ff.fuse_detections(g, traffic, roi)
     return g, traffic, offset, stop_line, obstacle, fusion, package_phase2(fusion, offset, stop_line, obstacle)
+
 
 def _run_production(roi, config, color):
     """The same chain through the production twins."""
@@ -80,7 +68,7 @@ STAGES = ("geometry", "traffic", "offset", "stop_line", "obstacle", "fusion", "p
 @pytest.mark.parametrize("color_on", [False, True], ids=["color_off", "color_on"])
 @pytest.mark.parametrize("scene", SCENES)
 def test_chain_parity(scene, color_on, config_name):
-    """Every stage output, and the Phase2Output, match between the debug chain and the production twins."""
+    # Every stage output, and the Phase2Output, match between the debug chain and the production twins.
     config = CONFIGS[config_name]
     color = cb.ColorConfig(cb.load_hsv_ranges(str(HSV_RANGES_PATH))) if color_on else cb.ColorConfig()
     roi = _roi(SCENES[scene], config)
@@ -93,7 +81,7 @@ def test_chain_parity(scene, color_on, config_name):
 
 @pytest.mark.software
 def test_scenes_exercise_every_output():
-    """Guards the parity test itself: the scene set must reach every detection type and offset mode."""
+    # Guards the parity test itself: the scene set must reach every detection type and offset mode.
     color = cb.ColorConfig(cb.load_hsv_ranges(str(HSV_RANGES_PATH)))
     types, modes, obstacles = set(), set(), set()
     for frame in SCENES.values():
@@ -110,7 +98,7 @@ def test_scenes_exercise_every_output():
 @pytest.mark.software
 @pytest.mark.parametrize("config_name", CONFIGS)
 def test_threshold_sweep_parity(config_name):
-    """Both chains agree on every frame of a sweep that straddles the gates."""
+    # Both chains agree on every frame of a sweep that straddles the gates.
     config = CONFIGS[config_name]
     color = cb.ColorConfig()
     for level, width, noise in SWEEP:
@@ -123,7 +111,7 @@ def test_threshold_sweep_parity(config_name):
 
 @pytest.mark.software
 def test_uncalibrated_single_boundary_parity():
-    """_project_single's uncalibrated branch, which the shipped configs never reach."""
+    # _project_single's uncalibrated branch, which the shipped configs never reach.
     config = PipelineConfig(lane_offset=lo.LaneOffsetConfig(expected_half_lane_px=None))
     roi = _roi(SCENES["one_boundary"], config)
     g = geo.detect_geometry(roi, config.geometry)
@@ -134,7 +122,7 @@ def test_uncalibrated_single_boundary_parity():
 
 @pytest.mark.software
 def test_invalid_confidence_parity():
-    """Out-of-range confidences are dropped the same way by both fusion paths."""
+    # Out-of-range confidences are dropped the same way by both fusion paths.
     roi = _roi(SCENES["sign_and_lights"], PipelineConfig())
     g = geo.detect_geometry(roi)
     for c in g.lane_candidates[:1] + g.sign_candidates[:1]:
@@ -151,7 +139,7 @@ def test_invalid_confidence_parity():
     (np.zeros((10, 10, 3), np.uint8), ValueError),
 ], ids=["none", "float", "bgr"])
 def test_detect_geometry_validates_like_run_geometry_stage(bad, exc):
-    """detect_geometry rejects the same malformed ROIs with the same exception types."""
+    # detect_geometry rejects the same malformed ROIs with the same exception types.
     roi = _roi(SCENES["two_boundary"], PipelineConfig())
     object.__setattr__(roi, "lane_roi", bad) if roi.__dataclass_params__.frozen else setattr(roi, "lane_roi", bad)
     with pytest.raises(exc):
@@ -166,9 +154,9 @@ def test_detect_geometry_validates_like_run_geometry_stage(bad, exc):
 # 1.0, a solidity of exactly 0.80), so each filter below is set so its
 # thresholds sit in the middle of the random data, and integer draws land on
 # the boundaries exactly. An off-by-one or a flipped < / <= in a twin shows up.
-# ---------------------------------------------------------------------------
 
 FUZZ_N = 1500
+
 
 def _blocky_gray(rng, h, w):
     """Gray image of random constant blocks, so contour mean intensities spread across 100-155."""
@@ -177,6 +165,7 @@ def _blocky_gray(rng, h, w):
         x, y = rng.integers(0, w), rng.integers(0, h)
         img[y:y + rng.integers(4, 30), x:x + rng.integers(4, 40)] = rng.integers(100, 156)
     return img
+
 
 def _lane_contour(rng, h, w):
     """An ellipse outline (many points) or a bare quad (4 points, the too_few_pts gate)."""
@@ -196,6 +185,7 @@ def _lane_contour(rng, h, w):
     pts = cv2.ellipse2Poly((cx, cy), axes, int(rng.integers(0, 180)), 0, 360, 10)
     return pts.reshape(-1, 1, 2).astype(np.int32)
 
+
 @pytest.mark.software
 def test_lane_gate_twins_fuzz():
     rng = np.random.default_rng(1234)
@@ -208,6 +198,7 @@ def test_lane_gate_twins_fuzz():
         a = geo._extract_lane_candidates(contours, lf, 1, 2, (h, w), gray, {})
         b = geo._filter_lane_contours(contours, lf, 1, 2, (h, w), gray)
         _same(a, b, f"trial {trial}")
+
 
 @pytest.mark.software
 def test_sign_gate_twins_fuzz():
@@ -224,6 +215,7 @@ def test_sign_gate_twins_fuzz():
         a = geo._extract_sign_candidates(contours, sf, 1, 2, {}, [])
         b = geo._filter_sign_contours(contours, sf, 1, 2)
         _same(a, b, f"trial {trial}")
+
 
 @pytest.mark.software
 def test_blob_gate_twins_fuzz():
@@ -246,6 +238,7 @@ def test_blob_gate_twins_fuzz():
         b = cb._filter_blobs(mask, "red", bf, 1, 2, hsv)
         _same(a, b, f"trial {trial}")
 
+
 def _random_lane_candidate(rng, cfg):
     """Fields drawn from small grids that include each LaneOffsetConfig threshold exactly."""
     pick = lambda *vals: float(rng.choice(vals))
@@ -260,6 +253,7 @@ def _random_lane_candidate(rng, cfg):
         foot_x=float(rng.integers(0, 432)),
     )
 
+
 @pytest.mark.software
 @pytest.mark.parametrize("config_name", CONFIGS)
 def test_usable_twins_fuzz(config_name):
@@ -269,6 +263,7 @@ def test_usable_twins_fuzz(config_name):
         c = _random_lane_candidate(rng, cfg)
         assert lo._usable(c, cfg, []) == lo._is_usable(c, cfg), f"case {i}: {c}"
 
+
 @pytest.mark.software
 def test_single_sided_twins_fuzz():
     rng = np.random.default_rng(1415)
@@ -277,6 +272,7 @@ def test_single_sided_twins_fuzz():
         anchor = lo.BoundaryAnchor(foot_x=float(rng.integers(0, 432)), weight=float(rng.random()), candidate=None)
         args = (anchor, str(rng.choice(["left", "right"])), 216.0, cfg, 1, 2, int(rng.integers(1, 4)))
         _same(lo._single_sided(*args, []), lo._project_single(*args), f"case {i}")
+
 
 @pytest.mark.software
 def test_best_candidate_twins_fuzz():
@@ -291,9 +287,10 @@ def test_best_candidate_twins_fuzz():
         b = ff._pick_best(cands)
         assert a is b, f"case {i}"
 
+
 @pytest.mark.software
 def test_stop_line_distance_twins_fuzz():
-    """Random candidate sets, confidences straddling the gate and tied rows: both versions pick the same line."""
+    # Random candidate sets, confidences straddling the gate and tied rows: both versions pick the same line.
     from src.perception.geometry import StopLineCandidate
     rng = np.random.default_rng(11)
     roi = _roi(SCENES["two_boundary"], SCENE_CONFIG)

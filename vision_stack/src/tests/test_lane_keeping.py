@@ -1,9 +1,10 @@
-"""
-test_lane_keeping.py  --  src/navigation/lane_keeping.py
+"""test_lane_keeping.py  --  src/navigation/lane_keeping.py
 
 LaneKeepingNavigator against the Navigation contract checks
 (navigation_checks.py), then its own behavior: stop triggers, which offset it
 steers by, the steering clamp and the stall-duty floor.
+
+--software  Hand-built packets. No camera or Pi.
 """
 import pytest
 
@@ -21,10 +22,6 @@ from src.tests.navigation_checks import (
 def nav(**kw):
     return LaneKeepingNavigator(**kw)
 
-
-# =============================================================================
-# The contract
-# =============================================================================
 
 @pytest.mark.software
 def test_the_gains_the_robot_drives_with():
@@ -59,10 +56,6 @@ def test_alone_it_keeps_full_speed_on_a_stale_lane():
     assert check_stale_lane_slows_then_stops(nav())
 
 
-# =============================================================================
-# Stopping is the rules' job now
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("fields", [{"drive_state": "stop"}, {"drive_state": "caution"}, {"stop_sign_detected": True},
                                     {"stop_line_detected": True, "stop_line_distance_px": 2.0,
@@ -71,10 +64,6 @@ def test_lane_keeping_never_stops_for_signs_lights_or_lines(fields):
     # navigation.Navigation's rules decide stops; lane keeping only steers
     assert nav().update(packet(**fields)) == Command(BASE_SPEED, BASE_SPEED)
 
-
-# =============================================================================
-# Steering
-# =============================================================================
 
 @pytest.mark.software
 def test_centered_drives_straight_at_the_base_speed():
@@ -176,10 +165,6 @@ def test_zero_gain_scale_is_plain_proportional_steering():
     assert cmd.left == pytest.approx(BASE_SPEED - 3.0 * KP_CM)
 
 
-# =============================================================================
-# record
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("fields, source", [
     ({"lane_offset_cm": 2.0}, "offset_cm"), ({"lane_offset": 0.2}, "offset"),
@@ -202,10 +187,6 @@ def test_record_says_rejected_and_reset_clears_it(monkeypatch):
     n.reset()
     assert n.record == {}
 
-
-# =============================================================================
-# steer(): shared with the intersection rule
-# =============================================================================
 
 @pytest.mark.software
 def test_steer_splits_clamps_and_records_like_update():

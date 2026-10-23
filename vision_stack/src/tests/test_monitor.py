@@ -1,5 +1,4 @@
-"""
-test_monitor.py  --  src/diagnostics/monitor.py
+"""test_monitor.py  --  src/diagnostics/monitor.py
 
 record() over a fake /proc on a fake clock: rows every interval, system
 rows once a second, and every way it ends (the process gone, the duration,
@@ -10,6 +9,8 @@ left out of them. The run folder's files, find_pid(), and the command line
 launching a real child.
 
 --software  Fake /proc trees and short-lived child processes. No Pi needed.
+--hardware  Two seconds of a child that sleeps, on the Pi: threads, cores,
+            temperature, clock and throttle flags all read.
 """
 import csv
 import json
@@ -48,10 +49,6 @@ def go(tmp_path, **kw):
                      system_reader=lambda: system_row(), **kw)
     return rec, clock
 
-
-# =============================================================================
-# record()
-# =============================================================================
 
 @pytest.mark.software
 def test_rows_every_interval_and_system_rows_once_a_second(tmp_path):
@@ -111,10 +108,6 @@ def test_ctrl_c_ends_it_and_keeps_the_rows(tmp_path):
     rec = mon.record(100, 0.5, clock=clock, sleep=sleep, proc=tmp_path, system_reader=system_row)
     assert rec["interrupted"] and len(rec["threads"]) == 2
 
-
-# =============================================================================
-# Summaries and the run folder
-# =============================================================================
 
 def trow(t, tid, name, core, cpu, vol=10.0, invol=1.0):
     return {"elapsed_s": t, "tid": tid, "name": name, "state": "S", "core": core, "cpu_pct": cpu,
@@ -207,10 +200,6 @@ def test_find_pid_takes_the_newest_match_and_never_itself(tmp_path):
     assert mon.find_pid("nothing", tmp_path) is None
 
 
-# =============================================================================
-# The command line
-# =============================================================================
-
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 @pytest.mark.software
 def test_cli_launches_a_run_records_it_and_returns_its_exit_code(tmp_path):
@@ -237,7 +226,7 @@ def test_cli_needs_exactly_one_target_and_a_missing_match_is_exit_2(monkeypatch,
 
 @pytest.mark.hardware
 def test_a_short_recording_on_the_pi_reads_every_source(tmp_path):
-    """Two seconds of a child that sleeps: threads, cores, temperature, clock and throttle flags all read."""
+    # Two seconds of a child that sleeps: threads, cores, temperature, clock and throttle flags all read.
     if read_throttled() is None:
         pytest.skip("vcgencmd unavailable: not a Pi")
     code = mon.cli(["--interval", "0.25", "--out", str(tmp_path), "--", sys.executable, "-c",

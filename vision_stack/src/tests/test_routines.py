@@ -48,10 +48,6 @@ def no_conditions(tester="", notes=""):
             "notes": notes, "temp_c": 50.0, "cpu_mhz": 1000.0, "throttled": "0x0", "battery_v": 11.9}
 
 
-# =============================================================================
-# The console
-# =============================================================================
-
 @pytest.mark.software
 def test_ask_strips_takes_the_default_and_stops_on_q_or_end_of_input():
     t = Person("  Mike ", "", "Q")
@@ -97,10 +93,6 @@ def test_after_a_trial_enter_keeps_r_redoes_d_discards_and_anything_else_is_aske
         c.after_trial()
 
 
-# =============================================================================
-# Criteria and verdicts
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("value, op, limit, passed", [
     (0.5, "<=", 0.5, True), (0.51, "<=", 0.5, False), (95.0, ">=", 95.0, True), (94.9, ">=", 95.0, False),
@@ -127,10 +119,6 @@ def test_stats_and_verdicts():
     assert h.verdict([ok], True) == h.PASS and h.verdict([ok, bad], True) == h.FAIL
     assert h.verdict([ok], False) == h.INCOMPLETE and h.verdict([], True) == h.RECORDED
 
-
-# =============================================================================
-# Conditions and needs
-# =============================================================================
 
 @pytest.mark.software
 def test_conditions_record_the_code_the_machine_the_tester_and_the_pi():
@@ -173,10 +161,6 @@ def test_needs_say_what_to_do_when_missing(tmp_path):
     (tmp_path / "13").mkdir()                                          # gone before its comm was read
     assert h._process_running("pigpiod", tmp_path) and not h._process_running("pigpiod", tmp_path / "x")
 
-
-# =============================================================================
-# run_routine()
-# =============================================================================
 
 class Probe(h.Routine):
     """A routine that records its calls: each trial asks for one number."""
@@ -292,10 +276,6 @@ def test_a_routine_without_criteria_is_recorded(tmp_path):
     assert res["verdict"] == h.RECORDED
     assert "none: a characterization" in (tmp_path / "out" / "summary.txt").read_text()
 
-
-# =============================================================================
-# The tape check and the command line
-# =============================================================================
 
 @pytest.mark.software
 def test_the_tape_check_passes_a_spread_up_to_its_limit(tmp_path):

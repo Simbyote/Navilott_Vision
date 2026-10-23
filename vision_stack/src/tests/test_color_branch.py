@@ -628,10 +628,6 @@ def test_color_characterization(request, frames, artifacts):
         artifacts.json(f"{fid:06d}_blob_trace.json", _jsonable_trace(dbg["trace"]))
 
 
-# =============================================================================
-# A lamp or a shirt: the roundness and core gates, at the robot's BlobFilter()
-# =============================================================================
-
 PROD = BlobFilter()                         # every gate on, as the robot runs
 LAMP_BOX = (120, 200)                       # (h, w) of the drawn traffic ROI
 
@@ -719,17 +715,12 @@ def test_the_production_twin_takes_lamps_and_rejects_shirts_alike():
 
 @pytest.mark.software
 def test_clipped_pixels_beside_a_shirt_dont_count_as_its_core():
-    """White inside the shirt's bounding box but outside its outline: a window or a white sleeve, not a lamp's core."""
+    # White inside the shirt's bounding box but outside its outline: a window or a white sleeve, not a lamp's core.
     img = lit("red", core_r=0)                                      # disc r 12 at (100, 60): its box is 88-112 x 48-72
     img[48:51, 88:91] = (250, 250, 250)                             # the box's corner, outside the circle
     labels, dbg = found(img)
     assert labels == [] and dbg["reject_counts"]["red"]["core"] == 1
 
-
-
-# =============================================================================
-# Glow mode: the white spot with the most white pixels, named by its ring
-# =============================================================================
 
 GLOW = GlowFilter()
 
@@ -846,7 +837,6 @@ def test_glow_names_a_spot_by_its_ring_not_its_own_tinted_white():
     assert [c.label for c in cands] == ["red"]
 
 
-
 @pytest.mark.software
 def test_glow_a_flat_strip_of_glare_is_no_lamp_however_white_or_ringed():
     # The board's edge glare (2026-10-07): a 2 px tall strip, ~40 white px,
@@ -864,7 +854,6 @@ def test_glow_a_flat_strip_of_glare_is_no_lamp_however_white_or_ringed():
     cv2.rectangle(tall, (40, 8), (40, 52), (255, 255, 255), -1)         # 1 x 45 white
     assert glow_read(tall)[0] == []
     assert [c.label for c in glow_read(roi, replace(GLOW, max_white_aspect=20.0))[0]] == ["red"]
-
 
 
 @pytest.mark.software

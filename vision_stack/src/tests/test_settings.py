@@ -1,13 +1,10 @@
-"""
-test_settings.py  --  the run-wide settings in src/params.py, and the values that must agree across modules
+"""test_settings.py  --  the run-wide settings in src/params.py, and the values that must agree across modules
 
-Purpose:
-    Each module's own tests pin its tuned constants next to the behaviour
-    they set. What's here belongs to no single module: the run-wide switches
-    in params.py, and copies of one value that live in several modules (a
-    frame-gap limit, a duty, a battery threshold) and only mean what they
-    say while they match. A tuning change that updates one copy and not the
-    others fails here instead of on the course.
+Each module's own tests pin its tuned constants. What's here belongs to no
+single module: the run-wide switches in params.py, and copies of one value
+that live in several modules (a frame-gap limit, a duty, a battery
+threshold) and only mean what they say while they match. A tuning change
+that updates one copy and not the others fails here instead of on the course.
 
 --software  Imports and arithmetic only. No camera, Pi or files written.
 """
@@ -24,10 +21,6 @@ from src.tests.sim_robot import FakeBattery
 
 pytestmark = pytest.mark.software
 
-
-# =============================================================================
-# params.py: the run-wide switches
-# =============================================================================
 
 def test_the_camera_runs_at_20_fps_480x270_upside_down():
     assert (params.FPS, params.FRAME_W, params.FRAME_H) == (20, 480, 270)
@@ -55,12 +48,8 @@ def test_the_bus_addresses_and_rates_are_the_boards():
     assert params.MOTOR_WATCHDOG_S == 0.5
 
 
-# =============================================================================
-# Copies of one value that must agree
-# =============================================================================
-
 def test_every_frame_gap_limit_is_phase_3s():
-    """A stall is clamped to the same step everywhere, or heading and the navigation timers disagree about it."""
+    # A stall is clamped to the same step everywhere, or heading and the navigation timers disagree about it.
     ms = Phase3Config().max_dt_s * 1000
     assert intersection.MAX_DT_MS == end_of_course.MAX_DT_MS == wheel_speed.MAX_DT_MS == ms
 

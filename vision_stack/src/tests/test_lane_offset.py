@@ -322,7 +322,7 @@ def test_right_only_projects_the_lane_center_to_the_left_of_the_boundary():
 @pytest.mark.software
 @pytest.mark.parametrize("x", [130.0, 170.0])       # near center, so neither side clamps
 def test_one_boundary_carries_its_offset_were_it_the_lanes_other_side(x):
-    """A line left of center read as the lane's right line, and the reverse: Phase 3 takes it on a broken streak."""
+    # A line left of center read as the lane's right line, and the reverse: Phase 3 takes it on a broken streak.
     res, _ = run([cand(x)], cfg=TEST_CFG)
     half = TEST_CFG.expected_half_lane_px
     other_center = x - half if res.mode == "left_only" else x + half
@@ -491,11 +491,6 @@ def draw_anchor_overlay(lane_roi, dbg, result):
     return vis
 
 
-
-# =============================================================================
-# Stop lines: lane candidates that belong to one are skipped
-# =============================================================================
-
 def stop_line(bbox=(100, 30, 200, 8), thickness=8.0, frame_id=1, ts=2):
     """Hand-built StopLineCandidate; only bbox and thickness_px matter to lane_offset."""
     from src.perception.geometry import StopLineCandidate
@@ -506,12 +501,14 @@ def stop_line(bbox=(100, 30, 200, 8), thickness=8.0, frame_id=1, ts=2):
         thickness_px=thickness, mean_intensity=220.0, clipped=False, confidence=0.9,
         frame_id=frame_id, timestamp_ms=ts)
 
+
 def with_stop(cands, stops, cfg=TEST_CFG):
     """Both lane_offset versions on candidates plus stop lines; checked equal."""
     g = GeometryBranchResult(list(cands), [], 1, 2, list(stops))
     debug, dbg = compute_lane_offset(g, make_roi(), cfg)
     assert debug == estimate_lane_offset(g, make_roi(), cfg)
     return debug, dbg
+
 
 def lying(bbox, fx):
     """A lane candidate lying across the ROI at bbox."""

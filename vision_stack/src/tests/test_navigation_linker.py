@@ -141,10 +141,6 @@ def rows(path):
         return list(csv.DictReader(f))
 
 
-# =============================================================================
-# A run
-# =============================================================================
-
 @pytest.mark.software
 def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
     rep, out, motor, _, camera = go(tmp_path, render=True)
@@ -238,10 +234,6 @@ def test_reason_changes_are_logged_as_events(tmp_path):
     assert len(events) == 1 + sum(a != b for a, b in zip(reasons, reasons[1:]))
 
 
-# =============================================================================
-# The contract
-# =============================================================================
-
 @pytest.mark.software
 def test_a_command_that_breaks_the_contract_is_braked_and_counted(tmp_path):
     class Stalls:
@@ -285,10 +277,6 @@ def test_the_intersection_stage_and_maneuver_are_logged(tmp_path):
     assert (row["stage"], row["maneuver"], row["step"], row["reason"]) == ("turn", "left", "1/1 left", "turning")
     assert (row["heading_deg"], row["turn_end"]) == ("-42.5", "gyro target")
 
-
-# =============================================================================
-# How a run ends
-# =============================================================================
 
 @pytest.mark.software
 def test_the_run_time_cap_ends_the_run_and_stops_the_motors(tmp_path):
@@ -382,10 +370,6 @@ def test_dropped_camera_frames_are_counted_and_skipped(tmp_path):
     assert rep["run"]["camera_drops"] == 2 and rep["run"]["frames"] == 6
 
 
-# =============================================================================
-# Sensors and the start button
-# =============================================================================
-
 @pytest.mark.software
 def test_sensor_readings_reach_the_packet_and_the_sensors_are_stopped(tmp_path):
     sensors = Sensors(SensorSample(yaw_rate_dps=0.0, left_wheel_cps=900.0, right_wheel_cps=880.0))
@@ -473,10 +457,6 @@ def test_ctrl_c_while_waiting_for_the_button_still_stops_everything(tmp_path):
     assert motor.calls == [("stop",)] and camera.closed
 
 
-# =============================================================================
-# The summary
-# =============================================================================
-
 @pytest.mark.software
 def test_nav_stats_counts_driving_braking_steering_and_latency():
     s = nl.NavStats()
@@ -501,10 +481,6 @@ def test_an_empty_run_still_summarizes():
                                       "recorder_dropped": 0}})
     assert lines[0] == "[NAVIGATION] ended by x   motors OFF (dry run)"
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 @pytest.fixture
 def cli_env(monkeypatch, tmp_path):
@@ -658,7 +634,6 @@ def test_the_stop_line_distance_is_logged_only_while_the_line_is_voted(tmp_path,
     assert logged[3] == "8.0" and logged[4] == "" and logged[2] == ""
 
 
-
 @pytest.mark.software
 def test_a_lane_that_stays_lost_ends_the_run_as_the_end_of_the_course(tmp_path):
     # The blind scene has no lane; Phase 3 holds, goes stale, the end-of-course rule creeps then finishes
@@ -709,7 +684,6 @@ def test_the_default_route_is_config_s(cli_env):
     from src.navigation.route import load_route
     nl.cli(["--frames", str(tmp)])
     assert got["navigator"].progress.route == load_route(ROUTE_PATH)
-
 
 
 @pytest.mark.software

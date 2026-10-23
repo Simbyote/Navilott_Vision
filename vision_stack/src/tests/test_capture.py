@@ -268,11 +268,13 @@ def test_sink_write_before_open_raises():
     with pytest.raises(CaptureError):
         VideoSink("x.avi", FPS, W, H).write(np.zeros((H, W, 3), np.uint8))
 
+
 @pytest.mark.software
 @pytest.mark.parametrize("fps", [camera.MIN_FPS - 1, camera.MAX_FPS + 1])
 def test_out_of_band_fps_warns(fps):
     with pytest.warns(RuntimeWarning, match="fps"):
         CameraSource(W, H, fps)
+
 
 @pytest.mark.software
 def test_in_band_fps_does_not_warn():
@@ -280,6 +282,7 @@ def test_in_band_fps_does_not_warn():
         warnings.simplefilter("error")      # any warning fails the test
         CameraSource(W, H, camera.MIN_FPS)  # the band edges are inclusive
         CameraSource(W, H, camera.MAX_FPS)
+
 
 @pytest.mark.software
 def test_explicit_zero_budget_is_not_replaced_by_fps():

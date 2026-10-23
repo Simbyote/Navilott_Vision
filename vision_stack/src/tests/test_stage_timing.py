@@ -50,10 +50,6 @@ def table(**columns):
     return {k: np.asarray(v, dtype=np.float64) for k, v in columns.items()}
 
 
-# =============================================================================
-# Stage discovery
-# =============================================================================
-
 @pytest.mark.software
 def test_stage_names_follow_pipeline_order_whatever_the_column_order():
     cols = ["fusion_ms", "roi_ms", "capture_ms", "preprocess_ms", "geometry_ms"]
@@ -95,10 +91,6 @@ def test_live_view_stages_csv_header_is_readable(tmp_path):
     assert "mode_ms" not in cols and "mode" not in cols
 
 
-# =============================================================================
-# Reading
-# =============================================================================
-
 @pytest.mark.software
 def test_warmup_frames_are_dropped(tmp_path):
     rows = [[i, i * 50, 30.0 if i < 2 else 3.0] for i in range(6)]
@@ -138,10 +130,6 @@ def test_a_recorded_interval_is_kept_over_timestamps(tmp_path):
     cols = st.read_timing_csv(write_csv(tmp_path / "s.csv", header, rows), skip=0)
     assert cols["interval_ms"].tolist() == [12.5, 13.5]
 
-
-# =============================================================================
-# Breakdown
-# =============================================================================
 
 @pytest.mark.software
 def test_unaccounted_is_total_minus_the_chain_stages():
@@ -233,10 +221,6 @@ def test_a_stage_with_no_timed_frames_has_no_median_and_no_segment():
     assert "color" not in [n for n, _ in bd["segments"]]
 
 
-# =============================================================================
-# Figures and command line
-# =============================================================================
-
 def sample_run(directory, n=20):
     """A stages.csv shaped like live_view's, 83 ms apart like the 12 FPS bench run."""
     rows = [[i, i * 83, 3.4, 0.2, 5.0 + (i % 4), 0.1, 0.1, 9.0 + (i % 4), 0, 0, "none", 0.0, 0, 0.02]
@@ -299,10 +283,6 @@ def test_cli_reports_a_missing_run(tmp_path, capsys):
     assert st.main([str(tmp_path / "nope")]) == 1
     assert "ERROR" in capsys.readouterr().err
 
-
-# =============================================================================
-# Hardware
-# =============================================================================
 
 @pytest.mark.hardware
 def test_stage_timing_characterization(request, frames, artifacts):

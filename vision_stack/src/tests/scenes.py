@@ -1,39 +1,21 @@
 """Synthetic test frames, the configs they run under, and structural comparison.
 
 Purpose:
-    The one source of synthetic frames for the tests. Every parity test and
-    every known-answer test draws from here, so a scene added once (a stop
-    line, a new light) is exercised by all of them.
-
-    Synthetic frames are drawn already undistorted: a mark drawn straight is
-    straight. Running them through MEASURED would warp them with the real
-    lens model and move every mark, so tests that feed synthetic frames use
-    SCENE_CONFIG. Tests on real captures use MEASURED.
-
-    Synthetic ground truth proves the arithmetic recovers what was drawn. It
-    says nothing about whether the camera sees the world the way these
-    frames assume, so it can't test accuracy in cm; that needs captures at
-    measured offsets on the course.
+    The one source of synthetic frames for the tests, so a scene added once
+    is exercised by every parity and known-answer test. The frames are drawn
+    already undistorted, so tests that feed them run under SCENE_CONFIG
+    (MEASURED with undistortion off); tests on real captures use MEASURED.
+    Synthetic ground truth proves the arithmetic recovers what was drawn, not
+    that the camera sees the world this way: accuracy in cm needs captures.
 
 Main package:
-    synthetic_frame(): lane marks at known lane-ROI x on a plain road.
-    scene(): synthetic_frame plus a stop line, a stop sign, lamps and noise.
-    with_obstacle(): a solid box standing in the frame, for the obstacle detector.
-    SCENES: named scenes covering every detection type and lane mode.
-    SWEEP, sweep_frame(): mark brightness x width x noise across the lane gates.
-    drive_sequence(): a stamped frame-and-sensor sequence long enough to move
-        every Phase 3 vote, hold and integrator, for packet parity.
-    SCENE_CONFIG: MEASURED with undistortion off and no ground plane or stop-line table.
-    SYNTHETIC_GROUND: a known ground homography for 480x270 frames: floor
-        cm from the bottom-center of the frame, 30 cm ahead at the lane ROI top.
-    SYNTHETIC_STOP_LINE_TABLE: a known stop-line table for 480x270 frames.
-    ALT_CONFIG: SCENE_CONFIG with every stage's tuning changed, so a stage
-        that ignores its config can't pass a parity test.
-    ALT_ESTIMATION: MEASURED_ESTIMATION with every Phase 3 field changed, for
-        the same reason.
-    floor_board(), lens_distort(): a checkerboard lying on a known floor, and
-        the raw frame our lens would capture of it, for the ground calibration.
-    same(): field-by-field equality across dataclasses, containers and arrays.
+    SCENES: named scenes (scene(): lane marks plus a stop line, sign, lamps,
+    noise) covering every detection type and lane mode, run under
+    SCENE_CONFIG. Beside them: the sweep, drive_sequence() for packet
+    parity, ALT_CONFIG / ALT_ESTIMATION (every field changed, so a stage
+    ignoring its config can't pass parity), the synthetic ground and
+    stop-line table, floor_board() for the ground calibration, and same(),
+    field-by-field equality.
 """
 from dataclasses import dataclass, fields, is_dataclass, replace
 from pathlib import Path
@@ -53,10 +35,6 @@ from src.perception.stop_line_table import StopLineTable
 from src.perception.roi_crop import LANE, ROIBounds, resolve
 from src.perception.stop_line_distance import StopLineDistanceConfig
 
-
-# =============================================================================
-# Configs
-# =============================================================================
 
 # A plausible floor plane for synthetic frames: the frame's bottom corners are
 # 15 cm either side of the robot reference (bottom-center of the view), and
@@ -153,13 +131,10 @@ ALT_ESTIMATION = replace(
 )
 
 
-# =============================================================================
-# Lane marks
-# =============================================================================
-
 LANE_RECT = resolve(LANE, (FRAME_H, FRAME_W))   # what crop_rois cuts at this size with the default bounds
 ROI_W, ROI_H = LANE_RECT[2], LANE_RECT[3]
 ROI_CENTER = ROI_W / 2.0                        # where the robot sits in the lane ROI
+
 
 def synthetic_frame(
         marks,
@@ -201,15 +176,12 @@ def synthetic_frame(
         )
     return frame
 
+
 def expected_offset(left_x: float, right_x: float) -> float:
     """The offset the chain must recover for markings at these ROI x."""
     lane_center = (left_x + right_x) / 2.0
     return (ROI_CENTER - lane_center) / ROI_CENTER
 
-
-# =============================================================================
-# Scenes
-# =============================================================================
 
 def scene(
         marks=(150, 290),
@@ -280,6 +252,7 @@ def scene(
 # An orange block and a white one: the detector finds the first by color, the second by brightness
 ORANGE_BOX, WHITE_BOX, DARK_BOX = (0, 140, 255), (215, 215, 215), (45, 45, 45)
 
+
 def with_obstacle(frame: np.ndarray, x_left: int, x_right: int, y_top: int, y_base: int,
                   bgr=ORANGE_BOX) -> np.ndarray:
     """
@@ -300,12 +273,14 @@ def with_obstacle(frame: np.ndarray, x_left: int, x_right: int, y_top: int, y_ba
 # a pure (0, 200, 0) green is hue 60, outside the calibrated green band
 RED_LAMP, YELLOW_LAMP, GREEN_LAMP = (0, 0, 255), (0, 220, 255), (233, 250, 0)
 
+
 def _paint(frame, x_left, x_right, y_top, height, value):
     """A gray rectangle in lane-ROI coordinates, on a copy of frame."""
     out = frame.copy()
     x0, y0 = LANE_RECT[0], LANE_RECT[1]
     cv2.rectangle(out, (x0 + x_left, y0 + y_top), (x0 + x_right, y0 + y_top + height - 1), (value,) * 3, -1)
     return out
+
 
 def _faint_stop_line():
     """
@@ -314,6 +289,7 @@ def _faint_stop_line():
     own Canny settings, so a detector handed the wrong edges fails parity.
     """
     return _paint(_paint(scene(), 100, 340, 25, 41, 110), 120, 320, 40, 8, 165)
+
 
 def _two_stop_lines():
     """
@@ -373,10 +349,6 @@ SCENES = {
 }
 
 
-# =============================================================================
-# Frame sequences (Phase 3 works across frames)
-# =============================================================================
-
 @dataclass(frozen=True)
 class SequenceFrame:
     """One stamped frame of a sequence, with the sensor readings for its window."""
@@ -387,6 +359,7 @@ class SequenceFrame:
     segment: str                    # which part of the drive this frame belongs to
 
 FRAME_MS = 50                       # 20 FPS
+
 
 def drive_sequence() -> list[SequenceFrame]:
     """
@@ -516,10 +489,6 @@ def course_sequence() -> list[SequenceFrame]:
     return out
 
 
-# =============================================================================
-# Gate sweep
-# =============================================================================
-
 # Marking brightness and width walked across the intensity, width and span
 # gates in both geometry and lane offset, so a path whose gate is off by one
 # flips a decision somewhere in the sweep. The fixed scenes sit far from
@@ -529,6 +498,7 @@ SWEEP = [(level, width, noise)
          for width in (2, 6, 24, 44)
          for noise in (None, 3)]
 
+
 def sweep_frame(level: int, width: int, noise: int | None) -> np.ndarray:
     """One SWEEP point: two marks at this brightness and width, with optional noise from this seed."""
     frame = synthetic_frame((150, 290), mark_width=width, marking=level)
@@ -537,10 +507,6 @@ def sweep_frame(level: int, width: int, noise: int | None) -> np.ndarray:
         frame = cv2.add(frame, rng.integers(0, 12, frame.shape, dtype=np.uint8))
     return frame
 
-
-# =============================================================================
-# Ground plane
-# =============================================================================
 
 def floor_board(ground, origin_x_cm, origin_y_cm, square_cm, pattern=(9, 6)) -> np.ndarray:
     """
@@ -562,6 +528,7 @@ def floor_board(ground, origin_x_cm, origin_y_cm, square_cm, pattern=(9, 6)) -> 
     img[squares & ((np.floor(u) + np.floor(v)) % 2 == 1)] = 20
     return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
+
 def lens_distort(undistorted: np.ndarray, calibration_path: str, alpha: float = 0.0) -> np.ndarray:
     """
     The raw frame our lens would capture, given the undistorted view preprocess produces from it.
@@ -581,10 +548,6 @@ def lens_distort(undistorted: np.ndarray, calibration_path: str, alpha: float = 
                      borderMode=cv2.BORDER_REPLICATE)
 
 
-# =============================================================================
-# Comparison
-# =============================================================================
-
 def same(a, b, path: str = "root") -> None:
     """Structural equality across dataclasses, containers and numpy arrays; asserts with the path that differs."""
     if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
@@ -603,6 +566,7 @@ def same(a, b, path: str = "root") -> None:
             same(x, y, f"{path}[{i}]")
     else:
         assert a == b, f"{path}: {a!r} != {b!r}"
+
 
 def differs(a, b) -> bool:
     """True if same() would fail."""

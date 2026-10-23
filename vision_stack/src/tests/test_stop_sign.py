@@ -1,5 +1,4 @@
-"""
-test_stop_sign.py  --  src/navigation/stop_sign.py
+"""test_stop_sign.py  --  src/navigation/stop_sign.py
 
 The stop-sign rule against a real tracker: no sign, no stop; a sign seen
 within SIGN_MEMORY_MS before the line is reached, and no more than
@@ -7,6 +6,8 @@ SIGN_LEAD_MS before that line came into view, brakes until the wheels
 stop, holds STOP_SIGN_HOLD_TIME_MS, then lets go; a ghost sign seen
 earlier on the way doesn't stop it at an unrelated line; jittery or missing
 encoders still start the hold; the sign is used up by one line; reset.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 

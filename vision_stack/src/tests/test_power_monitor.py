@@ -1,9 +1,10 @@
-"""Battery state machine: debounce, hysteresis and the CRITICAL latch. No hardware.
+"""test_power_monitor.py  --  src/diagnostics/battery_state.py
 
-Purpose:
-    The warning must ignore a brief sag under motor load, not flicker while
-    the voltage hovers at the threshold, and never un-latch CRITICAL
-    mid-run. Readings are fed straight in, so no ADC is needed.
+The battery state machine: the warning ignores a brief sag under motor
+load, doesn't flicker while the voltage hovers at a threshold, and never
+un-latches CRITICAL mid-run.
+
+--software  Readings fed straight in. No ADC.
 """
 
 import pytest

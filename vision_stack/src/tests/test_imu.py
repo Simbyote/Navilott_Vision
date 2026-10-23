@@ -181,14 +181,13 @@ def test_imu_characterization(request, artifacts):
     if counts and sum(counts) / len(counts) < 0.9 * expected:
         warnings.warn(f"{sum(counts) / len(counts):.1f} samples per window, expected {expected:.1f}")
 
+
 @pytest.mark.hardware
 def test_the_block_read_agrees_with_the_adafruit_driver_and_is_faster(artifacts):
-    """
-    Robot still. Interleaves read()'s one transfer with the driver's own
-    .gyro / .acceleration (7 transfers) on the same chip: the two agree to
-    within the stationary noise, and the block read takes well under half
-    the time per reading.
-    """
+    # Robot still. Interleaves read()'s one transfer with the driver's own
+    # .gyro / .acceleration (7 transfers) on the same chip: the two agree to
+    # within the stationary noise, and the block read takes well under half
+    # the time per reading.
     import math
     i2c_device_or_skip("imu", MPU6050_ADDRESSES)
     try:
@@ -222,10 +221,6 @@ def test_the_block_read_agrees_with_the_adafruit_driver_and_is_faster(artifacts)
     assert abs(mean_dy) < 0.05, "accel Y disagrees with the driver: wrong offset, scale or sign"
     assert block_ms < driver_ms / 2, "the block read isn't faster: is it still several transfers?"
 
-
-# =============================================================================
-# The FIFO
-# =============================================================================
 
 # Written out from the register map (rev 4.2), independent of imu.py
 REG_SMPLRT_DIV, REG_CONFIG, REG_FIFO_EN, REG_USER_CTRL = 0x19, 0x1A, 0x23, 0x6A

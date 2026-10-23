@@ -67,10 +67,6 @@ def run(folder, **kw):
                       d["irqs"], d["procs"])
 
 
-# =============================================================================
-# The numbers
-# =============================================================================
-
 @pytest.mark.software
 def test_process_load_core_load_and_the_busiest_thread(tmp_path):
     res = run(recording(tmp_path, main=lambda i: 40.0 if i <= 10 else 80.0))
@@ -110,10 +106,6 @@ def test_a_clean_recording_has_no_findings_and_a_short_one_only_a_note(tmp_path)
     assert res["findings"] == [] and any("too short to judge memory" in n for n in res["notes"])
 
 
-# =============================================================================
-# Findings
-# =============================================================================
-
 def throttled_system(n=10, **kw):
     return [srow(float(s), **kw) for s in range(n + 1)]
 
@@ -141,10 +133,6 @@ def test_a_flag_active_during_the_run_isnt_also_reported_as_only_latched(tmp_pat
     found = run(recording(tmp_path, system=throttled_system(under_voltage=1, under_voltage_occurred=1)))["findings"]
     assert not any("latched since boot" in f for f in found)
 
-
-# =============================================================================
-# Lining up a run
-# =============================================================================
 
 def nav_run(tmp_path, t0, intervals_ms):
     """A navigation run folder: nav.csv frames at the given intervals, report.json with its t0."""
@@ -236,10 +224,6 @@ def test_the_figure_shades_the_run_judged(tmp_path):
     assert json.loads((folder / "pi_load.json").read_text())["window"]["used"]
 
 
-# =============================================================================
-# How the threads share the Pi
-# =============================================================================
-
 @pytest.mark.software
 def test_python_and_native_threads_are_told_apart_by_name():
     for name in ("main", "sensor-hub", "frame-recorder", "motor-watchdog", "system-monitor", "pigpio-cb"):
@@ -314,10 +298,6 @@ def test_frames_outside_the_recording_are_left_out(tmp_path):
     assert a == {"frames": 0}
 
 
-# =============================================================================
-# The command line
-# =============================================================================
-
 @pytest.mark.software
 def test_the_command_line_writes_its_summary_and_lines_up_a_run(tmp_path, capsys):
     folder = recording(tmp_path)
@@ -343,9 +323,6 @@ def test_something_other_than_a_recording_is_an_error(tmp_path):
     (tmp_path / "threads.csv").write_text("a,b\n1,2\n")
     assert pl.main([str(tmp_path)]) == 1
 
-# =============================================================================
-# The rest of the Pi (os_counters)
-# =============================================================================
 
 def os_system(n=10, **kw):
     """System rows with the OS counters: rates from the second row on."""

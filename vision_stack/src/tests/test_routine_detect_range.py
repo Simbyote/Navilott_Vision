@@ -39,10 +39,6 @@ def look(n=40, **kw):
     return [frame(**kw) for _ in range(n)]
 
 
-# =============================================================================
-# camera_look
-# =============================================================================
-
 def det(type_, label, conf):
     return SimpleNamespace(type=type_, label_detail=label, confidence=conf)
 
@@ -129,10 +125,6 @@ def test_save_frame_and_parse_numbers(tmp_path):
     assert parse_numbers(12.5) == [12.5]
 
 
-# =============================================================================
-# Reading a look
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("frames, state, result", [
     (look(light=RED, drive="stop"), RED, dr.OK),
@@ -191,10 +183,6 @@ def test_the_reliable_range():
     assert dr.reliable_range([(0, miss), (10, ok)]) is None
     assert dr.reliable_range([(10, ok), (0, ok), (10, miss)]) == 0
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class FakeEyes:
     def __init__(self, looks):
@@ -296,10 +284,6 @@ def test_no_range_when_the_nearest_gap_fails(tmp_path):
     assert "not even at the nearest gap" in person.said() and results(tmp_path)["state"]["range_cm"] is None
 
 
-# =============================================================================
-# The criteria
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("looks, failing", [
     (LIGHT_OK * 2 + [look()] + LIGHT_OK[1:] + LIGHT_OK * 2,
@@ -323,10 +307,6 @@ def test_need_cm_moves_the_line(tmp_path):
     res = go(FakeEyes(looks), Person(*[""] * 45), tmp_path, need_cm=30)
     assert [c["name"] for c in res["criteria"] if not c["passed"]] == ["trials not read right within 30 cm"]
 
-
-# =============================================================================
-# Angles and offsets, and the stop line
-# =============================================================================
 
 def line_look(n=40, tilt=0.0, seen_=True):
     return [{"light": None, "sign": False, "drive_state": "go", "stop_sign": False, "stop_line": seen_,

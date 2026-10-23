@@ -131,10 +131,6 @@ def stepped_commands(route, n):
     return [pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors) for sf in COURSE[:n]]
 
 
-# =============================================================================
-# A run
-# =============================================================================
-
 @pytest.mark.software
 def test_a_finished_course_drives_the_pipelines_commands_then_halts():
     result, motor, system, log, pipeline, sleeps = go()
@@ -274,10 +270,6 @@ def test_halt_brakes_then_stands_by_and_stops_even_if_the_brake_fails():
     assert log == ["motor stop"]
 
 
-# =============================================================================
-# The screens
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("route, text", [(Route(), "St 0"), (Route(("left",) * 3), "St 3"),
                                          (Route(("left",) * 12), "St12"), (Route(("left",) * 120), "St99")])
@@ -319,10 +311,6 @@ def test_mm_ss_and_the_summary():
     assert (main.mm_ss(65.9), main.mm_ss(0), main.mm_ss(6000)) == ("01:05", "00:00", "99:00")
     assert main.summary(main.RunResult(main.END_EARLY, 65.0, 1300, 2)) == "ended early at step 2 after 01:05 (1300 frames)"
 
-
-# =============================================================================
-# The command line
-# =============================================================================
 
 @pytest.fixture
 def hardware(monkeypatch):

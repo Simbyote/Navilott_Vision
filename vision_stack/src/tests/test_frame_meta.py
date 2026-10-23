@@ -33,10 +33,6 @@ def md(n=0, exposure=10000, gain=2.0, ts0=5_000_000_000, period_ns=50_000_000, *
     return d
 
 
-# =============================================================================
-# Controls and one frame
-# =============================================================================
-
 @pytest.mark.software
 def test_controls_take_picamera2_names_and_enum_values():
     seen = []
@@ -109,10 +105,6 @@ def test_detect_runs_the_robots_color_branch_on_the_traffic_roi():
     assert fm.detect(np.full((FRAME_H, FRAME_W, 3), 70, np.uint8), 1, 50, MEASURED) == \
         {"label": "", "confidence": None, "white_px": 0}
 
-
-# =============================================================================
-# record()
-# =============================================================================
 
 class Request:
     def __init__(self, cam, n):
@@ -213,10 +205,6 @@ def test_record_stops_at_the_duration_and_on_ctrl_c_still_closes_and_writes(tmp_
     assert json.loads((tmp_path / "b" / "meta.json").read_text())["interrupted"]
 
 
-# =============================================================================
-# Summary and findings
-# =============================================================================
-
 def rows_of(*groups):
     """Rows from (count, label, exposure, gain) groups, one frame per 50 ms."""
     rows, n = [], 0
@@ -280,10 +268,6 @@ def test_an_empty_recording_summarizes_to_blanks():
     assert "exposure us          --" in "\n".join(fm.summary_lines(s))
 
 
-# =============================================================================
-# The command line
-# =============================================================================
-
 @pytest.mark.software
 def test_cli_without_picamera2_says_how_to_get_it(monkeypatch, capsys):
     def missing(controls):
@@ -316,10 +300,6 @@ def test_cli_records_with_the_configured_controls_plus_the_given_ones(monkeypatc
     assert seen["controls"] == {"ExposureValue": -0.5, "AeEnable": True}
     assert (out / "frames.csv").exists() and "frame metadata" in capsys.readouterr().out
 
-
-# =============================================================================
-# On the Pi
-# =============================================================================
 
 @pytest.mark.hardware
 def test_frame_meta_on_the_pi(artifacts):

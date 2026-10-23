@@ -32,18 +32,16 @@ NO_LANE_FILTER = replace(SCENE_CONFIG, geometry=replace(
 # and the thinnest ones are refused by geometry (too_few_pts)
 WIDE_TAPE_STOP = scene(marks=(150, 290), mark_width=24, stop_line=(100, 340, 40), stop_line_thickness=8)
 
+
 def chain(frame, trace=True, config=SCENE_CONFIG):
     if isinstance(frame, str):
         frame = SCENES[frame]
     return run_chain(frame, 7, 350, config, trace=trace)
 
+
 def data(frame, trace=True, config=SCENE_CONFIG, view=None):
     return (view or LaneGeometryView(lane_config=config.lane_offset)).extract(chain(frame, trace, config))
 
-
-# =============================================================================
-# geometry's lane trace
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("frame", ["two_boundary", "noise_b", "horizontal_blob", "stop_line_touching",
@@ -101,10 +99,6 @@ def test_extract_lane_candidates_traces_only_when_asked():
     assert len(dbg["trace"]) == dbg["reject_counts"]["seen"]
 
 
-# =============================================================================
-# What the view reads
-# =============================================================================
-
 @pytest.mark.software
 def test_extract_reads_the_roi_edges_trace_candidates_and_result():
     c = chain("two_boundary")
@@ -142,10 +136,6 @@ def test_removed_edge_px_counts_what_the_horizontal_filter_took_out():
     assert d["removed_edge_px"] == int(((d["edges_raw"] > 0) & (d["edges_lane"] == 0)).sum()) > 100
     assert data("stop_line_touching", config=NO_LANE_FILTER)["removed_edge_px"] == 0
 
-
-# =============================================================================
-# Drawing
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("frame", ["two_boundary", "one_boundary", "blind", "noise_b", "horizontal_blob",
@@ -191,10 +181,6 @@ def test_a_chain_without_a_lane_roi_renders_a_notice():
     assert view.render(d).shape[2] == 3
 
 
-# =============================================================================
-# CSV row and summary
-# =============================================================================
-
 @pytest.mark.software
 def test_row_matches_the_header_and_carries_the_result():
     view = LaneGeometryView(lane_config=LANE)
@@ -222,10 +208,6 @@ def test_report_counts_modes_filtered_frames_and_rejections_by_stage():
     assert re.search(r"refused by geometry, by gate:\n\s+too_few_pts\s+2\b", text)
     assert "refused by lane_offset" in text
 
-
-# =============================================================================
-# live_view
-# =============================================================================
 
 @pytest.mark.software
 def test_live_view_runs_the_lanegeo_view_and_writes_its_video_csv_and_summary(tmp_path):

@@ -57,10 +57,6 @@ def fake_proc(tmp_path, t=0, pids=None, psi=True, cma_free=200704):
     return p
 
 
-# =============================================================================
-# Readers
-# =============================================================================
-
 @pytest.mark.software
 def test_interrupts_sum_the_cores_and_name_the_device(tmp_path):
     irqs = osc.read_interrupts(fake_proc(tmp_path, t=1) / "interrupts")
@@ -119,10 +115,6 @@ def test_vc_clock_in_mhz_and_none_without_vcgencmd():
         raise subprocess.TimeoutExpired(argv, 1)
     assert osc.read_vc_clock_mhz("isp", run=slow) is None
 
-
-# =============================================================================
-# OsCounters
-# =============================================================================
 
 class Clocks:
     def __init__(self):
@@ -201,10 +193,6 @@ def test_a_laptop_without_the_sources_reads_none(tmp_path):
     assert {k: v for k, v in out["system"].items() if v is not None} == {"os_dt_s": 1.0}
 
 
-# =============================================================================
-# Summaries
-# =============================================================================
-
 def irq(t, name, hz, n="41"):
     return {"elapsed_s": t, "irq": n, "name": name, "rate_hz": hz}
 
@@ -252,10 +240,6 @@ def test_summary_lines_list_the_busiest_and_say_what_is_missing():
     bare = "\n".join(osc.summary_lines([], [], []))
     assert "no PSI in this kernel" in bare and bare.count("none recorded") == 2 and "CMA free min --" in bare
 
-
-# =============================================================================
-# On the Pi
-# =============================================================================
 
 @pytest.mark.hardware
 def test_os_counters_on_the_pi():

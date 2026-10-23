@@ -60,10 +60,6 @@ def write_frames(tmp_path, name, lamp, n=3):
     return tmp_path / name
 
 
-# =============================================================================
-# Measuring one lamp
-# =============================================================================
-
 @pytest.mark.software
 def test_the_lamp_is_found_at_its_center_in_the_traffic_roi():
     m, _, _ = measured("green", GREEN)
@@ -193,7 +189,7 @@ def test_the_band_comes_from_the_frames_that_found_the_colored_lamp(tmp_path):
 
 @pytest.mark.software
 def test_with_half_the_frames_white_the_band_and_area_are_the_colored_frames_alone(tmp_path):
-    """At exactly half, a median over every frame would land between the lamp and the white spot."""
+    # At exactly half, a median over every frame would land between the lamp and the white spot.
     def run(lamps, name):
         out = tmp_path / f"{name}.json"
         out.write_text(HSV_RANGES_PATH.read_text())
@@ -210,7 +206,7 @@ def test_with_half_the_frames_white_the_band_and_area_are_the_colored_frames_alo
 
 @pytest.mark.software
 def test_the_lamps_hue_comes_from_its_colored_pixels_not_its_dark_edge():
-    """A lamp disc with a dark, washed-out edge: that edge's hue is noise and mustn't widen the band or mark the frame mixed."""
+    # A lamp disc with a dark, washed-out edge: that edge's hue is noise and mustn't widen the band or mark the frame mixed.
     hsv = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
     hsv[:] = (0, 0, 20)                                            # a dark background
     rng = np.random.default_rng(0)
@@ -259,10 +255,6 @@ def test_a_lamp_at_the_edge_of_the_traffic_roi_is_reported(tmp_path):
     cl.main([f"red={folder}", f"--out={tmp_path / 'x.json'}"], config=SCENE_CONFIG, say=lines.append)
     assert "edge of the traffic ROI" not in "\n".join(lines)
 
-
-# =============================================================================
-# Frames, the file and the command line
-# =============================================================================
 
 @pytest.mark.software
 def test_a_run_folder_is_searched_and_its_frames_spread(tmp_path):
@@ -317,10 +309,6 @@ def test_each_frame_reports_its_clipped_core_and_a_lamp_that_doesnt_clip_is_warn
     m = cl.measure_lamp(cl.traffic_roi(lamp_frame(*GREEN), SCENE_CONFIG))
     assert m["core_px"] >= 25                                       # the drawn core: r 3, V 255, S 30
 
-
-# =============================================================================
-# Lit against off (an off= run)
-# =============================================================================
 
 # HSV: a lens's colored plastic unlit, and its LED lit: a white center, a colored
 # ring and a dimmer colored glow past it, as the course's LEDs (2026-10-06)

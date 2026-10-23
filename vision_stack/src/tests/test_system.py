@@ -413,6 +413,7 @@ def test_start_button_press(request, artifacts, capsys):
     })
     assert released, "button still reads high 10 s after the prompt to release: stuck switch or line"
 
+
 @pytest.mark.software
 def test_opening_it_names_pigpios_callback_thread(env, monkeypatch):
     mod, _, _ = env

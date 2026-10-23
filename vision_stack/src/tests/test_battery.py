@@ -52,10 +52,6 @@ def pwr():
     p.cleanup()
 
 
-# =============================================================================
-# Power
-# =============================================================================
-
 def test_the_pack_voltage_is_the_pin_times_the_divider(pwr):
     p, ch = pwr
     ch.pack_v = 11.6
@@ -128,10 +124,6 @@ def test_cleanup_without_a_bus_and_twice_is_fine(pwr):
     p.cleanup()
 
 
-# =============================================================================
-# battery_run
-# =============================================================================
-
 def test_a_missing_adc_is_said_and_gives_none():
     said = []
 
@@ -171,10 +163,6 @@ def test_start_says_and_reports_a_first_read_that_fails():
     assert br.start(p, said.append) is True
     p.cleanup()
 
-
-# =============================================================================
-# Read timing
-# =============================================================================
 
 class Timer:
     def __init__(self):
@@ -231,10 +219,6 @@ def test_the_read_history_keeps_only_the_newest(monkeypatch):
     loop(monkeypatch, p, 5)
     assert p.read_ms() == [3.0, 4.0, 5.0]
 
-
-# =============================================================================
-# ContinuousADC: the ADS1115 in continuous mode, the pointer set on every read
-# =============================================================================
 
 from src.diagnostics import battery as bat  # noqa: E402
 

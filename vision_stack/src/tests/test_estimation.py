@@ -27,9 +27,11 @@ from src.perception.stop_line_distance import StopLineResult
 
 FID, TS = 1, 100
 
+
 def lane(offset=0.0, mode="two_boundary", frame_id=FID, ts=TS):
     """Real LaneOffsetResult with a chosen offset, mode and stamp."""
     return LaneOffsetResult(offset, 10.0, 20.0, 10.0, 0.6, 2, mode, frame_id, ts)
+
 
 def det(det_type, label="", conf=0.9, frame_id=FID, ts=TS):
     """Real DetectionObject of one type, with the ROI that type comes from."""
@@ -37,10 +39,12 @@ def det(det_type, label="", conf=0.9, frame_id=FID, ts=TS):
     return DetectionObject(det_type, label, conf, {"x": 1.0, "y": 2.0}, (0, 0, 2, 4),
                            roi, (0, 0, 10, 10), frame_id, ts)
 
+
 def p2(dets=(), lanes=None, frame_id=FID, ts=TS):
     """Phase2Output; lanes defaults to one centered two_boundary result."""
     lanes = [lane(frame_id=frame_id, ts=ts)] if lanes is None else lanes
     return Phase2Output(list(dets), list(lanes), frame_id, ts)
+
 
 def feed(stage, values):
     """Run a classifier stage over a frame sequence; returns its state after each."""
@@ -111,11 +115,9 @@ def single(offset, other, mode="left_only"):
 
 @pytest.mark.software
 def test_lane_takes_one_boundary_as_the_other_side_when_its_side_breaks_continuity():
-    """
-    2026-10-20: the robot drifted right until its lane's right line crossed
-    the ROI's center; read as a left line (-0.73) against an estimate near
-    +0.8, it steered hard right and out. As the right line, it reads +0.92.
-    """
+    # 2026-10-20: the robot drifted right until its lane's right line crossed
+    # the ROI's center; read as a left line (-0.73) against an estimate near
+    # +0.8, it steered hard right and out. As the right line, it reads +0.92.
     f = LaneFilter(Phase3Config())
     f.update([lane(0.8)], [])
     log = []
@@ -327,9 +329,6 @@ def test_red_light_sequence_stops_then_releases():
     states = [proc.process(p2(d))[0].drive_state for d in (red, red, red, green, green)]
     assert states == [GO, STOP, STOP, STOP, GO]
 
-# =============================================================================
-# Stop lines
-# =============================================================================
 
 def seen(distance, frame_id=FID, ts=TS, cm="half"):
     """
@@ -385,11 +384,6 @@ def test_packet_carries_the_stop_line_vote_and_distances():
     assert [(p.stop_line_detected, p.stop_line_distance_px, p.stop_line_distance_cm) for p in packets] == \
         [(False, None, None), (True, 45.0, 22.5), (True, 45.0, 22.5)]
 
-
-
-# =============================================================================
-# Obstacles
-# =============================================================================
 
 def obstacle(distance, frame_id=FID, ts=TS, cm="half", clipped=False):
     """
@@ -474,7 +468,6 @@ def test_the_frames_lane_mode_passes_through_unfiltered(mode):
     pkt, _ = Phase3Processor().process(p2_)
     assert pkt.lane_mode == mode == lane_mode_of(p2_)
     assert lane_mode_of(replace(p2_, lane_offset_results=[])) == "none"
-
 
 
 @pytest.mark.software

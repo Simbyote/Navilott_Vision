@@ -56,10 +56,6 @@ def write_proc(root: Path, pid: int, threads: dict, cores: dict, program="python
     (root / "stat").write_text("\n".join(lines) + "\nintr 0\n")
 
 
-# =============================================================================
-# Parsing
-# =============================================================================
-
 @pytest.mark.software
 def test_parse_stat_counts_fields_from_the_last_parenthesis():
     line = stat_line(42, "odd ) (name", "R", utime=123, stime=45, core=3)
@@ -81,10 +77,6 @@ def test_read_tasks_names_the_first_thread_main_and_raises_for_a_gone_process(tm
     with pytest.raises(ProcessLookupError):
         th.read_tasks(999, tmp_path)
 
-
-# =============================================================================
-# The sampler
-# =============================================================================
 
 @pytest.mark.software
 def test_the_sampler_gives_exact_rates_over_the_interval(tmp_path, monkeypatch):
@@ -118,10 +110,6 @@ def test_python_names_stand_in_only_for_threads_nobody_named(tmp_path):
     names = {r["tid"]: r["name"] for r in s.take(0.5, 0.5)[0]}
     assert names == {100: "main", 101: "Thread-3", 102: "sensor-hub"}
 
-
-# =============================================================================
-# Naming, on the real kernel
-# =============================================================================
 
 def _comm(thread):
     return Path(f"/proc/self/task/{thread.native_id}/comm").read_text().strip()
@@ -198,10 +186,6 @@ def comm_of(thread, timeout_s=2.0):
         name = path.read_text().strip()
     return name
 
-
-# =============================================================================
-# Real-time priority
-# =============================================================================
 
 @pytest.mark.software
 def test_set_realtime_asks_for_fifo_on_the_calling_thread(monkeypatch):

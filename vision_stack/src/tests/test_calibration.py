@@ -12,7 +12,7 @@ subpixel refinement has real gradients. solve() then has a right answer.
 
 --software  Helper known-answers, solve() round trip on a known lens, error
             paths, preprocess.undistort against a reference map build,
-            and the contract of calibration/camera_calib.json if it exists
+            and the contract of calibration/camera_calibration.json if it exists
             (including 3x3 coverage of the frames it was solved from).
 --hardware  Times preprocess.undistort per frame (live or --replay), and on
             frames where the board is visible scores straightness raw vs

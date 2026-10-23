@@ -23,6 +23,7 @@ from src.tests.scenes import SCENE_CONFIG, SCENES
 
 NAMES = ("two_boundary", "blind", "stop_line_wide", "stop_line_wide", "two_boundary")
 
+
 @pytest.fixture
 def frames(tmp_path):
     d = tmp_path / "f"
@@ -31,6 +32,7 @@ def frames(tmp_path):
         cv2.imwrite(str(d / f"{i:06d}.png"), SCENES[n])
     return d
 
+
 def video_frames(path) -> int:
     cap = cv2.VideoCapture(str(path))
     n = 0
@@ -38,6 +40,7 @@ def video_frames(path) -> int:
         n += 1
     cap.release()
     return n
+
 
 def cli(frames, out, *extra):
     return p3.cli(["--frames", str(frames), "--out", str(out), "--print-every", "0",
@@ -117,10 +120,6 @@ def test_the_linker_runs_the_traced_processor(frames, tmp_path, monkeypatch):
     assert set(seen) == {TracedPhase3Processor}
 
 
-# =============================================================================
-# Encoders
-# =============================================================================
-
 @pytest.mark.software
 def test_encoders_flag_writes_the_wheel_columns(frames, tmp_path, fake_encoders, monkeypatch):
     drive, pi = fake_encoders
@@ -147,10 +146,6 @@ def test_encoders_flag_writes_the_wheel_columns(frames, tmp_path, fake_encoders,
     cli(frames, without, "--no-video")
     assert wheel_columns(without / "p3.csv") == [["0.0", "0.0"]] * len(NAMES)
 
-
-# =============================================================================
-# The obstacle in the text outputs
-# =============================================================================
 
 @pytest.mark.software
 def test_the_obstacle_reaches_the_status_line_the_events_and_p3_csv(tmp_path):

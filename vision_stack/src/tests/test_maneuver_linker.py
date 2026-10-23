@@ -82,10 +82,6 @@ def rows(path):
         return list(csv.DictReader(f))
 
 
-# =============================================================================
-# A full trial
-# =============================================================================
-
 @pytest.mark.software
 def test_a_trial_writes_the_whole_run_folder_and_stops_the_motors(tmp_path):
     rep, out, bot, camera, sensors = trial(tmp_path)
@@ -134,10 +130,6 @@ def test_the_lane_is_timed_back_after_the_turn(tmp_path):
     assert "lane found again     never" in (tmp_path / "blind" / "run" / "summary.txt").read_text()
 
 
-# =============================================================================
-# However it ends, the motors stop first
-# =============================================================================
-
 @pytest.mark.software
 def test_ctrl_c_stops_the_motors_and_still_writes_and_renders(tmp_path):
     rep, out, bot, *_ = trial(tmp_path, cam={"fail_at": 60})
@@ -177,10 +169,6 @@ def test_dropped_camera_frames_are_counted_and_skipped(tmp_path):
     rep, out, *_ = trial(tmp_path, cam={"drop_at": (10, 11)})
     assert rep["run"]["camera_drops"] == 2 and rep["completed"]
 
-
-# =============================================================================
-# Start button, overrides, render-only
-# =============================================================================
 
 @pytest.mark.software
 def test_the_start_button_is_waited_for_and_the_display_kept(tmp_path):
@@ -225,11 +213,6 @@ def test_render_only_rebuilds_the_video_from_a_run_folder(tmp_path):
         n += 1
     assert n == rep["run"]["frames"]
 
-
-
-# =============================================================================
-# --hold
-# =============================================================================
 
 def press_after(polls):
     """A resume() that says yes on every polls-th call."""

@@ -96,10 +96,6 @@ ROWS["stop-sign"] = (
 OPTIONS = {"detect-range": {"target": "light", "gaps": "0,30", "need_cm": 20.0, "frames": 60}}
 
 
-# =============================================================================
-# Numbers
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("op, limit, value, expected", [
     ("<=", 2.0, 0.5, 1.5), ("<=", 2.0, 3.6, -1.6), (">=", 20.0, 15.1, -4.9), (">=", 5, 5, 0),
@@ -131,10 +127,6 @@ def test_analyze_reads_the_harness_folder_with_the_routines_own_verdict(tmp_path
     assert res["fields"]["gap_cm"]["mean"] == pytest.approx(14.0 / 3)
     assert "reason" not in res["fields"] and res["attempts"] == []
 
-
-# =============================================================================
-# Figures
-# =============================================================================
 
 @pytest.mark.software
 def test_every_routine_has_canned_rows_here_and_every_key_plot_is_a_routine():
@@ -181,10 +173,6 @@ def test_detect_range_spreads_its_states_so_equal_reads_stay_visible(tmp_path):
     assert len([x for x in xs if abs(x) < 2]) == 4                 # four states at the 0 cm gap, apart
     plt.close(fig)
 
-
-# =============================================================================
-# Attempts, finding, the command line
-# =============================================================================
 
 @pytest.mark.software
 def test_each_attempt_with_a_nav_csv_gets_nav_runs_report(tmp_path):

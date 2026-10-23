@@ -55,10 +55,6 @@ def feed(watch, rows):
         assert watch(r) is None
 
 
-# =============================================================================
-# CourseWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_the_watch_counts_steps_stops_and_waits():
     w = cr.CourseWatch()
@@ -88,10 +84,6 @@ def test_odd_rows_are_harmless():
     feed(w, [{"t": 0.0, "step": None, "reason": None, "battery_v": ""}, {"t": 0.1, "step": "x/3"}])
     assert (w.steps, w.holds, w.volts) == (0, 0, [])
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class Rig:
     def __init__(self, log):
@@ -247,10 +239,6 @@ def test_registered():
     assert ROUTINES["course-run"] is cr.CourseRun and cr.CourseRun.trials == 3
     assert cr.FINISHED == END_COURSE and cr.MAX_S == 300.0
 
-
-# =============================================================================
-# The criteria
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("answers, failing", [

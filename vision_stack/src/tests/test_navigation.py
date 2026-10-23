@@ -1,11 +1,12 @@
-"""
-test_navigation.py  --  src/navigation/navigation.py, the navigation subsystem's orchestrator
+"""test_navigation.py  --  src/navigation/navigation.py, the navigation subsystem's orchestrator
 
 The rules in priority order over lane keeping: lane keeping when no rule
 speaks; the first rule that speaks wins, but every rule sees every frame and
 is told when a higher one already decided; record names the deciding part;
 the contract checks and the intersection scenarios end to end; reset; the
 contract re-exported.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 
@@ -53,10 +54,6 @@ def run(nav, case):
         out.append((p, nav.update(p), dict(nav.record)))
     return out
 
-
-# =============================================================================
-# The orchestration
-# =============================================================================
 
 @pytest.mark.software
 def test_the_rules_in_priority_order():
@@ -124,10 +121,6 @@ def test_it_is_a_navigator_and_re_exports_the_contract():
         assert getattr(navigation, name) is getattr(contract, name)
 
 
-# =============================================================================
-# The contract, end to end
-# =============================================================================
-
 @pytest.mark.software
 def test_every_command_is_valid():
     mixed = frames(intersection({"stop_sign_detected": True}, {"drive_state": "stop"}, after_frames=40)
@@ -176,10 +169,6 @@ def test_a_stale_lane_while_crossing_an_intersection_does_not_end_the_run():
     out = run(Navigation(), case)
     assert not any(rec.get("reason") == "end_of_course" for _, _, rec in out)
 
-
-# =============================================================================
-# Who decides, frame by frame
-# =============================================================================
 
 def rules_over(out):
     """The deciding rule per frame, collapsed to its runs."""
@@ -243,7 +232,6 @@ def test_a_green_line_is_crossed_straight_then_lane_keeping_takes_over():
     assert all(cmd == Command(0.4, 0.4) for cmd in crossing)          # straight, not chasing the offset
 
 
-
 @pytest.mark.software
 def test_once_finished_no_rule_is_asked_again():
     # A stop line passing under the view after the finish would make the intersection rule speak
@@ -258,10 +246,6 @@ def test_once_finished_no_rule_is_asked_again():
         assert nav.update(p) == BRAKE and nav.record["rule"] == RULE_END_OF_COURSE
     assert asked == [] and nav.tracker.phase == IDLE
 
-
-# =============================================================================
-# The route
-# =============================================================================
 
 # Frames after each line: to the line, the advance, a turn's time limit (no
 # yaw in these packets, so a turn runs to it) and the exit
@@ -321,7 +305,6 @@ def test_reset_starts_the_route_over():
     run(nav, course(1, []))
     nav.reset()
     assert nav.progress.step == 0 and nav.outcome is None and nav.end_step is None
-
 
 
 @pytest.mark.software

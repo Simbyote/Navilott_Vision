@@ -75,10 +75,6 @@ def run(args, **kw):
     return code, "\n".join(lines)
 
 
-# =============================================================================
-# The sweep, end to end
-# =============================================================================
-
 def test_from_bands_that_take_the_board_the_sweep_reads_every_frame_right(tmp_path, start_hsv):
     run_dir = recording(tmp_path, [("green", 6), ("yellow", 6), ("red", 6), (None, 4)])
     code, out = run([f"green={run_dir}:0-5", f"yellow={run_dir}:6-11", f"red={run_dir}:12-17",
@@ -100,10 +96,6 @@ def test_write_saves_bands_the_loader_accepts(tmp_path, start_hsv):
     assert ranges.green.lower[2] > 120                      # V floor above the board's
     assert ranges.green.lower[0] == START["green"]["lower"][0]      # hue kept
 
-
-# =============================================================================
-# The pieces
-# =============================================================================
 
 @pytest.mark.parametrize("arg, expect", [
     ("red=runs/nav_x", ("red", "runs/nav_x", None)),

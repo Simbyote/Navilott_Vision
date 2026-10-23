@@ -62,10 +62,6 @@ def _stamp(i: int) -> tuple[int, int]:
     return 1000 + i, 70_000 + 53 * i
 
 
-# =============================================================================
-# Parity with run_chain
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("config_name", CONFIGS)
 @pytest.mark.parametrize("scene", SCENES)
@@ -89,7 +85,7 @@ def test_perceive_matches_run_chain_across_the_gate_sweep(config_name):
 
 @pytest.mark.software
 def test_scenes_reach_every_output_through_the_pipeline():
-    """Guards the parity tests: the scenes must reach every detection type and lane mode."""
+    # Guards the parity tests: the scenes must reach every detection type and lane mode.
     types, modes = set(), set()
     for config in CONFIGS.values():
         pipeline = Pipeline(config)
@@ -105,10 +101,6 @@ def test_scenes_reach_every_output_through_the_pipeline():
     assert obstacles == {(False, False), (True, False), (True, True)}
 
 
-# =============================================================================
-# Config reach: ALT_CONFIG must be able to catch a stage ignoring its config
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("group", GROUPS)
 def test_alt_config_moves_every_stage_group(group):
@@ -118,11 +110,9 @@ def test_alt_config_moves_every_stage_group(group):
 @pytest.mark.software
 @pytest.mark.parametrize("group", GROUPS)
 def test_each_alt_group_changes_the_phase2_output(group):
-    """
-    Swapping only this group's tuning changes the Phase 2 output on some
-    scene. Without that, parity under ALT_CONFIG couldn't tell a stage that
-    reads its config from one that ignores it.
-    """
+    # Swapping only this group's tuning changes the Phase 2 output on some
+    # scene. Without that, parity under ALT_CONFIG couldn't tell a stage that
+    # reads its config from one that ignores it.
     swapped = replace(SCENE_CONFIG, **{group: getattr(ALT_CONFIG, group)})
     frames = list(SCENES.values()) + [sweep_frame(*p) for p in SWEEP]
     assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
@@ -131,7 +121,7 @@ def test_each_alt_group_changes_the_phase2_output(group):
 
 @pytest.mark.software
 def test_alt_lane_horizontal_filter_alone_changes_the_phase2_output():
-    """Like the stop-line filter: the geometry group guard can pass on its Canny change alone."""
+    # Like the stop-line filter: the geometry group guard can pass on its Canny change alone.
     lane = SCENE_CONFIG.geometry.lane
     alt = ALT_CONFIG.geometry.lane
     swapped = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry, lane=replace(
@@ -143,17 +133,13 @@ def test_alt_lane_horizontal_filter_alone_changes_the_phase2_output():
 
 @pytest.mark.software
 def test_alt_stop_line_filter_alone_changes_the_phase2_output():
-    """The geometry group guard can pass on its Canny change alone; the stop-line detector needs its own."""
+    # The geometry group guard can pass on its Canny change alone; the stop-line detector needs its own.
     swapped = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry,
                                                      stop_line=ALT_CONFIG.geometry.stop_line))
     assert ALT_CONFIG.geometry.stop_line != SCENE_CONFIG.geometry.stop_line
     assert any(differs(run_chain(f, 1, 50, swapped).phase2, run_chain(f, 1, 50, SCENE_CONFIG).phase2)
                for f in SCENES.values())
 
-
-# =============================================================================
-# Stage timing (opt-in)
-# =============================================================================
 
 @pytest.mark.software
 def test_timing_is_off_by_default():
@@ -178,10 +164,6 @@ def test_timing_on_records_run_chains_stages_and_changes_nothing():
     assert plain.last_geometry_ms == {}
 
 
-# =============================================================================
-# Contract
-# =============================================================================
-
 @pytest.mark.software
 def test_default_config_is_measured():
     assert Pipeline().config is MEASURED
@@ -203,7 +185,7 @@ def test_perceive_carries_the_stamp_and_leaves_the_frame_untouched():
 
 @pytest.mark.software
 def test_perceive_runs_no_debug_function(monkeypatch):
-    """The debug versions are wired to raise; the pipeline must not notice."""
+    # The debug versions are wired to raise; the pipeline must not notice.
     def boom(*_, **__):
         raise AssertionError("debug path called")
     for module, name in ((geo, "run_geometry_stage"), (geo, "extract_lane_candidates"),
@@ -228,10 +210,6 @@ def test_pipeline_imports_no_linker_or_debugger():
                                                        "src.phase3_linker"))]
 
 
-# =============================================================================
-# Phase 3: estimate() and step() against phase3_linker
-# =============================================================================
-
 # (Phase 2 config, Phase 3 config). cm_scale reaches lane_offset_cm and the
 # derived lane ROI width; alt moves every field of both
 PACKET_CASES = {
@@ -242,7 +220,6 @@ PACKET_CASES = {
     "stop_line_table": (replace(SCENE_CONFIG, stop_line_table=SYNTHETIC_STOP_LINE_TABLE), MEASURED_ESTIMATION),
 }
 DRIVE = drive_sequence()
-
 
 
 def _packets(pipeline, sequence=DRIVE):
@@ -257,10 +234,8 @@ def _packets(pipeline, sequence=DRIVE):
 @pytest.mark.software
 @pytest.mark.parametrize("case", PACKET_CASES)
 def test_packets_match_phase3_linker_over_a_drive(case):
-    """
-    Frame by frame: Phase 2 parity first, since a smoothed, voted packet
-    hides most Phase 2 differences; then the packet and Phase 3's debug.
-    """
+    # Frame by frame: Phase 2 parity first, since a smoothed, voted packet
+    # hides most Phase 2 differences; then the packet and Phase 3's debug.
     config, estimation = PACKET_CASES[case]
     pipeline = Pipeline(config, estimation)
     sf0 = DRIVE[0]
@@ -294,7 +269,7 @@ def test_step_is_perceive_estimate_then_navigate(case):
 @pytest.mark.software
 @pytest.mark.parametrize("lamp, color", [(RED_LAMP, "red"), (YELLOW_LAMP, "yellow"), (GREEN_LAMP, "green")])
 def test_each_scene_lamp_is_seen_as_its_color_under_the_calibrated_bands(lamp, color):
-    """The scenes run on calibration/hsv_ranges.json: a lamp it no longer covers would read as no light, which looks like go."""
+    # The scenes run on calibration/hsv_ranges.json: a lamp it no longer covers would read as no light, which looks like go.
     lights = [d for d in run_chain(scene(lights=(lamp,), lamp_radius=12), 0, 0, SCENE_CONFIG).fusion.detections
               if d.type == "traffic_light"]
     assert [d.label_detail for d in lights] == [color] and lights[0].confidence >= 0.9, lights
@@ -302,7 +277,7 @@ def test_each_scene_lamp_is_seen_as_its_color_under_the_calibrated_bands(lamp, c
 
 @pytest.mark.software
 def test_drive_sequence_moves_every_phase3_output():
-    """Guards the packet parity test: the drive must change every vote, status and integrator."""
+    # Guards the packet parity test: the drive must change every vote, status and integrator.
     seen = {k: set() for k in ("drive", "stop", "lane", "log", "line", "obstacle")}
     headings, cm, line_px = [], [], []
     for case in PACKET_CASES.values():
@@ -339,14 +314,16 @@ def test_the_drive_reports_cm_only_with_a_ground_plane():
 ALT_FIELDS = [f.name for f in fields(ALT_ESTIMATION)
               if getattr(ALT_ESTIMATION, f.name) != getattr(MEASURED_ESTIMATION, f.name)]
 
+
 @pytest.mark.software
 def test_alt_estimation_moves_every_field_but_the_derived_width():
     assert set(ALT_FIELDS) == {f.name for f in fields(ALT_ESTIMATION)} - {"lane_roi_width_px"}
 
+
 @pytest.mark.software
 @pytest.mark.parametrize("field", ALT_FIELDS)
 def test_each_alt_estimation_field_changes_the_packets(field):
-    """Without this, packet parity under ALT_ESTIMATION couldn't catch Phase 3 ignoring a field."""
+    # Without this, packet parity under ALT_ESTIMATION couldn't catch Phase 3 ignoring a field.
     swapped = replace(MEASURED_ESTIMATION, **{field: getattr(ALT_ESTIMATION, field)})
     assert differs(_packets(Pipeline(SCENE_CONFIG, swapped)),
                    _packets(Pipeline(SCENE_CONFIG, MEASURED_ESTIMATION))), \
@@ -403,10 +380,6 @@ def test_each_stage_time_leaves_out_the_wait_between_stages():
     timed.navigate(packet)
     assert timed.last_timings_ms["phase3"] < 40.0 and timed.last_timings_ms["navigation"] < 40.0
 
-
-# =============================================================================
-# Navigation: step() against navigation_linker
-# =============================================================================
 
 COURSE = course_sequence()
 COURSE_ROUTE = Route(("left",))
@@ -487,7 +460,7 @@ def _pipeline_course(config, sequence=COURSE):
 @pytest.mark.software
 @pytest.mark.parametrize("case", COURSE_CONFIGS)
 def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
-    """Frame by frame: the packet the navigator saw, its record, and the command the motors got; then how the run ended."""
+    # Frame by frame: the packet the navigator saw, its record, and the command the motors got; then how the run ended.
     config = COURSE_CONFIGS[case]
     source, motor, nav = _CourseSource(COURSE), _Motor(), _Watched(route=COURSE_ROUTE, gyro_bias_dps=MEASURED_ESTIMATION.gyro_bias_dps)
     report = nl.run(source, _CourseSensors(source), motor, nav, config, MEASURED_ESTIMATION,
@@ -505,7 +478,7 @@ def test_commands_match_navigation_linker_over_a_course(case, tmp_path):
 
 @pytest.mark.software
 def test_the_course_moves_every_navigation_rule_and_finishes():
-    """Guards the command parity test: every rule and intersection stage decides some frame, the route is counted, the run finishes."""
+    # Guards the command parity test: every rule and intersection stage decides some frame, the route is counted, the run finishes.
     seen, stages = set(), set()
     for config in COURSE_CONFIGS.values():
         pipeline, cmds, _, records = _pipeline_course(config)
@@ -552,14 +525,10 @@ def test_navigation_state_is_built_once_and_finished_follows_it():
     assert pipeline.finished
 
 
-# =============================================================================
-# Stop lines and the lane offset
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("scene", ["stop_line_short", "stop_line_wide", "intersection"])
 def test_a_stop_line_clear_of_the_lane_lines_leaves_the_lane_offset_alone(scene):
-    """The stop line passes the lane gates as a lane candidate; lane_offset must skip it."""
+    # The stop line passes the lane gates as a lane candidate; lane_offset must skip it.
     pipeline = Pipeline(SCENE_CONFIG)
     clear = pipeline.perceive(SCENES["two_boundary"], 1, 50).lane_offset_results[0]
     p2 = pipeline.perceive(SCENES[scene], 1, 50)
@@ -572,7 +541,7 @@ def test_a_stop_line_clear_of_the_lane_lines_leaves_the_lane_offset_alone(scene)
 @pytest.mark.parametrize("scene", ["stop_line_touching", "stop_line_between_marks", "stop_line_touching_left",
                                    "stop_line_far", "stop_line_clipped", "stop_line_tilted", "two_stop_lines"])
 def test_a_stop_line_touching_the_lane_lines_keeps_the_lane_and_is_measured(scene):
-    """The lane detector's edges lose the stop line, so it no longer joins the lane lines into one contour."""
+    # The lane detector's edges lose the stop line, so it no longer joins the lane lines into one contour.
     p2 = Pipeline(SCENE_CONFIG).perceive(SCENES[scene], 1, 50)
     lane = p2.lane_offset_results[0]
     assert lane.mode == "two_boundary"
@@ -583,12 +552,10 @@ def test_a_stop_line_touching_the_lane_lines_keeps_the_lane_and_is_measured(scen
 @pytest.mark.software
 @pytest.mark.parametrize("tape", [6, 20, 30])
 def test_the_lane_stays_all_the_way_up_to_a_stop_line_that_touches_it(tape):
-    """
-    The approach, frame by frame, down to the robot on the line, with real
-    tape widths. Wide tape still shifts the anchors (up to half a tape) while
-    the line is in view: the piece below it has no top edge, so its sides
-    trace apart. Pinned so the shift can't grow unnoticed.
-    """
+    # The approach, frame by frame, down to the robot on the line, with real
+    # tape widths. Wide tape still shifts the anchors (up to half a tape) while
+    # the line is in view: the piece below it has no top edge, so its sides
+    # trace apart. Pinned so the shift can't grow unnoticed.
     pipeline = Pipeline(SCENE_CONFIG)
     for y in (5, 20, 35, 50, 65, 76):
         frame = scene(marks=(150, 290), mark_width=tape, stop_line=(150 - tape // 2 - 10, 290 + tape // 2 + 10, y),
@@ -600,7 +567,7 @@ def test_the_lane_stays_all_the_way_up_to_a_stop_line_that_touches_it(tape):
 
 @pytest.mark.software
 def test_the_lane_filter_off_brings_back_the_blind_lane():
-    """The filter is what keeps the lane: without it the touching stop line blinds it again."""
+    # The filter is what keeps the lane: without it the touching stop line blinds it again.
     off = replace(SCENE_CONFIG, geometry=replace(SCENE_CONFIG.geometry,
                                                  lane=replace(SCENE_CONFIG.geometry.lane, horizontal_edge_deg=None)))
     p2 = Pipeline(off).perceive(SCENES["stop_line_touching"], 1, 50)
@@ -609,11 +576,9 @@ def test_the_lane_filter_off_brings_back_the_blind_lane():
 
 @pytest.mark.software
 def test_a_horizontal_blob_too_short_for_a_stop_line_still_moves_the_offset():
-    """
-    Known limit, pinned so a change to it is deliberate: shorter than any
-    stop line, so no stop line is found for lane_offset to skip it by, yet
-    it passes the lane gates.
-    """
+    # Known limit, pinned so a change to it is deliberate: shorter than any
+    # stop line, so no stop line is found for lane_offset to skip it by, yet
+    # it passes the lane gates.
     p2 = Pipeline(SCENE_CONFIG).perceive(SCENES["horizontal_blob"], 1, 50)
     assert not p2.stop_line_results[0].detected
     assert p2.lane_offset_results[0].right_x != 289.5

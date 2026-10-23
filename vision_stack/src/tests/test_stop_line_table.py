@@ -1,10 +1,11 @@
-"""
-test_stop_line_table.py  --  src/perception/stop_line_table.py
+"""test_stop_line_table.py  --  src/perception/stop_line_table.py
 
 The curve fit on marks with a known answer (exact, and with measurement
 noise), every way a set of marks is refused, the table's conversion, and
 loading: silent without a file, refused with a warning when malformed or fit
 under another camera setup.
+
+--software  Marks with known answers and files in a temp folder. No camera.
 """
 import json
 import warnings
@@ -27,10 +28,6 @@ ROWS = np.array([0.0, 15.0, 30.0, 50.0, 70.0])
 def true_cm(rows, a=800.0, b=160.0, c=-2.0):
     return a / (b - np.asarray(rows)) + c
 
-
-# =============================================================================
-# Fit
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("n", [3, 5])
@@ -75,10 +72,6 @@ def test_three_marks_is_the_minimum():
     assert MIN_MARKS == 3
 
 
-# =============================================================================
-# The table
-# =============================================================================
-
 @pytest.mark.software
 def test_to_cm_follows_the_curve_and_never_goes_negative():
     assert T.to_cm(0.0) == pytest.approx(3.0)
@@ -93,10 +86,6 @@ def test_tables_are_frozen_and_compare_by_value():
     with pytest.raises(Exception):
         T.a = 1.0
 
-
-# =============================================================================
-# Loading
-# =============================================================================
 
 def table_file(tmp_path, **changes):
     rec = {"curve": [800.0, 160.0, -2.0], "image_size": [FRAME_W, FRAME_H],

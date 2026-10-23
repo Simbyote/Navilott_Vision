@@ -1,5 +1,5 @@
 """
-test_geometry.py  --  src/perception/geometry.py
+test_geometry.py  --  src/perception/geometry.py and its detectors (geometry_lanes, geometry_stop_line, geometry_sign)
 
 Detection tests use synthetic ROIs with known ground truth (white tape on a dark
 mat, a filled red octagon in the color sign ROI) and their own explicit filter/Canny parameters, so
@@ -647,6 +647,7 @@ SIGN_CASES = {
     "small red on gray": (80, RED, 14),
 }
 
+
 @pytest.mark.software
 @pytest.mark.parametrize("case", SIGN_CASES)
 @pytest.mark.parametrize("clutter", [False, True])
@@ -823,6 +824,7 @@ BAD_ROIS = {
                        (np.zeros((20, 20), np.uint8), ValueError), (np.zeros((20, 20, 4), np.uint8), ValueError)],
 }
 
+
 @pytest.mark.software
 @pytest.mark.parametrize("which, bad, exc", [(w, b, e) for w, cases in BAD_ROIS.items() for b, e in cases])
 def test_invalid_rois_are_rejected_and_the_offender_is_named(which, bad, exc):
@@ -920,10 +922,6 @@ def test_every_recorded_frame_meets_the_geometry_contract(dataset_frames):
             raise AssertionError(f"frame_id={fd.frame_id}: {e}") from e
 
 
-# =============================================================================
-# Stop lines
-# =============================================================================
-
 def stop_bar(x0=100, x1=300, y=40, thickness=8, tilt_deg=0.0, value=FG, marks=(), mark_width=8,
              shape=LANE_SHAPE):
     """A bar across a lane ROI, optionally over vertical lane marks; tilt rotates it about its center (+ = right end lower)."""
@@ -959,7 +957,7 @@ def test_a_stop_line_is_found_where_it_was_drawn():
 
 @pytest.mark.software
 def test_a_stop_line_touching_lane_lines_is_found_as_one_line_across_them():
-    """The gradient split keeps the lane lines' sides out, so the bar comes out alone."""
+    # The gradient split keeps the lane lines' sides out, so the bar comes out alone.
     cands, _ = stop_lines(stop_bar(100, 340, 40, 8, marks=(150, 290)))
     assert len(cands) == 1
     assert abs(cands[0].x_left - 100) <= 3 and abs(cands[0].x_right - 340) <= 3
@@ -967,7 +965,7 @@ def test_a_stop_line_touching_lane_lines_is_found_as_one_line_across_them():
 
 @pytest.mark.software
 def test_a_stop_line_broken_by_wide_lane_tape_is_joined_into_one():
-    """30 px tape breaks the bar's edges wider than the closing bridges; the pieces are refit as one."""
+    # 30 px tape breaks the bar's edges wider than the closing bridges; the pieces are refit as one.
     cands, _ = stop_lines(stop_bar(80, 380, 40, 10, marks=(150, 300), mark_width=30))
     assert len(cands) == 1
     assert cands[0].x_left < 120 and cands[0].x_right > 340
@@ -1010,7 +1008,7 @@ def test_each_stop_line_gate_rejects_and_is_counted_under_its_own_name(scene, ga
 
 @pytest.mark.software
 def test_the_tilt_gate_rejects_an_edge_fitted_steeper_than_max_tilt():
-    """The gradient split already drops most steep edges; the fitted line is gated again."""
+    # The gradient split already drops most steep edges; the fitted line is gated again.
     x = np.arange(0, 200, dtype=np.float32)
     steep = geo._fit_segment(np.stack([x, 20 + x * np.tan(np.radians(25))], axis=1))
     assert geo._stop_line_from(steep, [], blank(LANE_SHAPE), TEST_STOP, 0, 0) == (None, "tilt")
@@ -1041,7 +1039,7 @@ def test_stop_lines_come_out_nearest_the_robot_first():
 @pytest.mark.software
 @pytest.mark.parametrize("seed", range(6))
 def test_lane_marks_dashes_and_clutter_give_no_stop_line(seed):
-    """Vertical tape, dash ends and noise: nothing lying across the ROI long enough to be a stop line."""
+    # Vertical tape, dash ends and noise: nothing lying across the ROI long enough to be a stop line.
     lane = stop_bar(0, 1, 0, 1, value=BG, marks=(150, 290))
     cv2.rectangle(lane, (60, 10), (80, 40), FG, -1)                            # a dash: 20 px ends
     rng = np.random.default_rng(seed)
@@ -1051,7 +1049,7 @@ def test_lane_marks_dashes_and_clutter_give_no_stop_line(seed):
 
 @pytest.mark.software
 def test_lane_and_sign_results_do_not_depend_on_the_stop_line_filter():
-    """Stop lines only read the shared Canny map: any StopLineFilter leaves lanes and signs as they are."""
+    # Stop lines only read the shared Canny map: any StopLineFilter leaves lanes and signs as they are.
     from src.tests.scenes import SCENE_CONFIG, SCENES
     permissive = StopLineFilter(max_tilt_deg=45.0, min_length_px=5.0, min_thickness_px=0.5,
                                 max_thickness_px=200.0, min_intensity=0.0, close_kernel=(31, 3))
@@ -1091,10 +1089,6 @@ def test_stop_line_config_reaches_the_detector_through_the_stage():
     assert geo.detect_geometry(roi, TEST_CFG).stop_line_candidates[0].bbox == found.stop_line_candidates[0].bbox
 
 
-# =============================================================================
-# Lines across the lane, out of the lane detector's edges
-# =============================================================================
-
 def lanes_found(lane, flt=TEST_LANE_FILTERED):
     return extract_lane_candidates(lane, TEST_CANNY, flt, 1, 2, False)
 
@@ -1114,7 +1108,7 @@ def test_a_stop_line_touching_the_lane_lines_no_longer_joins_them():
 
 @pytest.mark.software
 def test_the_stubs_of_a_stop_line_running_past_the_tape_go_too():
-    """Shorter than a tape end on their own; removed because they lie on the long run's line."""
+    # Shorter than a tape end on their own; removed because they lie on the long run's line.
     lane = stop_bar(40, 400, 40, 10, marks=(150, 290), mark_width=6)
     cands, _ = lanes_found(lane)
     assert cands and all(c.bbox[2] < 45 for c in cands)
@@ -1163,7 +1157,7 @@ def test_the_stop_line_detector_reads_the_full_edges_whatever_the_lane_filter():
 
 @pytest.mark.software
 def test_the_lane_filter_is_the_same_whether_it_shares_the_stop_line_split_or_not():
-    """At the same angle the stop-line detector's split is reused; at another the lane computes its own."""
+    # At the same angle the stop-line detector's split is reused; at another the lane computes its own.
     lane = stop_bar(100, 340, 40, 10, marks=(150, 290), mark_width=20)
     edges = geo._canny(lane, TEST_CANNY)
     shared = geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED, geo._horizontal_edges(lane, edges, 20.0))
@@ -1249,9 +1243,6 @@ def test_geometry_characterization(request, frames, artifacts):
                       "area": c.area, "solidity": c.solidity} for c in res.sign_candidates],
         })
 
-# =============================================================================
-# Ghost signs: aspect, extent and letters
-# =============================================================================
 
 GHOST = replace(TEST_SIGN, aspect_range=(0.6, 1.6), extent_range=(0.68, 0.92), min_letter_share=0.03)
 
@@ -1315,10 +1306,6 @@ def test_the_letter_share_counts_white_inside_the_hull_only():
     pink[25:35, 20:40] = (170, 170, 255)                # bright but red: the blur's pink, not a letter
     assert geo._letter_share(pink, hull, GHOST) == 0.0
 
-
-# =============================================================================
-# Timing each part (timings=)
-# =============================================================================
 
 @pytest.mark.software
 def test_each_part_of_geometry_is_timed_on_request_and_the_result_is_the_same():

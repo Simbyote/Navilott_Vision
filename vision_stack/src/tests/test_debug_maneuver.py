@@ -38,10 +38,6 @@ def near(img, color, tol=40):
     return int((np.abs(img.astype(int) - color).sum(axis=2) < tol).sum())
 
 
-# =============================================================================
-# The strip
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("rec", [record(SETTLE), record(FORWARD_1, leg_progress=150.0, heading_deg=-0.5),
                                  record(TURN, turn_deg=90.0), record(ABORTED, event="ABORT stall"),
@@ -72,10 +68,6 @@ def test_the_turn_bar_shows_the_pass_band_and_the_angle():
 def test_an_abort_event_is_red():
     assert near(draw_strip(record(ABORTED, event="ABORT frame gap"), ManeuverConfig(), W), dv.C_RED) > 0
 
-
-# =============================================================================
-# render_run on a real run folder
-# =============================================================================
 
 @pytest.fixture(scope="module")
 def run_dir(tmp_path_factory):

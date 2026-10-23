@@ -95,10 +95,6 @@ def results(tmp_path):
     return json.loads((tmp_path / "out" / "results.json").read_text())
 
 
-# =============================================================================
-# The numbers
-# =============================================================================
-
 @pytest.mark.software
 def test_rest_stats_bias_noise_drift_rate_time_and_errors():
     rs = rest(bias=-1.0, noise=0.1, seconds=2.0, fail={5}) + [SensorReading(2.5, None, None, 3, 4, None)]
@@ -131,10 +127,6 @@ def test_the_registry_has_it():
     assert ROUTINES["imu-check"] is ic.ImuCheck and ic.ImuCheck.trials == 10
     assert set(ic.ImuCheck.settings) == {"rest_s", "vib_s", "duty"}             # duty: read by power_profile._motors
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 @pytest.mark.software
 def test_rest_eight_alternating_turns_and_vibration_pass(tmp_path):
@@ -234,10 +226,6 @@ def test_stopping_at_the_first_prompt_stops_the_hub_and_says_nothing_measured(tm
     res = go(r, person, tmp_path)
     assert res["stopped_early"] and r._hub.stopped and "measured bias" not in person.said()
 
-
-# =============================================================================
-# The criteria
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("kw, failing", [

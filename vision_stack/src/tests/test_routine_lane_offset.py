@@ -78,10 +78,6 @@ def answers(*measured):
 EXACT = [frames(0, noise=0.01), frames(2), frames(-2), frames(4), frames(-4)]
 
 
-# =============================================================================
-# The numbers
-# =============================================================================
-
 @pytest.mark.software
 def test_a_looks_offset_is_over_frames_on_vision():
     f = frames(1, n=6) + frames(-5, n=2, status="hold") + frames(1, n=2, status="stale", width=None)
@@ -107,10 +103,6 @@ def test_to_cm_as_estimation_does():
     assert lo.to_cm(0.5, 400, 0.05) == pytest.approx(5.0)
     assert lo.to_cm(None, 400, 0.05) is None and lo.to_cm(0.5, None, 0.05) is None and lo.to_cm(0.5, 400, None) is None
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 @pytest.mark.software
 def test_five_positions_against_the_ruler_pass(tmp_path):
@@ -200,10 +192,6 @@ def test_stopping_at_the_first_prompt_closes_the_camera(tmp_path):
     res, person, eyes = go([], ["q"], tmp_path)
     assert res["stopped_early"] and eyes.closed and "ground scale" not in person.said()
 
-
-# =============================================================================
-# The criterion
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("off, verdict", [(2.0, h.PASS), (2.01, h.FAIL), (-2.01, h.FAIL), (-2.0, h.PASS)])

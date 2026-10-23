@@ -47,10 +47,6 @@ def feed(watch, rows):
     return None
 
 
-# =============================================================================
-# RecoverWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_a_recovery_ends_once_held_in_the_band():
     w = ro.RecoverWatch(straight=False)
@@ -99,10 +95,6 @@ def test_a_start_on_the_center_has_no_overshoot():
              {"t": 0.05, "lane_status": "vision", "lane_offset_cm": -1.0}])
     assert w.overshoot_cm == 0.0
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class Rig:
     def __init__(self, log):
@@ -230,10 +222,6 @@ def test_registered_and_planned():
     assert ro.RecoverOffset().plan({"positions": "0,1"}) == 2 and ro.BAND_CM == 1.5
     assert (ro.MAX_S, ro.STRAIGHT_S, ro.HOLD_S) == (6.0, 5.0, 1.0)
 
-
-# =============================================================================
-# The criteria
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("peak, verdict", [(1.5, h.PASS), (1.51, h.FAIL)])

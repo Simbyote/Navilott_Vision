@@ -252,10 +252,6 @@ def test_report_counts_candidates_fused_colors_coverage_and_rejects():
     assert "blobs seen 3, accepted 1; rejected by gate: area 1, aspect 1" in report
 
 
-# =============================================================================
-# Glow mode
-# =============================================================================
-
 def spot(label=RED, gate=None, px=5, conf=1.0, bbox=(10, 10, 6, 6), ring=20, votes=None, aspect=1.0):
     """One glow trace entry, as _glow_candidates records it."""
     votes = votes if votes is not None else {RED: 5, YELLOW: 0, GREEN: 0}

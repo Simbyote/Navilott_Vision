@@ -1,10 +1,11 @@
-"""
-test_calibrate_stop_line.py  --  src/scripts/calibrate_stop_line.py
+"""test_calibrate_stop_line.py  --  src/scripts/calibrate_stop_line.py
 
 Measuring a tape mark on drawn frames through the real Phase 2, the reasons
 a mark isn't recorded, the interactive loop (undo, too few marks, a typo, a
 mark the detector can't see), and the file it writes, loaded back through
-load_stop_line_table. No camera.
+load_stop_line_table.
+
+--software  Drawn frames and a scripted console. No camera.
 """
 import json
 
@@ -26,10 +27,6 @@ def tape(y_top):
     """A frame with a tape strip whose top edge is y_top lane-ROI rows down: its near edge is y_top + THICK."""
     return scene(stop_line=(120, 320, y_top), stop_line_thickness=THICK)
 
-
-# =============================================================================
-# Measuring a mark
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("y_top", [10, 30, 50])
@@ -64,10 +61,6 @@ def test_no_line_at_all_measures_nothing():
     m = cs.measure_mark([scene()] * 3, SCENE_CONFIG)
     assert (m["rows"], m["seen"], m["spread"]) == (None, 0, 0.0) and cs.mark_problem(m)
 
-
-# =============================================================================
-# The interactive loop
-# =============================================================================
 
 def interactive(answers, frames_for):
     """collect_marks with typed answers; frames_for(cm) -> the frame the camera sees for that mark."""
@@ -105,10 +98,6 @@ def test_a_mark_the_detector_cannot_see_is_not_recorded():
     assert [m["cm"] for m in marks] == [3.0, 6.0, 10.0]
     assert any("not recorded" in s for s in said)
 
-
-# =============================================================================
-# The camera
-# =============================================================================
 
 class UpsideDownCamera:
     """open_camera's capture: hands over the frame as the pipeline does, upside down."""
@@ -148,10 +137,6 @@ def test_main_grabs_upright_frames_from_the_camera(monkeypatch):
     assert cs.main(["--out", "/dev/null"], say=lambda s: None) == 0
     assert all(np.array_equal(f, tape(30)) for f in grabbed["frames"]) and cam.released
 
-
-# =============================================================================
-# The file
-# =============================================================================
 
 @pytest.mark.software
 def test_parse_marks():

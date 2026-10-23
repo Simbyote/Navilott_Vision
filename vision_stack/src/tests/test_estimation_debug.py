@@ -29,12 +29,14 @@ from src.tests.test_estimation import det, lane
 
 CFG = Phase3Config(max_offset_jump=0.3, hold_max_frames=2, vote_window=3)
 
+
 def line(px, detected=True, fid=1, ts=100, cm=None):
     """Real StopLineResult; distance_px is None when not detected, as Phase 2 reports it."""
     if not detected:
         return StopLineResult(False, None, None, None, None, None, False, 0.0, 0, fid, ts)
     return StopLineResult(True, px, 50.0, 100.0, 300.0, 0.0, False, 0.7, 1, fid, ts,
                           distance_cm=cm, proximity=0.5)
+
 
 def phase2(fid, ts, dets=(), lanes=None, lines=()):
     """Phase2Output at (fid, ts), with every piece restamped to it; lanes None is one centered result."""
@@ -43,18 +45,16 @@ def phase2(fid, ts, dets=(), lanes=None, lines=()):
                         [replace(r, frame_id=fid, timestamp_ms=ts) for r in lanes], fid, ts,
                         stop_line_results=[replace(r, frame_id=fid, timestamp_ms=ts) for r in lines])
 
+
 def frames(*items):
     """Phase2Outputs 50 ms apart; each item is (dets, lanes, lines), lines None for none."""
     return [phase2(i, i * 50, dets, lanes, lines or ()) for i, (dets, lanes, lines) in enumerate(items)]
+
 
 def run(stream, cfg=CFG, sensors=None):
     proc = TracedPhase3Processor(cfg)
     return [proc.process(o, sensors) for o in stream]
 
-
-# =============================================================================
-# Parity with the production processor
-# =============================================================================
 
 def _random_stream(n, seed):
     """Lanes that jump, drop and go unusable; lights of every color; signs and lines around the gates; stalls."""
@@ -114,10 +114,6 @@ def test_every_stage_is_timed_and_the_record_keys_are_present():
         assert isinstance(dbg[stage], dict)
 
 
-# =============================================================================
-# Traffic and stop sign: accepted vs gated, vote buffer
-# =============================================================================
-
 @pytest.mark.software
 def test_a_detection_above_the_gate_passes_and_one_below_is_gated():
     stream = frames(([det("traffic_light", "red", 0.9)], None, None),
@@ -152,10 +148,6 @@ def test_each_vote_records_only_its_own_detection_type():
     assert "detections" not in dbg["stop_line"]
 
 
-# =============================================================================
-# Lane: accepted, jump rejected, hold into stale
-# =============================================================================
-
 @pytest.mark.software
 def test_a_lane_jump_is_rejected_then_held_into_stale_and_reseeded():
     stream = frames(([], [lane(0.0)], None), ([], [lane(0.8)], None), ([], [lane(0.8)], None),
@@ -184,10 +176,6 @@ def test_lane_reasons_for_no_result_and_an_unusable_mode():
     assert recs[0]["status"] == LANE_STALE and recs[0]["ema_before"] is None
 
 
-# =============================================================================
-# Stop line: seen vs held
-# =============================================================================
-
 @pytest.mark.software
 def test_a_stop_line_distance_is_held_through_a_missed_frame():
     stream = frames(([], None, [line(30.0, cm=40.0)]), ([], None, [line(20.0, cm=30.0)]),
@@ -201,10 +189,6 @@ def test_a_stop_line_distance_is_held_through_a_missed_frame():
     assert [r["buffer"] for r in recs][-1] == (True, False, False)
     assert recs[0]["raw_vote"] is True and recs[2]["raw_vote"] is False
 
-
-# =============================================================================
-# Obstacle: seen vs held
-# =============================================================================
 
 def blocking(px, fid, ts, cm=None, clipped=False):
     """Phase2Output at (fid, ts) with one obstacle at px rows (None: none seen)."""
@@ -224,10 +208,6 @@ def test_an_obstacle_measurement_is_held_through_a_missed_frame():
     assert (recs[2]["measured_cm"], recs[2]["reported_px"], recs[2]["clipped"]) == (None, 0.0, True)
     assert (recs[3]["reported_px"], recs[3]["clipped"]) == (None, False)
 
-
-# =============================================================================
-# Heading
-# =============================================================================
 
 @pytest.mark.software
 def test_heading_resets_on_vision_and_integrates_off_it():

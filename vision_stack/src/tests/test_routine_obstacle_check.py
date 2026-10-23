@@ -42,10 +42,6 @@ def clear(n=40):
     return [frame() for _ in range(n)]
 
 
-# =============================================================================
-# The look's frames
-# =============================================================================
-
 @pytest.mark.software
 def test_seen_carries_phase_2s_obstacle_and_the_vote():
     ob = SimpleNamespace(detected=True, distance_cm=18.5, clipped=False)
@@ -61,10 +57,6 @@ def test_seen_carries_phase_2s_obstacle_and_the_vote():
     res.chain.phase2.obstacle_results = [SimpleNamespace(detected=False, distance_cm=None, clipped=False)]
     assert seen(res, MEASURED_ESTIMATION)["obstacle"] is False
 
-
-# =============================================================================
-# Reading a look
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("f, brakes", [
@@ -101,10 +93,6 @@ def test_a_looks_numbers():
                    "clipped_pct": 12.5, "would_brake": False, "result": oc.MISSED}
     assert oc.read_look(clear(), None, False)["reported_cm"] is None
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 def go(eyes, person, tmp_path, **options):
     return h.run_routine(oc.ObstacleCheck(eyes), person.console(), tmp_path / "out", options=options,
@@ -173,10 +161,6 @@ def test_each_criterion_on_its_own():
     assert failed((20, oc.OK, 1.0, True)) == [f"brake decisions wrong (gaps over 2 cm from {OBSTACLE_STOP_CM:g} cm)"]
     assert failed((20, oc.OK, 1.0, False), (OBSTACLE_STOP_CM + 1, oc.OK, 0.5, False)) == []   # too near to judge
 
-
-# =============================================================================
-# Laterals: how wide the path the detector watches is
-# =============================================================================
 
 @pytest.mark.software
 def test_the_seen_width_is_the_widest_offset_every_object_read_ok_out_to():

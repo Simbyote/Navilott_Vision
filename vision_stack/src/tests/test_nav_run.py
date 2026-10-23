@@ -50,10 +50,6 @@ def lane(n, start=0, **kw):
     return [row(start + i, **kw) for i in range(n)]
 
 
-# =============================================================================
-# Rules, braking, lane keeping
-# =============================================================================
-
 @pytest.mark.software
 def test_time_and_episodes_per_rule_and_the_transitions(tmp_path):
     rows = lane(10) + lane(4, 10, rule="stop_sign", brake=1, reason="stop_sign_hold") + lane(6, 14)
@@ -92,10 +88,6 @@ def test_weaving_is_never_counted_across_a_break_in_lane_keeping(tmp_path):
     assert nr.analyze(table(tmp_path, rows))["lane_keeping"]["weave_per_s"] == 0.0
 
 
-# =============================================================================
-# Intersections
-# =============================================================================
-
 def crossing(start, bias_yaw=0.0):
     """to_line 10 frames, held by a stop sign 6, turn 20 at -60 deg/s, exit 4: one intersection."""
     rows = [row(start + i, rule="intersection", stage="to_line", step="1/1 left", maneuver="left",
@@ -131,10 +123,6 @@ def test_a_veer_after_the_crossing_is_flagged_against_the_runs_p95(tmp_path):
     (x,) = nr.analyze(table(tmp_path, rows))["intersections"]
     assert x["after"]["veer"] and x["after"]["offset_max_abs"] == pytest.approx(0.29)
 
-
-# =============================================================================
-# Wheels, latency, findings
-# =============================================================================
 
 @pytest.mark.software
 def test_wheel_balance_only_counts_equal_duty_driving_frames(tmp_path):
@@ -176,10 +164,6 @@ def test_each_finding_on_its_own(tmp_path, rows, words):
 def test_a_clean_run_has_no_findings(tmp_path):
     assert nr.analyze(table(tmp_path, lane(40)))["findings"] == []
 
-
-# =============================================================================
-# End to end and the command line
-# =============================================================================
 
 @pytest.mark.software
 def test_intersection_linkers_left_turn_reads_as_one_clean_gyro_turn(tmp_path):

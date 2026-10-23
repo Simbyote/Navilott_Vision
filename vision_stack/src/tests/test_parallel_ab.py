@@ -1,10 +1,11 @@
-"""
-test_parallel_ab.py  --  src/analysis/parallel_ab.py
+"""test_parallel_ab.py  --  src/analysis/parallel_ab.py
 
 The runs alternate serial and parallel with a label each, every run's
 numbers come from its own nav.csv and report.json, and the verdict says
 whether the modes separate or overlap. No camera: the launcher is a fake
 that writes a run folder.
+
+--software  A fake launcher. No camera or Pi.
 """
 import csv
 import json

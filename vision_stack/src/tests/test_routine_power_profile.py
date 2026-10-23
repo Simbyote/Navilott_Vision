@@ -185,10 +185,6 @@ def test_without_the_adc_it_says_so_and_still_runs(tmp_path, monkeypatch):
     assert ctx.options == {"stage_s": pp.STAGE_S, "duty": pp.BASE_SPEED}
 
 
-# =============================================================================
-# The real loads, on fake hardware
-# =============================================================================
-
 @pytest.mark.software
 def test_the_motors_load_keeps_refreshing_the_duty_then_stops(monkeypatch):
     log = []

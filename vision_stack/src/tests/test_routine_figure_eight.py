@@ -66,10 +66,6 @@ def feed(watch, rows):
     return None
 
 
-# =============================================================================
-# EightWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_each_intersection_its_maneuver_turn_heading_and_lane():
     w = fe.EightWatch(seconds=1e9)
@@ -215,10 +211,6 @@ def test_rows_before_the_first_intersection_and_odd_labels_are_harmless():
     assert w({"t": 0.05, "rule": "lane_keeping", "step": None, "lane_status": "vision"}) is None
     assert w.intersections == [] and fe._step("x/1") == 0 and fe._step("12/1600 left") == 12
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class Rig:
     def __init__(self, log):

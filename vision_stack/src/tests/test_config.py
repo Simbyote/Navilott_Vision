@@ -31,10 +31,6 @@ from src.phase2_linker import run_chain
 from src.tests.scenes import SCENE_CONFIG, synthetic_frame
 
 
-# =============================================================================
-# MEASURED
-# =============================================================================
-
 @pytest.mark.software
 def test_measured_undistorts_with_the_lens_calibration():
     assert MEASURED.preprocess.calibration_path == str(CAMERA_CALIB_PATH)
@@ -66,7 +62,7 @@ def test_measured_keeps_the_swept_lane_gates():
 
 @pytest.mark.software
 def test_measured_takes_a_pair_as_a_lane_only_near_the_measured_width():
-    """Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line."""
+    # Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line.
     lo = MEASURED.lane_offset
     assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (300.0, 400.0, 178.0)
     assert lo.min_lane_width_px < 2 * lo.expected_half_lane_px < lo.max_lane_width_px
@@ -79,10 +75,6 @@ def test_bare_pipeline_config_is_each_stages_defaults():
     assert c.preprocess.calibration_path is None
     assert c.color.hsv_ranges is None
 
-
-# =============================================================================
-# SCENE_CONFIG
-# =============================================================================
 
 @pytest.mark.software
 def test_scene_config_is_measured_without_undistortion():
@@ -111,10 +103,6 @@ def test_synthetic_marks_come_back_exactly_only_without_undistortion():
     warped = run_chain(frame, 0, 0, MEASURED).offset
     assert (warped.left_x, warped.right_x) != (149.5, 289.5)
 
-
-# =============================================================================
-# One config for every consumer
-# =============================================================================
 
 def _default(fn, name):
     return inspect.signature(fn).parameters[name].default
@@ -181,7 +169,7 @@ def test_phase3_linker_reports_the_color_branch_from_the_config(tmp_path, capsys
 
 @pytest.mark.software
 def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_path):
-    """A matching ground file at GROUND_HOMOGRAPHY_PATH ends up in MEASURED.ground; SCENE_CONFIG never has one."""
+    # A matching ground file at GROUND_HOMOGRAPHY_PATH ends up in MEASURED.ground; SCENE_CONFIG never has one.
     import json
     from src.perception.ground import lens_id
     from src.tests.scenes import SYNTHETIC_GROUND
@@ -220,7 +208,7 @@ def test_only_a_stop_line_without_any_cm_source_warns(tmp_path, ground, table, w
 
 @pytest.mark.software
 def test_measured_loads_the_stop_line_table_against_its_own_preprocess(tmp_path):
-    """A matching table at STOP_LINE_TABLE_PATH ends up in MEASURED.stop_line_table; SCENE_CONFIG never has one."""
+    # A matching table at STOP_LINE_TABLE_PATH ends up in MEASURED.stop_line_table; SCENE_CONFIG never has one.
     import json
     from src.perception.ground import lens_id
     table = tmp_path / "stop_line_table.json"

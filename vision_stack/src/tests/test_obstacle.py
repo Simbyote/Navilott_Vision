@@ -52,6 +52,7 @@ def close(measured, drawn, px=EDGE_PX) -> bool:
 def roi_of(frame, config=SCENE_CONFIG, frame_id=7, ts=350):
     return crop_rois(preprocess_frame(FrameData(frame, frame_id, ts), config.preprocess), config.roi)
 
+
 def both(frame, cfg=CFG, ground=None, table=None, config=SCENE_CONFIG, roi=None):
     """The debug and production results on one frame, checked equal."""
     roi = roi_of(frame, config) if roi is None else roi
@@ -59,10 +60,6 @@ def both(frame, cfg=CFG, ground=None, table=None, config=SCENE_CONFIG, roi=None)
     same(result, estimate_obstacle(roi, cfg, ground, table))
     return result, debug, roi
 
-
-# =============================================================================
-# What is an obstacle
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("bgr", [ORANGE_BOX, WHITE_BOX, (200, 60, 30), (40, 200, 40)],
@@ -77,7 +74,7 @@ def test_a_bright_or_colored_box_in_the_path_is_found(bgr):
 
 @pytest.mark.software
 def test_a_dark_box_is_not_told_from_the_mats():
-    """The known blind spot: no brighter than the floor and no color."""
+    # The known blind spot: no brighter than the floor and no color.
     r, d, _ = both(with_obstacle(scene(), 200, 280, 150, 250, DARK_BOX))
     assert not r.detected and d["not_floor_px"] == both(scene())[1]["not_floor_px"]    # the lane marks' only
 
@@ -85,7 +82,7 @@ def test_a_dark_box_is_not_told_from_the_mats():
 @pytest.mark.software
 @pytest.mark.parametrize("name", [n for n in SCENES if not n.startswith("obstacle")])
 def test_no_marking_scene_is_an_obstacle(name):
-    """Lane lines, dashes, stop lines (thin, thick, clipped, tilted), signs, lamps and noise all fail the opening."""
+    # Lane lines, dashes, stop lines (thin, thick, clipped, tilted), signs, lamps and noise all fail the opening.
     for config in (SCENE_CONFIG, ALT_CONFIG):
         r, _, _ = both(SCENES[name], config.obstacle, config=config)
         assert not r.detected, name
@@ -93,12 +90,10 @@ def test_no_marking_scene_is_an_obstacle(name):
 
 @pytest.mark.software
 def test_tape_is_bright_but_never_survives_the_opening():
-    """
-    Lane tape up to ~40 px wide after the blur (MEASURED's lane gate allows
-    45; the widest seen was 41.7) and a stop line far thicker than the
-    course's (~10 rows per cm near the view bottom): open_px is wider than
-    both. Tape wider than open_px would survive: the opening's one assumption.
-    """
+    # Lane tape up to ~40 px wide after the blur (MEASURED's lane gate allows
+    # 45; the widest seen was 41.7) and a stop line far thicker than the
+    # course's (~10 rows per cm near the view bottom): open_px is wider than
+    # both. Tape wider than open_px would survive: the opening's one assumption.
     frame = scene(marks=(150, 290), mark_width=36, stop_line=(100, 380, 40), stop_line_thickness=30)
     r, d, _ = both(frame)
     assert d["not_floor_px"] > 0 and not d["opened"].any() and not r.detected
@@ -112,11 +107,9 @@ def test_a_box_off_the_robots_path_is_not_its_obstacle():
 
 @pytest.mark.software
 def test_a_warm_light_over_everything_is_not_an_obstacle_but_a_can_under_it_is():
-    """
-    Under the warm light by the windows (2026-10-12) the whole floor read
-    saturated. The color test is against the frame's own neutral, so a cast
-    over everything moves the reference with it.
-    """
+    # Under the warm light by the windows (2026-10-12) the whole floor read
+    # saturated. The color test is against the frame's own neutral, so a cast
+    # over everything moves the reference with it.
     warm = lambda f: cv2.add(f, np.full(f.shape, (0, 25, 70), np.uint8))       # BGR: toward orange
     assert not both(warm(scene()))[0].detected
     r, _, _ = both(warm(with_obstacle(scene(), 200, 280, 150, 250, (140, 50, 20))))
@@ -125,14 +118,14 @@ def test_a_warm_light_over_everything_is_not_an_obstacle_but_a_can_under_it_is()
 
 @pytest.mark.software
 def test_a_dark_blue_can_filling_the_lane_roi_is_found_by_its_color():
-    """Dark, so not bright; its brightest channel (blue) clears min_value though its luminance doesn't."""
+    # Dark, so not bright; its brightest channel (blue) clears min_value though its luminance doesn't.
     r, d, _ = both(with_obstacle(scene(), 20, 460, 120, FRAME_H, (110, 35, 15)))
     assert r.detected and r.clipped
 
 
 @pytest.mark.software
 def test_a_box_filling_the_path_is_still_found():
-    """The floor level comes from the lane ROI, wider than the path: floor stays beside the box."""
+    # The floor level comes from the lane ROI, wider than the path: floor stays beside the box.
     frame = with_obstacle(scene(), 120, 360, 100, FRAME_H, WHITE_BOX)
     r, d, roi = both(frame)
     assert d["floor_level"] < 100 and r.detected and r.clipped
@@ -142,20 +135,14 @@ def test_a_box_filling_the_path_is_still_found():
 @pytest.mark.software
 @pytest.mark.parametrize("floor", [60, 110, 135])
 def test_the_floor_level_follows_the_floor_dark_or_light(floor):
-    """
-    The course's floor runs from dark mats to light gray (95-130 at the
-    2026-10-12 run's intersections). A fixed floor level called the light
-    floor an obstacle; measured each frame, only the box stands out.
-    """
+    # The course's floor runs from dark mats to light gray (95-130 at the
+    # 2026-10-12 run's intersections). A fixed floor level called the light
+    # floor an obstacle; measured each frame, only the box stands out.
     plain = synthetic_frame((150, 290), road=floor, surround=floor)
     assert not both(plain)[0].detected
     r, d, _ = both(with_obstacle(plain, 200, 280, 150, 250, WHITE_BOX))
     assert r.detected and abs(d["floor_level"] - floor) <= 2
 
-
-# =============================================================================
-# Gates and choice
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("w, h, area, rows, expected", [
@@ -198,7 +185,7 @@ def test_the_nearest_box_is_the_obstacle():
 
 @pytest.mark.software
 def test_each_config_field_moves_the_answer():
-    """Without this, parity under ALT_CONFIG couldn't catch a twin ignoring a field."""
+    # Without this, parity under ALT_CONFIG couldn't catch a twin ignoring a field.
     base = both(SCENES["obstacle_near"])[0]
     moved = {
         "min_contrast": (replace(CFG, min_contrast=200.0, min_chroma=500.0), SCENES["obstacle_near"]),
@@ -219,10 +206,6 @@ def test_each_config_field_moves_the_answer():
     _, high, _ = both(SCENES["obstacle_near"], replace(CFG, floor_percentile=90.0))
     assert low["floor_level"] != high["floor_level"] and base.detected
 
-
-# =============================================================================
-# Distance
-# =============================================================================
 
 @pytest.mark.software
 def test_rows_are_counted_from_the_lane_roi_bottom_whatever_the_obstacle_roi():
@@ -269,10 +252,6 @@ def test_no_cm_without_a_calibration_or_at_another_frame_size():
                    cfg=replace(CFG, min_area_px=500, min_width_px=30, min_height_px=30, open_px=31))
     assert r.detected and r.distance_cm is None
 
-
-# =============================================================================
-# Stamps, contract and debug
-# =============================================================================
 
 @pytest.mark.software
 def test_results_carry_the_frame_stamp_found_or_not():
@@ -335,10 +314,6 @@ def test_the_chain_measures_it_and_packages_it():
     assert "obstacle" in chain.timings_ms and chain.obstacle_debug["frame_id"] == 3
 
 
-# =============================================================================
-# On the Pi
-# =============================================================================
-
 # Where the hardware check holds the measurement: within this many cm of the
 # tape, in this share of the frames
 CM_TOLERANCE = 1.5
@@ -349,10 +324,8 @@ STAGE_BUDGET_MS = 5.0           # the obstacle stage's median on the Pi; the fra
 
 @pytest.mark.hardware
 def test_obstacle_on_the_pi(request, frames, artifacts):
-    """
-    The detector on real frames under MEASURED. Without --obstacle-cm it
-    records what it sees; with it, it checks it against what was placed.
-    """
+    # The detector on real frames under MEASURED. Without --obstacle-cm it
+    # records what it sees; with it, it checks it against what was placed.
     n = request.config.getoption("--frames")
     placed = request.config.getoption("--obstacle-cm")
     rows, stage_ms, stills = [], [], 0

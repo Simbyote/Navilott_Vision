@@ -1,25 +1,17 @@
-"""
-test_drive.py  --  src/peripherals/drive.py
+"""test_drive.py  --  src/peripherals/drive.py
 
 drive.py imports pigpio at module load, so software tests swap in a fake
-before importing it; a fake clock steps a simple wheel model that injects
-the motion as encoder edges, so nothing waits.
+before importing it; a fake clock steps a wheel model that injects the
+motion as encoder edges, so nothing waits.
 
---software  Quadrature decoding, cps, TB6612 direction/PWM commands, brake
-            and stop, against a fake pigpio and a simple wheel model. No GPIO.
-            The watchdog on a fake clock: braking a quiet loop, never a
-            steady one, disarmed by brake and stop, re-armed by drive; and
-            its thread in real time. The pigpiod watchdog's script run by a
-            small interpreter of pigpio's script language, and its
-            heartbeat, disarming and fallback in MotorController.
---hardware  Skips unless pigpio is up and a short nudge makes an encoder
-            count, so the motorless chassis skips here. Then spins each
-            wheel alone, both forward, reverse and in place, checks the
-            counts hold when stopped, and drives 3 s straight open loop,
-            recording counts per leg and the motors' natural mismatch. A
-            second test drives once and goes quiet: the watchdog must stop
-            the wheels; a third does the same with the Python watchdog
-            stubbed out, so only pigpiod's script can. WHEELS OFF THE
+--software  Quadrature decoding, cps, TB6612 commands, brake and stop; the
+            watchdog on a fake clock and on its thread; the pigpiod
+            watchdog's script, run by a small interpreter of pigpio's script
+            language, and its heartbeat and fallback.
+--hardware  Skips unless a short nudge makes an encoder count. Each wheel
+            alone, both, in place; counts held when stopped; 3 s straight
+            open loop. Then drive once and go quiet: the watchdog must stop
+            the wheels, and pigpiod's script alone must too. WHEELS OFF THE
             GROUND: about 14 s of motor time.
 """
 import importlib
@@ -196,9 +188,6 @@ def _wheel_model(mod, pi, motor, right_gain=1.0, cps_at_full=400):
     return step
 
 
-# -----------------------------------------------------------------------------
-# EncoderReader
-# -----------------------------------------------------------------------------
 @pytest.mark.software
 def test_encoder_missing_pigpio_daemon_raises_with_the_fix(env):
     mod, pi, _ = env
@@ -434,9 +423,6 @@ def test_motor_probe_counts_a_chassis_with_one_dead_encoder_as_fitted(env):
     assert _motors_respond(enc, m, clock.sleep)
 
 
-# -----------------------------------------------------------------------------
-# Hardware
-# -----------------------------------------------------------------------------
 @pytest.mark.hardware
 def test_drive_characterization(artifacts):
     pi = pigpio_or_skip("drive")
@@ -504,6 +490,7 @@ def test_drive_characterization(artifacts):
     # never match exactly; lane keeping and the gyro heading hold correct for it
     assert straight.left_count > 20 and straight.right_count > 20, "straight: a wheel stopped counting"
 
+
 @pytest.mark.software
 def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monkeypatch):
     mod, pi, _ = env
@@ -516,11 +503,9 @@ def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monk
 
 @pytest.mark.software
 def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
-    """
-    The physical wiring, by raw pin (test_drive_characterization proves it on the robot):
-    the left command's wheel carries the encoder on 19/16, the right's the one on 21/20,
-    and driving forward 19 leads 16 and 21 leads 20 (signs measured by hand 2026-09-29).
-    """
+    # The physical wiring, by raw pin (test_drive_characterization proves it on the robot):
+    # the left command's wheel carries the encoder on 19/16, the right's the one on 21/20,
+    # and driving forward 19 leads 16 and 21 leads 20 (signs measured by hand 2026-09-29).
     mod, pi, _ = env
     enc = mod.EncoderReader(pi)
     pi.quad(19, 16, 25, c1_leads=True)          # the left wheel forward
@@ -530,9 +515,6 @@ def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
     assert enc.counts() == (20, 10)
 
 
-# -----------------------------------------------------------------------------
-# Watchdog
-# -----------------------------------------------------------------------------
 def _braked(pi, m):
     return all(pi.levels[p] == 1 for p in (m.ain1, m.ain2, m.bin1, m.bin2, m.stby)) and \
         pi.pwm[m.pwma][1] == pi.pwm[m.pwmb][1] == FULL_DUTY
@@ -653,11 +635,9 @@ def test_a_failing_brake_is_logged_and_the_watching_goes_on(env, caplog):
 
 @pytest.mark.hardware
 def test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet():
-    """
-    As when the camera stops mid-run: one drive(), then silence. The wheels
-    turn, the watchdog brakes them within watchdog_s (+ one check period),
-    and they stay stopped. WHEELS OFF THE GROUND.
-    """
+    # As when the camera stops mid-run: one drive(), then silence. The wheels
+    # turn, the watchdog brakes them within watchdog_s (+ one check period),
+    # and they stay stopped. WHEELS OFF THE GROUND.
     pi = pigpio_or_skip("drive")
     try:
         mod = importlib.import_module(DRIVE_MODULE)
@@ -688,11 +668,9 @@ def test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet():
 
 @pytest.mark.hardware
 def test_the_pigpiod_watchdog_alone_stops_the_real_wheels():
-    """
-    As when the whole process stalls: one drive(), then the Python watchdog
-    can't run (its check is stubbed out), so only the script in pigpiod can
-    brake. It must, within watchdog_s plus one look. WHEELS OFF THE GROUND.
-    """
+    # As when the whole process stalls: one drive(), then the Python watchdog
+    # can't run (its check is stubbed out), so only the script in pigpiod can
+    # brake. It must, within watchdog_s plus one look. WHEELS OFF THE GROUND.
     pi = pigpio_or_skip("drive")
     try:
         mod = importlib.import_module(DRIVE_MODULE)
@@ -720,10 +698,6 @@ def test_the_pigpiod_watchdog_alone_stops_the_real_wheels():
     assert moving.left_count > 10 and moving.right_count > 10, "the wheels never turned: nothing to stop"
     assert abs(after.left_count) <= 2 and abs(after.right_count) <= 2, "wheels still turning: pigpiod didn't brake"
 
-
-# =============================================================================
-# The watchdog inside pigpiod
-# =============================================================================
 
 class ScriptSim:
     """

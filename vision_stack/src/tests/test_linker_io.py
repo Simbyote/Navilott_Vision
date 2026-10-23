@@ -28,10 +28,6 @@ from src.phase3_linker import run_phase3_chain
 from src.tests.scenes import SCENE_CONFIG, SCENES
 
 
-# =============================================================================
-# open_rig and countdown
-# =============================================================================
-
 def _part(log, kind, release):
     """A fake device constructor: logs what it was opened with, and its stop() / close()."""
     def make(*a):
@@ -130,10 +126,6 @@ def test_the_countdown_is_three_seconds_out_loud(monkeypatch, capsys):
     assert slept == [1.0] * io.COUNTDOWN_S
 
 
-# =============================================================================
-# FrameRecorder
-# =============================================================================
-
 @pytest.mark.software
 def test_a_full_recorder_queue_drops_frames_instead_of_blocking(tmp_path, monkeypatch):
     gate = threading.Event()
@@ -169,10 +161,6 @@ def test_a_recorder_error_is_raised_by_close_not_in_the_loop(tmp_path, monkeypat
     with pytest.raises(RuntimeError, match="disk full"):
         rec.close()
 
-
-# =============================================================================
-# NoMotors and chain_record
-# =============================================================================
 
 @pytest.mark.software
 def test_no_motors_takes_every_motor_call():

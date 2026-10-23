@@ -143,10 +143,6 @@ VC = {("vcgencmd", "version"): "Aug 23 2026\nversion abc (clean)",
 MEMINFO = "MemTotal:  427000 kB\nCmaTotal:  262144 kB\nCmaFree:   200704 kB\n"
 
 
-# =============================================================================
-# Parsers
-# =============================================================================
-
 @pytest.mark.software
 def test_media_graph_keeps_entities_nodes_formats_and_only_enabled_links():
     m = ca.parse_media(MEDIA_UNICAM)
@@ -247,10 +243,6 @@ def test_the_pipeline_is_the_robots_with_a_silent_fakesink():
     assert ca.anatomy_pipeline(num_buffers=60).endswith("fakesink sync=false silent=true num-buffers=60")
     assert "appsink" not in pipe
 
-
-# =============================================================================
-# record()
-# =============================================================================
 
 class FakePi:
     """
@@ -449,10 +441,6 @@ def test_summary_shows_the_route_caps_times_videocore_and_libcamera(tmp_path):
     assert "drawn: media0.png, media1.png, gst_pipeline.png" in text
 
 
-# =============================================================================
-# Running tools and the command line
-# =============================================================================
-
 @pytest.mark.software
 def test_run_tool_and_launch_for_report_a_missing_tool_and_capture_output():
     assert ca.run_tool(["no-such-tool-xyz"])[0] is None
@@ -477,10 +465,6 @@ def test_cli_adds_camera_controls_to_the_configured_ones_and_rejects_unknown(mon
     assert ca.cli(["--camera-control", "nonsense=1"]) == 2
     assert "unknown camera control" in capsys.readouterr().out
 
-
-# =============================================================================
-# On the Pi
-# =============================================================================
 
 PI_SECONDS = 8.0
 
@@ -509,7 +493,7 @@ def test_launch_for_marks_a_run_it_had_to_stop_and_not_one_that_ended(tmp_path):
 
 @pytest.mark.software
 def test_a_stalled_recording_is_bisected_to_the_setting_that_stalls_it(tmp_path):
-    """The 2026-10-12 Pi: the recording stuck in PAUSED; by hand, with none of the tool's settings, it ran."""
+    # The 2026-10-12 Pi: the recording stuck in PAUSED; by hand, with none of the tool's settings, it ran.
     pi = FakePi()
     runs = []
 
