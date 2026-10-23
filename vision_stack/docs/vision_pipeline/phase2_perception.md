@@ -127,7 +127,7 @@ Traffic and sign overlap in x 240–360, y 0–135.
 
 ## Stage 3A: Geometry branch
 
-**File:** `geometry.py` · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
+**Files:** `geometry.py` (runs the three detectors), `geometry_lanes.py`, `geometry_stop_line.py`, `geometry_sign.py`, `geometry_shared.py` (configs, candidate types, edge helpers) · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
 
 Finds lane boundaries and stop lines from intensity edges, and stop-sign shapes from color. Canny runs once on the lane ROI; the lane and stop-line detectors both read that edge map. The sign detector doesn't use Canny: it thresholds a redness image of the color sign ROI.
 

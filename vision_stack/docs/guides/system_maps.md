@@ -248,7 +248,7 @@ Each ROI is a view into the frame, not a copy, and keeps its rectangle so detect
 - **Gray path** (lane and sign shapes): edges come from brightness. The 9×3 blur is wider than it is tall, smoothing along the lane lines more than across them.
 - **Color path** (traffic light, sign redness): HSV thresholds need the chroma that gray throws away, and a light 3×3 blur.
 
-### Geometry branch (`geometry.py`)
+### Geometry branch (`geometry.py`, running `geometry_lanes.py`, `geometry_stop_line.py`, `geometry_sign.py`)
 
 ```mermaid
 flowchart TB
