@@ -1,25 +1,19 @@
 """Battery for a run: open the monitor if it's fitted, judge the pack before the start, watch it during.
 
 Purpose:
-    The course run (src.main) and the navigation linker both check the pack
-    the same way, so the rule lives here once. Before the start, with the
-    motors idle, a resting reading is judged: under Power.VOLTAGE_CRITICAL
-    the run is refused when the motors would drive; under
-    Power.VOLTAGE_WARNING it only warns, so a sagging or misread pack can't
-    lock the robot out on the day. During the run the caller ends it once
-    Power.should_stop() (CRITICAL, latched). A missing ADC, or one that
-    can't be read, never stops a run: it's said once and the run goes on
-    without a battery.
+    The course run (src.main) and the navigation linker check the pack the
+    same way, so the rule lives here once. At rest, a pack under CRITICAL
+    refuses a run that would drive the motors; under WARNING it only warns,
+    so a sagging or misread pack can't lock the robot out on the day. A
+    missing or unreadable ADC never stops a run: it's said once.
 
 Main package:
-    open_battery(): a Power, or None when the ADC isn't there.
-    preflight(): judge the resting pack: GO, LOW or REFUSE, and why.
-    start(): start monitoring; False (said) if the first read fails.
-    CODE_BATTERY: the display code for a refused or battery-ended run.
+    The verdict: preflight() -> GO, LOW or REFUSE, and why.
 
 Flow:
-    open_battery() -> preflight() before the start screen -> start() at GO
-    -> should_stop() each frame -> cleanup() at the end.
+    1. open_battery(): a Power, or None without the ADC.
+    2. preflight() before the start screen; start() at GO.
+    3. The caller ends the run once should_stop(); cleanup() at the end.
 """
 from src.diagnostics.battery import Power
 

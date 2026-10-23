@@ -1,29 +1,19 @@
 """System monitor: SoC temperature, CPU clock, throttle flags and memory, sampled in the background.
 
 Purpose:
-    A soak run needs the Pi's condition recorded next to its frame timings,
-    on one clock, so a slowdown can be matched to the heat or memory growth
-    behind it. Watching vcgencmd or top in another terminal leaves nothing
-    to line up afterwards. SystemMonitor samples once a second on a daemon
-    thread and keeps the rows in memory, so no file I/O happens during the
-    run.
+    A soak run needs the Pi's condition next to its frame timings, on one
+    clock, so a slowdown can be matched to the heat or memory growth behind
+    it. Sampled once a second on a daemon thread and kept in memory, so no
+    file I/O lands in the run; every source is optional, so it runs anywhere.
 
 Main package:
-    SystemMonitor   start() / stop(); rows() returns every sample as a dict
-                    in FIELDS order. elapsed_s is time.perf_counter() since
-                    start(), the same clock the frame loop uses.
-    read_*()        one reading each, None where the source doesn't exist
-                    (a laptop has no vcgencmd and may have no thermal zone),
-                    so the monitor runs anywhere and records what it can.
-    decode_throttled()
-                    vcgencmd get_throttled's bit field as named flags.
+    SystemMonitor: rows() -> every sample (temperature, clock, throttling,
+    this process's and the system's memory), elapsed_s on the frame loop's clock.
 
-Sources, no extra dependencies:
-    /sys/class/thermal/thermal_zone0/temp                  millidegrees C
-    /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq  kHz
-    vcgencmd get_throttled                                 "throttled=0x50005"
-    /proc/self/status VmRSS                                this process, kB
-    /proc/meminfo MemAvailable                             whole system, kB
+Flow:
+    1. start(): the sampling thread.
+    2. Once a second: one row from /sys, vcgencmd and /proc.
+    3. stop(); rows() for the caller to write.
 """
 
 import os
@@ -52,10 +42,6 @@ OCCURRED_SHIFT = 16
 FIELDS = ("elapsed_s", "temp_c", "cpu_mhz", "throttled_raw",
           *THROTTLE_BITS, "rss_mb", "mem_available_mb", "load_1m")
 
-
-# =============================================================================
-# Readings
-# =============================================================================
 
 def _read_number(path: Path) -> float | None:
     try:
@@ -129,10 +115,6 @@ def read_load_1m() -> float | None:
     except OSError:
         return None
 
-
-# =============================================================================
-# Monitor
-# =============================================================================
 
 class SystemMonitor:
     """

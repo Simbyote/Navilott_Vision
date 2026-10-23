@@ -1,38 +1,21 @@
 """OS counters: what the rest of the Pi does while the robot runs.
 
 Purpose:
-    The recorder (monitor.py) follows the robot's own threads. Around them,
-    the kernel and the other processes keep working, and some of it is the
-    robot's work done elsewhere: the camera's frames arrive as Unicam
-    interrupts and go to the VideoCore ISP over VCHIQ, the ADS1115 and the
-    IMU answer over I2C, pigpiod times the motor PWM by DMA in its own
-    process, a recording writes to the SD card. All of it is in /proc and
-    vcgencmd, as counters to read once a second:
-
-    - interrupts per second, per line of /proc/interrupts: hardware events
-      counted by the hardware, not by Python (Unicam ~ the frame rate);
-    - the VideoCore ISP and core clocks (vcgencmd, every CLOCK_EVERY_S);
-    - CmaFree: the contiguous memory camera buffers come from;
-    - the SD card's read and write rate and busy time (/proc/diskstats);
-    - pressure stalls (/proc/pressure): the share of time some task waited
-      on CPU, I/O or memory, when the kernel has PSI;
-    - every other process's CPU (/proc/<pid>/stat): pigpiod, sshd,
-      journald, the recorder itself.
-
-    Every source is optional: a missing one reads None (or no rows), so a
-    laptop records what it has.
+    Some of the robot's work happens outside its threads: Unicam interrupts
+    per frame, the ISP over VCHIQ, I2C, pigpiod's DMA-timed PWM, the SD card
+    writing a recording. All of it is in /proc and vcgencmd as counters,
+    read once a second for monitor.py. Every source is optional, so a laptop
+    records what it has (docs/guides/diagnostics.md, section 8).
 
 Main package:
-    OsCounters(target_pid): take(elapsed_s, now) -> {"system": {SYSTEM_FIELDS},
-        "irqs": [IRQ_FIELDS rows], "procs": [PROC_FIELDS rows]}, rates over
-        the time since the last take (none on the first).
-    read_interrupts(), read_disk(), read_pressure(), read_cma_mb(),
-    read_process_ticks(), parse_vcgencmd(), read_vc_clock_mhz(): one reading each.
-    irq_summary(rows, n), proc_summary(rows, n): per IRQ / process means over n intervals.
+    OsCounters: take() -> the system fields (ISP clock, CMA, SD card,
+    pressure stalls) and per-IRQ and per-process rows, as rates since the
+    last take.
 
 Flow:
-    monitor.record() calls take() on its once-a-second system tick; the
-    system fields join system.csv, the rows go to irqs.csv and procs.csv.
+    1. monitor.record() calls take() on its once-a-second tick.
+    2. Rates over the interval; the system fields join system.csv, the rows
+       irqs.csv and procs.csv.
 """
 import os
 import re
@@ -55,10 +38,6 @@ try:
 except (ValueError, OSError, AttributeError):        # not POSIX
     CLK_TCK = 100
 
-
-# =============================================================================
-# Readings
-# =============================================================================
 
 # A trigger type: "Edge" / "Level" on the Pi's ARM controller, "5-edge" on x86's IO-APIC. A chip
 # name such as ARMCTRL-level isn't one: it comes before the hardware IRQ number
@@ -173,10 +152,6 @@ def read_process_ticks(proc: Path = PROC, exclude: tuple[int, ...] = ()) -> dict
     return out
 
 
-# =============================================================================
-# Sampling
-# =============================================================================
-
 class OsCounters:
     """
     The counters above, as rates between takes.
@@ -229,10 +204,6 @@ class OsCounters:
         self._prev = (now, irqs, disk, ticks)
         return out
 
-
-# =============================================================================
-# Summaries
-# =============================================================================
 
 def _per_key(rows: list[dict], key, value: str, n: int) -> list[dict]:
     """Per key: the mean of value over n intervals (absent intervals are 0) and the max; largest mean first."""

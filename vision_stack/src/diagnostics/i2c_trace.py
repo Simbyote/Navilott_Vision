@@ -1,49 +1,22 @@
 """I2C trace: every transfer on the Pi's I2C buses, from the kernel, as a bus analyzer would show it.
 
 Purpose:
-    The robot shares bus 1 (GPIO 2/3) between the MPU-6050 (the sensor
-    hub's thread, 100 Hz) and the ADS1115 battery ADC (the battery monitor's
-    thread, 1 Hz); the camera's own bus carries libcamera's exposure and
-    gain writes to the IMX290 every frame. Python sees only how long its own
-    call took. The kernel traces every transfer on every bus (the i2c
-    tracepoints: each message's address, direction, length and data, and
-    the result), from any process, timestamped to the microsecond. This
-    turns that trace into:
-
-    - every transfer: when, which bus and device, which thread asked, the
-      messages (w1 r14 = write 1 byte, then read 14), how long it held the
-      bus, how long it had to (its wire time: the bits clocked at the bus's
-      clock), and the result;
-    - per bus: occupancy (the share of time a transfer was in progress)
-      against wire occupancy (the share the bits alone need), and the
-      overhead between them (driver, interrupts, the controller's FIFO);
-    - per device: transfers and bytes per second, durations, errors, the
-      gaps between transfers (the IMU's should be a steady 10 ms), and how
-      many started right after another device's transfer (they queued
-      behind it on the bus).
-
-    Tracing needs root (tracefs); the recording is read back afterwards, so
-    the robot's run is untouched. --from re-analyzes a recorded folder
-    anywhere, without root (and draws the figure where matplotlib is).
+    Bus 1 carries the MPU-6050 and the ADS1115; the camera's bus carries
+    libcamera's exposure writes every frame. Python sees only how long its
+    own call took; the kernel's i2c tracepoints see every transfer from any
+    process, to the microsecond. This turns them into per-transfer, per-bus
+    and per-device timing: occupancy, wire time, gaps, queueing, errors
+    (docs/guides/diagnostics.md, section 10). Recording needs root;
+    re-analysis (--from) doesn't.
 
 Main package:
-    record_trace(tracefs, seconds) -> (text, window_s, lost, clock): turn
-        the i2c events on, wait, read them, put tracefs back as it was.
-    parse_events(text), assemble(events) -> transfers.
-    bus_info(): each adapter's name and clock (device tree).
-    analyze(transfers, window_s, buses, lost) -> dict: per bus, per device,
-        findings.
-    summary_lines(res), figure(transfers, res, path).
-    cli(): sudo python3 -m src.diagnostics.i2c_trace [--seconds S] [--out DIR]
-        | python3 -m src.diagnostics.i2c_trace --from DIR
+    The run folder: every transfer (when, which device and thread, how long,
+    the result), per-bus and per-device statistics, findings and a figure.
 
 Flow:
-    1. Root and tracefs checked; the trace buffer enlarged, the clock set
-       to mono (so times line up with the runs' t0_monotonic), the buffer
-       cleared, the four i2c events turned on for --seconds.
-    2. Read back; every setting restored.
-    3. Events grouped into transfers per bus (a bus is locked for a whole
-       transfer, so its events never interleave); stats, findings, files.
+    1. Turn the i2c events on (clock mono, so times line up with the runs'), wait, read back.
+    2. Restore every tracefs setting.
+    3. Group events into transfers per bus; statistics, findings, files.
 """
 import argparse
 import csv
@@ -94,10 +67,6 @@ Output (--out DIR, default <root>/runs/i2c_<timestamp>):
     i2c_trace.png      transfers on a timeline, occupancy per second, IMU gaps (with matplotlib)
 """
 
-
-# =============================================================================
-# Parsing
-# =============================================================================
 
 # "   sensor-hub-1234    [002] d..1.  1234.567890: i2c_write: i2c-1 #0 a=068 f=0000 l=1 [3b]"
 _LINE = re.compile(r"^\s*(?P<task>.+?)-(?P<pid>\d+)\s+(?:\(\s*[\d-]+\)\s+)?\[(?P<cpu>\d+)\]\s+(?:\S+\s+)?"
@@ -186,10 +155,6 @@ def assemble(events: list[dict], clocks: dict | None = None) -> list[dict]:
                 "wdata": "".join(cur["wdata"][:8]), "rdata": "".join(cur["rdata"][:16])})
     return out
 
-
-# =============================================================================
-# The system: buses and tracefs
-# =============================================================================
 
 def bus_info(adapters: Path = ADAPTERS) -> dict:
     """
@@ -282,10 +247,6 @@ def record_trace(tracefs: Path, seconds: float, sleep=time.sleep, clock=time.mon
         _write(tracefs / "tracing_on", saved["tracing_on"])
     return text, window, lost, clock_used
 
-
-# =============================================================================
-# Analysis
-# =============================================================================
 
 def _q(xs: list[float], q: float) -> float:
     s = sorted(xs)
@@ -405,10 +366,6 @@ def summary_lines(res: dict, meta: dict | None = None) -> list[str]:
     return lines
 
 
-# =============================================================================
-# Figure
-# =============================================================================
-
 # Categorical slots 1-4 of the validated default palette (dataviz skill), as
 # pi_load's cores; the lanes are labeled, so color is never the only identity
 DEVICE_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
@@ -489,10 +446,6 @@ def figure(transfers: list[dict], res: dict, path) -> Path | None:
     plt.close(fig)
     return Path(path)
 
-
-# =============================================================================
-# Writing and the command line
-# =============================================================================
 
 def write(out_dir, trace_text: str, window_s: float, lost: int, buses: dict, meta: dict,
           draw: bool = True) -> dict:

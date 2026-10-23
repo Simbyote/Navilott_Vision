@@ -1,42 +1,22 @@
 """Battery monitor: pack voltage through the V-Sense divider and the ADS1115, with a latched warning.
 
 Purpose:
-    A 3S pack has no BMS (DEC-019), so the software has to notice a flat
-    battery. Power samples the voltage on a daemon thread, smooths it, and
-    runs it through BatteryStateMachine, so a brief sag under motor load
-    doesn't raise a false alarm. Callbacks fire once per transition.
+    A 3S pack has no protection board (DEC-019), so the software has to
+    notice a flat battery. The voltage is sampled on a daemon thread,
+    smoothed, and debounced by BatteryStateMachine, so a brief sag under
+    motor load doesn't raise a false alarm; callbacks fire once per
+    transition. How the ADS1115 is read, and why: docs/architecture.md, "Power".
 
 Main package:
-    Power           start_monitoring() / cleanup(); voltage(), percentage(),
-                    state(), is_warning(), should_stop(), sensor_ok();
-                    on_warning / on_critical / on_recovered / on_fault take
-                    callbacks that run on the sampling thread (keep them short);
-                    preflight() is a resting-voltage check before a run;
-                    read_ms() is how long each monitoring read took (the
-                    ADS1115's I2C, and the conversion in single-shot mode).
-    ContinuousADC   the ADS1115 converting A0 on its own; .voltage fetches
-                    the latest result (params.ADS1115_CONTINUOUS).
+    Power: the monitor. preflight() judges the pack at rest before a run;
+    during it, state(), should_stop() (CRITICAL, latched) and the
+    on_warning / on_critical / on_fault callbacks.
 
-Hardware:
-    Battery -> 30k/10k divider (4:1) -> ADS1115 A0, I2C bus 1, address from
-    params.ADS1115_I2C_ADDRESS. Shares the bus with the MPU-6050.
-
-    The ADS1115 has one pointer register saying which register the next
-    read returns, shared by everything that talks to the chip. The Adafruit
-    library's continuous mode reads the result without setting the pointer,
-    trusting it still names the conversion register. Anything else that
-    talks to the chip (a second process opening the ADC) can move it, and
-    the "voltage" is then another register: most likely why that version
-    read 9.44 V for a 12 V pack (2026-10-21; reverted in 85ddf2d). ContinuousADC sets the pointer in every read, as one combined
-    transfer (write then read, no stop between), so nothing can move it in
-    between, and checks the config each read so a chip someone else
-    reconfigured is put back before its result is trusted.
-
-Usage:
-    pwr = Power()
-    pwr.on_critical(stop_motors)
-    ok, volts = pwr.preflight()       # motors idle
-    pwr.start_monitoring()
+Flow:
+    1. Power() opens the ADS1115 (ContinuousADC, or the library's single shots).
+    2. preflight(), motors idle; then start_monitoring().
+    3. Once a second: read, smooth, the state machine, any callbacks.
+    4. cleanup() stops the thread and releases the bus.
 """
 
 import logging

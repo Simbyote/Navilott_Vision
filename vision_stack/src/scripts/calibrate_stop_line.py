@@ -3,26 +3,21 @@
 
 Purpose:
     The board-free way to give the stop line a distance in cm
-    (perception/stop_line_table.py has why). A strip of tape is laid across
-    the lane at a measured distance; the robot's own Phase 2 (run_chain,
-    with MEASURED's settings) looks at it for a few frames and reports how
-    many rows above the lane ROI's bottom it sees the line (distance_px,
-    median over the frames). Repeat at 4-6 distances; the curve through them
-    is written to calibration/stop_line_table.json, which config.py loads.
-    Because the rows come from the same detector the robot drives with,
-    whatever that detector does is calibrated in.
+    (perception/stop_line_table.py). A strip of tape lies across the lane at
+    a measured distance, and the robot's own Phase 2 reports how many rows
+    above the lane ROI's bottom it sees it. Because the rows come from the
+    detector the robot drives with, whatever it does is calibrated in
+    (docs/guides/calibrate_stop_line.md).
 
 Main package:
-    measure_mark(): one tape mark's rows from a batch of frames, or why not.
-    parse_marks(): "cm:rows,..." from the command line, for a refit.
-    build_record(): the JSON, with the fit, each mark and its error.
-    main(): interactive with the camera, or --marks for a refit.
+    calibration/stop_line_table.json: the curve's A, B and C, each mark and
+    its error, and the image size, undistort_alpha and lens it's valid for.
 
 Flow:
-    1. Open the camera. For each mark: place the tape, type its distance,
-       and the script grabs --frames frames and measures the line.
-    2. Enter on an empty line fits the curve through the marks (3 or more).
-    3. Print each mark's error, write the JSON.
+    1. Per mark: place the tape, type its distance; the script measures the
+       line over --frames upright frames.
+    2. Enter on an empty line fits the curve (3 marks or more).
+    3. Print each mark's error; write the JSON.
 """
 import argparse
 import json
@@ -70,10 +65,6 @@ Redo it after changing the camera mount or angle, undistort_alpha, the output
 size or the lens calibration.
 """
 
-
-# =============================================================================
-# Measuring
-# =============================================================================
 
 def measure_mark(frames, config) -> dict:
     """
@@ -126,10 +117,6 @@ def parse_marks(text: str) -> list[dict]:
     return marks
 
 
-# =============================================================================
-# Fit and output
-# =============================================================================
-
 def build_record(marks: list[dict], preprocess, frame_size, reference: str) -> dict:
     """
     The JSON load_stop_line_table reads, plus what's needed to audit or refit it.
@@ -177,10 +164,6 @@ def report_lines(rec: dict, roi_height: int) -> list[str]:
         out.append(f"  NOTE: marks reach {far:.0f} of the lane ROI's {roi_height} rows; farther lines are extrapolated")
     return out
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def collect_marks(grab, ask, say, config, frames_per_mark: int) -> list[dict]:
     """

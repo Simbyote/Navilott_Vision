@@ -2,41 +2,22 @@
 """Traffic-light sweep: try many HSV floors and blob gates on labelled frames, keep what reads them right.
 
 Purpose:
-    calibrate_lamps measures a lamp as one bright disc with a glow around it
-    and puts each band between the two. The course's light isn't that: bare
-    LEDs, a white center with a thin colored ring, reflections in the panel
-    above them and a second light nearby (2026-10-06), and its measured bands
-    passed nothing. This doesn't measure the lamp. It runs the color branch
-    itself on frames you've labelled (which lamp was lit) with each setting
-    in a grid, and scores what Phase 3 would see: a lamp of the lit color at
-    or above its confidence gate is a hit, any other color there a false
-    reading. The best settings are the ones that read the most frames right.
-
-    Hue spans stay as they are in hsv_ranges.json; a lamp's hue is rarely
-    the problem. What's swept is what took hand-tuning: each color's S and V
-    floors, and the blob gates (min_area, ref_area, roundness, core). In
-    glow mode (MEASURED.color.glow set) the bands only name each white spot's
-    ring, and only they are swept.
+    The course's light isn't one bright disc with a glow, so calibrate_lamps'
+    measured bands passed nothing (2026-10-06). This doesn't measure the
+    lamp: it runs the color branch itself on frames labelled with the lit
+    lamp, for each setting in a grid, and scores what Phase 3 would see. In
+    glow mode the bands only name each white spot's ring, and only they are
+    swept (docs/guides/sweep_lamps.md).
 
 Main package:
-    parse_label(): "red=runs/nav_x:108-200" -> (label, path, frame span).
-    read_labelled(): a run folder's frames in a span, spread to a limit.
-    color_score(): one color's hits and false readings under one setting.
-    fusion_score(): what the frame reads as (the highest-confidence lamp at
-        the gate), against its label, over all frames.
-    sweep_bands(), sweep_blob(): one pass over each grid.
-    main(): the command line.
+    The best settings: each color's S and V floors and the blob gates, with
+    the frames read right before and after; --write saves the bands.
 
 Flow:
     1. Read each label's frames; cut the traffic ROI as the robot does.
-    2. Start from calibration/hsv_ranges.json and MEASURED's blob gates.
-    3. ROUNDS times: each color's (S, V) floor scored on its own (hits minus
-       FALSE_WEIGHT x false readings), then the blob gates on whole frames.
-       Ties go to the setting whose weakest right reading is strongest,
-       then to the middle of those, so the choice isn't on the edge of what
-       works.
-    4. Print each color's best floors, the frames read right before and
-       after, the bands and the BlobFilter; --write saves the bands.
+    2. Start from hsv_ranges.json and MEASURED's blob gates.
+    3. ROUNDS times: each color's floors on their own, then the blob gates on
+       whole frames (ties go to the middle of the best). Print; --write saves.
 """
 import argparse
 import re
@@ -93,10 +74,6 @@ Leave a few frames out of each span where the light is changing.
 """
 
 
-# =============================================================================
-# Labelled frames
-# =============================================================================
-
 def parse_label(arg: str) -> tuple[str, str, tuple[int, int] | None]:
     """'label=path' or 'label=path:A-B' (frames A to B, inclusive) -> (label, path, span or None)."""
     label, sep, rest = arg.partition("=")
@@ -136,10 +113,6 @@ def read_labelled(path: str, span: tuple[int, int] | None, limit: int = FRAMES_P
         raise FileNotFoundError(f"{path}: no readable .jpg or .png frames{where}")
     return frames
 
-
-# =============================================================================
-# Scoring
-# =============================================================================
 
 def detect(roi: np.ndarray, hsv: HSVRanges, blob: BlobFilter, gate: float, glow: GlowFilter | None = None) -> list:
     """The color branch's candidates at or above Phase 3's gate."""
@@ -209,10 +182,6 @@ def _best(scored: list):
     return tied[len(tied) // 2]
 
 
-# =============================================================================
-# The sweep
-# =============================================================================
-
 def with_floor(hsv: HSVRanges, color: str, s: int, v: int) -> HSVRanges:
     """hsv with this color's S and V floors set (both red bands for red); hue and caps kept."""
     def floor(r: ColorRange) -> ColorRange:
@@ -253,10 +222,6 @@ def bands_json(hsv: HSVRanges) -> dict:
     return {k: {"lower": list(getattr(hsv, k).lower), "upper": list(getattr(hsv, k).upper)}
             for k in ("red_low", "red_high", "yellow", "green")}
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def _table_lines(score: dict) -> list[str]:
     head = "  lit \\ read as  " + "".join(f"{c:>8}" for c in LABELS)

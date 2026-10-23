@@ -1,35 +1,21 @@
 """Threads and cores: what each of a process's threads is doing, on which core, read from the kernel.
 
 Purpose:
-    The robot's process runs several threads at once: the frame loop, the
-    sensor hub, pigpio's callback thread, GStreamer's capture threads (and
-    the frame recorder in the linkers). The kernel schedules them across
-    the Pi's cores, and Python's GIL lets only one of the Python ones run
-    Python at a time. Nothing in the code shows how that plays out; the
-    kernel does, in /proc. This module reads it: per thread, its CPU use
-    (user and system), the core it last ran on, its state and how often it
-    blocked (voluntary context switches) or was preempted (involuntary);
-    per core, how busy it was.
-
-    It also names threads at the OS level. Python's thread names stay inside
-    Python (before 3.14), so top, ps and /proc show every Python thread as
-    "python3"; name_os_thread() sets the kernel's name (15 bytes at most),
-    so the threads can be told apart from outside the process.
+    The robot's process runs several threads (the frame loop, the sensor
+    hub, pigpio's callbacks, GStreamer's, the recorder), scheduled across
+    the Pi's cores with the GIL letting one run Python at a time. The kernel
+    shows how that plays out, in /proc. It also gives threads OS-level
+    names, so top and /proc can tell them apart, and puts a thread on
+    real-time priority when asked.
 
 Main package:
-    name_os_thread(name, thread): the kernel name of a thread (default: the
-        calling one). name_pigpio_threads(): names pigpio's callback threads.
-    set_realtime(priority): the calling thread onto SCHED_FIFO, or why not.
-    read_tasks(pid) -> {tid: TaskTimes}; read_core_times() -> {core: CoreTimes}.
-    ThreadSampler: rows of per-thread and per-core rates between two reads.
+    ThreadSampler: per-thread CPU, core, state and context switches, and
+    per-core busy time, as rates between two reads.
 
 Flow:
-    1. Each thread that the code starts names itself (sensor-hub,
-       frame-recorder, system-monitor); drive.py names pigpio's.
-    2. A sampler reads /proc/<pid>/task/*/stat and status, and /proc/stat,
-       at an interval (src/diagnostics/monitor.py runs it in its own process).
-    3. Each read after the first gives rates over the interval: CPU %,
-       context switches per second, core busy %.
+    1. Threads name themselves (name_os_thread); drive.py names pigpio's.
+    2. A sampler reads /proc/<pid>/task/*/stat and /proc/stat at an interval.
+    3. Each read after the first: rates over the interval.
 """
 import ctypes
 import ctypes.util
@@ -49,10 +35,6 @@ THREAD_FIELDS = ("elapsed_s", "tid", "name", "state", "core", "cpu_pct", "user_p
                  "vol_ctx_s", "invol_ctx_s")
 CORE_FIELDS = ("elapsed_s", "core", "busy_pct")
 
-
-# =============================================================================
-# Naming
-# =============================================================================
 
 def _libc():
     if not sys.platform.startswith("linux"):
@@ -139,10 +121,6 @@ def _rtprio_limit() -> str:
     except (ImportError, AttributeError, OSError, ValueError):
         return "?"
 
-
-# =============================================================================
-# Reading /proc
-# =============================================================================
 
 @dataclass(frozen=True)
 class TaskTimes:
@@ -234,10 +212,6 @@ def parse_core_times(text: str) -> dict[int, CoreTimes]:
 def read_core_times(proc: Path = PROC) -> dict[int, CoreTimes]:
     return parse_core_times((proc / "stat").read_text())
 
-
-# =============================================================================
-# Rates between reads
-# =============================================================================
 
 class ThreadSampler:
     """

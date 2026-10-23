@@ -1,33 +1,21 @@
 """Pi diagnostics recorder: a run's threads, cores and system health, recorded from a separate process.
 
 Purpose:
-    The Pi's OS is part of the robot: the kernel decides which core each
-    thread runs on, the GIL decides which Python thread runs Python, and
-    heat or a weak supply throttles the clock. This records all of it for
-    any run (main, a linker, a test) without touching that run's code or
-    loop: it is its own process, reading /proc and the Pi's sensors, so it
-    shares no GIL and costs the robot only a few file reads per interval.
+    The Pi's OS is part of the robot: the kernel picks each thread's core,
+    the GIL picks which Python thread runs, heat or a weak supply throttles
+    the clock. This records all of it for any run without touching that
+    run's code: its own process, reading /proc and the Pi's sensors, so it
+    shares no GIL (docs/guides/diagnostics.md).
 
 Main package:
-    record(pid, ...) -> {"threads", "cores", "system"} rows until the
-        process ends, the duration passes or Ctrl-C.
-    summary_lines(...): the per-thread, per-core and system summary.
-    find_pid(pattern): the newest process whose command line contains it.
-    cli(): launch a command and record it, or attach to a running one.
+    The recording: threads.csv, cores.csv, system.csv, irqs.csv, procs.csv,
+    meta.json and summary.txt.
 
 Flow:
-    1. The process: the command after "--" (launched here), --pid, or
-       --match (waits for it to start).
-    2. Every --interval: per-thread and per-core rates (threads.ThreadSampler);
-       every second: temperature, clock, throttling, the run's memory
-       (system_monitor.sample), and the rest of the Pi (os_counters):
-       interrupts per second, the ISP clock, CMA, the SD card, pressure
-       stalls, every other process's CPU.
-    3. Ends when the process exits, after --duration, or on Ctrl-C (a
-       launched run gets the Ctrl-C too; the recorder waits for it to stop
-       its motors and exit).
-    4. Writes threads.csv, cores.csv, system.csv, irqs.csv, procs.csv,
-       meta.json and summary.txt.
+    1. The process: a command launched here, --pid, or --match.
+    2. Every --interval: per-thread and per-core rates; every second: the
+       system's health and the rest of the Pi (os_counters).
+    3. Until the process exits, --duration, or Ctrl-C; then the files.
 """
 import argparse
 import csv
@@ -78,10 +66,6 @@ Output (--out DIR, default <root>/runs/diag_<timestamp>):
 """
 
 
-# =============================================================================
-# Finding the process
-# =============================================================================
-
 def find_pid(pattern: str, proc: Path = PROC, exclude: tuple[int, ...] = ()) -> int | None:
     """
     The newest process (highest pid) whose command line contains pattern.
@@ -103,10 +87,6 @@ def find_pid(pattern: str, proc: Path = PROC, exclude: tuple[int, ...] = ()) -> 
             found.append(int(entry.name))
     return max(found) if found else None
 
-
-# =============================================================================
-# Recording
-# =============================================================================
 
 def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = None,
            alive=None, clock=time.perf_counter, sleep=time.sleep, proc: Path = PROC,
@@ -165,10 +145,6 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
     out["elapsed_s"] = round(clock() - t0, 3)
     return out
 
-
-# =============================================================================
-# Summary
-# =============================================================================
 
 def _mean(xs: list) -> float:
     return sum(xs) / len(xs) if xs else 0.0
@@ -273,10 +249,6 @@ def write(out_dir: str, meta: dict, rec: dict) -> list[str]:
         f.write("\n".join(lines) + "\n")
     return lines
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
     """

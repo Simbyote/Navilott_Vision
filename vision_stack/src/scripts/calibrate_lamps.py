@@ -2,52 +2,22 @@
 """Traffic-light lamp calibration: frames of each lit lamp -> the HSV bands the color branch detects them with.
 
 Purpose:
-    The color branch (perception/color_branch.py) finds a lamp as the
-    pixels inside its color's HSV band. A lamp on camera isn't one color: a
-    bright core, a ring of the lamp's real color around it, and a glow that
-    spreads past the lamp, still tinted but dimmer and paler. A band that
-    takes the glow measures the glow, not the lamp. This takes frames the
-    robot recorded with one lamp lit, runs them through the robot's own
-    preprocess and traffic-ROI crop, and measures the lamp (a disc around
-    the brightest blob) against its glow (a ring outside it). Each band's
-    hue spans the lamp's; its S and V minimums sit halfway between the
-    lamp and the glow, so the band keeps the one and drops the other. It
-    says when no S or V threshold separates them (try a darker exposure),
-    when two colors' hues overlap, and how large each lamp's blob is under
-    its new band, for BlobFilter's areas. It suggests no band at all when
-    what it found has no color to measure (a blown-out white spot, or not
-    the lamp), and says when two lamps were found at the same spot. --write puts the measured colors
-    into calibration/hsv_ranges.json, leaving the others as they were.
-
-    Lamp against glow can't tell a lit lamp from an unlit one, and the
-    course's unlit lenses passed for lit ones (2026-10-06: the red lens off
-    read V ~180, its plastic still red). Given a run with every lamp off
-    (off=PATH), each lens is also cross-checked: the same spot lit against
-    off, in the off run and in the other colors' runs. Its S and V floors
-    then sit halfway between the lens lit and the lens off, where a channel
-    separates them; the lamp-against-glow floor is kept for one that
-    doesn't, and a lens nothing separates is reported.
+    A lamp on camera is a bright core, a ring of its real color and a paler
+    glow beyond; a band that takes the glow measures the glow. This measures
+    the lamp against its glow on frames recorded with one lamp lit, through
+    the robot's own preprocess and crop, and puts each band's floors between
+    the two. Given a run with every lamp off, it also checks each lens lit
+    against unlit, since unlit lenses can pass for lit (docs/guides/calibrate_lamps.md).
 
 Main package:
-    traffic_roi(): a recorded frame's traffic ROI, as the pipeline cuts it.
-    measure_lamp(): one frame's lamp and glow statistics and suggested band.
-    combine(): the median band over a lamp's frames.
-    bands_for(): a color's band(s) in hsv_ranges.json form (red: both halves).
-    blob_area(): the lamp's largest blob under a band, as the color branch measures it.
-    hue_overlaps(): pairs of colors whose hue spans meet.
-    lit_pixels(): the pixels that light up with a lamp, from its run and the off run.
-    cross_check(): those pixels lit against unlit: the band, S, V and white center.
-    write_ranges(): merge bands into hsv_ranges.json, checked by its loader.
-    main(): the command line.
+    The bands, in hsv_ranges.json form, with warnings (no threshold
+    separates, hues overlap, a lens nothing separates) and each lamp's blob
+    area under its band; --write merges them into calibration/hsv_ranges.json.
 
 Flow:
-    1. For each color=path given, read its frames (an image, or a folder
-       such as a navigation_linker run, searched for .jpg / .png).
-    2. Each frame: preprocess, crop the traffic ROI, find the brightest blob,
-       measure the lamp disc and the glow ring around it.
-    3. The median band over the frames; the blob area under it.
-    4. With an off run: each lens lit against off; floors between the two.
-    5. Print the bands, the warnings and the areas; --write merges them.
+    1. Per color=path: read its frames; preprocess, crop, find the brightest blob.
+    2. Measure the lamp disc against the glow ring; the median band over the frames.
+    3. With an off run: each lens lit against off. Print; --write merges.
 """
 import argparse
 import json
@@ -123,10 +93,6 @@ also checked lit against off; its S and V floors then sit between the two:
     python3 -m src.scripts.calibrate_lamps red=runs/lamp_red ... off=runs/lamps_off
 """
 
-
-# =============================================================================
-# Measuring
-# =============================================================================
 
 def traffic_roi(frame_bgr: np.ndarray, config=MEASURED) -> np.ndarray:
     """The traffic ROI the color branch reads: preprocess (undistortion included), then the crop."""
@@ -352,10 +318,6 @@ def cross_check(on_rois: list, unlit_rois: list, mask: np.ndarray) -> dict:
                     "off": float(np.percentile([white(p) for p in off], OFF_PCT))}
     return out
 
-
-# =============================================================================
-# Frames, the file and the command line
-# =============================================================================
 
 def read_frames(path: str, limit: int = FRAMES_PER_LAMP) -> list[np.ndarray]:
     """An image, or up to limit images spread across a folder (searched below it)."""

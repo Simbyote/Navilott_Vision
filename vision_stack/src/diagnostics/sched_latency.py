@@ -1,43 +1,21 @@
 """Scheduling latency: how late Linux wakes a thread, against the robot's deadlines.
 
 Purpose:
-    The robot runs on Linux, not a real-time OS. What an RTOS buys is a
-    small, bounded delay between a thread's wake-up time and when it
-    actually runs; on Linux that delay is usually small and occasionally
-    not. The robot's deadlines are soft (a 50 ms frame, a 10 ms IMU tick)
-    and its hard timing (PWM, encoder edges, pixel readout, I2C bits) is
-    done by hardware, so the question is how the worst case here compares
-    with those deadlines. This measures it three ways:
-
-    - python: a Python thread at normal priority sleeping to a 1 ms grid,
-      how late each wake-up is. This is what the robot's own threads (the
-      sensor hub, the frame loop) live with. Needs nothing.
-    - other: cyclictest at normal priority (SCHED_OTHER): the kernel's own
-      wake-up latency for an ordinary thread, without Python.
-    - fifo: cyclictest at real-time priority (SCHED_FIFO 80): the best this
-      kernel gives an RTOS-style thread.
-
-    cyclictest (apt: rt-tests) needs root; without either, only python
-    runs, and the summary says so. Run it twice, idle and while the robot's
-    pipeline loads the Pi (make nav-dry in another terminal), with --label,
-    and put them side by side with --compare.
+    What an RTOS buys is a small, bounded delay between a thread's wake-up
+    time and when it runs; on Linux that delay is usually small and
+    occasionally not. The robot's deadlines are soft (a 50 ms frame, a 10 ms
+    IMU tick) and its hard timing is done by hardware, so the question is
+    how the worst case compares (docs/guides/diagnostics.md, section 11).
 
 Main package:
-    python_latency(seconds, interval_us) -> list of us late.
-    run_cyclictest(policy, seconds, interval_us) -> histogram, or None.
-    parse_cyclictest(text) -> {"hist", "min", "avg", "max", "overflows", "total"}.
-    case_stats(hist, overflows, max_us) -> n, min, p50, p99, p99.9, max.
-    findings(res), summary_lines(res), compare_lines(a, b), tail(hist),
-    figure(res, path): each case's tail, the share of wake-ups at least x late.
-    cli(): sudo python3 -m src.diagnostics.sched_latency [--seconds S] [--label L]
-        | --compare DIR DIR
+    The run folder: per case (a Python thread, cyclictest at normal and at
+    real-time priority) the percentiles of how late it woke, findings
+    against the deadlines, sched_latency.json, histogram.csv and a figure.
 
 Flow:
-    1. The kernel's preemption model (uname -v: PREEMPT, PREEMPT_RT).
-    2. Each case for --seconds: python, then cyclictest other and fifo.
-    3. Histograms to percentiles; against FRAME_BUDGET_MS and the IMU's
-       period; findings; summary.txt, sched_latency.json, histogram.csv and
-       the figure.
+    1. The kernel's preemption model.
+    2. Each case for --seconds (cyclictest needs root and rt-tests).
+    3. Percentiles, findings, files; --compare puts two runs side by side.
 """
 import argparse
 import csv
@@ -89,10 +67,6 @@ Output (--out DIR, default <root>/runs/sched_<label>_<timestamp>):
     sched_latency.png   each case's tail: the share of wake-ups at least x us late (with matplotlib)
 """
 
-
-# =============================================================================
-# Measuring
-# =============================================================================
 
 def python_latency(seconds: float, interval_us: int = INTERVAL_US, clock=time.perf_counter,
                    sleep=time.sleep) -> list[float]:
@@ -188,10 +162,6 @@ def preemption_model(version: str | None = None) -> str:
     return "none (voluntary or server)"
 
 
-# =============================================================================
-# Statistics
-# =============================================================================
-
 def hist_of(values_us: list[float]) -> dict:
     """Wake-ups per whole microsecond late (rounded down), as cyclictest bins them."""
     return dict(Counter(int(v) for v in values_us))
@@ -247,10 +217,6 @@ def findings(res: dict) -> list[str]:
         out.append("the kernel isn't PREEMPT_RT: an RT kernel shortens the worst case further, on the same hardware")
     return out
 
-
-# =============================================================================
-# Output
-# =============================================================================
 
 def _row(name: str, s: dict | None) -> str:
     if not s:

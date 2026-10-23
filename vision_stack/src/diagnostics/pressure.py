@@ -1,39 +1,21 @@
-"""System pressure: how long tasks waited on CPU, I/O and memory, and what was waiting to be written, around a late frame.
+"""System pressure: what the system waited on around a late frame.
 
 Purpose:
-    A frame loop that suddenly takes half a second, with its own stages
-    timed as normal, was held by something outside it: the GIL, the CPU,
-    the SD card, or memory. The kernel keeps a running count of exactly
-    that, Pressure Stall Information (PSI, /proc/pressure/{cpu,io,memory}):
-    microseconds during which some task (and, for io and memory, every
-    task) was stalled waiting on the resource. The difference between two
-    reads is the stall inside that window. /proc/meminfo adds how much
-    written data was still waiting for the disk (Dirty, Writeback) and how
-    much memory was free.
-
-    The 2026-10-20 figure eights had a 1,080 ms frame with a 354 ms IMU
-    read (both threads held at once) and a 584 ms gap outside the timed
-    stages with the IMU still reading. StallLog records each such gap with
-    the system's side of it, so the next run says which resource it was.
-
-    Raspberry Pi kernels may build PSI in but leave it off: then the files
-    are missing or unreadable, and StallLog records the timings and meminfo
-    without it (psi_on False). `psi=1` on the kernel command line turns it
-    on (setup.mk psi).
+    A frame loop that suddenly takes half a second, its own stages timed as
+    normal, was held by something outside it: the CPU, the SD card or
+    memory. The kernel counts exactly that (Pressure Stall Information,
+    /proc/pressure), and /proc/meminfo says what was still waiting to be
+    written. Each long gap gets one row with the system's side of it (the
+    2026-10-20 figure eights had 584 ms and 1,080 ms frames no one could
+    explain). Without PSI on (psi=1, setup.mk psi), the timings and meminfo alone.
 
 Main package:
-    Pressure: the PSI files held open; read() -> raw text, cheap enough to
-        call every frame; totals(raw) -> {"cpu_some": us, ...}.
-    meminfo() -> {"dirty_kb", "writeback_kb", "available_mb"}.
-    StallLog: per frame, frame(...); writes stalls.csv when a frame came
-        stall_ms or more after the one before.
+    StallLog: stalls.csv, one row per gap of stall_ms or more between frames.
 
-Flow (StallLog, per frame):
-    1. At the frame's arrival, read the PSI files (raw text, not parsed).
-    2. If the gap since the previous arrival is stall_ms or more (and the
-       previous frame wasn't the run's first, whose start-up always is): parse
-       both reads, write one row with the stall in each resource over the
-       gap, meminfo, and the loop's own timings around it.
+Flow, per frame:
+    1. At the frame's arrival, read the PSI files (raw, unparsed: cheap).
+    2. A gap of stall_ms or more (not after the run's first frame): one row
+       with each resource's stall over it, meminfo and the loop's own timings.
     3. Keep this read as the next frame's "before".
 """
 import csv

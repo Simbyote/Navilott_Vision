@@ -2,32 +2,20 @@
 
 Purpose:
     GStreamer's latency tracer stalls libcamerasrc before PLAYING on the
-    robot's Pi, in every flags mode (2026-10-14). This measures the same
-    thing from inside the pipeline instead: a buffer probe on each element's
-    pads stamps a monotonic time as each frame goes in and comes out. Nothing
-    is injected into the stream (no tracer hooks, no custom queries), so the
-    pipeline runs as it does by hand.
+    robot's Pi (2026-10-14). This measures the same from inside the
+    pipeline: a probe on each element's pads stamps each frame in and out,
+    with nothing injected into the stream. Stdlib and PyGObject only, so the
+    system python3 can run it when the venv can't import gi.
 
-    Standalone on purpose: stdlib + PyGObject only, so the system python3
-    (which has python3-gi) can run it when the venv can't import gi.
+Main package:
+    Its stdout, after the run: "[pad-timing] KIND ELEMENT TS_MS MS" rows,
+    KIND element (sink pad in to src pad out), pipeline (source to sink) or
+    camera (sensor timestamp to the source's pad), then EOS, ERROR or NOGI.
 
-Usage:
-    python3 pad_timing.py "PIPELINE"
-    The pipeline must end itself (a sink with num-buffers): this waits for
-    EOS or an error.
-
-Output (stdout, tab-separated, printed after the run so printing doesn't
-land inside a measurement):
-    [pad-timing]  KIND  ELEMENT  TS_MS  MS
-        element   element's sink pad in -> its src pad out
-        pipeline  the source's src pad -> the sink's sink pad ("src -> sink")
-        camera    the buffer's PTS (libcamerasrc sets it from the sensor
-                  timestamp, as running time) -> the source's src pad: sensor
-                  readout, Unicam, the ISP and the IPA
-    then one of:
-    [pad-timing]  EOS
-    [pad-timing]  ERROR  message
-    [pad-timing]  NOGI   why          (PyGObject / Gst 1.0 not importable)
+Flow:
+    1. python3 pad_timing.py "PIPELINE" (one that ends itself: num-buffers).
+    2. Probes on every pad; run to EOS or an error.
+    3. Print the rows.
 """
 import sys
 import time

@@ -2,29 +2,20 @@
 """Code cards: one structure infographic per source file, from its docstring and its syntax tree.
 
 Purpose:
-    Generic tools draw structure without the why, and they lose calls made
-    through a list or an attribute: code2flow drew Navigation.update() as
-    calling itself, because the real call is `rule.update(...)` on each
-    entry of self.rules and it matches calls by name. Every module here
-    opens with a Purpose / Main package / Flow docstring, so a card puts the
-    why next to the structure: what the file is for, which project modules
-    it uses and which use it, each class with the objects it holds and what
-    each method calls, its constants, and its flow. The code is only read,
-    never imported or run, so any file can be carded on any machine.
+    Generic tools draw structure without the why, and lose calls made
+    through a list or an attribute (code2flow drew Navigation.update() as
+    calling itself). Every module opens with a Purpose / Main package / Flow
+    docstring, so a card puts the why next to the structure: what the file
+    is for, which modules it uses and which use it, its classes, constants
+    and flow. The code is only read, never imported (docs/guides/code_cards.md).
 
 Main package:
-    doc_sections(): a docstring's first line and its titled sections.
-    read_module(): one file's ModuleInfo.
-    scan(): every non-test module under <root>/src.
-    used_by(): who imports each module, and how many test files do.
-    draw(): one card as a PNG.
-    main(): the command line.
+    One PNG card per module under src/ (tests skipped).
 
 Flow:
-    1. Parse every module under src/ (tests skipped): docstring sections,
-       imports (top level or inside a function), classes, functions, constants.
+    1. Parse every module: docstring sections, imports, classes, functions, constants.
     2. Turn the imports around into "used by".
-    3. Draw one card per module (or per --only module) into --out.
+    3. Draw one card per module (or per --only) into --out.
 """
 import argparse
 import ast
@@ -107,10 +98,6 @@ class ModuleInfo:
     functions: list = field(default_factory=list)
     constants: list = field(default_factory=list)   # (names, value, comment)
 
-
-# =============================================================================
-# Reading
-# =============================================================================
 
 def doc_sections(doc: str) -> tuple[str, dict]:
     """
@@ -352,10 +339,6 @@ def used_by(mods: dict, root: Path) -> dict:
             out[t] = (out[t][0], out[t][1] + 1)
     return out
 
-
-# =============================================================================
-# Drawing
-# =============================================================================
 
 def reflow(text: str) -> str:
     """Join a docstring's hard-wrapped prose into paragraphs; list items and indented lines stay as they are."""

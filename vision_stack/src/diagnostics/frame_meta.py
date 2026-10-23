@@ -1,43 +1,22 @@
 """Frame metadata: what libcamera did to every frame, beside what the color branch read in it.
 
 Purpose:
-    The camera's auto exposure (AGC) and white balance (AWB) run in
-    libcamera's IPA on the ARM cores: from the ISP's statistics of each
-    frame they set the next frame's exposure time, analogue and digital
-    gain and colour gains. libcamera reports those per frame, with the
-    moment the sensor started exposing it, but the robot's GStreamer
-    pipeline drops that metadata at the appsink. This opens the camera
-    through Picamera2 instead, set up like the robot's (the same sensor
-    mode, size, frame rate, 180 degree flip and CAMERA_CONTROLS), and logs
-    every frame's metadata next to the color branch's own reading of its
-    traffic ROI (MEASURED: the label, confidence and clipped-white pixels).
-
-    That answers what the GStreamer path can't:
-    - did a red LED read yellow on frames with longer exposure or more
-      gain (hold the light on one color and compare the labels);
-    - how far AGC swings as the robot turns, and whether it has settled;
-    - how long a frame takes from the sensor starting to expose it to
-      Python having it (the ISP, the IPA and the queue included).
-
-    Like capture_anatomy, it needs the camera free: stop the robot's
-    pipeline first. --save-every keeps frames as a folder the linkers
-    (--frames) and calib-lamps read.
+    Auto exposure and white balance run in libcamera's IPA, and the robot's
+    GStreamer pipeline drops their per-frame metadata at the appsink. This
+    opens the camera through Picamera2, set up like the robot, and logs each
+    frame's exposure, gains and timing next to the color branch's reading of
+    its traffic ROI: did a red LED read yellow on longer exposures, how far
+    does AGC swing, how long from exposure to Python (docs/guides/diagnostics.md,
+    section 9). The camera must be free.
 
 Main package:
-    record(out_dir, seconds, ...) -> rows: the camera for that long, frames.csv,
-        meta.json, summary.txt and frames/ written.
-    to_libcamera_controls(controls): libcamerasrc names (exposure-value)
-        as Picamera2's (ExposureValue), enum names as their values.
-    frame_row(md, now_ns, t0_ns, detection): one frame's CSV row.
-    summarize(rows), findings(summary), summary_lines(summary).
-    cli(): python3 -m src.diagnostics.frame_meta [--seconds S] [--save-every N]
-        [--camera-control K=V] [--no-detect] [--out DIR]
+    The run folder: frames.csv (one row a frame), meta.json, summary.txt,
+    and with --save-every, frames/ the linkers and calib-lamps can replay.
 
 Flow:
-    1. Picamera2 (lazy import: only the Pi has it) configured like the robot.
-    2. Each frame: its request's metadata and image; the color branch on
-       the traffic ROI; a row; every Nth image saved.
-    3. Stop at --seconds (or Ctrl-C); write and summarize.
+    1. Picamera2 configured like the robot.
+    2. Per frame: its metadata and image; the color branch on the traffic ROI; a row.
+    3. Stop at --seconds or Ctrl-C; write and summarize.
 """
 import argparse
 import csv
@@ -88,10 +67,6 @@ Output (--out DIR, default <root>/runs/meta_<timestamp>):
 """
 
 
-# =============================================================================
-# Controls
-# =============================================================================
-
 def _libcamera_enum(name: str, value: str):
     """libcamera.controls.<name>Enum's member called value (any case, - and _ ignored)."""
     from libcamera import controls                      # only on the Pi
@@ -119,10 +94,6 @@ def to_libcamera_controls(controls: dict, enum_lookup=_libcamera_enum) -> dict:
         out[name] = enum_lookup(name, value) if isinstance(value, str) else value
     return out
 
-
-# =============================================================================
-# One frame
-# =============================================================================
 
 def frame_row(n: int, md: dict, now_ns: int, t0_ns: int | None, detection: dict | None) -> dict:
     """
@@ -168,10 +139,6 @@ def detect(frame, n: int, ts_ms: int, config) -> dict:
     return {"label": best.label if best else "", "confidence": best.confidence if best else None,
             "white_px": None if white is None else int((white > 0).sum())}
 
-
-# =============================================================================
-# Recording
-# =============================================================================
 
 def open_camera(controls: dict, factory=None):
     """Picamera2 configured like the robot's capture, started. factory: Picamera2 (injectable)."""
@@ -253,10 +220,6 @@ def record(out_dir, seconds: float = SECONDS, controls: dict | None = None, save
     (out / "summary.txt").write_text("\n".join(summary_lines(summary, meta)) + "\n")
     return rows
 
-
-# =============================================================================
-# Summary
-# =============================================================================
 
 def _stats(xs: list) -> dict | None:
     v = sorted(float(x) for x in xs if x not in (None, ""))
@@ -353,10 +316,6 @@ def summary_lines(s: dict, meta: dict | None = None) -> list[str]:
     lines += ["", "findings"] + [f"  - {x}" for x in s["findings"] or ["nothing stood out"]]
     return lines
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
     """python3 -m src.diagnostics.frame_meta [--seconds S] [--save-every N] [--camera-control K=V] [--no-detect] [--out DIR]"""

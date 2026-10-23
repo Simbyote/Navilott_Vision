@@ -1,19 +1,17 @@
-"""
-Battery state machine (pure logic, no hardware imports)
-========================================================
-E1.08 Magnetronics
+"""Battery state machine: OK / WARNING / CRITICAL from a stream of voltages, debounced.
 
-Turns a stream of battery voltage readings into OK / WARNING / CRITICAL,
-with debouncing and hysteresis so motor-load sag doesn't cause false
-alarms or flicker.
+Purpose:
+    Motor load sags the pack for a moment; a raw threshold would raise false
+    alarms and flicker. Pure logic, kept apart from battery.py so it tests
+    off the Pi.
 
-Rules:
-    - Escalation needs `confirm` consecutive readings at/below a threshold.
-    - WARNING clears only after `confirm` consecutive readings at/above
-      (warning + hysteresis).
-    - CRITICAL is latched for the rest of the run (never clears).
+Main package:
+    BatteryState: OK, WARNING or CRITICAL, from BatteryStateMachine.update().
 
-Kept separate from battery.py so it can be unit-tested off the Pi.
+Flow, per reading:
+    1. Escalate after `confirm` readings in a row at or below a threshold.
+    2. WARNING clears after `confirm` readings at or above warning + hysteresis.
+    3. CRITICAL latches for the rest of the run.
 """
 
 from enum import IntEnum

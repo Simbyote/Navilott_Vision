@@ -109,6 +109,8 @@ BCM numbering, following Product Spec GPIO Table 7. The display, button and I²C
 
 The Pi and the motors share a battery but not a regulator. Motor current spikes, at startup or when a wheel stalls, sag the battery; the buck converter keeps the Pi's rail steady through that as long as the battery stays above its minimum input. If the Pi resets when the motors start, check the buck's input headroom first.
 
+**Reading the pack.** A 3S pack has no protection board (DEC-019), so the software watches it: `diagnostics/battery.py` reads the ADS1115 once a second on its own thread, smooths it, and runs it through a state machine (`battery_state.py`) that needs several readings in a row to change state, so a brief sag under motor load doesn't raise an alarm; CRITICAL latches for the rest of the run. With `params.ADS1115_CONTINUOUS` the chip converts on its own and each read is two combined I²C transfers, the config checked and the result fetched; single-shot (off) is the Adafruit library's 11–30 transfers over ~9 ms. The chip has one pointer register naming what the next read returns, shared by everything that talks to it. The library's own continuous mode reads without setting it, so anything else that touches the chip (a second process opening the ADC) moves it and the "voltage" is another register: most likely why that version read 9.44 V for a 12 V pack (2026-10-21, reverted). `ContinuousADC` sets the pointer in every read, in the same transfer, and puts back a config someone else changed.
+
 Still to measure: the current draw of the Pi and of each motor at stall. The robot measures voltage only (`make routine-power-profile` records the sag under each load); current needs a sensor such as an INA219 on the I²C bus. **TBD**
 
 ---

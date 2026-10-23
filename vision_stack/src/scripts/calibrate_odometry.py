@@ -1,32 +1,20 @@
-"""
-calibrate_odometry.py  --  floor cm per encoder count, from measured runs
+"""Odometry calibration: floor cm per encoder count, from measured runs.
 
 Purpose:
-    Odometry (estimation/odometry.py) turns the encoders' counts into cm with
-    one number, cm_per_count. It depends on the wheels (diameter, tyre
-    squash), the gearbox and how the encoders are decoded, so it's measured,
-    not computed: move the robot a measured distance, count, divide.
-
-    Two ways to move it, each a few trials:
-      push (default): roll the robot by hand from one tape mark to another,
-          motors off. Exact distance, no slip; the gearbox turns stiffly.
-      --drive S: drive straight at --duty for S seconds, then measure how far
-          it went with a tape. Includes the slip the robot really has.
-    Both wheels are counted. They should agree within a few %: more means the
-    push or the drive wasn't straight, or one wheel slipped, and the trial
-    says so.
-
-    Writes calibration/odometry.json; MEASURED_ESTIMATION (config.py) reads
-    cm_per_count from it when the pipeline starts.
+    Odometry turns encoder counts into cm with one number, cm_per_count,
+    which depends on the wheels, the gearbox and the decoding, so it's
+    measured: move the robot a measured distance, count, divide. Push it by
+    hand (exact, no slip) or drive it (--drive: the slip it really has);
+    both wheels should agree within a few percent
+    (docs/guides/calibrate_odometry.md).
 
 Main package:
-    trial(cm, before, after) -> one trial's counts and counts per cm.
-    summarize(trials) -> cm_per_count, each wheel, and the trials' spread.
-    run(...) -> the trials, with the prompts; main() wires the hardware.
+    calibration/odometry.json: cm_per_count, each wheel's, and the trials'
+    spread; MEASURED_ESTIMATION reads it at startup.
 
 Flow:
     1. Open the encoders (and the motors for --drive).
-    2. Per trial: read counts, move the robot, read counts, ask (or know) cm.
+    2. Per trial: read counts, move the robot, read counts, the distance.
     3. Summarize, print, write the JSON (unless --dry-run).
 """
 import argparse

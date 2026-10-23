@@ -1,57 +1,22 @@
 """Capture anatomy: how a frame gets from the IMX290 to OpenCV on this Pi, recorded once.
 
 Purpose:
-    The capture pipeline is one GStreamer string (capture/camera.py), but a
-    frame crosses three pieces of hardware and two pieces of software on the
-    way: the sensor reads out raw Bayer over CSI-2; Unicam, the Pi's CSI-2
-    receiver, DMA-writes it to memory; the VideoCore ISP demosaics,
-    corrects and downscales it; libcamera's IPA, running on the ARM cores in
-    the robot's process, reads the ISP's statistics and sets the next
-    exposure and gain; then videoconvert and videoflip turn it into the BGR
-    image OpenCV gets, in software. None of that is visible from Python.
-    This records what the OS can show of it, once, into one folder:
-
-    - the hardware graph the kernel built (media-ctl): sensor -> Unicam ->
-      memory, and the ISP's input and output nodes, with the format on each
-      link;
-    - the caps GStreamer negotiated at every pad (gst-launch -v): what the
-      ISP hands over (NV12, YUY2, BGR...) decides how much videoconvert
-      does;
-    - how long every element holds each frame, the source-to-sink time, and
-      the sensor-to-first-pad time, by buffer probes (pad_timing.py), so the
-      CPU-side conversion has a number. GStreamer's latency tracer did this
-      first, but it stalls libcamerasrc before PLAYING on this Pi in every
-      flags mode (2026-10-14);
-    - libcamera's log (the sensor mode and Unicam format it picked);
-    - the VideoCore side: ARM, core, ISP, 3D and H.264 clocks, core volts,
-      the ARM / GPU memory split, the CMA pool camera buffers come from.
-
-    It runs the robot's exact pipeline string with appsink swapped for a
-    fakesink, so nothing reads the frames and the timing is the capture's
-    alone. The camera can be open in one process at a time: stop the robot's
-    pipeline first. Every tool is optional; a missing one is noted and the
-    rest is recorded (on a laptop, almost everything is missing).
+    A frame crosses the sensor, Unicam (the CSI-2 receiver), the VideoCore
+    ISP and libcamera's IPA before GStreamer hands it to OpenCV, and none of
+    it is visible from Python. This records what the OS can show: the
+    hardware graph, the caps negotiated at every pad, how long each element
+    holds a frame, libcamera's log, the VideoCore's clocks and memory
+    (docs/guides/diagnostics.md, section 7). The camera must be free.
 
 Main package:
-    record(out_dir, duration_s, ...) -> dict: runs every probe, writes the
-        folder, returns what it parsed.
-    parse_media(text), parse_caps(text), parse_pad_timing(text),
-    parse_tracer(text), libcamera_selected(text): the parsers, one per
-        tool's output (vcgencmd's and /proc/meminfo's are os_counters',
-        shared with the recorder).
-    summary_lines(res): summary.txt.
-    cli(): python3 -m src.diagnostics.capture_anatomy [--seconds S] [--out DIR]
+    The run folder: anatomy.json (everything parsed), latency.csv and
+    summary.txt (findings, such as any CPU-side conversion and its cost).
 
 Flow:
-    1. Static probes: uname, v4l2-ctl, rpicam-hello --list-cameras,
-       gst-inspect-1.0 libcamerasrc, vcgencmd, /proc/meminfo, media-ctl
-       on every /dev/media* (graph and dot, drawn to PNG when graphviz is
-       there).
-    2. The pipeline under gst-launch-1.0 -v, ending itself after
-       duration_s x FPS buffers, with libcamera's log and GStreamer's
-       pipeline dumps on: the caps. If it stalls, each setting is bisected.
-    3. The same pipeline again under pad_timing.py: the time per element.
-    4. Parse, write latency.csv, anatomy.json and summary.txt.
+    1. Static probes: uname, v4l2-ctl, rpicam-hello, gst-inspect, vcgencmd, media-ctl.
+    2. The pipeline under gst-launch -v: the caps (bisected if it stalls).
+    3. The pipeline under pad_timing.py: the time per element.
+    4. Parse; write the folder.
 """
 import argparse
 import csv
@@ -112,10 +77,6 @@ Output (--out DIR, default <root>/runs/anatomy_<timestamp>):
 """
 
 
-# =============================================================================
-# Running tools
-# =============================================================================
-
 def run_tool(argv: list[str], timeout: float = 10.0) -> tuple[int | None, str]:
     """
     (exit code, stdout + stderr) of a command; (None, why) when it can't run.
@@ -169,10 +130,6 @@ def gi_python(run) -> str | None:
             return py
     return None
 
-
-# =============================================================================
-# Parsers
-# =============================================================================
 
 _ENTITY = re.compile(r"^- entity \d+: (.+?) \(")
 _LINK = re.compile(r'->\s*"(.+?)":(\d+)\s*\[([^\]]*)\]')
@@ -337,10 +294,6 @@ def libcamera_selected(text: str) -> list[str]:
     return keep
 
 
-# =============================================================================
-# Recording
-# =============================================================================
-
 def _static_probes() -> list[tuple[str, list[str]]]:
     probes = [("uname.txt", ["uname", "-a"]),
               ("v4l2_devices.txt", ["v4l2-ctl", "--list-devices"]),
@@ -488,10 +441,6 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     _save(out, "summary.txt", "\n".join(lines))
     return res
 
-
-# =============================================================================
-# Summary
-# =============================================================================
 
 def _element_ms(res: dict, factory: str) -> float:
     """The median ms of the elements whose name starts with factory (videoconvert0...), summed."""
@@ -688,10 +637,6 @@ def summary_lines(res: dict) -> list[str]:
         lines += ["", "drawn: " + ", ".join(res["pngs"])]
     return lines
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
     """python3 -m src.diagnostics.capture_anatomy [--seconds S] [--camera-control K=V ...] [--out DIR]"""

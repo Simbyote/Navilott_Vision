@@ -2,32 +2,22 @@
 """Ground-plane calibration: fit the homography from undistorted frame pixels to floor centimeters.
 
 Purpose:
-    The camera is rigidly mounted and the floor is flat, so one homography
-    turns any floor point in the frame into centimeters on the floor. A
-    checkerboard lying flat across the lane ROI gives 54 points whose floor
-    positions are known from the square size, and findHomography fits all of
-    them. Frames go through preprocess_frame with MEASURED's own settings, so
-    the fit is on exactly the undistorted frames the pipeline sees; the JSON
-    records the lens calibration, undistort_alpha and size it's valid for,
-    and ground.load_ground_homography refuses it under anything else.
+    A checkerboard lying flat across the lane ROI gives 54 points whose
+    floor positions follow from the square size; one homography through
+    them maps any floor point in the frame to cm. Frames go through
+    preprocess_frame with MEASURED's settings, so the fit is on exactly the
+    frames the pipeline sees (docs/guides/calibrate_ground.md).
 
 Main package:
     calibration/ground_homography.json: H (frame px -> floor cm), the
-    conditions it was fit under, the board and origin used, the per-corner
-    reprojection error in cm and the averaged corners (so a refit needs no
-    camera). calibration/ground_debug.png: the board with corner 0 marked,
-    the floor axes and a projected 5 cm grid, to check before trusting it.
+    conditions it was fit under, the per-corner error in cm, and the averaged
+    corners for a refit; ground_debug.png, the board and a projected 5 cm grid.
 
 Flow:
-    1. Grab frames (camera, or --image), undistort each through preprocess_frame.
-    2. Find the 9x6 inner corners, refined in a window sized to the squares
-       as perspective shrinks them; average them over the frames.
-    3. Order them so corner 0 is the top-left in the image (far-left on the floor).
-    4. Floor position of each corner from --square-cm and corner 0's position.
-    5. findHomography over all corners; report the error in cm per corner.
-    6. With no --origin-y-cm, move the origin to the floor at the bottom-center
-       of the frame: the robot reference point.
-    7. Write the JSON and the debug image.
+    1. Grab frames (camera or --image), turned upright and preprocessed.
+    2. Find and average the board's inner corners; order them from the far-left.
+    3. Each corner's floor position from --square-cm and corner 0's position.
+    4. Fit, origin at the robot's reference point; write the JSON and the debug image.
 """
 
 import argparse
@@ -76,14 +66,11 @@ size, or the lens calibration.
 """
 
 
-# =============================================================================
-# Corners
-# =============================================================================
-
 def undistorted_gray(frame_bgr: np.ndarray, preprocess: PreprocessParams) -> tuple[np.ndarray, np.ndarray]:
     """(undistorted BGR, its gray) through preprocess_frame, the pipeline's own undistortion."""
     und = preprocess_frame(FrameData(frame_bgr, 0, 0), preprocess).undistorted
     return und, cv2.cvtColor(und, cv2.COLOR_BGR2GRAY)
+
 
 def order_corners(corners: np.ndarray, pattern: tuple[int, int]) -> np.ndarray:
     """
@@ -109,6 +96,7 @@ def order_corners(corners: np.ndarray, pattern: tuple[int, int]) -> np.ndarray:
         raise ValueError(f"board is turned: its {cols}-corner side must run across the image, "
                          "left to right; turn it a quarter turn")
     return pts
+
 
 def find_ground_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarray | None:
     """
@@ -137,6 +125,7 @@ def find_ground_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarra
     refined = cv2.cornerSubPix(gray, corners, (half, half), (-1, -1), SUBPIX_CRITERIA)
     return order_corners(refined, pattern)
 
+
 def average_corners(frames, pattern, preprocess) -> tuple[np.ndarray | None, int, np.ndarray | None]:
     """
     Corners found in each undistorted frame, ordered and averaged.
@@ -156,10 +145,6 @@ def average_corners(frames, pattern, preprocess) -> tuple[np.ndarray | None, int
     return np.mean(found, axis=0), len(found), last
 
 
-# =============================================================================
-# Fit
-# =============================================================================
-
 def board_points_cm(pattern, square_cm: float, origin_x_cm: float, origin_y_cm: float) -> np.ndarray:
     """
     Floor position of each inner corner, row-major like order_corners().
@@ -171,6 +156,7 @@ def board_points_cm(pattern, square_cm: float, origin_x_cm: float, origin_y_cm: 
     c, r = np.meshgrid(np.arange(cols), np.arange(rows))
     return np.stack([origin_x_cm + c.ravel() * square_cm,
                      origin_y_cm - r.ravel() * square_cm], axis=1).astype(np.float64)
+
 
 def reference_at_view_bottom(H: np.ndarray, frame_w: int, frame_h: int) -> tuple[np.ndarray, float]:
     """
@@ -189,6 +175,7 @@ def reference_at_view_bottom(H: np.ndarray, frame_w: int, frame_h: int) -> tuple
     T = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, -y_bottom], [0.0, 0.0, 1.0]])
     H2 = T @ H
     return H2 / H2[2, 2], -y_bottom
+
 
 def fit(corners_px, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size) -> dict:
     """
@@ -212,10 +199,6 @@ def fit(corners_px, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size) ->
     return {"H": H, "errors_cm": errors, "corner0_cm": (float(corner0[0]), float(corner0[1])),
             "y_shift_cm": shift}
 
-
-# =============================================================================
-# Output
-# =============================================================================
 
 def debug_image(und: np.ndarray, corners_px: np.ndarray, pattern, H: np.ndarray, lane_rect,
                 corner0_cm, scale: int = 3) -> np.ndarray:
@@ -275,6 +258,7 @@ def debug_image(und: np.ndarray, corners_px: np.ndarray, pattern, H: np.ndarray,
     text("reference (0, 0)", (ref[0] + 14, ref[1] - 8), (0, 255, 255))
     return img
 
+
 def record(result: dict, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size,
            preprocess: PreprocessParams, corners_px, frames_used: int) -> dict:
     """The JSON load_ground_homography reads, plus what's needed to audit or refit it."""
@@ -303,10 +287,6 @@ def record(result: dict, pattern, square_cm, origin_x_cm, origin_y_cm, frame_siz
     }
 
 
-# =============================================================================
-# Command line
-# =============================================================================
-
 def grab_frames(args) -> list[np.ndarray]:
     """--image files, or --frames frames from the camera."""
     if args.image:
@@ -320,6 +300,7 @@ def grab_frames(args) -> list[np.ndarray]:
         return grab_upright(cap, args.frames)
     finally:
         cap.release()
+
 
 def main(argv: list[str] | None = None) -> int:
     """Parse arguments, fit, and write the JSON and the debug image."""

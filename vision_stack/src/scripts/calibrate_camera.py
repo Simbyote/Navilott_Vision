@@ -2,24 +2,22 @@
 """Lens calibration for the IMX290 + M12 lens: measure the distortion once, write it for preprocess.
 
 Purpose:
-    preprocess.py undistorts every frame before the gray/color split so
-    straight tape stays straight across the whole frame; this script produces
-    the calibration it loads. The camera is opened through capture's own
-    build_gst_pipeline(), and verify undistorts through preprocess's own
-    undistort(), so the script can't drift from what the pipeline does. A
-    calibration is only valid for the sensor mode, output size, flip and lens
-    focus it was captured with; the JSON records the first three, and turning
-    the lens means recalibrating.
+    preprocess.py undistorts every frame so straight tape stays straight
+    across the whole frame; this produces the calibration it loads. The
+    camera opens through capture's own pipeline string and verify
+    undistorts through preprocess's own undistort(), so the script can't
+    drift from the pipeline. Valid only for the sensor mode, output size,
+    flip and lens focus it was captured with (docs/guides/calibrate_camera.md).
 
 Main package:
-    calibration/camera_calib.json: image_size, camera_matrix and dist_coeffs
-    (what preprocess reads), plus the RMS reprojection error, the frames used
-    and dropped, the board pattern, and the sensor mode and flip it's valid for.
+    calibration/camera_calibration.json: image_size, camera_matrix and
+    dist_coeffs (what preprocess reads), the RMS reprojection error, the
+    frames used, the board, and the mode and flip it's valid for.
 
 Flow (mode "all"):
     1. capture: auto-save checkerboard frames as the board moves around the view.
-    2. solve: calibrate from them, drop outlier frames once, write the JSON.
-    3. verify: save raw vs undistorted pairs and score line straightness.
+    2. solve: calibrate, drop outlier frames once, write the JSON.
+    3. verify: raw vs undistorted pairs, and a line-straightness score.
 """
 
 import argparse
