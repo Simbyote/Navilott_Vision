@@ -135,6 +135,59 @@ def test_touch_keys_count_each_line_and_stop_cleanly():
     stream.close()
 
 
+def with_wheels(rows, slipping_step=None):
+    """
+    Wheel speeds and the gyro on rows: turns at 1350 / 2190 counts/s turning
+    27 deg/s (left -), lane keeping straight. On slipping_step's turn the
+    wheels drive as usual but the gyro reads 3 deg/s, turn 3 on 2026-10-20.
+    """
+    out = []
+    for r in rows:
+        r = {**r, "brake": 0}
+        if r.get("stage") == "turn":
+            left = "left" in r["step"]
+            r.update(left_cps=1350 if left else 2190, right_cps=2190 if left else 1350,
+                     yaw_rate=(-27.0 if left else 27.0))
+            if fe._step(r["step"]) == slipping_step:
+                r["yaw_rate"] = -3.0
+        else:
+            r.update(left_cps=1700, right_cps=1700, yaw_rate=0.0)
+        out.append(r)
+    return out
+
+
+@pytest.mark.software
+def test_a_turn_the_chassis_does_not_follow_is_found_and_placed():
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, with_wheels(lap_rows(laps=2), slipping_step=3))
+    spots = w.slips()
+    assert [(x["lap"], x["step"], x["maneuver"], x["stage"], x["frames"]) for x in spots] == [(1, 3, "left", "turn", 8)]
+    assert spots[0]["gyro_dps"] == -3.0 and spots[0]["wheels_dps"] == pytest.approx(-26.6, abs=1.0)
+    assert w.intersections[2]["slip_s"] == round(7 * DT, 2)
+    assert sum(i["slip_s"] for i in w.intersections) == w.intersections[2]["slip_s"]
+    assert w.slips() == spots and w.intersections[2]["slip_s"] == round(7 * DT, 2)          # again: not added twice
+
+
+@pytest.mark.software
+def test_a_clean_run_has_no_slips_and_a_run_without_wheels_none_to_find():
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, with_wheels(lap_rows(laps=2)))
+    assert w.slips() == []
+    w2 = fe.EightWatch(seconds=1e9)
+    feed(w2, lap_rows(laps=2))
+    assert w2.slips() == []
+
+
+@pytest.mark.software
+def test_a_short_disagreement_is_not_a_slip():
+    rows = with_wheels(lap_rows(laps=2))
+    for r in rows[:3]:                                    # 3 frames: under SLIP_FRAMES
+        r["yaw_rate"] = -3.0
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, rows)
+    assert w.slips() == []
+
+
 @pytest.mark.software
 def test_laps_run_from_one_lap_start_to_the_next():
     w = fe.EightWatch(seconds=1e9)

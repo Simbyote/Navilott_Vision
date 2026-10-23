@@ -17,7 +17,10 @@ Purpose:
     lane came back, each lap's time and pack volts. The tester presses
     Enter in the terminal at each touch (TouchKeys), logged with where the
     robot was; afterwards they say how many times they touched it and how
-    many laps they saw.
+    many laps they saw. After the run, EightWatch.slips() finds where the
+    chassis didn't turn the way its wheels did (the gyro against the wheels'
+    speed difference), the turn-3 signature of 2026-10-20: reported per
+    intersection and in slips.csv, not judged.
 
     Pass: no touches; ran the whole time; the laps the robot counted are
     the laps seen; every finished turn ended on the gyro, within
@@ -36,7 +39,7 @@ Flow (per trial):
        line, about to turn left; Enter drives.
     2. One run until the time is up (or it ends otherwise); motors stop.
     3. The tester's touches and laps seen; intersections.csv, laps.csv and
-       touches.csv for the attempt; the trial's row.
+       touches.csv, slips.csv for the attempt; the trial's row.
 """
 import csv
 import os
@@ -58,9 +61,18 @@ MAX_LAPS = 200              # the route's length: far more than any run's minute
 TIME_UP = "time up"
 EXPECTED_DEG = {LEFT: -90.0, RIGHT: 90.0}               # + = turned right
 INTERSECTION_FIELDS = ("step", "lap", "maneuver", "t_enter", "turn_end", "turn_deg", "exit_deg", "heading_deg",
-                       "heading_off_deg", "lane_back", "battery_v")
+                       "heading_off_deg", "lane_back", "slip_s", "battery_v")
 LAP_FIELDS = ("lap", "t_start", "seconds", "battery_v")
 TOUCH_FIELDS = ("t", "lap", "step", "maneuver", "stage", "rule")
+SLIP_FIELDS = ("t0", "t1", "frames", "lap", "step", "maneuver", "stage", "gyro_dps", "wheels_dps")
+# The chassis not turning the way its wheels do: the gyro's yaw rate against
+# the rate the wheels' speed difference gives (fit over every turn frame of
+# the run), off by more than SLIP_DPS for SLIP_FRAMES frames in a row while
+# driving. The 2026-10-20 figure-eight report's numbers: turn 3 sat at
+# ~3 deg/s against ~27 in the other lefts with both wheels at speed
+SLIP_DPS = 12.0
+SLIP_FRAMES = 4             # ~0.2 s
+MIN_FIT_FRAMES = 20         # turn frames needed to fit the wheels' yaw
 
 
 def _num(v) -> float | None:
@@ -79,6 +91,19 @@ def _step(label) -> int:
 def recording(value) -> bool:
     """The record setting as a switch: 0 / off / no / false is off, anything else on."""
     return str(value).strip().lower() not in ("0", "0.0", "off", "no", "false")
+
+
+def _fit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
+    """Least squares y = k x + c; None with under MIN_FIT_FRAMES points or no spread in x."""
+    if len(points) < MIN_FIT_FRAMES:
+        return None
+    mx = statistics.fmean(x for x, _ in points)
+    my = statistics.fmean(y for _, y in points)
+    var = sum((x - mx) ** 2 for x, _ in points)
+    if var == 0:
+        return None
+    k = sum((x - mx) * (y - my) for x, y in points) / var
+    return k, my - k * mx
 
 
 class TouchKeys:
@@ -141,12 +166,14 @@ class EightWatch:
     contract: frames braked because a command broke the contract.
     touches: one dict per touch logged (TOUCH_FIELDS): when, and where the
         robot was, from touches() (TouchKeys.pressed) on the next frame.
+    slips(): after the run, where the chassis didn't follow its wheels.
     """
     def __init__(self, seconds: float, touches=None):
         self.seconds = seconds
         self._pressed = touches
         self.touches: list[dict] = []
         self.intersections: list[dict] = []
+        self._motion: list[tuple] = []          # (t, intersection index, stage, wheel cps difference, gyro dps)
         self.lane_lost_s = 0.0
         self.contract = 0
         self.frames = 0
@@ -164,7 +191,7 @@ class EightWatch:
             self.intersections.append({"step": step, "lap": (step - 1) // len(ROUTE_LAP) + 1, "maneuver": m,
                                        "t_enter": round(t, 2), "turn_end": None, "turn_deg": None,
                                        "exit_deg": None, "heading_deg": None, "heading_off_deg": None,
-                                       "lane_back": False,
+                                       "lane_back": False, "slip_s": 0.0,
                                        "battery_v": _num(n.get("battery_v"))})
         cur = self.intersections[-1] if self.intersections else None
         if cur is not None and n.get("rule") == RULE_INTERSECTION:
@@ -188,11 +215,52 @@ class EightWatch:
                 self.lane_lost_s += dt
         if n.get("reason") == "contract":
             self.contract += 1
+        left, right, yaw = _num(n.get("left_cps")), _num(n.get("right_cps")), _num(n.get("yaw_rate"))
+        if not _num(n.get("brake")) and None not in (left, right, yaw):
+            self._motion.append((t, len(self.intersections) - 1, n.get("stage") or "", right - left, yaw))
         for _ in range(self._pressed() if self._pressed is not None else 0):
             self.touches.append({"t": round(t, 2), "lap": cur["lap"] if cur else 0, "step": cur["step"] if cur else 0,
                                  "maneuver": cur["maneuver"] if cur else "", "stage": n.get("stage") or "",
                                  "rule": n.get("rule") or ""})
         return TIME_UP if t >= self.seconds else None
+
+    def slips(self) -> list[dict]:
+        """
+        Runs of SLIP_FRAMES or more frames, while driving, where the gyro and
+        the wheels disagree on the turn rate by more than SLIP_DPS (SLIP_FIELDS).
+        Each one's seconds are added to its intersection's slip_s. [] when
+        the run had too few turn frames to fit the wheels' yaw.
+        """
+        for i in self.intersections:
+            i["slip_s"] = 0.0
+        turns = [(d, y) for _, _, stage, d, y in self._motion if stage == "turn"]
+        line = _fit(turns)
+        if line is None:
+            return []
+        # Again without the frames the first fit put past SLIP_DPS: the slips
+        # themselves pull the wheels' line toward them
+        line = _fit([(d, y) for d, y in turns if abs(y - (line[0] * d + line[1])) <= SLIP_DPS]) or line
+        k, c = line
+        spots, run = [], []
+        for row in self._motion + [None]:                       # None closes the last run
+            off = row is not None and abs(row[4] - (k * row[3] + c)) > SLIP_DPS
+            if off and (not run or run[-1][1] == row[1]):
+                run.append(row)
+                continue
+            if len(run) >= SLIP_FRAMES:
+                spots.append(self._spot(run, k, c))
+            run = [row] if off else []
+        return spots
+
+    def _spot(self, run: list[tuple], k: float, c: float) -> dict:
+        i = self.intersections[run[0][1]] if run[0][1] >= 0 else None
+        t0, t1 = run[0][0], run[-1][0]
+        if i is not None:
+            i["slip_s"] = round(i["slip_s"] + t1 - t0, 2)
+        return {"t0": round(t0, 2), "t1": round(t1, 2), "frames": len(run),
+                "lap": i["lap"] if i else 0, "step": i["step"] if i else 0, "maneuver": i["maneuver"] if i else "",
+                "stage": run[0][2], "gyro_dps": round(statistics.median(r[4] for r in run), 1),
+                "wheels_dps": round(statistics.median(k * r[3] + c for r in run), 1)}
 
     def finished(self) -> list[dict]:
         """The intersections whose turn finished: the lane came back after them."""
@@ -212,7 +280,7 @@ class FigureEight(Routine):
     requirement = "course repeatability; demo-day endurance"
     trials = 1
     fields = ("minutes", "ended_by", "intersections", "laps_robot", "laps_seen", "touches", "touches_logged",
-              "turns_off_gyro",
+              "slip_spots", "turns_off_gyro",
               "turns_off_heading", "left_mean_deg", "right_mean_deg", "lap_s_mean", "lane_lost_s", "contract",
               "fps", "battery_start_v", "battery_end_v")
     needs = ("pigpiod",)
@@ -281,15 +349,23 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
                                   f" ({x['stage'] or x['rule']})" for x in watch.touches))
         touches = int(ctx.console.ask_number("Times you touched it (nudged, caught, put back)", lo=0, hi=1000))
         laps_seen = int(ctx.console.ask_number("Laps you saw it complete", lo=0, hi=1000))
-        self._write(attempt, watch)
-        return self._row(watch, report, touches, laps_seen)
+        slips = watch.slips()
+        ctx.console.say(f"  didn't turn with its wheels: {len(slips)} spots"
+                        + "".join(f"\n    lap {x['lap']}, step {x['step']} {x['maneuver']} ({x['stage']}): "
+                                  f"{x['t1'] - x['t0']:.1f} s, gyro {x['gyro_dps']:+.0f} deg/s, "
+                                  f"wheels {x['wheels_dps']:+.0f}" for x in slips))
+        self._write(attempt, watch, slips)
+        row = self._row(watch, report, touches, laps_seen)
+        row["slip_spots"] = len(slips)
+        return row
 
     @staticmethod
-    def _write(folder: Path, watch: EightWatch) -> None:
+    def _write(folder: Path, watch: EightWatch, slips: list[dict]) -> None:
         folder.mkdir(parents=True, exist_ok=True)
         for name, fields, rows in (("intersections.csv", INTERSECTION_FIELDS, watch.intersections),
                                    ("laps.csv", LAP_FIELDS, watch.laps()),
-                                   ("touches.csv", TOUCH_FIELDS, watch.touches)):
+                                   ("touches.csv", TOUCH_FIELDS, watch.touches),
+                                   ("slips.csv", SLIP_FIELDS, slips)):
             with open(folder / name, "w", newline="") as f:
                 w = csv.DictWriter(f, fields)
                 w.writeheader()
