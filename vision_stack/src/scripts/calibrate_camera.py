@@ -48,7 +48,7 @@ SUBPIX_CRITERIA = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 1e-3)
 # --help text. Kept apart from the module docstring, which documents the code.
 _CLI_HELP = """\
 Lens calibration for the vision pipeline camera. Writes
-calibration/camera_calib.json, which preprocess.py uses to undistort frames.
+calibration/camera_calibration.json, which preprocess.py uses to undistort frames.
 
 Modes:
     capture   Grab checkerboard frames from the camera. Headless: a frame is
