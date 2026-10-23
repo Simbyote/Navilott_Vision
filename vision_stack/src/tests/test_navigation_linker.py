@@ -764,6 +764,22 @@ def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
 
 
 @pytest.mark.software
+def test_the_label_and_the_code_reach_the_report_and_the_summary(tmp_path):
+    rep, out, *_ = go(tmp_path, label="recorder off")
+    assert rep["label"] == "recorder off" and set(rep["code"]) == {"commit", "uncommitted_changes"}
+    assert (out / "summary.txt").read_text().startswith("[recorder off] [NAVIGATION]")
+    plain, out2, *_ = go(tmp_path / "b")
+    assert plain["label"] == "" and (out2 / "summary.txt").read_text().startswith("[NAVIGATION]")
+
+
+@pytest.mark.software
+def test_the_label_from_the_command_line_reaches_the_run(cli_env):
+    got, tmp = cli_env
+    assert nl.cli(["--camera", "--out", str(tmp / "o"), "--label", "new tires"]) == 0
+    assert got["label"] == "new tires"
+
+
+@pytest.mark.software
 def test_the_report_keeps_the_clock_at_the_start_for_lining_up_other_records(tmp_path):
     rep, *_ = go(tmp_path)
     t = [float(r["t"]) for r in rows(tmp_path / "run" / "nav.csv")]

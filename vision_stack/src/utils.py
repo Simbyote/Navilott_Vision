@@ -7,10 +7,29 @@ Purpose:
 
 Main package:
     clamp(), check_same_frame(), check_frame_size().
+    code_version(): the commit the code is at, and whether it has uncommitted changes.
     Laps: per-stage wall time, for the pipeline's opt-in stage timing.
     GcWatch: the garbage collector frozen before a control loop and timed in it.
 """
+import subprocess
 import time
+from pathlib import Path
+
+
+def _git(*args) -> str | None:
+    try:
+        p = subprocess.run(["git", *args], capture_output=True, text=True, timeout=5,
+                           cwd=Path(__file__).resolve().parent)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.strip() if p.returncode == 0 else None
+
+
+def code_version() -> dict:
+    """{"commit": short hash or None, "uncommitted_changes": bool or None}: which code a run ran."""
+    commit = _git("rev-parse", "--short", "HEAD")
+    dirty = _git("status", "--porcelain")
+    return {"commit": commit, "uncommitted_changes": None if dirty is None else bool(dirty)}
 
 
 def clamp(value: float, lo: float, hi: float) -> float:

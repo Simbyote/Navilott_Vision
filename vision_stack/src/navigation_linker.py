@@ -66,7 +66,7 @@ from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLE
 from src.perception.color_branch import load_hsv_ranges
 from src.phase2_linker import warm_up
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
-from src.utils import GcWatch
+from src.utils import GcWatch, code_version
 from src.perception import parallel
 
 # The run's backstop: brake and end after this long, whatever the navigator
@@ -209,7 +209,8 @@ def summary_lines(report: dict) -> list[str]:
     rules = ", ".join(f"{k} {v}" for k, v in sorted(n["decided_by"].items())) or "none"
     lat = n["latency_ms"]
     return [
-        f"[NAVIGATION] ended by {report['ended_by']}"
+        ("" if not report.get("label") else f"[{report['label']}] ")
+        + f"[NAVIGATION] ended by {report['ended_by']}"
         + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
         + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
         + ("   perception PARALLEL" if report.get("parallel_perception") else "")
@@ -277,6 +278,7 @@ def run(
         battery=None,
         record: bool = True,
         warmup: bool = False,
+        label: str = "",
     ) -> dict:
     """
     Run the navigator on every frame until the cap, the source's end or Ctrl-C.
@@ -310,6 +312,9 @@ def run(
             (phase2_linker.warm_up), so the first driving frame doesn't pay
             the first-call costs. For the live camera; a replay would lose
             its first frame.
+        label: What this run was for or under (free text, e.g. "recorder
+            off", "new tires"), kept in report.json and the summary with
+            the commit it ran.
 
     Outputs:
         The findings, also written to report.json.
@@ -487,7 +492,8 @@ def run(
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
                           "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None),
                           "fifo_overflows": getattr(sensors, "fifo_overflows", None)}
-    report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+    report = {"label": label, "code": code_version(),
+              "ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
               "motor_watchdog": None if not hasattr(motor, "watchdog_status") else
               {"status": motor.watchdog_status, "trips": motor.watchdog_trips},
               "parallel_perception": parallel.enabled(),
@@ -571,6 +577,8 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--out", default=None, metavar="DIR")
+    ap.add_argument("--label", default="", metavar="TEXT",
+                    help='what this run is for or under, kept in report.json, e.g. --label "recorder off"')
     parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     parallel.apply(args)
@@ -634,7 +642,7 @@ def cli(argv: list[str] | None = None) -> int:
             out_dir, system,
             max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
             render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery,
-            record=not args.no_record, warmup=args.camera)
+            record=not args.no_record, warmup=args.camera, label=args.label)
     finally:
         if battery is not None:
             battery.cleanup()

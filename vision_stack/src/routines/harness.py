@@ -42,10 +42,11 @@ import csv
 import json
 import platform
 import statistics
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from src.utils import code_version
 
 PASS, FAIL, INCOMPLETE, RECORDED = "PASS", "FAIL", "INCOMPLETE", "RECORDED"
 QUIT_WORDS = ("q", "quit")
@@ -226,15 +227,6 @@ class Context:
 # Conditions and needs
 # =============================================================================
 
-def _git(*args) -> str | None:
-    try:
-        p = subprocess.run(["git", *args], capture_output=True, text=True, timeout=5,
-                           cwd=Path(__file__).resolve().parent)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return p.stdout.strip() if p.returncode == 0 else None
-
-
 def read_battery_volts() -> float | None:
     """One resting reading of the pack, or None without the ADC (a laptop, or no I2C)."""
     from src.diagnostics import battery_run
@@ -259,10 +251,7 @@ def conditions(tester: str = "", notes: str = "", battery=read_battery_volts, sy
         from src.diagnostics.system_monitor import sample
         system = sample
     sysrow = system()
-    commit = _git("rev-parse", "--short", "HEAD")
-    dirty = _git("status", "--porcelain")
-    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), "commit": commit,
-            "uncommitted_changes": None if dirty is None else bool(dirty), "host": platform.node(),
+    return {"time": time.strftime("%Y-%m-%d %H:%M:%S"), **code_version(), "host": platform.node(),
             "tester": tester, "notes": notes, "temp_c": sysrow.get("temp_c"), "cpu_mhz": sysrow.get("cpu_mhz"),
             "throttled": sysrow.get("throttled_raw"), "battery_v": battery()}
 
