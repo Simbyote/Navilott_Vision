@@ -1,35 +1,22 @@
-"""
-TB6612 motor driver and N20 quadrature encoders.
+"""TB6612 motor driver and N20 quadrature encoders.
 
 Purpose:
-    The robot's drive hardware, and nothing above it: MotorController turns
-    per-wheel duty into the TB6612's PWM and direction pins (drive, a short
-    brake, standby), and EncoderReader counts each wheel's quadrature edges
-    on pigpio interrupt callbacks, so counting never blocks the main loop.
-    Deciding how to drive belongs to navigation (src/navigation/) and the
-    drive trial (src/maneuver.py); reading the encoders once per frame
-    belongs to the sensor hub (src/peripherals/sensing.py), which turns
-    counts() into counts per second per frame.
+    The robot's drive hardware, and nothing above it: per-wheel duty to the
+    TB6612's PWM and direction pins, and each wheel's quadrature edges
+    counted on pigpio callbacks, so counting never blocks the loop. Two
+    watchdogs brake the motors if commands stop: a thread here, and a copy
+    inside pigpiod for when Python is stalled or gone. How to drive is navigation/'s.
 
 Main package:
-    EncoderReader: non-blocking quadrature decoder registering state transitions
-        on left (GPIO 21/20) and right (GPIO 16/19) channel interrupts via pigpio;
-        counts() -> (left, right) live totals, + = forward.
-    MotorController: drive(left, right) in [-1, 1] per wheel, brake(), stop().
-        A watchdog thread brakes the motors when drive() goes quiet for
-        MOTOR_WATCHDOG_S while they're driving: a stuck run loop (a camera
-        that stops delivering frames) can't leave the robot driving blind.
-    DaemonWatchdog: the same watchdog as a pigpio script inside pigpiod, so
-        it brakes even when the Python process is stalled or gone.
-        MotorController runs one alongside its thread (MOTOR_DAEMON_WATCHDOG).
+    MotorController: drive(left, right) in [-1, 1] per wheel, brake(),
+    stop(), with its watchdogs. EncoderReader: counts() -> (left, right)
+    totals, + = forward (left on GPIO 19/16, right on 20/21).
 
 Flow:
-    1. Instantiate pigpio.pi connection and check daemon status.
-    2. Initialize EncoderReader to start background interrupt callbacks.
-    3. Initialize MotorController with configured TB6612 control pins.
-    4. drive() / brake() each frame; stop() and cancel() on exit to disengage
-       hardware PWM and callbacks safely. Between drive()s, the watchdog
-       brakes if the next one is MOTOR_WATCHDOG_S late.
+    1. Connect to the pigpio daemon; start the encoder callbacks.
+    2. drive() / brake() each frame; a watchdog brakes if the next one is
+       MOTOR_WATCHDOG_S late.
+    3. stop() and cancel() on exit release PWM and callbacks.
 """
 
 import logging
@@ -48,9 +35,6 @@ log = logging.getLogger(__name__)
 WATCHDOG_CHECKS = 5
 
 
-# =============================================================================
-# N20 Encoder Reader Class (pigpio Hardware Interrupts)
-# =============================================================================
 class EncoderReader:
     """
     Reads quadrature encoders on Left (GPIO 19/16) and Right (GPIO 20/21) motors.
@@ -84,12 +68,10 @@ class EncoderReader:
         self._right_c1_state = 0
         self._right_c2_state = 0
 
-        # Configure GPIO modes and pull-ups
         for pin in [self.LEFT_C1, self.LEFT_C2, self.RIGHT_C1, self.RIGHT_C2]:
             self._pi.set_mode(pin, pigpio.INPUT)
             self._pi.set_pull_up_down(pin, pigpio.PUD_UP)
 
-        # Set up callbacks for quadrature decoding
         self._cb_l1 = self._pi.callback(self.LEFT_C1, pigpio.EITHER_EDGE, self._left_cb)
         self._cb_l2 = self._pi.callback(self.LEFT_C2, pigpio.EITHER_EDGE, self._left_cb)
         self._cb_r1 = self._pi.callback(self.RIGHT_C1, pigpio.EITHER_EDGE, self._right_cb)
@@ -138,10 +120,6 @@ class EncoderReader:
         self._cb_r1.cancel()
         self._cb_r2.cancel()
 
-
-# =============================================================================
-# The watchdog inside pigpiod
-# =============================================================================
 
 # How often the script looks, ms: it brakes 0-1 look after the timeout
 DAEMON_CHECK_MS = 100
@@ -262,9 +240,6 @@ class DaemonWatchdog:
         self._sid = None
 
 
-# =============================================================================
-# Motor Controller Class (TB6612 Driver & Closed-Loop Control)
-# =============================================================================
 class MotorController:
     """
     Controls a dual DC motor setup via a TB6612 motor driver and pigpio:
@@ -348,13 +323,13 @@ class MotorController:
         with self._lock:
             self._pi.write(self.stby, 1)
 
-            # Left Motor Direction & Duty Cycle (0 to 1,000,000 for hardware_PWM)
+            # hardware_PWM's duty runs 0-1,000,000. The direction pins are mirrored:
+            # AIN1 high reverses the left wheel, BIN1 high drives the right one forward
             spd_l = int(max(0.0, min(1.0, abs(left_speed))) * 1000000)
             self._pi.hardware_PWM(self.pwma, self.pwm_freq, spd_l)
             self._pi.write(self.ain1, 1 if left_speed < 0 else 0)
             self._pi.write(self.ain2, 1 if left_speed > 0 else 0)
 
-            # Right Motor Direction & Duty Cycle
             spd_r = int(max(0.0, min(1.0, abs(right_speed))) * 1000000)
             self._pi.hardware_PWM(self.pwmb, self.pwm_freq, spd_r)
             self._pi.write(self.bin1, 1 if right_speed > 0 else 0)

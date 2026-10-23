@@ -3,23 +3,17 @@
 Purpose:
     Holds the robot until the start button is pressed, counts down, shows
     elapsed MM:SS during the run and the final time after it, then releases
-    the GPIO. All GPIO goes through the pigpio daemon, so the two share pins 
-    without conflict. Requires the tm1637 package and a running daemon 
-    (sudo pigpiod). Pins come from params.py, which follows Product Spec GPIO 
-    Table 7.
+    the GPIO. All GPIO goes through the pigpio daemon, so the two share it
+    without conflict; pins come from params.py (Product Spec GPIO Table 7).
 
 Main package:
     System: owns the display and the button for one run.
 
 Flow:
-    1. wait_for_start(text): show text ("rdy" by default; the production run
-       shows the route's step count) and block until a debounced press.
-    2. run_countdown(): 5-4-3-2-1, one per second, then blank.
-    3. update_display(elapsed_s), every frame; throttled internally.
-    4. show_final_time(elapsed_s) once the loop exits, or show_text() for
-       a code (the production run's "E  2", "Err ").
-    5. cleanup(), in the finally block; cleanup(blank=False) leaves the
-       last screen up after the program exits.
+    1. wait_for_start(text): show text and block until a debounced press.
+    2. run_countdown(): 5-4-3-2-1, one per second.
+    3. update_display(elapsed_s) every frame, throttled internally.
+    4. show_final_time() or show_text() once the loop exits; cleanup() last.
 """
 
 import time

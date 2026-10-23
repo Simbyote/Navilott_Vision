@@ -1,28 +1,20 @@
 """Odometry: how far the robot has driven, from the wheel encoders' counts.
 
 Purpose:
-    The encoders already steer the wheel speeds (navigation/wheel_speed.py)
-    but nothing turned their counts into distance. This does, once per frame,
-    so the rules can measure in cm instead of time: an advance into an
-    intersection, a stop at a line, a crossing's exit.
-
-    Distance comes from the cumulative counts the sensor hub reads, never
-    from counts per second x frame time, so a late or long frame adds no
-    error: the counts went on while the frame loop was busy. Each wheel's
-    distance is its counts since the first frame that had them, times
-    cm_per_count; the robot's (the midpoint of its axle) is the mean of the
-    two, so a spin in place adds about nothing and an arc adds its center's
-    path.
-
-    cm_per_count comes from calibration/odometry.json
-    (scripts/calibrate_odometry.py). Without it, or without encoders, every
-    distance is None and nothing downstream may use one.
+    Lets the rules measure in cm instead of time: an advance into an
+    intersection, a stop at a line, a crossing's exit. It reads the
+    cumulative counts, never counts per second times frame time, so a late
+    or long frame adds no error (docs/vision_pipeline/phase3_estimation.md,
+    "Odometry").
 
 Main package:
-    Odometer: update(left_count, right_count, log) -> Odometry, every frame.
-        record: the frame's numbers, for the traced twin.
-    Odometry: distance_cm, left_cm, right_cm (None without a scale or encoders).
-    load_odometry(path) -> cm_per_count, or None when the file is missing.
+    Odometry: distance_cm (the axle's midpoint), left_cm and right_cm since
+    the first frame with counts; None without encoders.
+
+Flow, each frame:
+    1. Each wheel: counts since the first frame that had them, x cm_per_count
+       (calibration/odometry.json, else the nominal wheel scale).
+    2. The robot: the mean of the two.
 """
 import json
 import logging

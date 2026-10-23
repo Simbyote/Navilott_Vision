@@ -2,20 +2,20 @@
 
 Purpose:
     Owns the libcamera/GStreamer camera pipeline and is the single origin of
-    per-frame identity. No downstream stage mints a frame id or timestamp;
-    each references what capture assigned. Also provides a file sink for
-    writing frames to video.
+    per-frame identity: no downstream stage mints a frame id or timestamp.
+    The ISP hands over BGR at the output size; the frame is turned upright
+    here (orient()) rather than in the pipeline
+    (docs/vision_pipeline/phase1_capture.md).
 
 Main package:
-    FrameData: one BGR frame plus its sequence number and monotonic arrival
-    time. Ids are unique and gap-free for the life of a CameraSource, even
-    across reopens.
+    FrameData: one upright BGR frame plus its sequence number and monotonic
+    arrival time. Ids are unique and gap-free for the life of a
+    CameraSource, even across reopens.
 
 Flow:
     1. Build the libcamera -> GStreamer -> OpenCV pipeline string.
     2. Open the capture and pull frames, stamping each with id and time.
     3. Absorb isolated read failures; raise once the failure budget is spent.
-    4. Optionally write frames to a video file.
 """
 import time
 import warnings
@@ -66,6 +66,7 @@ class FrameData:
 
 class CaptureError(RuntimeError):
     """Raised on any capture or recording failure: open, dead camera, or frame-size mismatch."""
+
 
 class CameraSource:
     """
@@ -185,6 +186,7 @@ class CameraSource:
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+
 
 class VideoSink:
     """Writes BGR frames to a video file. Every frame must match the configured size."""
@@ -330,7 +332,7 @@ def build_gst_pipeline(
     Raises:
         ValueError: For an unknown control name.
     """
-    # ISP outputs BGR format instead of NV21x
+    # format:        BGR straight from the ISP, so no videoconvert
     # sensor-config: pinned mode so field of view doesn't change with output size
     # no videoflip:  the frames come out upside down; orient() turns them (see there for why)
     # appsink:       hold only the newest frame so a slow consumer never reads a stale backlog

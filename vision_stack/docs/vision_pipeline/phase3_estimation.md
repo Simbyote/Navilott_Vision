@@ -147,6 +147,12 @@ A `SensorBatch` gives Phase 3 what it needs: the yaw integrated reading by readi
 
 The MPU-6050 is at 0x68, with the on-chip low-pass filter at 44 Hz to stay under the 50 Hz Nyquist limit of 100 Hz sampling. The hub doesn't calibrate it, so `Phase3Config.gyro_bias_dps` (`phase3_linker --gyro-bias`) carries the bias (`config.GYRO_BIAS_DPS`, which `MEASURED_ESTIMATION`, the main run and every linker share), **in the hub's frame** (after `IMU_YAW_SIGN`; with +1 that's the raw reading at rest). The hub is the only way the IMU and encoders are read: the pipeline, the linkers and `test_imu`'s bench characterization all go through it, and the drivers only answer `read()` / `counts()`.
 
+**One I²C transfer a reading.** `IMUReader.read()` fetches the chip's 14-byte sample block from `ACCEL_XOUT_H` and scales it with the ranges read once at open. The Adafruit driver (`adafruit_mpu6050` 1.3.9) fetched each axis in its own transfer and re-read the range register for `.gyro`: 7 transfers for the two values (strace on the robot, 2026-10-03: 7.3 per tick), 4.6 ms per read at 100 kHz, and the hub's thread giving up and retaking the GIL for every one of them.
+
+**FIFO mode** (`params.IMU_FIFO`). The chip does the sampling instead of a thread: it writes gyro Z and the accel into its 1 KB FIFO at `IMU_RATE_HZ` on its own clock, and the hub's `drain()` takes every sample it holds in two transfers (the count, then the samples). No thread has to wake 100 times a second on time, and the samples are spaced by the chip's clock whatever the scheduler did; each window's are spread over the time that actually passed, held within `FIFO_STEP` of the nominal period. 8 bytes a sample: 128 samples, 1.28 s, before the FIFO overflows; an overflow is reset and counted (`fifo_overflows`), and those samples are lost.
+
+**Real-time priority.** With the IMU polled (FIFO off), the hub's thread asks for `SCHED_FIFO` at `SENSOR_HUB_RT_PRIORITY`, so it wakes on time while Phase 2 keeps the cores busy, and runs at normal priority when it isn't permitted (`setup.mk rt-limits`); `SensorHub.priority` says which it got, and the run's report records it.
+
 Using the encoder readings to control anything (checking that a steering correction actually turned the wheels, speed control, driving a set distance) is Navigation's job, since only Navigation knows what was commanded. Phase 3 only measures the distance.
 
 ---

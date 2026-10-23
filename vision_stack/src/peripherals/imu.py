@@ -1,43 +1,22 @@
-"""MPU-6050 gyro Z and lateral accel: one reading on request, or every sample its FIFO holds, for the sensor hub.
+"""MPU-6050 gyro Z and lateral accel: one reading on request, or every sample its FIFO holds.
 
 Purpose:
-    The IMU driver and nothing above it. sensing.SensorHub calls read() at
-    its own rate (100 Hz) on its own thread, together with the encoders,
-    and groups the readings per camera frame; this module never decides
-    when to sample. calibrate() measures the gyro's zero-rate bias with the
-    robot still (the IMU hardware test's bias figure).
-
-    Each reading is one I2C transfer: the 14-byte sample block from
-    ACCEL_XOUT_H, scaled with the ranges read once at open. The Adafruit
-    driver (adafruit_mpu6050 1.3.9) fetches each axis in its own transfer
-    and .gyro re-reads the range register: 7 transfers for the two values
-    (strace on the robot, 2026-10-03: 7.3 per tick), 4.6 ms per read at
-    100 kHz, and the sensor hub's thread giving up and retaking the GIL for
-    every one of them.
-
-    With fifo (params.IMU_FIFO), the chip does the sampling instead: it
-    writes gyro Z and the accel into its 1 KB FIFO at IMU_RATE_HZ on its
-    own clock, and read_fifo() takes every sample it holds in two
-    transfers (the count, then the samples). The sensor hub calls it once
-    per frame, so no thread has to wake 100 times a second on time, and
-    the samples are exactly 1 / IMU_RATE_HZ apart whatever the scheduler
-    did. 8 bytes a sample: 128 samples, 1.28 s, before the FIFO overflows;
-    an overflow is reset and counted (fifo_overflows), and those samples
-    are lost.
+    The IMU driver and nothing above it: the sensor hub decides when to
+    read. One reading is one I2C transfer of the chip's sample block; with
+    the FIFO on, the chip samples on its own clock and read_fifo() takes
+    every sample since the last call in two transfers
+    (docs/vision_pipeline/phase3_estimation.md, "Sensors").
 
 Main package:
     IMUReader: read() -> (gyro Z deg/s, accel Y m/s^2) in the driver's
-        frame (Z up: + = turning LEFT; this robot's mount is upside down,
-        which sensing's IMU_YAW_SIGN accounts for), calibrate();
-        with fifo: read_fifo() -> [(gyro Z, accel Y), ...] oldest first,
-        fifo_reset(), period_s, fifo_overflows.
+    frame (+ = turning left; sensing's IMU_YAW_SIGN maps it), calibrate(),
+    and with fifo, read_fifo() -> those pairs, oldest first.
 
 Flow:
-    1. IMUReader() opens I2C, sets the on-chip low-pass filter and reads
-       the gyro and accel ranges; with fifo, sets the sample rate and
-       starts the FIFO.
+    1. Open I2C, set the on-chip low-pass filter, read the ranges; with
+       fifo, set the sample rate and start the FIFO.
     2. Optionally calibrate(), robot still: later reads subtract the bias.
-    3. read(), as often as the caller samples; or read_fifo() once per frame.
+    3. read() as often as the caller samples, or read_fifo() once per frame.
 """
 
 import struct

@@ -3,32 +3,20 @@
 Purpose:
     Phase 2 answers "what is in this frame"; Phase 3 answers "what is true
     across the last few frames, given the sensors". A stage belongs here only
-    if it uses history (smoothing, voting, holding) or sensor data; per-frame
-    judgments about pixels belong in Phase 2. Each stage is a small class that
-    owns only its own state, so stages test alone and can't reach into each
-    other. peripherals.imu is never imported (it loads board drivers at
-    import time), so this runs and tests off the Pi.
+    if it uses history (smoothing, voting, holding) or sensor data. Each stage
+    owns only its own state, so stages test alone, and no driver is imported,
+    so it runs off the Pi (docs/vision_pipeline/phase3_estimation.md).
 
 Main package:
-    EstimationPacket: smoothed lane offset and its status, heading change
-    since vision was lost, the voted drive state, stop-sign flag,
-    stop-line flag with its distance, obstacle flag with its distance,
-    sensor pass-throughs (IMU yaw rate and
-    lateral accel, each wheel's encoder counts per second), and the frame
-    identity carried from Phase2Output.
-    with_lane_roi_width(): the lane ROI width the cm scale needs, from Phase
-    2's ROI tuning; the pipeline and phase3_linker both build Phase 3 with it.
+    EstimationPacket: the smoothed lane offset and its status, the heading
+    turned since vision was lost, the voted light, sign, stop line and
+    obstacle, the sensor pass-throughs and odometry, and the frame identity.
 
 Flow (Phase3Processor.process() is the only place the order is written):
-    1. LaneFilter: EMA, per-frame jump gate and dropout hold on the lane offset.
-    2. HeadingTracker: integrate IMU yaw while vision is lost; zero on vision.
-    3. TrafficClassifier: confidence gate and majority vote -> go / caution / stop.
-    4. StopSignClassifier: confidence gate and majority vote -> bool.
-    5. StopLineClassifier: majority vote -> bool, with the distance held
-       through frames that miss the line while the vote stands.
-    6. ObstacleClassifier: the same for the obstacle in the robot's path.
-    7. Odometer: encoder counts -> distance driven, cm (odometry.py).
-    8. Assemble the EstimationPacket.
+    1. LaneFilter, then HeadingTracker: the lane, and the heading while it's lost.
+    2. The votes: traffic light, stop sign, stop line, obstacle.
+    3. Odometer: distance driven.
+    4. Assemble the EstimationPacket.
 """
 from collections import Counter, deque
 from dataclasses import dataclass, replace
@@ -139,12 +127,14 @@ class SensorSample:
             yaw_span_s = getattr(batch, "yaw_span_s", None),
         )
 
+
 @dataclass(frozen=True)
 class LaneEstimate:
     """Output of the lane filter for one frame."""
     offset: float               # smoothed, normalized; the last good value while holding or stale, 0.0 before any measurement
     offset_cm: float | None     # None unless Phase3Config sets the scale
     status: str                 # LANE_VISION | LANE_HOLD | LANE_STALE
+
 
 @dataclass(frozen=True)
 class EstimationPacket:
@@ -224,6 +214,7 @@ class _EMA:
 
     def reset(self) -> None:
         self.value = None
+
 
 class _Vote:
     """

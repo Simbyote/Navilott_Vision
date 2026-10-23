@@ -1,42 +1,22 @@
 """Sensor collection: the IMU and wheel encoders read together, grouped per camera frame.
 
 Purpose:
-    The sensors run faster than the camera (100 Hz against ~20 FPS), so a
-    background thread reads the IMU and both encoder counts together at
-    SENSOR_RATE_HZ, stamps each reading on the camera's clock
-    (time.monotonic), and keeps them until the frame loop drains them. Each
-    frame then gets every reading taken since the previous frame as one
-    SensorBatch, and SensorSample.from_batch() turns that into Phase 3's input.
-    Yaw is put into Estimation's convention (+ = turning right) here, once,
-    with IMU_YAW_SIGN, so nothing downstream knows how the IMU is mounted.
-
-    This module never imports the board drivers or pigpio. SensorHub takes
-    any objects with the drivers' read() / counts(); SensorHub.open() imports
-    the real ones only when asked for, so replays and tests never load them.
+    The sensors run faster than the camera (100 Hz against ~20 FPS), so
+    their readings are collected between frames, stamped on the camera's
+    clock, and handed to each frame as one group, yaw already in Estimation's
+    + = right. Drivers are imported only when asked for, so replays and tests
+    never load them (docs/vision_pipeline/phase3_estimation.md, "Sensors").
 
 Main package:
-    SensorReading: one reading: time, yaw rate, lateral accel, both counts,
-        and how long the IMU read took (imu_ms: I2C plus the GIL, as the
-        thread lived it; diagnostics.i2c_trace has the bus's side).
-    SensorBatch: one frame window's readings, what Phase 3 needs from them
-        (the yaw integrated reading by reading, so a long window loses
-        nothing), and the window's IMU reads: attempted, failed, the slowest.
-    SensorHub: the sampling thread, its buffer, and drain(). Over the real
-        sensors (open()) the thread asks for real-time priority
-        (SENSOR_HUB_RT_PRIORITY); priority says what it got. With an IMU
-        sampling into its own FIFO (IMUReader.fifo, params.IMU_FIFO) there
-        is no thread: drain() reads the FIFO, each sample stamped by the
-        chip's own period.
-    Sensors: what a frame loop uses (src/main.py and every linker): opens and
-        starts a hub, then one read() / sample() per frame.
+    SensorBatch: one frame window's readings, the yaw integrated reading by
+    reading, and the window's IMU read times and failures;
+    SensorSample.from_batch() makes it Phase 3's input.
 
 Flow:
-    1. Sensors(imu=..., encoders=...): SensorHub.open() and start().
-       (Or by hand: SensorHub.open() / SensorHub(imu, encoders), start().)
-    2. Once per frame, sample() (or read() for the batch too): the hub's
-       drain() closes the window with a fresh encoder reading and hands over
-       every reading since the previous one, as a SensorSample.
-    3. stop(): end the thread and release whatever open() opened.
+    1. Sensors(imu=, encoders=) opens a SensorHub and starts it: a 100 Hz
+       thread, or none with the IMU sampling into its FIFO.
+    2. Once per frame, sample() / read(): every reading since the last.
+    3. stop() ends the thread and releases what open() opened.
 """
 import logging
 import threading
