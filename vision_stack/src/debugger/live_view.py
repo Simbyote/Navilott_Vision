@@ -239,8 +239,10 @@ def stage_timing_report(stage_ms: dict[str, list[float]], exclude=()) -> list[st
     Inputs:
         stage_ms: stage name -> per-frame ms, in the order to print. A
             "stage.part" name is a part of that stage (geometry.lanes): it's
-            printed indented under the stage and not added to the total,
-            since the stage's own time already holds it.
+            printed indented under the stage, by its full dotted name, and
+            not added to the total, since the stage's own time already holds
+            it. The dot keeps it out of parsers that read a stage line as a
+            plain name then "med" (the report project's ^\s*(\w+)\s+med).
         exclude: Stages printed but left out of the total (phase3_linker's
             render, which the robot never pays).
     """
@@ -262,7 +264,7 @@ def stage_timing_report(stage_ms: dict[str, list[float]], exclude=()) -> list[st
         part = "." in name
         if name not in exclude and not part:
             total_med += med
-        label = f"  {name.split('.', 1)[1]}" if part else name
+        label = f"  {name}" if part else name
         out.append(f" {label:<22} med {ms(med)}  p95 {ms(p95)}"
                    + ("   (not in total)" if name in exclude else ""))
     out.append(f" {'TOTAL (median)':<22}     {total_med:6.1f}  "

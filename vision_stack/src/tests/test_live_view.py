@@ -326,6 +326,10 @@ def test_a_stages_parts_print_under_it_and_stay_out_of_the_total():
     lines = lv.stage_timing_report({"preprocess": [10.0], "geometry": [20.0], "color": [5.0],
                                     "geometry.edges": [3.0], "geometry.lanes": [9.0], "geometry.sign": [6.0]})
     names = [line.split(" med")[0].strip() for line in lines[1:-1]]
-    assert names == ["preprocess", "geometry", "edges", "lanes", "sign", "color"]
-    assert lines[3].startswith("   edges")                                   # indented under geometry
+    assert names == ["preprocess", "geometry", "geometry.edges", "geometry.lanes", "geometry.sign", "color"]
+    assert lines[3].startswith("   geometry.edges")                          # indented under geometry
     assert " 35.0  ->" in lines[-1]                                          # 10 + 20 + 5: the parts aren't added
+    # A parser that reads "<name> med" lines as stages (the report project's) still sees only the stages
+    import re
+    stages = re.findall(r"^\s*(\w+)\s+med", "\n".join(lines), re.M)
+    assert stages == ["preprocess", "geometry", "color"]
