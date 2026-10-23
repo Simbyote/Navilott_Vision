@@ -1,31 +1,21 @@
 """Phase 1-3 plus the motors: a scripted drive trial that records everything and renders it afterwards.
 
 Purpose:
-    The integration test between driving, the IMU, the encoders and the
-    vision pipeline, ahead of the Navigation state machine. The robot
-    settles, checks the IMU's yaw sign with two short spins, drives a leg
-    kept straight by the encoders and the gyro, turns 180 degrees on the
-    gyro, and drives back (src/maneuver.py holds that logic, hardware-free).
-    Every frame still runs the whole vision chain, reused from the upstream
-    linkers (run_phase3_chain: phase2_linker's run_chain, then the traced
-    Phase 3), but vision only records: it never steers. Nothing is drawn
-    while the robot moves; frames and per-frame records go to disk on a
-    background thread, and the video is rendered once the trial ends or is
-    interrupted.
+    The integration test of driving, the IMU and the encoders (maneuver.py's
+    trial), with the whole vision chain running on every frame so the load
+    is real; vision only records, it never steers. Frames go to disk on a
+    background thread and maneuver.avi is rendered after
+    (docs/guides/maneuver_linker.md).
 
 Main package:
-    run(): one trial; returns its findings (Maneuver.report() plus timing,
-    lane re-acquisition after the turn, and recorder drops). The run folder
-    holds maneuver.csv, p3.csv, frames/, records.pkl, config.json,
-    report.json, summary.txt and, after rendering, maneuver.avi.
+    The run folder: maneuver.csv, p3.csv, report.json and summary.txt (the
+    trial's findings, timing, lane re-acquisition after the turn), frames/
+    and maneuver.avi.
 
 Flow:
-    1. Open the camera, sensors, motors and start button; wait for the press.
-    2. Per frame: read the camera and sensors, step the maneuver, drive the
-       motors, run the vision chain, log, queue the frame for the recorder.
-    3. On the end, an abort or Ctrl-C: stop the motors first, flush the
-       recorder, write the summary.
-    4. Render maneuver.avi from the recording, and play it if there's a display.
+    1. Open the rig; wait for the start.
+    2. Per frame: sensors, the maneuver's command, motors, vision, log.
+    3. Stop the motors first, however it ends; flush; summary; render.
 """
 import argparse
 import csv
@@ -82,18 +72,10 @@ Output (--out DIR, default <root>/runs/maneuver_<timestamp>):
 """
 
 
-# =============================================================================
-# The per-frame record (the recorder is linker_io's)
-# =============================================================================
-
 def _record(res, machine: Maneuver) -> dict:
     """What render_run() needs to redraw this frame: the chain plus the maneuver's record."""
     return {**chain_record(res), "maneuver": dict(machine.record)}
 
-
-# =============================================================================
-# The trial
-# =============================================================================
 
 class Resume:
     """
@@ -345,10 +327,6 @@ def summary_lines(report: dict, cfg: ManeuverConfig) -> list[str]:
                    f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}")
     return out
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 # Flags for the fields people will change most; --set reaches any field
 _FLAGS = {"leg_counts": "--leg-counts", "leg_max_s": "--leg-max-s", "speed": "--speed",

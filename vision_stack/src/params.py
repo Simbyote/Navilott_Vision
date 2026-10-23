@@ -1,23 +1,22 @@
 """Constants that more than one module has to agree on.
 
 Purpose:
-    Hardware facts, file locations, and the names that cross stage boundaries
-    as plain strings. A camera change or a rename happens here once instead of
-    in every file that repeated it, and a typo in a shared name fails as an
-    import error instead of a string that silently never matches.
-
-    Only shared values live here. Tuning stays in each stage's config
-    dataclass (PipelineConfig bundles them), constants used by one module
-    stay in that module next to their reasoning, and anything derivable
-    (ROI rects, lane ROI width) is computed from these, never stored.
+    Hardware facts, file locations, and the names that cross stage
+    boundaries as plain strings. A camera change or a rename happens here
+    once, and a typo in a shared name fails as an import error instead of a
+    string that silently never matches. Tuning stays in each stage's config
+    (config.py bundles it); a constant used by one module stays beside its
+    reasoning there.
 
 Main package:
-    None; module-level constants only.
+    None: module-level constants only.
+
+Flow:
+    None: read at import.
 """
 import math
 from pathlib import Path
 
-# --- Camera ---
 # IMX290 native 1920x1080, 10-bit. Pinned so the field of view doesn't change
 # with output size. A lens calibration is only valid for this mode, the output
 # size, the flip and the lens focus it was captured with.
@@ -63,7 +62,6 @@ PARALLEL_PERCEPTION = False
 GC_DISABLE_IN_RUN = True
 GC_COLLECT_EVERY = 200          # frames, ~10 s at 20 FPS
 
-# --- Paths ---
 # Resolved from this file (<root>/src/params.py) so the working directory never matters
 PIPELINE_ROOT = Path(__file__).resolve().parents[1]
 CALIBRATION_DIR = PIPELINE_ROOT / "calibration"     # camera, HSV and IMU calibrations
@@ -74,16 +72,13 @@ STOP_LINE_TABLE_PATH = CALIBRATION_DIR / "stop_line_table.json"       # stop-lin
 ODOMETRY_PATH = CALIBRATION_DIR / "odometry.json"                     # encoder counts -> cm; scripts/calibrate_odometry.py
 RUNS_DIR = PIPELINE_ROOT / "runs"                   # live_view output, one timestamped folder per run
 
-# --- GPIO (BCM numbers; Product Spec GPIO Table 7) ---
 # One list, so no two modules can claim the same pin. Add the motor driver's here too.
 GPIO_DISPLAY_CLK = 5        # TM1637 clock, header pin 29
 GPIO_DISPLAY_DIO = 6        # TM1637 data, header pin 31
 GPIO_START_BUTTON = 17      # active-high, pull-down, header pin 11
 
-# --- IMU ---
 IMU_I2C_ADDRESS = 0x68      # MPU-6050 with AD0 low
 
-# --- Battery monitor (src/diagnostics/battery.py) ---
 ADS1115_I2C_ADDRESS = 0x48  # ADS1115 with ADDR tied to GND; A0 reads the 4:1 V-Sense divider
 # The ADS1115 converts A0 on its own (continuous mode) and a battery read is
 # two combined I2C transfers, the config checked and the latest result
@@ -106,7 +101,6 @@ IMU_FIFO = True
 # measured with them swapped). Per robot: measure a new mount.
 IMU_YAW_SIGN = 1
 
-# --- Sensor collection (src/peripherals/sensing.py) ---
 # The hub reads the IMU and both encoders together at this rate. It samples
 # the IMU, so it runs at the rate the on-chip filter is set for
 SENSOR_RATE_HZ = IMU_RATE_HZ
@@ -123,7 +117,6 @@ SENSOR_HISTORY_S = 2.0
 # as before. None: never asks
 SENSOR_HUB_RT_PRIORITY = 20
 
-# --- Motor watchdog (src/peripherals/drive.py) ---
 # The run loops command the motors once per frame (~50 ms at FPS; p95 54 ms
 # over a 60 s run, 2026-10-03). If no command arrives for this long, the loop
 # is stuck (the camera stopped delivering frames mid-run that day, and
@@ -139,7 +132,6 @@ MOTOR_WATCHDOG_S = 0.5
 # the Python watchdog alone
 MOTOR_DAEMON_WATCHDOG = True
 
-# --- Wheels and encoders (estimation/odometry.py) ---
 # The nominal scale, used until scripts/calibrate_odometry.py writes
 # ODOMETRY_PATH: a 3.3 cm wheel, and 1400 counts per wheel turn (a 7-pulse
 # encoder behind the N20s' 200:1 gearbox, sold as 12 V, 140 RPM no load;
@@ -151,20 +143,16 @@ WHEEL_DIAMETER_CM = 3.3
 ENCODER_COUNTS_PER_REV = 1400
 NOMINAL_CM_PER_COUNT = math.pi * WHEEL_DIAMETER_CM / ENCODER_COUNTS_PER_REV     # ~0.0074
 
-# --- ROI names (DetectionObject.source_roi) ---
 ROI_LANE, ROI_TRAFFIC, ROI_SIGN = "lane", "traffic", "sign"
 ROI_OBSTACLE = "obstacle"        # the robot's path ahead; perception/obstacle.py
 
-# --- Detection types (candidate labels, DetectionObject.type) ---
 LANE_BOUNDARY = "lane_boundary"
 TRAFFIC_LIGHT = "traffic_light"
 STOP_SIGN = "stop_sign"
 STOP_LINE = "stop_line"          # StopLineCandidate.label; not a DetectionObject type
 
-# --- Traffic light colors (TrafficLightCandidate.label, DetectionObject.label_detail) ---
 RED, YELLOW, GREEN = "red", "yellow", "green"
 
-# --- Lane offset modes (LaneOffsetResult.mode) ---
 MODE_TWO_BOUNDARY = "two_boundary"
 MODE_LEFT_ONLY = "left_only"
 MODE_RIGHT_ONLY = "right_only"
@@ -176,7 +164,6 @@ MODE_NONE = "none"
 # so both must use the same value.
 FOOT_BAND_PX = 6
 
-# --- Debug artifact filename suffixes ---
 # One list, so no two stages can write the same file name.
 UNDISTORT_SUFFIX = "_0_undistorted.png"     # preprocess; the number orders the stages
 GRAY_SUFFIX = "_1_gray.png"

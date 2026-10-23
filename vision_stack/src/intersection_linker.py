@@ -1,34 +1,21 @@
 """Intersection linker: one intersection per run, straight, left or right, with the whole chain driving, recorded and judged.
 
 Purpose:
-    Proves the intersection sequences (intersection.py's to the line, turn,
-    exit) on the mat, one maneuver at a time, before a full course. Each
-    sequence is a navigation_linker run (camera -> Phase 2 -> traced Phase 3
-    -> Navigation -> motors, recorded and rendered afterwards) with a
-    one-step route, so the robot drives exactly as in a course run: it
-    approaches a real stop line, crosses or turns, and the run ends once
-    lane keeping has held the lane on vision for SETTLE_S after the
-    crossing. SequenceWatch follows the run frame by frame and judge() gives
-    each sequence PASS or CHECK: one intersection counted, a turn ended on
-    the gyro (not its time limit), the lane found again, the heading turned
-    within HEADING_TOLERANCE_DEG of the maneuver's (left -90, right +90,
-    straight 0; + = turned right), no command braked for the contract.
+    Proves the intersection sequences on the mat, one maneuver at a time,
+    before a full course. Each is a navigation_linker run with a one-step
+    route, so the robot drives exactly as in a course run, and each is
+    judged PASS or CHECK (docs/guides/intersection_linker.md).
 
 Main package:
-    SequenceWatch: navigation_linker.run's stop_when; ends the run and
-        gathers the findings.
-    judge(): PASS / CHECK and why.
-    run_sequence(): one maneuver, one run folder.
-    cli(): python3 -m src.intersection_linker straight|left|right|all --camera
+    The verdict per sequence: PASS when one intersection counted, the turn
+    ended on the gyro, the lane came back, and the heading turned is within
+    HEADING_TOLERANCE_DEG of the maneuver's.
 
 Flow:
-    1. Per maneuver: place the robot in its lane, the stop line ahead in
-       view; start button (or Enter with --no-button).
-    2. navigation_linker.run with Route((maneuver,)) and a SequenceWatch.
-    3. The run ends (lane held after the crossing, the cap, Ctrl-C, ...);
-       motors stop first. Findings and verdict into the sequence's report.
-    4. runs/intersection_<time>/<maneuver>/ holds each run; summary.txt and
-       report.json beside them sum up every sequence.
+    1. Per maneuver: the robot in its lane, the stop line ahead; the start.
+    2. navigation_linker.run with that one-step route; SequenceWatch ends it
+       once the lane has held SETTLE_S after the crossing.
+    3. The verdict into the sequence's folder; summary.txt and report.json beside them.
 """
 import argparse
 import json

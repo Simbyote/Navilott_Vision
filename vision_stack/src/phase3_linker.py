@@ -1,29 +1,20 @@
 """Phase 1-3 linker: the debug pipeline for capture, perception and estimation, reported as text and video.
 
 Purpose:
-    The estimation test harness. Phase 3's lane filter, dropout hold, heading
-    tracker and votes only mean something across frames, so this runs the
-    whole chain and shows each packet next to the Phase 2 input it came from;
-    a bad packet can then be traced to bad input or bad filtering. It is the
-    instrumented twin of pipeline.Pipeline: Phases 1-2 come from
-    phase2_linker.run_chain() and Phase 3 from
-    estimation_debug.TracedPhase3Processor, which record every decision and
-    time every stage, and the tests hold both to Pipeline's packets. It runs
-    the chain itself, live or from a replay, rather than reading
-    phase2_linker's recordings. The Phase 3 video (debug_phase3) is recorded
-    and shown the way phase2_linker's views are.
+    Phase 3's filters and votes only mean something across frames, so this
+    runs the whole chain and shows each packet next to the Phase 2 input it
+    came from: a bad packet can be traced to bad input or bad filtering. It
+    is the instrumented twin of Pipeline's first two phases, which the tests
+    hold to identical packets (docs/guides/phase3_linker.md).
 
 Main package:
-    Phase3Result: one frame's ChainResult, the EstimationPacket handed to
-    Navigation, Phase 3's debug (the per-stage records and timings), and
-    per-phase timings.
+    Phase3Result: one frame's ChainResult, the EstimationPacket, Phase 3's
+    per-stage records and timings, and per-phase timings.
 
 Flow:
-    FrameSource -> run_chain() -> TracedPhase3Processor.process() -> EstimationPacket
-                   (Phases 1-2)   (Phase 3)
-    Each result goes to p3.csv, the event tracker, the run statistics and,
-    unless turned off, Phase3View (p3_debug.avi / .csv and the window);
-    summary.txt is written when the source ends or the run is interrupted.
+    1. Per frame: run_chain() (Phases 1-2) -> TracedPhase3Processor -> packet.
+    2. Each result to p3.csv, the run statistics and the Phase 3 view.
+    3. summary.txt when the source ends or the run is interrupted.
 """
 import argparse
 import csv
@@ -121,6 +112,7 @@ class Phase3Result:
     p3_debug: dict                  # the processor's debug; TracedPhase3Processor adds per-stage records and timings_ms
     timings_ms: dict = field(default_factory=dict)      # capture, phase2, phase3, total; render added by run() when it draws
 
+
 def run_phase3_chain(
         frame_bgr: np.ndarray,
         frame_id: int,
@@ -166,6 +158,7 @@ def run_phase3_chain(
 def _fmt(v, spec: str, none: str = "--") -> str:
     """Format an optional number."""
     return none if v is None else format(v, spec)
+
 
 def status_line(res: Phase3Result) -> str:
     """
@@ -247,6 +240,7 @@ CSV_COLUMNS = (
     "stop_line_tilt_deg",
     "yaw_deg", "yaw_span_s",
 )
+
 
 class CsvLog:
     """p3.csv: every field of every frame, one row per Phase3Result, in CSV_COLUMNS order."""

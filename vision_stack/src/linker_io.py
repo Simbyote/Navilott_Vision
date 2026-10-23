@@ -2,33 +2,20 @@
 
 Purpose:
     maneuver_linker, navigation_linker and intersection_linker all open the
-    same rig (a camera or a replay, the sensors, the motors, the start
-    button), drive the robot while recording every frame for a video
-    rendered afterwards, and offer a dry run with the motors off. Those
-    pieces live here, so no linker repeats them or imports another one for
-    them. phase3_linker opens its own: no motors or button, sensors by flag.
+    same rig, drive while recording every frame for a video rendered after,
+    and offer a dry run with the motors off. Those pieces live here, so no
+    linker repeats them or imports another for them.
 
 Main package:
-    open_rig(...) -> Rig(source, sensors, motor, system); raises one of
-        OPEN_ERRORS after releasing whatever had opened.
-    release(*things): stop() or close() each that opened.
-    countdown(): the console "starting in 3, 2, 1" when there's no button.
-    FrameRecorder: put(frame_id, frame, record) on a background thread;
-        close() flushes. dropped, written.
-    NoRecorder: FrameRecorder's stand-in that writes nothing (--no-record).
-    NoMotors: drive() / brake() / stop() that do nothing (--no-motors).
-    chain_record(res): one frame's Phase 1-3 result without its images,
-        what debug_maneuver.as_result() redraws the Phase 3 view from.
+    Rig: the source (a camera or a replay), the sensors, the motors (or
+    NoMotors) and the start button, from open_rig(). FrameRecorder writes
+    each frame and its record on a background thread.
 
-Flow (opening the rig): the camera with the sensors, or a video / frame
-    folder without; the motors and the start button only with the camera
-    and when asked for, NoMotors otherwise.
-
-Flow (a recording):
-    1. FrameRecorder(out_dir) makes frames/ and opens records.pkl.
-    2. Per frame: put() copies the frame and queues it with its record; a
-       full queue drops it rather than block the control loop.
-    3. close() writes what's queued, then reports any error the thread hit.
+Flow:
+    1. open_rig(): the camera with sensors, motors and button as asked; a
+       replay without; release what opened if anything fails.
+    2. Per frame: FrameRecorder.put(); a full queue drops rather than block.
+    3. close() writes what's queued and reports any error the thread hit.
 """
 import os
 import pickle
@@ -53,10 +40,6 @@ COUNTDOWN_S = 3         # seconds to step back from the robot when there's no st
 # pigpiod, a missing module off the Pi. Anything else is a bug, not hardware
 OPEN_ERRORS = (CaptureError, OSError, RuntimeError, ImportError)
 
-
-# =============================================================================
-# The rig
-# =============================================================================
 
 class Rig(NamedTuple):
     """What a driving linker runs on. sensors and system are None when not opened."""
@@ -125,11 +108,6 @@ def countdown(seconds: int = COUNTDOWN_S) -> None:
     for n in range(seconds, 0, -1):
         print(f"  starting in {n}")
         time.sleep(1.0)
-
-
-# =============================================================================
-# Recording
-# =============================================================================
 
 
 class FrameRecorder:

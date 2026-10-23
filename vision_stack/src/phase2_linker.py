@@ -1,28 +1,21 @@
 """Phase 1-2 linker: the one place the stage order is written down.
 
 Purpose:
-    Runs a frame through every Phase 1-2 stage in order, so the live view and
-    the tests all go through one chain and can't drift from it. The color
-    branch stays off until calibrated HSV ranges are supplied; lane
-    boundaries and stop signs flow either way. Every stage's tuning comes in
-    as one PipelineConfig from src/config.py, so re-tuning after a camera
-    change is a config swap and a re-run, not a code edit.
+    Runs a frame through every Phase 1-2 stage in order, with every debug
+    dict, so the live view, the other linkers and the tests all go through
+    one chain and can't drift from it; pipeline.py is its debug-free twin.
+    Every stage's tuning arrives as one PipelineConfig.
 
 Main package:
-    ChainResult: every stage's output and debug data for one frame, ending in
-    the Phase2Output handed to Phase 3, plus per-stage timings.
-    warm_up(frame, config): one frame through the chain, thrown away, so a
-    run's first real frame doesn't pay the stages' first-call costs.
+    ChainResult: every stage's output and debug data for one frame, ending
+    in the Phase2Output handed to Phase 3, plus per-stage timings.
 
 Flow:
-    FrameData -> preprocess_frame -> crop_rois -> run_geometry_stage
-              -> run_color_stage -> compute_lane_offset
-              -> compute_stop_line_distance -> compute_obstacle
-              -> fuse_detections -> package_phase2
-
-Command line (options from live_view.cli):
-    python3 phase2_linker.py --video clip.mp4 --no-display
-    python3 phase2_linker.py --frames frames/Sample1
+    1. preprocess -> ROIs -> geometry -> color -> lane offset -> stop line
+       -> obstacle -> fusion -> package (parallel: color and obstacle on a
+       side thread).
+    2. On the command line, the live view over a camera or a replay:
+       python3 -m src.phase2_linker --video clip.mp4 (docs/guides/phase2_linker.md).
 """
 import time
 

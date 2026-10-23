@@ -1,38 +1,22 @@
 """Pipeline tuning: every Phase 2 stage's config as one unit, and the robot's measured values.
 
 Purpose:
-    The one home for tuning. The main pipeline, both linkers, the debuggers
-    and the tests import it from here, so the robot and every tool that
-    checks it run the same numbers. Re-tuning after a camera change is an
-    edit here and a re-run, not a code change. It holds no pipeline code, so
-    importing the tuning never pulls in a stage or a debugger.
-
-    params.py keeps what isn't tuning: hardware facts, paths and shared
-    names. Each stage keeps its own config dataclass next to the code that
-    reads it; PipelineConfig only bundles them.
+    The one home for tuning, so the robot and every tool that checks it run
+    the same numbers; re-tuning after a camera change is an edit here, not a
+    code change. It holds no pipeline code, so importing the tuning never
+    pulls in a stage. params.py keeps what isn't tuning: hardware facts,
+    paths and shared names.
 
 Main package:
-    PipelineConfig: preprocess, ROI, geometry, color, lane-offset,
-        stop-line distance and obstacle tuning, and the ground homography
-        (frame px -> floor cm) the cm outputs project through.
-        Its defaults are each stage's own defaults: no undistortion, color
-        branch off.
-    MEASURED: the robot's Phase 2 tuning. Undistorts with the lens
-        calibration, runs the color branch with the calibrated HSV ranges,
-        and uses the lane gates from the candidate sweep.
-    MEASURED_ESTIMATION: the robot's Phase 3 tuning (Phase3Config), kept
-        apart from PipelineConfig because run_chain and the Phase 2 parity
-        tests take Phase 2 tuning only.
+    MEASURED: the robot's Phase 2 tuning (a PipelineConfig: each stage's
+    config, the ground homography and the stop-line table), and
+    MEASURED_ESTIMATION, its Phase 3 tuning (a Phase3Config).
 
-Flow:
-    Import-time only. MEASURED reads calibration/hsv_ranges.json once, when
-    this module is first imported, and fails then if the file is missing or
-    malformed rather than on the first frame. It also loads
-    calibration/ground_homography.json once, checked against MEASURED's own
-    preprocess settings; missing or mismatched, it warns and leaves ground
-    None, which only turns the cm outputs off. MEASURED_ESTIMATION reads
-    calibration/odometry.json the same way: missing, distances are None. The
-    lens calibration is stored as a path and read by preprocess on first use.
+Flow, at import only:
+    1. The HSV ranges load, and fail now if missing, not on the first frame.
+    2. The ground homography and the stop-line table load if they match how
+       preprocess runs; otherwise a warning and no cm.
+    3. The odometry scale loads, else the nominal wheel scale.
 """
 import warnings
 from dataclasses import dataclass, field
@@ -55,10 +39,6 @@ from src.perception.stop_line_distance import StopLineDistanceConfig
 from src.perception.stop_line_table import StopLineTable, load_stop_line_table
 
 
-# =============================================================================
-# Config bundle
-# =============================================================================
-
 @dataclass(frozen=True)
 class PipelineConfig:
     """Every stage's tuning as one unit."""
@@ -74,10 +54,6 @@ class PipelineConfig:
     stop_line_table: StopLineTable | None = None
     obstacle: ObstacleConfig = field(default_factory=ObstacleConfig)
 
-
-# =============================================================================
-# The robot's tuning
-# =============================================================================
 
 # Lane gates revised from the 4827-candidate CSV sweep rather than from course
 # dimensions. min_proximity sat above the observed median of 0.17 and killed
@@ -182,10 +158,10 @@ if MEASURED.ground is None and MEASURED.stop_line_table is None:
 # Gyro Z at rest, deg/s, in the sensor hub's frame (+ = turning right, after
 # IMU_YAW_SIGN): the one bias every yaw reading is corrected by before it's
 # integrated, in Phase 3's heading, the intersection's heading hold and the
-# drive trial. The 2026-09-29 phase3_linker run read -0.90 raw at rest; it was
-# +1.1 while IMU_YAW_SIGN was -1, and with IMU_YAW_SIGN = 1 (2026-10-01) the
-# hub frame is the raw one. Re-measure, robot still: maneuver_linker prints
-# it ("gyro bias at rest ... measured"), as does test_imu --hardware (bias_dps)
+# drive trial. -0.90 raw at rest (2026-09-29 phase3_linker run; with
+# IMU_YAW_SIGN = 1 the hub's frame is the raw one). Re-measure, robot still:
+# maneuver_linker prints it ("gyro bias at rest ... measured"), as does
+# test_imu --hardware (bias_dps)
 GYRO_BIAS_DPS = -0.90
 
 # Phase 3: estimation.Phase3Config's defaults until course runs tune them,

@@ -2,25 +2,20 @@
 
 Purpose:
     maneuver_linker's control logic, kept apart from the camera, the motors
-    and the sensors so it runs and tests anywhere. Each call to step() gets
-    one frame's sensor readings and returns one motor command; nothing here
-    sleeps or blocks, so the camera keeps running through every maneuver.
-    Straightness and the turn rely on the encoders and the IMU only; vision
-    is recorded by the linker and never steers. This is a test of the drive,
-    IMU and encoder integration, not the Navigation state machine.
+    and the sensors so it runs and tests anywhere. Each step() gets one
+    frame's sensor readings and returns one motor command, never blocking.
+    It tests the drive, IMU and encoder integration: vision never steers.
 
 Main package:
-    Maneuver: step(Tick) -> Command, the per-frame record, and report(), the
-    trial's findings (gyro bias at rest, yaw sign, each leg, the 180 turn).
+    Maneuver: step(Tick) -> Command per frame, and report(), the trial's
+    findings (gyro bias at rest, yaw sign, each leg, the 180 turn).
 
 Flow:
     1. SETTLE: still; measure the gyro bias and the lateral-accel baseline.
-    2. PULSE_LEFT / PULSE_RIGHT: short spins each way; their yaw sets the sign.
-    3. FORWARD: straight on encoder and gyro corrections, to leg_counts (capped by leg_max_s).
-    4. STOP, TURN (gyro angle to 180, slowing near it), TURN_SETTLE (overshoot).
-    5. FORWARD back, STOP, DONE. Any safety check ends in ABORTED, motors off.
-    With hold on, the robot brakes at HOLD after the pulses, each leg and the
-    turn, until resume(), so each step can be measured by hand.
+    2. PULSE_LEFT / PULSE_RIGHT: short spins each way set the yaw sign.
+    3. FORWARD, STOP, TURN 180 on the gyro, FORWARD back, STOP, DONE.
+    Any safety check ends in ABORTED, motors off; with hold on, the robot
+    brakes after each step until resume().
 """
 import math
 from dataclasses import dataclass, field
@@ -100,8 +95,6 @@ class Tick:
     right_cps: float
 
 
-
-
 @dataclass
 class _Leg:
     start_t: float
@@ -150,10 +143,6 @@ class Maneuver:
     @property
     def done(self) -> bool:
         return self.step_name in (DONE, ABORTED)
-
-    # -------------------------------------------------------------------------
-    # One frame
-    # -------------------------------------------------------------------------
 
     def step(self, tick: Tick) -> Command:
         """
@@ -315,10 +304,6 @@ class Maneuver:
             return still, self._finish_turn(tick)
         return still, ""
 
-    # -------------------------------------------------------------------------
-    # Steps
-    # -------------------------------------------------------------------------
-
     def _decide_sign(self, tick: Tick) -> str:
         """+1 when a commanded left spin reads + yaw. Both pulses must move and disagree in sign."""
         left, right = self._pulses["left_deg"], self._pulses["right_deg"]
@@ -393,10 +378,6 @@ class Maneuver:
             t["reason"] = (f"final {final:.1f} deg outside {cfg.turn_target_deg:.0f} "
                            f"+/- {cfg.turn_tolerance_deg:.0f}")
         return self._go(FORWARD_2, tick) + f" (turn {'PASS' if t['success'] else 'FAIL'} {final:.1f} deg)"
-
-    # -------------------------------------------------------------------------
-    # Findings
-    # -------------------------------------------------------------------------
 
     def report(self) -> dict:
         """What the trial found; sections it never reached are missing."""

@@ -2,35 +2,21 @@
 
 Purpose:
     What the robot runs. It declares the flow and nothing else: each stage
-    is a call into the file that owns it (the production twins of Phase 2,
-    Phase 3's processor, the navigation subsystem and the command contract),
-    so no frame pays for the overlays, traces and debug dicts the linkers
-    build. phase2_linker, phase3_linker and navigation_linker stay as the
-    instrumented debuggers of the same flow; test_pipeline holds them to
-    identical results, so neither side can drift. Nothing here reads or
-    writes a file per frame: tuning arrives once, as a PipelineConfig and
-    Phase3Config from src/config.py, and the route as a Route.
+    is a call into the file that owns it, so no frame pays for the overlays,
+    traces and debug dicts the linkers build. The linkers stay as the
+    instrumented twins of the same flow, and test_pipeline holds them to
+    identical results. Nothing here touches a file per frame.
 
 Main package:
-    Pipeline: one run's config, Phase 3 and Navigation state, and stage flow.
-        perceive(frame, frame_id, timestamp_ms) -> Phase2Output      (Phases 1-2)
-        estimate(phase2, sensors)               -> EstimationPacket  (Phase 3)
-        navigate(packet)                        -> Command           (Navigation)
-        step(frame, frame_id, timestamp_ms, sensors) -> Command      (all three)
-        finished: Navigation has ended the run.
+    Pipeline: one run's config, Phase 3 and Navigation state;
+    step(frame, frame_id, timestamp_ms, sensors) -> Command, or perceive /
+    estimate / navigate one phase at a time.
 
 Flow:
-    FrameData -> preprocess_frame -> crop_rois -> detect_geometry
-              -> detect_color -> estimate_lane_offset
-              -> estimate_stop_line_distance -> estimate_obstacle -> fuse
-              -> package_phase2 -> Phase2Output
-              -> Phase3Processor.process -> EstimationPacket
-              -> Navigation.update -> enforce -> Command
-    Phase 3 and Navigation each run as one stage: their internal order
-    belongs to estimation.py and navigation.py. Driving the motors with the
-    Command is the caller's (the run loop's) last stage.
-    Stage timing is opt-in (Pipeline(timing=True)); off, the flow pays one
-    branch per stage and last_timings_ms stays empty.
+    1. Phase 2: preprocess, ROIs, geometry, color, lane offset, stop line,
+       obstacle, fusion, package (parallel: color and obstacle on a side thread).
+    2. Phase 3: Phase3Processor.process -> EstimationPacket.
+    3. Navigation.update -> enforce -> Command; the caller drives the motors.
 """
 import time
 

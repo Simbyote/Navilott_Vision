@@ -6,10 +6,12 @@ Purpose:
     without pulling in anything else.
 
 Main package:
-    clamp(), check_same_frame(), check_frame_size().
-    code_version(): the commit the code is at, and whether it has uncommitted changes.
-    Laps: per-stage wall time, for the pipeline's opt-in stage timing.
-    GcWatch: the garbage collector frozen before a control loop and timed in it.
+    None: helpers. The two that carry state are Laps (per-stage wall time,
+    the pipeline's opt-in stage timing) and GcWatch (the garbage collector
+    frozen before a control loop and timed in it).
+
+Flow:
+    None: each helper is called where it's needed.
 """
 import subprocess
 import time
@@ -60,6 +62,7 @@ def check_same_frame(geometry, roi, stage: str) -> None:
             f"{(geometry.frame_id, geometry.timestamp_ms)} does not match roi stamp "
             f"{(roi.frame_id, roi.timestamp_ms)} — candidates are from different frames"
         )
+
 
 def check_frame_size(frame, size: tuple[int, int] | None, stage: str) -> None:
     """

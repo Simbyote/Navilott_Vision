@@ -1,43 +1,22 @@
 """Phases 1-3 plus Navigation: the whole chain driving the robot, recorded and rendered afterwards.
 
 Purpose:
-    The integration test of the Navigation step, ahead of adding it to
-    pipeline.py. Every frame runs capture, Phase 2 and the traced Phase 3
-    (run_phase3_chain, reused from phase3_linker), hands the packet to the
-    Navigation subsystem (navigation.Navigation: the stop sign, traffic light
-    and intersection rules over lane keeping, which is everything behind it),
-    checks the Command against the contract, and drives the motors with it. Nothing is drawn while the robot
-    drives: frames and per-frame records go to disk on linker_io's
-    background recorder, and nav.avi is rendered once the run ends, so the
-    run measures the real control loop.
-
-    The motors only run with the camera. --no-motors is a bench dry run, and
-    --video / --frames replays are always dry: they show what the navigator
-    would have commanded on recorded footage.
+    The instrumented twin of the production run: every frame through
+    capture, Phase 2, the traced Phase 3 and Navigation, the command checked
+    against the contract and driven. Nothing is drawn while it drives, so the
+    run measures the real control loop; nav.avi is rendered after. Replays
+    and --no-motors are dry runs (docs/guides/navigation_linker.md).
 
 Main package:
-    run(): one run; returns its findings. The run folder holds nav.csv,
-    p3.csv, frames/, records.pkl, report.json, summary.txt and, after
-    rendering, nav.avi.
-    NavStats: the [NAVIGATION] summary: how the run ended, which rule decided
-    how many frames, time driving and braked (and why), steering, command
-    latency, the IMU's read times and reads per frame (nav.csv: imu_reads,
-    imu_read_ms, imu_failed), and the battery (start, lowest, end, and how
-    long its ADC reads take) when it's monitored.
+    The run folder: nav.csv (every frame), p3.csv, report.json and
+    summary.txt (how the run ended, which rule decided, steering, latency,
+    sensors, battery), frames/ and nav.avi.
 
 Flow:
-    1. Open the source, sensors, motors and start button; wait for the press.
-    2. Per frame: read the camera and sensors, run the vision chain, ask the
-       navigator, check the command, drive the motors, log, queue the frame.
-    3. On the navigator finishing (end of course), the run-time cap, a
-       critical battery, the source ending, the caller's stop_when, Ctrl-C or
-       an error: stop the motors first, flush the recorder, write the summary.
-
-    The battery (diagnostics.battery_run), with the camera only: judged at
-    rest before the start (a critical pack refuses to drive the motors; a
-    low one, or any pack on a dry run, only warns), watched from the start,
-    and logged per frame in nav.csv (battery_v, battery_state).
-    4. Render nav.avi from the recording, and play it if there's a display.
+    1. Open the rig; check the battery at rest; wait for the start.
+    2. Per frame: sensors, vision, Navigation, contract check, motors, log.
+    3. Stop the motors first, however it ends; flush the recorder; summary.
+    4. Render nav.avi.
 """
 import argparse
 import csv
@@ -93,6 +72,7 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
               "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
 
+
 def wheel_columns(rec: dict, wheels) -> dict:
     """
     nav.csv's wheel-speed columns: the turn's target counts/s (blank off a
@@ -134,10 +114,6 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
     frames/, records.pkl   what the video is rendered from
 """
 
-
-# =============================================================================
-# Findings
-# =============================================================================
 
 def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen: int = -1) -> str:
     """
@@ -253,10 +229,6 @@ def read_stats(ms: list[float]) -> dict | None:
     return {"n": int(a.size), "p50": round(float(np.percentile(a, 50)), 3),
             "p95": round(float(np.percentile(a, 95)), 3), "max": round(float(a.max()), 3)}
 
-
-# =============================================================================
-# The run
-# =============================================================================
 
 def run(
         source,
@@ -534,10 +506,6 @@ def run(
         raise error
     return report
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 def cli(argv: list[str] | None = None) -> int:
     """

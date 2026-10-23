@@ -1,49 +1,22 @@
 """Production run: the start button, the course, the time on the display. Nothing recorded.
 
 Purpose:
-    What the robot runs on the course: python3 -m src.main. It reads and
-    checks the route, prints the plan and shows its step count on the
-    display ("St 3"), waits for the start button and the countdown, then
-    drives: every camera frame goes through Pipeline.step() (Phases 1-3 and
-    Navigation) and the Command it returns goes to the motors, the last
-    stage. The display shows the elapsed time while it drives. Nothing is
-    recorded or written: the linkers are the instrumented twins
-    (navigation_linker for this whole chain).
-
-    How a run ends, motors first (brake, then standby) every time:
-        finished          the route's finish: the final time stays up.
-        ended early       the lane lost before the route was done: the
-                          display alternates "E  N" (N = the step reached)
-                          and the time until Ctrl-C.
-        run time cap      MAX_RUN_S, a backstop in case the end is never
-                          seen: alternates "E  t" and the time, as above.
-        battery critical  the pack fell to CRITICAL (Power.should_stop):
-                          alternates "Lo-b" and the time, as above.
-        Ctrl-C            the time so far stays up.
-        error             "Err " stays up; the traceback is printed.
-
-    The battery (diagnostics.battery_run): checked at rest before the start
-    screen, where a critical pack refuses to start ("Lo-b", exit 2) and a
-    low one warns, then watched during the run. Without the ADC it says so
-    and runs unmonitored.
+    What the robot runs on the course (python3 -m src.main): every frame
+    through Pipeline.step(), its Command to the motors. Nothing is recorded:
+    the linkers are the instrumented twins. Every way a run ends stops the
+    motors first, and the display says which it was
+    (docs/guides/production_run.md).
 
 Main package:
-    run(): one run, from the button to the halt; returns a RunResult.
-    end_screen(): what the display shows after it, and for how long.
-    cli(): opens the hardware and runs it.
+    RunResult: how the run ended (finished, ended early, the time cap, a
+    critical battery, Ctrl-C, an error), its time and the step it reached.
 
 Flow:
-    1. load_route(), print the plan; open the camera, sensors, motors and
-       display; build the Pipeline. A bad route or missing hardware exits 2
-       before anything moves; so does a critical pack at rest.
-    2. One frame through Phase 2 and thrown away (Pipeline.warm_up), so
-       the first driving frame skips the first-call costs; then "St N" until
-       the button, then the countdown.
-    3. Per frame: camera -> Pipeline.step(frame, sensors) -> motors; time on
-       the display; until Navigation finishes, the cap, a critical battery,
-       Ctrl-C or an error.
+    1. Load and print the route; open the hardware; check the battery at rest.
+    2. Warm Phase 2 up on one frame; "St N" until the button; the countdown.
+    3. Per frame: camera -> Pipeline.step() -> motors; time on the display.
     4. Halt the motors, release the camera and sensors.
-    5. The end screen; release the display without blanking it.
+    5. The end screen, left up.
 """
 import argparse
 import sys
