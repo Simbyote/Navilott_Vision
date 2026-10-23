@@ -2,20 +2,17 @@
 
 Purpose:
     Lets anchor selection and gating be reviewed frame by frame after a run
-    with no monitor on the robot. Two ways in share one drawing: LaneView,
-    the view live_view runs, and DebugVideoWriter, for a loop that has the
-    stage outputs in hand but no chain result. 
-    Importing this module doesn't import lane_offset; only candidate_gates() 
-    does, at its first call, so annotate() works anywhere the stage outputs do and no
-    import cycle with the stage is possible.
+    with no monitor on the robot. LaneView (what live_view runs) and
+    DebugVideoWriter (for a loop with the stage outputs but no chain result)
+    share one drawing. Only candidate_gates() imports lane_offset, at its
+    first call, so annotate() works anywhere and no import cycle is possible.
 
 Main package:
-    The annotated frame from annotate(): the lane ROI outline, every raw
-    candidate (green usable, red with its gate), a tick at each usable
-    anchor's foot, the selected left (cyan) and right (magenta) boundaries,
-    the robot at ROI center (gray) and the implied lane center (yellow; red
-    when the offset is clamped at +/-1), under a header with the mode, an
-    offset gauge, counts and decision tags.
+    The annotated frame from annotate(): every raw candidate (green usable,
+    red with its gate), the chosen left (cyan) and right (magenta)
+    boundaries, the robot (gray) and the lane center (yellow; red when the
+    offset is clamped), under a header with the mode, an offset gauge and
+    decision tags (docs/guides/phase2_linker.md).
 
 Flow:
     1. Pair each raw candidate with the gate that rejected it (candidate_gates).
@@ -69,9 +66,11 @@ LANE_CSV_FIELDS = ("frame_id", "timestamp_ms", "mode", "offset", "left_x",
 
 _TAG_RE = re.compile(r"^\[([A-Z-]+)\]")
 
+
 def log_tags(log: list[str]) -> Counter:
     """Counter of the [TAG] that opens each debug log entry."""
     return Counter(m.group(1) for m in map(_TAG_RE.match, log) if m)
+
 
 def load_source_frame(path: str, lane_rect: tuple[int, int, int, int],
                       frame_size: tuple[int, int] = FRAME_SIZE) -> np.ndarray | None:
@@ -104,12 +103,14 @@ def load_source_frame(path: str, lane_rect: tuple[int, int, int, int],
         img = cv2.resize(img, frame_size, interpolation=cv2.INTER_AREA)
     return img
 
+
 def _blank(lane_rect, frame_size):
     """Dark canvas with the lane ROI a shade lighter, for drawing without a source frame."""
     img = np.full((frame_size[1], frame_size[0], 3), 25, np.uint8)
     x, y, w, h = lane_rect
     img[y:y + h, x:x + w] = 55
     return img
+
 
 def _csv_row(result, dbg):
     """One decision-log row, in LANE_CSV_FIELDS order."""
@@ -122,6 +123,7 @@ def _csv_row(result, dbg):
         dbg.get("raw_count", ""), result.boundary_count,
         *(tags.get(t, 0) for t in LOG_TAGS),
     ]
+
 
 def candidate_gates(geometry, config) -> list[tuple[tuple[int, int, int, int], str | None]]:
     """
@@ -161,6 +163,7 @@ def candidate_gates(geometry, config) -> list[tuple[tuple[int, int, int, int], s
             gate = parts[1] if len(parts) > 1 else "rejected"
         pairs.append((cand.bbox, gate))
     return pairs
+
 
 def annotate(frame: np.ndarray | None, result, dbg: dict,
              lane_rect: tuple[int, int, int, int], candidates=(), scale: int = 1,
@@ -259,6 +262,7 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
         x += cv2.getTextSize(label, FONT, fs, th)[0][0] + 10 * s
 
     return img
+
 
 class LaneView:
     """
@@ -361,6 +365,7 @@ class LaneView:
 
     def row(self, data):
         return _csv_row(data["result"], data["dbg"])
+
 
 class DebugVideoWriter(dv.ViewWriter):
     """

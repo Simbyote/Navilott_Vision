@@ -2,23 +2,15 @@
 
 Purpose:
     Lets the stop-line gates be checked on real footage, apart from the lane
-    view. The top panel is the lane ROI with every top edge the detector
-    fitted: accepted lines as the band between their paired edges, rejected
-    edges in red with the gate that stopped them. The line stop_line_distance
-    measured is outlined in white with its distance to the ROI bottom, and
-    lane candidates lane_offset skipped because they lie on a stop line are
-    boxed in amber. The bottom panel is the gradient split itself: every
-    Canny edge in gray, the kept top edges (brightness rising going down) in
-    cyan and bottom edges in magenta, with the fitted lines over them. If a
-    line is missed, the bottom panel says whether its edges survived the
-    split; the top panel says which gate refused it.
-
-    Coordinates are lane-ROI-relative. The threshold, when given, stands in
-    for stop_line_distance's min_confidence, so a line can be amber here and
+    view. The top panel says which gate refused a line; the bottom panel,
+    the gradient split, says whether its edges survived to the gates at all
+    (docs/guides/phase2_linker.md). The threshold, when given, stands in for
+    stop_line_distance's min_confidence, so a line can be amber here and
     still be a geometry candidate.
 
 Main package:
-    StopLineView: implements the view interface in debug_video.
+    StopLineView: implements the view interface in debug_video, in
+    lane-ROI coordinates.
 
 Flow:
     1. Pull the stop-line debug, candidates, measurement and lane-offset skips from the chain.
@@ -64,10 +56,6 @@ class StopLineView(dv.CandidateView):
         self._skipped = 0
         self._best_conf = []
         self._counts = {}
-
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
 
     def extract(self, chain, frame=None) -> dict:
         """
@@ -172,10 +160,6 @@ class StopLineView(dv.CandidateView):
             for gate, v in sorted(rej.items(), key=lambda kv: -kv[1]):
                 out.append(f"  {gate:<20}{v:6}")
         return out
-
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
 
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)

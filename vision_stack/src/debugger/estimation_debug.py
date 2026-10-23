@@ -2,21 +2,16 @@
 
 Purpose:
     estimation.py is what the robot runs, and it carries no debug beyond its
-    log strings. This is phase3_linker's instrumented copy of the same flow,
-    as run_chain is Phase 2's. Each Traced* stage subclasses its production
-    stage and calls the production update(), so the filter and vote math
-    exist in one place; the subclass only reads state before and after the
-    call and the inputs, and leaves the decision in .record.
-    TracedPhase3Processor repeats Phase3Processor.process()'s order with a
-    lap per stage. test_estimation_debug holds its packets identical to the
-    production processor's. Nothing here draws; pipeline.py never imports it.
+    log strings; this is phase3_linker's instrumented copy, as run_chain is
+    Phase 2's. Each Traced* stage subclasses its production stage and calls
+    the production update(), so the math exists once; test_estimation_debug
+    holds its packets identical to the production processor's. pipeline.py
+    never imports it (docs/vision_pipeline/phase3_estimation.md).
 
 Main package:
-    TracedPhase3Processor.process(phase2, sensors) -> (packet, debug)
-        debug holds Phase3Processor's fields (frame_id, timestamp_ms, dt,
-        log), one record per stage (lane, heading, traffic, stop_sign,
-        stop_line, obstacle, odometry; see each Traced* class, and
-        Odometer.record) and timings_ms per stage.
+    TracedPhase3Processor.process(phase2, sensors) -> (packet, debug): debug
+    holds Phase3Processor's fields, one record per stage (each Traced*
+    class's .record) and timings_ms per stage.
 
 Flow:
     dt -> lane -> heading -> traffic -> stop sign -> stop line -> obstacle -> odometry -> packet,
@@ -113,6 +108,7 @@ def _gated(detections, kind: str, gate: float) -> list[dict]:
         "bbox": d.bounding_box,
         "source_rect": d.source_rect,
     } for d in detections if d.type == kind]
+
 
 def _vote_record(vote, detections=None) -> dict:
     """The vote after this frame's update: raw (the sample just added), buffer, window, state."""

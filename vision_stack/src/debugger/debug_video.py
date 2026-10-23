@@ -1,19 +1,16 @@
 """Shared recording, drawing and interface pieces for the debug views.
 
 Purpose:
-    Everything view-agnostic. Each view (debug_lane on the source frame,
-    debug_stop on the sign ROI, debug_traffic on the traffic ROI) records
-    through ViewWriter and draws with draw_text and the shared palette.
-    Nothing here imports a pipeline stage or another view.
+    Everything view-agnostic: each view records through ViewWriter and
+    draws with draw_text and the shared palette. Nothing here imports a
+    pipeline stage or another view.
 
 Main package:
     The view interface. live_view runs any object that has:
 
         name                        short id, used in file names and the window
         CSV_FIELDS                  header row of the view's CSV
-        extract(chain, frame=None)  pull this view's data out of a chain result;
-                                    frame is the source frame, ignored by views
-                                    that draw on their own ROI
+        extract(chain, frame=None)  this view's data from a chain result
         observe(data)               accumulate run statistics, every frame
         render(data, scale) -> img  the picture
         row(data) -> list           one CSV row
@@ -50,6 +47,7 @@ STATE_COLORS = {"pass": C_USABLE, "low": C_AMBER, "reject": C_RED}
 REPORT_THRESHOLDS = (0.30, 0.40, 0.50, 0.60, 0.70)    # summary.txt: share of frames passing at each
 GAP_PX = 6                                            # between panels, before zoom
 
+
 def draw_text(img: np.ndarray, s: str, org: tuple[int, int], color: tuple[int, int, int],
               fs: float, th: int = 1) -> None:
     """Label with a black outline underneath, so it stays readable over white tape."""
@@ -58,9 +56,11 @@ def draw_text(img: np.ndarray, s: str, org: tuple[int, int], color: tuple[int, i
 
 _text = draw_text
 
+
 def offset_x(v: float, x0: int, x1: int) -> int:
     """x of a [-1, 1] value on an offset bar running from x0 to x1; clamped to the ends."""
     return int(x0 + (clamp(v, -1.0, 1.0) + 1) / 2 * (x1 - x0))
+
 
 def draw_offset_axis(img: np.ndarray, x0: int, x1: int, y: int, tick: int,
                      color: tuple[int, int, int] = C_GRAY) -> None:
@@ -69,6 +69,7 @@ def draw_offset_axis(img: np.ndarray, x0: int, x1: int, y: int, tick: int,
     for v in (-1.0, 0.0, 1.0):
         tx = offset_x(v, x0, x1)
         cv2.line(img, (tx, y - tick), (tx, y + tick), color, 1)
+
 
 class CandidateView:
     """

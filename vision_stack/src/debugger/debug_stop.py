@@ -4,17 +4,14 @@ Purpose:
     Lets the sign filter be calibrated on its own, apart from the lane view.
     Fusion forwards the best valid stop sign at any confidence; the threshold
     here stands in for whatever Phase 3 applies, so a sign can be amber here
-    and still be in Phase2Output.detections. Without a trace (the chain ran
-    with trace=False) the view still draws accepted candidates and says so,
-    but can't show rejected contours. Coordinates are sign-ROI-relative.
+    and still be in Phase2Output.detections. Without a trace (trace=False)
+    only accepted candidates are drawn, and the view says so.
 
 Main package:
-    The rendered panel pair: the color sign ROI with every traced contour
-    beside the redness image the detector thresholded, with its red mask
-    outlined and the threshold used, under a header with pass / low /
-    rejected counts, the best candidate and whether fusion passed a stop
-    sign on, over a footer of this frame's per-gate rejection counts. Only
-    the largest red blob is gated; the others are labeled "smaller".
+    The rendered panel pair, in sign-ROI coordinates: the color ROI with
+    every traced contour labeled by its gate ("smaller" for blobs never
+    gated because a larger one passed), beside the redness image with its
+    red mask and threshold (docs/guides/phase2_linker.md).
 
 Flow:
     1. Pull the sign debug, accepted candidates and fused stop sign from the chain.
@@ -31,6 +28,7 @@ from src.params import STOP_SIGN
 GATE_SHORT = {"area": "area", "not_largest": "smaller", "vertices": "vert", "hull": "hull",
               "solidity": "sol", "aspect": "aspect", "extent": "extent", "letters": "letters"}
 C_MASK = (255, 255, 0)      # cyan: the red mask's outline on the redness panel
+
 
 class StopView(dv.CandidateView):
     """

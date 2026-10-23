@@ -1,29 +1,17 @@
 """Phase 3 view: what Phase 2 handed to Phase 3, and what Phase 3 did with it, frame by frame.
 
 Purpose:
-    phase3_linker's video. Phase 3 only acts across frames (EMA, jump gate,
+    phase3_linker's video. Phase 3 acts only across frames (EMA, jump gate,
     hold, votes), so a wrong packet is either bad input or a filter doing
-    what it was told. This view puts both on one picture: the Phase 2 lane
-    overlay (debug_lane.annotate, as in run.avi) with each traffic light and
-    stop sign re-colored by its Phase 3 fate, then the lane filter's decision,
-    the three votes and a scrolling timeline where "output held while the
-    input moved" shows as a flat filtered trace over a moving raw one.
-    It reads the records TracedPhase3Processor leaves in the debug dict;
-    nothing here re-derives a decision.
+    what it was told; this puts both on one picture. It reads the records
+    TracedPhase3Processor leaves in the debug dict, so nothing here
+    re-derives a decision. Panels: docs/guides/phase3_linker.md.
 
 Main package:
     Phase3View: implements the view interface in debug_video, on a
-    phase3_linker.Phase3Result instead of a chain result.
-
-    Top        camera frame under the lane overlay's header (padded, so the
-               header hides nothing), lane overlay; traffic / sign boxes green when
-               they passed the gate, amber below it, labeled "conf >= gate"
-    Lane bar   [-1, 1]: raw offset (hollow; red when gated), filtered offset
-               (filled); background by status; hold counter n/max and reason
-    Votes      traffic, stop sign, stop line: the vote buffer as cells
-               (oldest left), this frame's raw vote and the state
-    Timeline   the last ~5 s: status band, raw and filtered offset, then
-               drive state, stop sign and stop line tracks
+    phase3_linker.Phase3Result instead of a chain result. Four panels: the
+    lane overlay with each light and sign colored by its Phase 3 fate, the
+    lane filter's bar, the votes, and a ~5 s timeline.
 
 Flow:
     extract() pulls the Phase3Result apart, observe() adds the frame to the
@@ -51,8 +39,9 @@ def _raw_measured(lane: dict) -> bool:
     """True when this frame's raw offset is a measurement (a usable mode), gated or not."""
     return lane["reason"] not in (NO_RESULT, UNUSABLE_MODE)
 
+
 def _cell_color(kind: str, value) -> tuple[int, int, int]:
-    
+
     if kind == "traffic":
         return DRIVE_COLORS.get(value, dv.C_GRAY)
     if kind == "stop_sign":
@@ -99,10 +88,6 @@ class Phase3View:
         self._line_held = 0
         self._obstacle_frames = 0
         self._obstacle_held = 0
-
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
 
     def extract(self, res, frame=None) -> dict:
         """
@@ -197,10 +182,6 @@ class Phase3View:
         out.append(f" frames with a held stop-line distance   {self._line_held}")
         out.append(f" frames with an obstacle in the path     {self._obstacle_frames}  (held {self._obstacle_held})")
         return out
-
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
 
     def render(self, data, scale: int = 1) -> np.ndarray:
         """The four panels stacked, as wide as the frame at this scale."""

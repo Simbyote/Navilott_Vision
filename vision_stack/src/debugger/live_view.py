@@ -1,14 +1,12 @@
 """Live view: run a frame source through the pipeline and show and record what it decided.
 
 Purpose:
-    The debug harness for whole-pipeline runs. Pulls frames from a camera,
-    video or image directory, hands each to a process callable, and runs
-    every view on the result: draws it with debug_video, records it, and
-    optionally shows it. The window and the recording show the same picture,
-    and output is written with or without a display, so a run on the robot
-    can be reviewed later. The stage order is injected as `process`, so
-    phase2_linker can import this module without a cycle, and nothing here
-    is specific to one view.
+    The debug harness for whole-pipeline runs: frames from a camera, video
+    or image folder go through an injected `process` callable, and every
+    view draws, records and optionally shows the result. The window and the
+    recording are the same picture, written with or without a display, so a
+    run on the robot can be reviewed later. `process` is injected so
+    phase2_linker can import this without a cycle.
 
 Main package:
     RunStats: run-wide frame and detection counts, per-stage timings, and one
@@ -126,6 +124,7 @@ class FrameSource:
     def close(self) -> None:
         pass
 
+
 class CameraFrameSource(FrameSource):
     """Live capture. Opens the camera on construction and keeps capture's own stamp."""
     def __init__(self, width: int, height: int, fps: int, controls: dict | None = None) -> None:
@@ -142,6 +141,7 @@ class CameraFrameSource(FrameSource):
 
     def close(self) -> None:
         self.cam.release()
+
 
 class VideoFrameSource(FrameSource):
     """Recorded video file. fps=None uses the file's own rate, or FPS if it doesn't report one."""
@@ -164,6 +164,7 @@ class VideoFrameSource(FrameSource):
 
     def close(self) -> None:
         self.cap.release()
+
 
 class DirectoryFrameSource(FrameSource):
     """Image sequence, sorted by filename. Unreadable files are skipped without using a frame id."""
@@ -311,6 +312,7 @@ class StageLog:
     def close(self) -> None:
         self._f.close()
 
+
 class Display:
     """
     Preview window with pause, still capture and view switching.
@@ -406,6 +408,7 @@ class Display:
 def _video_name(view) -> str:
     """The lane view keeps the historical run.avi / run.csv names."""
     return "run.avi" if view.name == "lane" else f"run_{view.name}.avi"
+
 
 def run(source: FrameSource, process: Callable, lane_config, out_dir: str,
         display: bool = True, scale: int = 1, stride: int = 1,
@@ -508,6 +511,7 @@ def write_summary(path: str, source: FrameSource, stats: RunStats) -> None:
         f.write(f"source: {source.label}\n")
         f.write(f"fusion: {'on' if stats.fusion_seen else 'off'}\n\n")
         f.write("\n".join(stats.report()) + "\n")
+
 
 def cli(runner: Callable, argv: list[str] | None = None) -> int:
     """

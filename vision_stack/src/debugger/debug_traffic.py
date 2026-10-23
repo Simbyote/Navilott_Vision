@@ -1,32 +1,17 @@
 """Traffic-light view: what the color branch saw and decided on the traffic ROI.
 
 Purpose:
-    Lets the HSV ranges and blob filter be calibrated on their own. The masks
-    are the calibration surface, so they sit beside the picture, not behind
-    it, and the best candidate's mean HSV shows how close it sits to a band
-    edge: a blob at the edge of a band is one lighting change from vanishing.
-    Fusion keeps the single highest-confidence light across all three colors
-    at any confidence, and confidence is area only, so the largest blob wins;
-    the threshold here stands in for whatever Phase 3 applies. With the color
-    branch off the view says so instead of drawing, and uncalibrated ranges
-    are flagged. Coordinates are traffic-ROI-relative.
-
-    In glow mode (MEASURED's color branch, ColorConfig.glow set) the light
-    isn't a blob: it's the clipped-white spot with the most white, named by
-    the band that holds the most of its 2 px ring. So the mask column adds
-    the white mask on top, each spot is labelled with the glow gate that
-    decided it (white, shape, ring, smaller) and with its ring's winning
-    share, and the footer and report count those gates instead of area and
-    aspect. A lit LED with no box means no white was clipped (exposure); a
-    box labelled "ring" means white with no band around it (glare, or a band
-    edge); a red LED labelled yellow is a ring hue problem.
+    Lets the HSV ranges and the light's gates be calibrated on their own.
+    The masks are the calibration surface, so they sit beside the picture,
+    and the best candidate's mean HSV shows how close it sits to a band edge:
+    one lighting change from vanishing. In glow mode (MEASURED's, ColorConfig
+    .glow set) each clipped-white spot is labelled by the glow gate that
+    decided it. How to read both modes: docs/guides/phase2_linker.md.
 
 Main package:
-    The rendered panel: the traffic ROI with every traced blob, beside the
-    red, yellow and green masks, tinted, with pixel counts, under a header
-    with pass / low / rejected counts, the best candidate and whether fusion
-    passed a light on, over a footer of blobs seen / accepted per color.
-    In glow mode the white mask sits above the three color masks.
+    The rendered panel, in traffic-ROI coordinates: the ROI with every
+    traced blob or spot, beside the color masks (the white mask on top in
+    glow mode), under a header with the counts and the best candidate.
 
 Flow:
     1. Pull the color debug, accepted candidates and fused light from the chain.
@@ -46,6 +31,7 @@ WHITE_TINT = (255, 255, 255)                     # the glow white mask's tint
 GLOW_GATES = ("white", "shape", "ring", "smaller")
 # color branch gate names, shortened for labels
 GATE_SHORT = {"area": "area", "aspect": "asp"}
+
 
 class TrafficView(dv.CandidateView):
     """

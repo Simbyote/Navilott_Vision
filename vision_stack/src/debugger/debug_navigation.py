@@ -2,21 +2,16 @@
 
 Purpose:
     navigation_linker draws nothing while the robot drives, so rendering
-    can't slow the control loop. It records each frame's JPEG and a record of
-    what the pipeline and the navigator decided; this module turns the run
-    folder into video afterwards: the Phase 3 view (debug_phase3) exactly as
-    the live decisions were, with a navigation strip under it. Nothing is
-    re-run, so the video shows what happened, not a re-computation. The
-    recording format (frames/, records.pkl) is maneuver_linker's, read with
-    debug_maneuver's helpers.
+    can't slow the control loop. This turns its run folder (frames/,
+    records.pkl: maneuver_linker's format, read with debug_maneuver's
+    helpers) into video afterwards, the Phase 3 view with a navigation strip
+    under it. Nothing is re-run, so the video shows what happened
+    (docs/guides/navigation_linker.md).
 
 Main package:
-    render_run(): run folder in, nav.avi and nav_video.csv out.
-    draw_strip(): the strip for one frame: DRIVE or BRAKE and why, which
-    navigation rule decided it, the stop-line phase, the route step and the
-    intersection's stage (to_line, turn, exit), both
-    wheel duties as bars (with the stall duty marked), the steering and what
-    it came from, and the packet fields the navigator steered by.
+    render_run(): run folder in, nav.avi and nav_video.csv out; draw_strip()
+    is one frame's strip (the decision and its rule, the route step and
+    stage, both wheel duties, the steering and the packet it came from).
 
 Flow:
     1. Read records.pkl in order; load each frame's JPEG (skipping any the

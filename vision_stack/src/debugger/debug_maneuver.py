@@ -2,20 +2,14 @@
 
 Purpose:
     maneuver_linker draws nothing while the robot moves, so rendering can't
-    slow the control loop. It records each frame's JPEG and a pickled record
-    of what the pipeline decided (the lane result, Phase 3's packet and
-    per-stage records, the maneuver step and motor commands). This module
-    turns a run folder into video afterwards: the Phase 3 view (debug_phase3)
-    exactly as the live decisions were, with a strip under it for the
-    maneuver. Nothing is re-run, so the video shows what happened, not a
-    re-computation.
+    slow the control loop: it records each frame's JPEG and a pickled
+    record of what the pipeline decided. This turns a run folder into video
+    afterwards, the Phase 3 view with a maneuver strip under it. Nothing is
+    re-run, so the video shows what happened, not a re-computation
+    (docs/guides/maneuver_linker.md).
 
 Main package:
     render_run(): run folder in, maneuver.avi and maneuver_video.csv out.
-    The strip: step (colored by kind) and the event that changed it, motor
-    commands with the encoder and heading corrections, each wheel's counts
-    per second, and a bar: leg progress to leg_counts on a leg, turn angle to
-    the target (with the pass band) in the turn.
 
 Flow:
     1. Read records.pkl in order; load each frame's JPEG (skipping any the

@@ -3,21 +3,14 @@
 Purpose:
     Lets the obstacle detector's thresholds and gates be checked on real
     footage (make phase2 VIEWS=obstacle). The top panel is the obstacle ROI
-    in color with every not-floor pixel tinted, each blob that survived the
-    opening boxed by its fate (green: passed, red: the gate that stopped it)
-    and the measured one in white, with an arrow from its base to the view
-    bottom and its distance. The bottom panel is the two masks: gray is not
-    floor, white is what survived the opening. A missed obstacle shows in
-    the bottom panel as never not-floor (too dark, no color: lower
-    min_contrast or min_chroma) or as removed by the opening (narrower
-    than open_px); a false one shows in the top panel with what it really
-    was. The lane ROI's top edge is drawn across both, since distances are
-    counted from the lane ROI's bottom.
-
-    Coordinates are obstacle-ROI-relative.
+    with each surviving blob boxed by its fate and the measured one's
+    distance; the bottom panel is the not-floor and opened masks, which say
+    whether a missed obstacle was never seen or opened away
+    (docs/guides/phase2_linker.md).
 
 Main package:
-    ObstacleView: implements the view interface in debug_video.
+    ObstacleView: implements the view interface in debug_video, in
+    obstacle-ROI coordinates.
 
 Flow:
     1. Pull the obstacle result and its debug (masks, blobs, counts) from the chain.
@@ -57,10 +50,6 @@ class ObstacleView(dv.CandidateView):
         self._distances_cm = []
         self._floor = []
         self._counts = {}
-
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
 
     def extract(self, chain, frame=None) -> dict:
         """
@@ -140,10 +129,6 @@ class ObstacleView(dv.CandidateView):
             for gate, v in sorted(rej.items(), key=lambda kv: -kv[1]):
                 out.append(f"  {gate:<20}{v:6}")
         return out
-
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
 
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)

@@ -1,28 +1,17 @@
 """Lane-geometry view: every contour the lane detector traced, and who refused it.
 
 Purpose:
-    The lane view (debug_lane) shows what lane_offset decided on the frame.
-    This one shows the step before, on the lane ROI: every contour the lane
-    detector traced, colored by the stage that decided it. Red contours were
-    refused by geometry's own gates (area, aspect, span, intensity), which
-    the lane view never draws; amber ones were accepted by geometry and
-    refused by lane_offset (confidence, proximity, length, width, intensity,
-    or lying on a stop line); green ones are usable boundaries, and the two
-    chosen as left and right are marked at their foot. If a lane line is
-    missing, the color says which stage lost it and the label says why.
-
-    The bottom panel is the edge map the contours came from: every Canny
-    edge in gray, the edges the horizontal-line filter took out (a stop line
-    across the lane) in red, the edges the lane detector kept in white, and
-    what the closing step added between them in blue. Contours that join
-    things they shouldn't, like a lane line and a stop line, show here.
-
-    Coordinates are lane-ROI-relative. Rejected contours need the chain's
-    trace (trace=True, which live_view uses); without it only the candidates
-    geometry accepted are drawn, and the footer says so.
+    The lane view shows what lane_offset decided; this shows the step before.
+    Each contour is colored by the stage that decided it: red, geometry's own
+    gates (which the lane view never draws); amber, lane_offset's; green,
+    usable. A bottom panel shows the edge map the contours came from. If a
+    lane line is missing, the color says which stage lost it and the label
+    says why (docs/guides/phase2_linker.md). Rejected contours need the
+    chain's trace (trace=True); without it the footer says so.
 
 Main package:
-    LaneGeometryView: implements the view interface in debug_video.
+    LaneGeometryView: implements the view interface in debug_video, in
+    lane-ROI coordinates.
 
 Flow:
     1. Pull the lane trace, edge maps, candidates and the lane result from
@@ -74,10 +63,6 @@ class LaneGeometryView(dv.CandidateView):
         self._geo = {}
         self._offset = {}
         self._filtered_frames = 0
-
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
 
     def extract(self, chain, frame=None) -> dict:
         """
@@ -169,10 +154,6 @@ class LaneGeometryView(dv.CandidateView):
             for g, c in sorted(self._offset.items(), key=lambda kv: -kv[1]):
                 out.append(f"  {g:<20}{c:6}")
         return out
-
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
 
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)
