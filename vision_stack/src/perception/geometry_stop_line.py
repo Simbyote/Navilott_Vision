@@ -1,17 +1,21 @@
 """Stop lines from the gray lane ROI: near-horizontal edges paired top with bottom.
 
 Purpose:
-    The lane ROI's Canny edges (the same map the lane detector reads), split
-    by gradient direction so only edges of near-horizontal lines remain,
-    then split into top (dark to bright going down) and bottom edges, each
-    fitted, top paired with bottom and gated by length, tilt, thickness and
-    brightness. One of geometry's three detectors; geometry.detect_geometry()
-    runs it. The distance to the line is stop_line_distance's job.
+    A stop line's edges run across the lane, so their gradient points up or
+    down where a lane line's points sideways. Splitting the shared Canny
+    edges by gradient keeps only lines near horizontal, before any contour
+    can join a stop line to the lane lines it touches. The distance to the
+    line is stop_line_distance's job.
 
 Main package:
-    find_stop_line_candidates(): production, candidates only.
-    extract_stop_line_candidates(): the same with a trace, for the debug
-        views and tests.
+    StopLineCandidate: one painted line: its ends, near row (y_near_px),
+    tilt, thickness, brightness, confidence, and whether it runs off the
+    bottom of the view (clipped: the robot is on it).
+
+Flow:
+    1. Split the edges into top and bottom edges of near-horizontal lines.
+    2. Fit each edge; join pieces broken by lane tape.
+    3. Pair each top edge with a bottom edge below it; gate the pairs.
 """
 import math
 
@@ -49,6 +53,7 @@ class _EdgeSegment:
     def length_px(self) -> float:
         return (self.x1 - self.x0) / math.cos(math.atan(self.slope))
 
+
 def _fit_segment(
         points: np.ndarray,
     ) -> _EdgeSegment | None:
@@ -60,6 +65,7 @@ def _fit_segment(
     if abs(vx) < 1e-6:
         return None
     return _EdgeSegment(points, x0, x1, float(cx), float(cy), float(vy / vx))
+
 
 def _edge_segments(
         mask: np.ndarray,
@@ -102,6 +108,7 @@ def _edge_segments(
         joined.append(seg)
     return joined
 
+
 def _stop_line_confidence(
         length_px: float,
         tilt_deg: float,
@@ -113,6 +120,7 @@ def _stop_line_confidence(
     intensity_score = clamp((mean_intensity - f.min_intensity) / max(255.0 - f.min_intensity, 1.0), 0.0, 1.0)
     square_score = clamp(1.0 - abs(tilt_deg) / max(f.max_tilt_deg, 1e-6), 0.0, 1.0)
     return round(clamp(0.5 * length_score + 0.3 * intensity_score + 0.2 * square_score, 0.0, 1.0), 4)
+
 
 def _stop_line_from(
         top: _EdgeSegment,
@@ -209,6 +217,7 @@ def _stop_line_from(
         proximity = round(clamp(min(y_near, float(roi_h)) / max(roi_h, 1), 0.0, 1.0), 4),
     ), "accepted"
 
+
 def extract_stop_line_candidates(
         lane_roi: np.ndarray,
         edges_raw: np.ndarray,
@@ -263,6 +272,7 @@ def extract_stop_line_candidates(
         "trace": trace,
         "bottoms": [ends(b) for b in bottoms],
     }
+
 
 def find_stop_line_candidates(
         lane_roi: np.ndarray,

@@ -1,24 +1,22 @@
 """Feature fusion: one frame's branch candidates as a single list of detections.
 
 Purpose:
-    The geometry and color branches run independently and emit their own
-    candidate types in their own ROI spaces. Fusion converts them into the
-    single Phase 2 DetectionObject schema, resolves conflicts within each
-    class, and logs every discard and suppression. color_branch is
-    deliberately not imported, so lane and sign fusion work without it.
+    The geometry and color branches emit their own candidate types in their
+    own ROI spaces. Fusion converts them into the one Phase 2 detection
+    schema, resolves conflicts within each class and logs every discard. It
+    doesn't import color_branch, so lane and sign fusion work without it.
 
 Main package:
-    FusionResult: the frame's surviving DetectionObjects, ordered traffic
-    light, lane boundaries by descending confidence, stop sign, and stamped
-    with the ROICropResult's frame identity. Positions are ROI-local; each
-    detection carries the rect that maps it into the frame.
+    FusionResult: the frame's surviving DetectionObjects (traffic light,
+    lane boundaries by descending confidence, stop sign) with the frame
+    identity. Positions are ROI-local; each detection carries the rect
+    that maps it into the frame.
 
 Flow:
     1. Check that the geometry result and the ROI crop share a frame stamp.
-    2. Traffic light: keep the highest-confidence valid candidate.
+    2. Traffic light and stop sign: keep each class's most confident valid candidate.
     3. Lane boundaries: forward every valid candidate, by descending confidence.
-    4. Stop sign: keep the highest-confidence valid candidate.
-    5. Package with the frame identity and a debug summary.
+    4. Package with the frame identity and a debug summary.
 """
 
 import cv2
@@ -65,6 +63,7 @@ class DetectionObject:
     frame_id: int
     timestamp: int                              # the frame's capture time in ms, not a branch clock
 
+
 @dataclass(frozen=True)
 class FusionResult:
     """Output of the fusion stage. frame_id and timestamp_ms are copied from ROICropResult, never re-derived."""
@@ -82,11 +81,13 @@ def _centroid(
     cy = float(y) + float(h) / 2.0 if h > 0 else float(y)
     return {"x": round(cx, 2), "y": round(cy, 2)}
 
+
 def _valid_confidence(
         c: float
     ) -> bool:
     """True for a confidence in [0, 1]. NaN fails."""
     return 0.0 <= c <= 1.0
+
 
 def _best_candidate(
         candidates: list,
@@ -108,6 +109,7 @@ def _best_candidate(
         return None
     return max(valid, key=lambda c: c.confidence)
 
+
 def _pick_best(
         candidates: list,
     ):
@@ -118,6 +120,7 @@ def _pick_best(
         return None
     return max(valid, key=lambda c: c.confidence)
 
+
 def _rects(
         roi: ROICropResult
     ) -> dict[str, tuple[int, int, int, int]]:
@@ -127,6 +130,7 @@ def _rects(
         ROI_TRAFFIC: roi.traffic_rect,
         ROI_SIGN: roi.sign_rect,
     }
+
 
 def _detection(
         det_type: str,
@@ -308,6 +312,7 @@ _TYPE_COLORS = {
     LANE_BOUNDARY: (0,  255,  0),   # green
     STOP_SIGN:     (0,    0, 255),  # red
 }
+
 
 def draw_fusion_overlay(
         canvas: np.ndarray,

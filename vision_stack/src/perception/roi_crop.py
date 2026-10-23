@@ -1,23 +1,19 @@
-"""Region-of-interest cropping that splits each frame into per-branch inputs.
+"""ROI cropping: each branch's region of the preprocessed frame, as read-only views.
 
 Purpose:
-    Partitions the preprocessed frame into four regions before the pipeline
-    splits into parallel branches. Cropping shrinks the pixel area each
-    branch processes and removes irrelevant scenery, which lowers the
-    false-positive rate before any threshold is applied.
+    Each branch looks only where its target can be: the lane on the floor
+    ahead, the traffic light top-center, signs to the right, obstacles in
+    the robot's path. Cropping before any threshold shrinks each branch's
+    work and keeps unrelated scenery from becoming false positives.
 
 Main package:
-    ROICropResult: lane and sign ROIs cut from the gray frame, a traffic ROI
-    and a second sign ROI (sign_color_roi, same rect) cut from the color
-    frame (HSV thresholding and the sign's redness mask need chroma), the
-    obstacle ROI (the path ahead) from both, and
-    each ROI's rect in source pixels so
-    ROI-space detections can be mapped back to the frame. ROIs are read-only
-    views, not copies.
+    ROICropResult: the lane, sign, traffic and obstacle ROIs as read-only
+    views (gray, color or both, as each branch needs), each ROI's rect in
+    frame px to map detections back, and the frame identity.
 
 Flow:
     1. Check that the gray and color frames share (H, W).
-    2. Resolve each fractional ROIBounds to pixel coordinates.
+    2. Resolve each fractional ROIBounds to pixels.
     3. Slice each ROI as a read-only view; carry the frame identity forward.
 """
 import numpy as np
@@ -51,20 +47,18 @@ class ROIBounds:
 
 # Bottom strip of the frame: the near-field road surface
 LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
-# Top-center, around the course's light as seen from its stop line
-# (2026-10-06: the board spans x 142-208, y 28-55 px at 480x270). Kept
-# narrow: to the right, ~x 270, a second traffic light read yellow while
-# this one was green; below, a red box on a shelf. It runs to the top of the
-# frame: stopped further forward (at a stop sign) the light rises out of a
-# y0 of 0.09. The clear panel above the board reflects each lit LED ~30 px
-# higher (red's reads yellow), but with the swept bands the frames at the
-# stop still read 139 of 139 right with it in view (2026-10-06)
+# Top-center, around the course's light as seen from its stop line (the board
+# spans x 142-208, y 28-55 px at 480x270, 2026-10-06). Narrow: to the right
+# (~x 270) a second traffic light read yellow while this one was green, and
+# below is a red box on a shelf. Up to the frame's top: stopped further
+# forward, at a stop sign, the light rises out of a lower y0. The clear panel
+# above the board reflects each lit LED ~30 px higher (red's reads yellow),
+# yet with the swept bands the frames at the stop read 139 of 139 right
 TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
-# Upper-right: signs are posted right of the lane. From the frame's top since
-# 2026-10-20 (0.20 from 2026-09-28): near the line the sign rises in the
-# frame, and the ROI's top edge cut it into 5-7 vertices from ~20 cm in
-# (sign_check on a course run). The traffic ROI ends at x 0.53, so the two
-# don't overlap
+# Upper-right: signs are posted right of the lane. Up to the frame's top: near
+# the line the sign rises in the frame, and a top edge at 0.20 cut it into 5-7
+# vertices from ~20 cm in (sign_check, 2026-10-20). Starts right of the
+# traffic ROI's x 0.53, so the two don't overlap
 SIGN = ROIBounds(x0=0.55, y0=0.00, x1=1.00, y1=0.85)
 # The robot's path ahead (perception/obstacle.py): the middle half of the
 # frame, where the robot's own body will go, from the bottom of the view up
@@ -104,7 +98,7 @@ class ROICropResult:
     timestamp_ms: int
     source_shape: tuple[int, int]               # (H, W) the ROIs were cut from
     # The sign ROI again, from the color frame: the stop sign is found by color.
-    # The gray sign_roi is no longer read by any stage; a view costs nothing to keep
+    # No stage reads the gray sign_roi; a view costs nothing to keep
     sign_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect as sign_rect
     # The path ahead, from both frames: brightness from gray, saturation from
     # color (perception/obstacle.py). crop_rois always fills all three
@@ -151,6 +145,7 @@ def resolve(
     y_end = min(max(round(bounds.y1 * H), y + 1), H)
     return (x, y, x_end - x, y_end - y)
 
+
 def crop(
         frame: np.ndarray,
         bounds: ROIBounds
@@ -184,7 +179,7 @@ def crop_rois(
     traffic and the sign again from color, the obstacle ROI from both.
 
     Inputs:
-        config: ROI bounds. Defaults to LANE, TRAFFIC and SIGN.
+        config: ROI bounds. Defaults to LANE, TRAFFIC, SIGN and OBSTACLE.
 
     Outputs:
         ROICropResult, with frame_id and timestamp_ms carried forward unchanged.
@@ -233,6 +228,7 @@ LANE_COLOR = (0, 0, 255)
 TRAFFIC_COLOR = (0, 255, 0)
 SIGN_COLOR = (255, 0, 0)
 RECT_THICKNESS = 1
+
 
 def draw_roi_overlay(
         frame: np.ndarray,

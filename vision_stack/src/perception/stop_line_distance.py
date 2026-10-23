@@ -1,37 +1,22 @@
 """Stop-line distance: how far ahead of the robot the nearest stop line is.
 
 Purpose:
-    Turns geometry's stop-line candidates into one measurement per frame.
-    Geometry only detects; this module measures, the way lane_offset
-    measures lateral error from the same geometry result. The two are
-    siblings over one frame:
-
-        crop_rois -> geometry -+-> compute_lane_offset       -> lateral error
-                               +-> compute_stop_line_distance -> distance ahead
-
-    Two distances come out. distance_px counts lane-ROI rows from the line's
-    nearest point to the ROI bottom, and needs no calibration. distance_cm is
-    the floor distance forward from the robot reference point to where the
-    line's near edge crosses the robot's centerline (X = 0), through the
-    ground homography (perception/ground.py). Without one it comes from the
-    stop-line table (perception/stop_line_table.py): distance_px through a
-    curve fit to tape marks, forward distance only, measured from wherever
-    the marks were. None when there's neither. A line the robot is on
-    (clipped at the ROI bottom) measures 0 in both.
+    Geometry only detects; this module measures, turning stop-line
+    candidates into one distance per frame the way lane_offset turns lane
+    candidates into a steering error. distance_px needs no calibration;
+    distance_cm comes from the ground homography, else the stop-line table
+    (docs/vision_pipeline/phase2_perception.md, "Stage 4B").
 
 Main package:
-    StopLineResult: whether a stop line was found, its distance_px and
-    distance_cm, how close it is as a [0, 1] proximity, its ends, tilt and
-    confidence, and the frame identity. One per frame; detected False when
-    there is none.
+    StopLineResult: whether a line was found, distance_px and distance_cm
+    (0 once the line is under the robot), a [0, 1] proximity, the line's
+    ends, tilt and confidence. One per frame; detected False when none.
 
 Flow:
     1. Gate each candidate by confidence.
     2. Keep the one nearest the robot (largest y_near_px).
     3. distance_px = lane ROI height - y_near_px.
-    4. distance_cm: with a homography, the near edge's two ends to frame px
-       (add the lane ROI origin), to the floor, then the crossing with X = 0;
-       otherwise the stop-line table at distance_px.
+    4. distance_cm: the homography at the robot's centerline, else the table.
 """
 import math
 from dataclasses import dataclass
@@ -42,10 +27,6 @@ from src.perception.roi_crop import ROICropResult
 from src.perception.stop_line_table import StopLineTable
 from src.utils import check_same_frame
 
-
-# =============================================================================
-# Config and result
-# =============================================================================
 
 @dataclass(frozen=True)
 class StopLineDistanceConfig:
@@ -73,16 +54,11 @@ class StopLineResult:
     candidate_count: int            # candidates geometry found, before the confidence gate
     frame_id: int
     timestamp_ms: int
-    # Floor cm forward of the robot reference to where the near edge crosses
-    # the robot's centerline (or, from the stop-line table, cm ahead of where
-    # its marks were measured from); 0 when on it. None without either
+    # Floor cm from the robot reference to where the near edge crosses the robot's centerline;
+    # from the stop-line table, cm ahead of where its marks were measured from. 0 on it, None without either
     distance_cm: float | None = None
     proximity: float = 0.0          # [0, 1] y_near_px / ROI height; 1.0 = at the ROI bottom
 
-
-# =============================================================================
-# Measurement
-# =============================================================================
 
 def _nothing(count: int, frame_id: int, timestamp_ms: int) -> StopLineResult:
     return StopLineResult(
@@ -91,6 +67,7 @@ def _nothing(count: int, frame_id: int, timestamp_ms: int) -> StopLineResult:
         candidate_count = count, frame_id = frame_id, timestamp_ms = timestamp_ms,
         distance_cm = None, proximity = 0.0,
     )
+
 
 def _table_cm(c: StopLineCandidate, roi: ROICropResult, table: StopLineTable | None) -> float | None:
     """
@@ -102,6 +79,7 @@ def _table_cm(c: StopLineCandidate, roi: ROICropResult, table: StopLineTable | N
     if c.clipped:
         return 0.0
     return round(table.to_cm(max(roi.lane_rect[3] - c.y_near_px, 0.0)), 2)
+
 
 def _distance_cm(
         c: StopLineCandidate,
@@ -128,6 +106,7 @@ def _distance_cm(
                                      (rx + c.x_right, ry + edge(c.x_right)))
     return None if y is None else round(max(y, 0.0), 2)
 
+
 def _measure(
         c: StopLineCandidate,
         roi: ROICropResult,
@@ -151,6 +130,7 @@ def _measure(
         distance_cm = _distance_cm(c, roi, ground, table),
         proximity = c.proximity,
     )
+
 
 def compute_stop_line_distance(
         geometry: GeometryBranchResult,

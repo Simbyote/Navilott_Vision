@@ -1,23 +1,22 @@
 """Phase 2 output packaging: one frame's results as the Phase 3 contract.
 
 Purpose:
-    The last Phase 2 stage and the contract boundary with Phase 3. It does no
-    computation, filtering or decision logic: it collects fusion's detections,
-    the lane offset, the stop-line distance and the obstacle, checks that they belong to the same frame, and
-    packages them into one predictable object. Frame identity lives on the
-    container, so a frame with no detections is still identifiable.
+    The last Phase 2 stage and the contract boundary with Phase 3. It
+    computes nothing: it collects one frame's detections and measurements,
+    checks that they belong to that frame, and packages them. Frame identity
+    lives on the container, so a frame with no detections is still
+    identifiable.
 
 Main package:
-    Phase2Output: the frame's detections exactly as fusion ordered them, its
-    lane offset, stop-line and obstacle results, the frame identity and a detection count. Phase 3
-    should steer lane-keeping from lane_offset_results, not from lane_boundary
-    positions: those are bbox centroids, and for an angled marking that isn't
-    where the marking meets the robot.
+    Phase2Output: fusion's detections in fusion's order, the lane offset,
+    stop-line and obstacle results, and the frame identity. Phase 3 steers
+    from lane_offset_results, not from lane_boundary positions: those are
+    bbox centroids, which for an angled marking aren't where it meets the robot.
 
 Flow:
     1. Take the detections and frame stamp from the FusionResult.
-    2. Wrap the lane offset, stop-line and obstacle results in lists (empty if there is none).
-    3. Check list types, required fields, per-item stamps and detection_count.
+    2. Wrap each measurement in a list (empty when there is none).
+    3. Check list types, required fields, per-item stamps and the count.
 """
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -69,13 +68,9 @@ class Phase2Output:
     frame_id: int
     timestamp_ms: int
     detection_count: int | None = None              # None computes len(detections); a mismatch is rejected (F3)
-    # One per frame from the chain (detected False when none); [] if none supplied.
-    # Distance to the nearest stop line: a measurement, like the lane offset,
-    # so it travels beside detections rather than as one
+    # Measurements, like the lane offset, so they travel beside detections, not as
+    # them: one per frame from the chain (detected False when none), [] if none supplied
     stop_line_results: list[StopLineResult] = field(default_factory=list)
-    # One per frame from the chain (detected False when none); [] if none
-    # supplied. The nearest obstacle in the robot's path: a measurement, like
-    # the stop line's, so it travels beside detections too
     obstacle_results: list[ObstacleResult] = field(default_factory=list)
 
     def __post_init__(self):
@@ -109,6 +104,7 @@ class Phase2Output:
                 f"Phase2Output: detection_count {self.detection_count} does "
                 f"not match len(detections) {n}"
             )
+
 
 def _check_items(
         kind: str,

@@ -1,17 +1,16 @@
-"""Frame conditioning that feeds the geometry and color branches.
+"""Preprocessing: one captured frame into the gray and color frames the branches read.
 
 Purpose:
-    Conditions each captured BGR frame before ROI cropping splits the
-    pipeline into branches. Owns the BGR -> gray conversion: the geometry
-    branch rejects 3-channel input, so the conversion happens here and
-    nowhere else. Lens undistortion also lives here, ahead of the split, so
-    both branches see the same corrected geometry.
+    Owns everything done to the whole frame before ROI cropping splits the
+    pipeline: lens undistortion, so every branch sees the same corrected
+    geometry, and the BGR -> gray conversion, which happens here and nowhere
+    else (the geometry branch rejects 3-channel input).
 
 Main package:
-    PreprocessResult: a blurred gray frame for the lane and sign ROIs, a
-    blurred BGR frame for the traffic and color sign ROIs (HSV thresholding
-    and the sign's redness need the chroma that gray discards), the unblurred undistorted frame that detection
-    coordinates refer to, and the frame identity carried from capture.
+    PreprocessResult: a blurred gray frame (lane and sign ROIs), a blurred
+    BGR frame (traffic, sign color and obstacle ROIs, which need chroma), the
+    unblurred undistorted frame that detection coordinates refer to, and the
+    frame identity.
 
 Flow:
     1. Validate the frame and blur kernels.
@@ -45,7 +44,7 @@ class PreprocessParams:
     # it bought in contrast. Kept so the report comparison can be regenerated.
     # Turning it on invalidates the LaneContourFilter.min_intensity tuning.
     equalize: bool = False
-    # JSON from tools/calibrate_camera.py; None disables undistortion. Only
+    # JSON from scripts/calibrate_camera.py; None disables undistortion. Only
     # valid for the resolution, sensor mode, flip and focus it was captured at.
     calibration_path: str | None = None
     # [0, 1]. 0.0 crops to valid pixels. Higher keeps more field of view but
@@ -81,6 +80,7 @@ def _validate_frame(
         )
     if frame.dtype != np.uint8:
         raise TypeError(f"preprocess: expected uint8, got {frame.dtype}")
+
 
 def _validate_kernel(
     kernel: tuple[int, int],
@@ -133,6 +133,7 @@ def _undistort_maps(
     size = (width, height)
     new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, size, alpha, size)
     return cv2.initUndistortRectifyMap(K, dist, None, new_K, size, cv2.CV_16SC2)
+
 
 def undistort(
     frame: np.ndarray,
@@ -188,6 +189,7 @@ def to_grayscale(
     """
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+
 def histogram_equalization(
     gray: np.ndarray
 ) -> np.ndarray:
@@ -210,6 +212,7 @@ def histogram_equalization(
             "Call to_grayscale() first."
         )
     return cv2.equalizeHist(gray)
+
 
 def gaussian_blur(
     frame: np.ndarray,

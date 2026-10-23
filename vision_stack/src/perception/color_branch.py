@@ -1,33 +1,22 @@
-"""Color branch: traffic-light color candidates from the traffic ROI.
+"""Color branch: traffic-light candidates from the traffic ROI.
 
 Purpose:
-    Isolates traffic-light state by color before any structural analysis.
-    Runs after the geometry stage in phase2_linker.run_chain(); its
-    candidates go to feature_fusion.fuse_detections() alongside the lane and
-    sign candidates. The branch stays off until HSV ranges calibrated under
-    course lighting are loaded; the built-in ranges are only a scaffold.
+    Finds a traffic light's lit lamp. Color alone can't tell a lamp from a
+    shirt or a sign of the same color, but a lit lamp clips the camera to
+    white at its center, and the gates rest on that. The branch is off until
+    HSV ranges are loaded; MEASURED runs it in glow mode, tuned on the
+    course's bare LEDs (docs/vision_pipeline/phase2_perception.md, "Stage 3B").
 
 Main package:
-    TrafficLightCandidate: a color label, a traffic-ROI-relative bbox and an
-    area-based confidence for one blob. An empty list means no blob survived.
+    TrafficLightCandidate: a color label, a traffic-ROI bbox and a
+    confidence. An empty list means no lamp; glow mode gives at most one.
 
 Flow:
     1. Convert the BGR traffic ROI to HSV.
-    2. Threshold into red, yellow and green masks (red spans the hue wrap).
-    3. Find blobs in each mask and gate them by area, aspect, roundness and
-       a clipped core: a lit lamp is brighter than the camera can record, so
-       its middle clips to near-white inside the colored ring. A shirt, a
-       wall or a sign of the same color reflects light and never does.
-    4. Score survivors by area and package them with the frame identity.
-
-    Glow mode (ColorConfig.glow set): for lamps whose colored ring is no
-    brighter than the same lens unlit, the course's bare LEDs (2026-10-06),
-    where steps 3-4 read an unlit lens as lit. A lit LED clips the camera to
-    white and an unlit lens never does, so the light starts there: the
-    clipped-white spots, each named by the color band its ring of pixels
-    falls in, and the spot with the most white pixels is the frame's one
-    candidate (a traffic light shows one lamp at a time; the LED beats its
-    dimmer reflection).
+    2. Blob mode: threshold each color's band, gate each blob (area, aspect,
+       roundness, clipped core), score by area.
+    3. Glow mode: find the clipped-white spots, name each by its ring's
+       color, keep the one with the most white pixels.
 """
 import json
 from dataclasses import dataclass, field
@@ -41,11 +30,13 @@ from src.perception.roi_crop import ROICropResult
 
 DEFAULT_HSV_PATH = str(HSV_RANGES_PATH)
 
+
 @dataclass
 class ColorRange:
     """One HSV color band, bounds inclusive."""
     lower: tuple[int, int, int]   # (H_min, S_min, V_min)
     upper: tuple[int, int, int]   # (H_max, S_max, V_max)
+
 
 @dataclass
 class HSVRanges:
@@ -73,6 +64,7 @@ class HSVRanges:
         dict flags them.
         """
         return self._validated
+
 
 @dataclass
 class BlobFilter:
@@ -113,14 +105,15 @@ class BlobFilter:
     core_max_s: int = 60
     min_core_px: int = 3
 
+
 @dataclass(frozen=True)
 class GlowFilter:
     """
-    Glow mode's gates (see the module docstring). Measured on the course's
-    light from its stop line, 2026-10-06: a lit LED's white center held 3-31
-    clipped pixels (median 8-14), an unlit lens 0; with these, 196 of 196
-    labelled frames read right, and an unlit lens can't be picked whatever
-    its size.
+    Glow mode's gates (docs/vision_pipeline/phase2_perception.md, "Stage 3B").
+    Measured on the course's light from its stop line, 2026-10-06: a lit LED's
+    white center held 3-31 clipped pixels (median 8-14), an unlit lens 0; with
+    these, 196 of 196 labelled frames read right, and an unlit lens can't be
+    picked whatever its size.
     """
     # A clipped pixel: as BlobFilter's core gate. The lit LEDs' centers read
     # V 240-255, S 5-20; the board's glare clips too, so the ring decides
@@ -169,6 +162,7 @@ class TrafficLightCandidate:
 
 _HSV_CAPS = (180, 255, 255)     # H allows 180 as an upper bound for the red wrap
 
+
 def _band(data: dict, key: str) -> ColorRange:
     """One band from the JSON, checked so a typo fails at load, not on frame 1."""
     lower = tuple(int(v) for v in data[key]["lower"])
@@ -182,6 +176,7 @@ def _band(data: dict, key: str) -> ColorRange:
                 f"0 <= lower <= upper <= {cap}"
             )
     return ColorRange(lower, upper)
+
 
 def load_hsv_ranges(json_path: str) -> HSVRanges:
     """
@@ -221,6 +216,7 @@ def load_hsv_ranges(json_path: str) -> HSVRanges:
     ranges._validated = True
     return ranges
 
+
 def load_color_config(
         json_path: str = DEFAULT_HSV_PATH,
         blob: BlobFilter | None = None,
@@ -237,12 +233,12 @@ def load_color_config(
     return ColorConfig(load_hsv_ranges(json_path), blob or BlobFilter(), glow)
 
 
-# @TODO assumes BGR; does not handle a YUV frame
 def _to_hsv(
         roi_bgr: np.ndarray
     ) -> np.ndarray:
     """BGR to OpenCV HSV (H in 0-179)."""
     return cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
+
 
 def _threshold_red(
         hsv: np.ndarray,
@@ -257,6 +253,7 @@ def _threshold_red(
                             np.array(ranges.red_high.upper, dtype=np.uint8))
     return cv2.bitwise_or(mask_low, mask_high)
 
+
 def _threshold_single(
         hsv: np.ndarray,
         color_range: ColorRange
@@ -265,6 +262,7 @@ def _threshold_single(
     return cv2.inRange(hsv,
                        np.array(color_range.lower, dtype=np.uint8),
                        np.array(color_range.upper, dtype=np.uint8))
+
 
 def _mean_hsv(
         hsv: np.ndarray,
@@ -278,6 +276,7 @@ def _mean_hsv(
     m = cv2.mean(hsv[y:y + h, x:x + w], mask=mask)
     return (round(m[0], 1), round(m[1], 1), round(m[2], 1))
 
+
 def _roundness(
         contour: np.ndarray,
         area: float
@@ -285,6 +284,7 @@ def _roundness(
     """The outline's area over its minimum enclosing circle's: 1.0 a perfect disc, lower the less round."""
     _, r = cv2.minEnclosingCircle(contour)
     return area / (np.pi * r * r) if r > 0 else 0.0
+
 
 def _core_px(
         hsv: np.ndarray,
@@ -298,6 +298,7 @@ def _core_px(
     patch = hsv[y:y + h, x:x + w]
     clipped = (patch[..., 2] >= blob_filter.core_min_v) & (patch[..., 1] <= blob_filter.core_max_s)
     return int(np.count_nonzero(clipped & (inside > 0)))
+
 
 def _shape_and_core(
         contour: np.ndarray,
@@ -328,6 +329,7 @@ def _shape_and_core(
 # An area-rejected blob is traced only if its bounding box covers at least this
 # fraction of min_area; smaller ones are mask speckle and are only counted
 TRACE_MIN_BBOX_FRAC = 1.0
+
 
 def _blobs_to_candidates(
     mask: np.ndarray,
@@ -434,6 +436,7 @@ def _blobs_to_candidates(
         ))
 
     return candidates
+
 
 def _filter_blobs(
     mask: np.ndarray,
@@ -694,6 +697,7 @@ def find_traffic_light_candidates(
 
     return candidates
 
+
 def run_color_stage(
         roi: ROICropResult,
         config: ColorConfig = ColorConfig(),
@@ -755,6 +759,7 @@ _LABEL_COLORS = {   # BGR
     YELLOW: (0, 200, 255),
     GREEN: (0, 200, 0),
 }
+
 
 def draw_candidates(
         roi_bgr: np.ndarray,

@@ -1,64 +1,22 @@
 """Obstacle detection: is something standing in the robot's path, and how far ahead is its base?
 
 Purpose:
-    The course is floor (dark mats to light gray) and white tape, and neither
-    has a color of its own. So in the obstacle ROI (roi_crop.OBSTACLE, the
-    middle of the frame from the bottom of the view up past the lane ROI), a
-    pixel much brighter than the floor, or a color clearly unlike the
-    floor's, is "not floor". Both are measured against the floor in the
-    same frame (the lane ROI), so a light floor or a warm light cast moves
-    the reference with it. Tape is bright too,
-    but thin: a morphological opening with a square wider than any tape
-    (lane lines, dashes, stop lines) removes it, and what survives is
-    something solid and large. Each surviving blob is gated on size and on
-    how far ahead its base is, and the nearest one that passes is the
-    obstacle.
-
-    Upright objects rise above the floor, so the blob's lowest row is where
-    the object meets the floor. The floor at that row is measured the way
-    the stop line is (stop_line_distance.py): rows above the lane ROI
-    bottom (distance_px), and cm through the ground homography or, without
-    one, the stop-line table, whose curve maps any floor row to cm. The
-    table's reference is the robot's front edge, and its row 0 (the bottom
-    of the view) is ~10.2 cm ahead of it (2026-09-30), so nothing nearer
-    than that has a visible base: a blob that runs off the ROI bottom is
-    clipped, "at the edge of the view or nearer".
-
-    The loop already runs at its 50 ms budget on the Pi, so the masks are
-    built on every step-th pixel each way (2: a quarter of the pixels). An
-    obstacle is tens of pixels across, so nothing it needs is lost; every
-    size and row in the config and the result stays in full-resolution px.
-
-    What it can't see: an object no brighter than the floor and with no
-    color (black or gray), an object wholly outside the middle of the
-    frame, and, by brightness, a light one so wide it covers the whole lane
-    ROI (it becomes the floor level; by color it is still seen). What it may mistake for one: a bright or colored patch on
-    the floor at least open_px across (glare, a light-colored floor past the
-    mat's edge, a stop sign low in the corridor). The gates are a first
-    guess; tune them on the course with the obstacle view
-    (make phase2 VIEWS=obstacle).
+    The course is floor and white tape, neither with a color of its own, so
+    in the obstacle ROI a pixel much brighter than the floor, or clearly
+    colored, is "not floor". An opening wider than any tape removes the
+    tape; what survives the gates is something solid (blind spots and each
+    threshold's measurements: docs/vision_pipeline/phase2_perception.md, "Stage 4C").
 
 Main package:
-    ObstacleConfig: the not-floor thresholds, the opening and the blob gates.
-    ObstacleResult: whether there is an obstacle, its distance in rows and
-        cm, whether it runs off the view bottom, its box, and the frame stamp.
-        One per frame; detected False when there is none.
-    compute_obstacle(): the debug version, with the masks and every blob's fate.
-    estimate_obstacle(): the production twin, the same result without them.
-    gate(): the blob gates, shared by both.
+    ObstacleResult: whether there is an obstacle, its base's distance in
+    rows and cm (as the stop line's), whether it runs off the view bottom
+    (clipped: this near or nearer), its box, and the frame stamp.
 
 Flow:
     1. Take every step-th pixel of the ROI, gray and color.
-    2. Floor level: a low percentile of the lane ROI's gray (from its
-       histogram); wider than the path, so an obstacle in it leaves floor beside it.
-    3. Not floor: gray >= floor + min_contrast, or a Lab color at least
-       min_chroma from the scene's neutral (the whole frame's median), with
-       its brightest channel >= min_value.
-    4. Opening with an open_px square: tape and specks go.
-    5. Connected blobs, scaled back to full-resolution px; each gated: area,
-       width, height, then how far ahead its base is.
-    6. The nearest passing blob (lowest base) is measured: distance_px from
-       its base to the lane ROI bottom; distance_cm at its base's center.
+    2. Not floor: brighter than the lane ROI's floor, or colored against the frame's neutral.
+    3. Open with an open_px square; gate each blob (area, width, height, how far ahead).
+    4. Measure the nearest passing blob's base.
 """
 from dataclasses import dataclass
 
@@ -74,16 +32,12 @@ GATE_SMALL, GATE_NARROW, GATE_SHORT, GATE_FAR = "small", "narrow", "short", "far
 GATES = (GATE_SMALL, GATE_NARROW, GATE_SHORT, GATE_FAR)
 
 
-# =============================================================================
-# Config and result
-# =============================================================================
-
 @dataclass(frozen=True)
 class ObstacleConfig:
     """
     Tuning for the obstacle detector. Pixel sizes are full-resolution px at
-    480x270, whatever step is; first guesses from the course's dimensions,
-    not yet tuned on course frames.
+    480x270, whatever step is. The floor and color levels were tuned on the
+    2026-10-12 runs; the blob gates are first guesses from the course's dimensions.
     """
     # The floor's gray level: this percentile of the lane ROI, which is wider
     # than the robot's path, so an obstacle in the path leaves floor on both
@@ -128,9 +82,8 @@ class ObstacleResult:
     """
     detected: bool
     distance_px: float | None       # rows from the obstacle's base to the lane ROI bottom; 0 when clipped; None if not detected
-    # Floor cm ahead of the ground homography's reference, or of the stop-line
-    # table's (the robot's front edge); None without either. Clipped: the
-    # cm at the view bottom, i.e. "this near or nearer"
+    # Floor cm ahead of the homography's reference, or the table's (the robot's front edge); None
+    # without either. Clipped: the cm at the view bottom, "this near or nearer"
     distance_cm: float | None
     clipped: bool                   # the blob runs off the ROI bottom: its base isn't in view
     bbox: tuple[int, int, int, int] | None      # (x, y, w, h) in obstacle-ROI px; add roi.obstacle_rect's origin for frame px
@@ -140,17 +93,15 @@ class ObstacleResult:
     timestamp_ms: int
 
 
-# =============================================================================
-# Stages shared by both versions
-# =============================================================================
-
 def _kernel(size: int) -> np.ndarray:
     return cv2.getStructuringElement(cv2.MORPH_RECT, (size, size))
+
 
 def _percentile(gray: np.ndarray, pct: float) -> float:
     """The lowest gray level with at least pct% of the pixels at or below it, from a histogram: no sort."""
     hist = cv2.calcHist([gray], [0], None, [256], [0, 256]).ravel()
     return float(np.searchsorted(np.cumsum(hist), pct / 100.0 * gray.size))
+
 
 def _floor_ab(roi: ROICropResult, k: int) -> tuple[float, float]:
     """
@@ -164,6 +115,7 @@ def _floor_ab(roi: ROICropResult, k: int) -> tuple[float, float]:
     lab = cv2.cvtColor(np.ascontiguousarray(ref[::s, ::s]), cv2.COLOR_BGR2Lab)
     return (_percentile(np.ascontiguousarray(lab[..., 1]), 50.0),
             _percentile(np.ascontiguousarray(lab[..., 2]), 50.0))
+
 
 def _colored(roi: ROICropResult, color: np.ndarray, k: int, cfg: ObstacleConfig) -> np.ndarray:
     """uint8 0 / 255: |a - a_ref| + |b - b_ref| >= min_chroma, with max(B, G, R) >= min_value."""
@@ -179,6 +131,7 @@ def _colored(roi: ROICropResult, color: np.ndarray, k: int, cfg: ObstacleConfig)
     _, lit = cv2.threshold(cv2.max(cv2.max(ch[0], ch[1]), ch[2]), float(cfg.min_value) - 1.0, 255,
                            cv2.THRESH_BINARY)
     return cv2.bitwise_and(far, lit)
+
 
 def _masks(roi: ROICropResult, cfg: ObstacleConfig) -> tuple[float, np.ndarray, np.ndarray]:
     """
@@ -200,6 +153,7 @@ def _masks(roi: ROICropResult, cfg: ObstacleConfig) -> tuple[float, np.ndarray, 
     opened = cv2.morphologyEx(mask, cv2.MORPH_OPEN, _kernel(side)) if side > 1 else mask
     return floor, mask, opened
 
+
 def _blobs(opened: np.ndarray, step: int, roi_h: int) -> list[tuple[int, int, int, int, int]]:
     """
     Each blob's (x, y, w, h, area) in full-resolution obstacle-ROI px,
@@ -214,10 +168,12 @@ def _blobs(opened: np.ndarray, step: int, roi_h: int) -> list[tuple[int, int, in
         out.append((x * k, y * k, w * k, bottom - y * k, area * k * k))
     return out
 
+
 def _rows_ahead(roi: ROICropResult, base_y: int) -> float:
     """Rows from an obstacle-ROI row to the lane ROI bottom (the view's), never negative."""
     lx, ly, lw, lh = roi.lane_rect
     return float(max(ly + lh - (roi.obstacle_rect[1] + base_y), 0))
+
 
 def gate(w: int, h: int, area: int, rows: float, cfg: ObstacleConfig) -> str | None:
     """The first gate a blob fails, in GATES order; None if it passes them all."""
@@ -230,6 +186,7 @@ def gate(w: int, h: int, area: int, rows: float, cfg: ObstacleConfig) -> str | N
     if rows > cfg.max_rows_ahead:
         return GATE_FAR
     return None
+
 
 def _cm(
         roi: ROICropResult,
@@ -253,6 +210,7 @@ def _cm(
         return round(table.to_cm(rows), 2)
     return None
 
+
 def _measure(roi, blob, count, ground, table) -> ObstacleResult:
     """ObstacleResult for one blob (x, y, w, h, area)."""
     x, y, w, h, area = blob
@@ -271,15 +229,18 @@ def _measure(roi, blob, count, ground, table) -> ObstacleResult:
         timestamp_ms = roi.timestamp_ms,
     )
 
+
 def _nothing(count: int, roi: ROICropResult) -> ObstacleResult:
     return ObstacleResult(
         detected = False, distance_px = None, distance_cm = None, clipped = False, bbox = None,
         area_px = 0, candidate_count = count, frame_id = roi.frame_id, timestamp_ms = roi.timestamp_ms,
     )
 
+
 def _nearer(a, b) -> bool:
     """Blob a is nearer than b: lower base, then larger."""
     return (a[1] + a[3], a[4]) > (b[1] + b[3], b[4])
+
 
 def _full_size(mask: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     """A 1 / step mask back at the ROI's size, each sample repeated over the pixels it stood for."""
@@ -287,10 +248,6 @@ def _full_size(mask: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
     k_y, k_x = -(-h // mask.shape[0]), -(-w // mask.shape[1])
     return np.repeat(np.repeat(mask, k_y, axis=0), k_x, axis=1)[:h, :w]
 
-
-# =============================================================================
-# Entry points
-# =============================================================================
 
 def compute_obstacle(
         roi: ROICropResult,

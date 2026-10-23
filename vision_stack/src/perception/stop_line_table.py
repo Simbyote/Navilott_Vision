@@ -1,31 +1,20 @@
-"""Stop-line table: stop-line distance in cm from its row in the image, calibrated with tape marks.
+"""Stop-line distance in cm from the line's row in the image, calibrated with tape marks.
 
 Purpose:
-    The ground homography (ground.py) needs a checkerboard found flat and
-    square on the floor, which is hard to get right. The stop line only
-    needs one number, how far ahead the line is, and that depends almost
-    entirely on how many rows above the lane ROI's bottom the line appears
-    (StopLineResult.distance_px). So this is a 1-D calibration instead: tape
-    strips at a few measured distances, the row the robot's own stop-line
-    detector reports for each (scripts/calibrate_stop_line.py), and the
-    curve through them. For a flat floor seen by a fixed camera that curve is
-
-        cm = A / (B - rows) + C
-
-    (B is the horizon's height above the ROI bottom, in rows), fit to the
-    marks by linear least squares. Measured by the same detector the robot
-    drives with, it needs no board, no corner finding and no squareness.
-    It gives distance ahead only; the homography stays for full floor X/Y.
+    The stop line needs only its distance ahead, and on a flat floor that
+    follows from how many rows above the lane ROI's bottom the line sits.
+    A curve fit to tape marks measured by the robot's own detector gives it
+    without the ground homography's checkerboard
+    (docs/vision_pipeline/phase2_perception.md, "Stop-line table").
 
 Main package:
-    StopLineTable: the fit and the conditions it's valid for; to_cm(rows).
-    fit_stop_line_table(): (A, B, C) and each mark's error in cm.
-    load_stop_line_table(): the calibration file, or None.
+    StopLineTable: the fitted curve cm = A / (B - rows) + C, and the image
+    size, undistort_alpha and lens calibration it is valid for.
 
 Flow:
-    1. calibrate_stop_line fits the marks and writes the JSON.
+    1. scripts/calibrate_stop_line.py fits the marks and writes the JSON.
     2. config.py loads it once into MEASURED.stop_line_table.
-    3. stop_line_distance uses it for distance_cm when there's no homography.
+    3. stop_line_distance converts rows to cm when there's no homography.
 """
 import json
 import warnings

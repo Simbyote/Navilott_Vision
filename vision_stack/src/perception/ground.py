@@ -2,28 +2,18 @@
 
 Purpose:
     The camera is rigidly mounted and the floor is flat, so one 3x3
-    homography maps any point on the floor, as seen in the frame preprocess
-    produces, to floor coordinates. It is fit once by
-    scripts/calibrate_ground.py on frames from preprocess_frame with the
-    robot's own preprocess settings, and is only valid for exactly those:
-    the lens calibration, undistort_alpha and output size. Loading checks
-    all three and refuses a homography fit under different ones, because a
-    mismatch shifts every distance without raising anything.
+    homography maps any floor point in the preprocessed frame to floor
+    coordinates. It is valid only for the lens calibration, undistort_alpha
+    and output size it was fit under, and loading refuses any other: a
+    mismatch would shift every distance without raising anything.
 
 Main package:
-    GroundHomography: H (frame px -> floor cm) with the conditions it was fit
-        under. Floor axes: X_cm right+, Y_cm forward+, origin at the robot
-        reference point: the floor seen at the bottom-center of the frame,
-        unless the calibration was given another one.
-    load_ground_homography(): the calibration file, or None with a warning.
-    fit_ground_homography(): H from matched frame and floor points, with the
-        per-point error in cm; the calibration script and the tests share it.
-    lens_id(): the identifier of a lens calibration a homography is tied to.
-    fit_conditions_problem(): why a calibration fit on undistorted frames
-        doesn't match how preprocess runs now; shared with stop_line_table.
+    GroundHomography: H (frame px -> floor cm) and the conditions it was fit
+    under. Floor axes: X_cm right+, Y_cm forward+, origin at the robot's
+    reference point (by default the floor at the frame's bottom center).
 
 Flow:
-    1. calibrate_ground fits H on undistorted frames and writes the JSON.
+    1. scripts/calibrate_ground.py fits H on undistorted frames, writes the JSON.
     2. config.py loads it once into MEASURED.ground; nothing reads it per frame.
     3. Stages project points with to_floor(); None means no ground plane.
 """
@@ -36,10 +26,6 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-
-# =============================================================================
-# Lens identity
-# =============================================================================
 
 def lens_id(calibration_path: str | Path | None) -> str | None:
     """
@@ -60,10 +46,6 @@ def lens_id(calibration_path: str | Path | None) -> str | None:
     key = {k: calib[k] for k in ("image_size", "camera_matrix", "dist_coeffs")}
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest()
 
-
-# =============================================================================
-# The homography
-# =============================================================================
 
 @dataclass(frozen=True)
 class GroundHomography:
@@ -159,10 +141,6 @@ def fit_ground_homography(
     return H, np.linalg.norm(proj - cm, axis=1)
 
 
-# =============================================================================
-# Loading
-# =============================================================================
-
 def fit_conditions_problem(size, alpha: float, lens: str | None, preprocess,
                            frame_size: tuple[int, int]) -> str | None:
     """
@@ -194,6 +172,7 @@ def _refuse(path, why: str) -> None:
                   "stop-line table if there is one. Rerun scripts/calibrate_ground.py, or delete the "
                   "file to use the table alone.", stacklevel=3)
     return None
+
 
 def load_ground_homography(
         path: str | Path,

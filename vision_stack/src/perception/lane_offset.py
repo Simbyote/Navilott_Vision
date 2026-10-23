@@ -1,29 +1,22 @@
 """Lane offset: the robot's lateral error from the center of its own lane.
 
 Purpose:
-    Turns the geometry branch's lane candidates into a steering error. It
-    reads GeometryBranchResult rather than fusion output, because fusion
-    keeps only a centroid and a confidence, and estimation needs the geometry
-    that normalization discards. The two are siblings over the same frame:
-
-        crop_rois -> geometry -+-> fuse_detections     -> Phase2Output
-                               +-> compute_lane_offset -> steering error
+    Turns the geometry branch's lane candidates into the steering error
+    Phase 3 uses. It reads GeometryBranchResult rather than fusion's output:
+    fusion keeps only a centroid and a confidence, and the offset needs each
+    contour's foot, width, length and brightness
+    (docs/vision_pipeline/phase2_perception.md, "Stage 4").
 
 Main package:
     LaneOffsetResult: offset in [-1, 1], normalized by half the lane ROI
-    width (0 = centered, + = robot right of lane center, - = left), the
-    boundary anchors used, a confidence, and the mode the estimate came from.
-    Usable directly as the Phase 3 steering error.
+    width (0 centered, + = robot right of lane center), the boundary anchors
+    used, a confidence, and the mode the estimate came from.
 
 Flow:
-    0. Skip lane candidates that lie on a detected stop line: geometry's
-       lane detector doesn't know about stop lines, so a stop line short
-       enough to pass the lane gates arrives here as a lane candidate.
-    1. Gate each lane candidate: is it trustworthy enough to steer by?
-    2. Reduce survivors to anchors: foot x and a proximity-scaled weight.
-    3. Pick the nearest boundary on each side of ROI center.
-    4. Two boundaries with plausible spacing: offset from their midpoint.
-    5. Otherwise one boundary: project the lane center from it, if calibrated.
+    1. Skip candidates lying on a detected stop line.
+    2. Gate the rest on whether they're trustworthy enough to steer by.
+    3. Reduce survivors to anchors; pick the nearest on each side of center.
+    4. Two plausible boundaries: offset from their midpoint; one: project the center.
 """
 import numpy as np
 from dataclasses import dataclass
@@ -58,7 +51,8 @@ class LaneOffsetConfig:
     # camera calibration (cm-per-px against a known lane width). None disables
     # single-boundary mode: one usable boundary then reports
     # "single_uncalibrated" with zero confidence, not a steering error of unknown scale.
-    expected_half_lane_px: float | None = 228        # Half of 95% of a single lane frame
+    # PipelineConfig()'s default: half of 95% of the 480 px frame. MEASURED sets the course's 178 (config.py)
+    expected_half_lane_px: float | None = 228
     foot_band_px: int = FOOT_BAND_PX    # band height for foot_x; only used when geometry didn't store one
     # A lane candidate lying across the ROI, with this fraction of its width
     # within a detected stop line's span and no further from it than the line
@@ -74,7 +68,8 @@ class BoundaryAnchor:
     """One lane boundary reduced to the quantities the offset math uses."""
     foot_x: float               # lane-ROI px, from the contour's lowest rows
     weight: float               # confidence scaled by proximity; how much this anchor counts
-    candidate: LaneCandidate    # kept for debug, and for the scene state machine to reach back into
+    candidate: LaneCandidate    # the candidate it came from, for debugging
+
 
 @dataclass(frozen=True)
 class LaneOffsetResult:
@@ -135,6 +130,7 @@ def foot_x(
     band = pts[pts[:, 1] >= y_max - max(band_px, 0)]
     return float(band[:, 0].mean())
 
+
 def _usable(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
@@ -168,6 +164,7 @@ def _usable(
         return False
     return True
 
+
 def _is_usable(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
@@ -186,6 +183,7 @@ def _is_usable(
         return False
     return True
 
+
 def _anchor(
         candidate: LaneCandidate,
         config: LaneOffsetConfig,
@@ -199,6 +197,7 @@ def _anchor(
         weight = round(weight, 4),
         candidate = candidate,
     )
+
 
 def _lane_pair(
         anchors: list[BoundaryAnchor],
@@ -243,6 +242,7 @@ def _lane_pair(
     if left_side:
         return left_side[0], None
     return None, None
+
 
 def _single_sided(
         anchor: BoundaryAnchor,
@@ -305,6 +305,7 @@ def _single_sided(
         timestamp_ms = timestamp_ms,
         other_side_offset = round(other_side, 4),
     )
+
 
 def _project_single(
         anchor: BoundaryAnchor,
@@ -376,6 +377,7 @@ def _on_stop_line(
         if x_overlap >= min_overlap * w and rows_apart <= s.thickness_px:
             return s
     return None
+
 
 def compute_lane_offset(
         geometry: GeometryBranchResult,

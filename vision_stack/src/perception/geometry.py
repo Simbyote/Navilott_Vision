@@ -1,59 +1,22 @@
-"""Geometry branch: lane boundaries and stop lines from the gray lane ROI, stop-sign shapes from the color sign ROI.
+"""Geometry branch: lane boundaries, stop lines and the stop sign, each from its own detector.
 
 Purpose:
-    Answers three structural questions per frame. Lane boundaries: white tape
-    on a dark mat gives intensity edges that Canny finds, and contours are
-    kept when their area, elongation, span and brightness match tape. Stop
-    lines: the same lane-ROI Canny edges, split by gradient direction so only
-    edges of near-horizontal lines remain, then the tape's top and bottom
-    edges paired into one line with its own gates. Stop sign: a red sign on a
-    floor of similar brightness gives Canny almost no edge in gray, so the
-    sign is found by color instead: a redness mask, its largest blob, and
-    polygon approximation of that blob's hull, where an octagon gives about 8
-    vertices and area and solidity reject noise.
-
-    Stop lines only share the Canny result. They have their own config
-    (StopLineFilter) and never change what the lane and sign detectors see,
-    so lane and sign results are identical with or without them. Geometry
-    only detects; the distance to a stop line is stop_line_distance's job.
-
-    This module is the orchestrator: it validates the ROIs, computes what
-    the detectors share once, runs each and packages the result. Each
-    detector lives in its own module, and what they share in another:
-
-        geometry_lanes.py       lane boundaries (find_lane_candidates)
-        geometry_stop_line.py   stop lines (find_stop_line_candidates)
-        geometry_sign.py        the stop sign (find_sign_candidates)
-        geometry_shared.py      configs, candidate types, edge helpers
-
-    Every name from them is re-exported here, so callers import from
-    geometry as they always have.
+    Answers three structural questions per frame. Lanes and stop lines come
+    from the gray lane ROI's Canny edges, computed once here and shared; the
+    stop sign from the color sign ROI's redness, since a red sign on a floor
+    of similar brightness gives Canny almost no edge. This module runs the
+    three detectors and re-exports their names (phase2_perception.md, "Stage 3A").
 
 Main package:
-    detect_geometry(): production, one frame's result.
-    GEOMETRY_PARTS: what each call can time (timings=): the shared edges
-        (Canny and the gradient split), then each detector.
-    run_geometry_branch() / run_geometry_stage(): the same with traces, for
-        the debug views and tests.
-    GeometryBranchResult: one frame's accepted LaneCandidates,
-    SignCandidates and StopLineCandidates, all coordinates ROI-relative, with
-    the frame identity carried from ROICropResult. Consumed by feature
-    fusion, lane_offset and stop_line_distance.
+    GeometryBranchResult: one frame's accepted lane, stop-line and sign
+    candidates, ROI-relative, with the frame identity.
 
 Flow:
-    1. Validate the ROIs: the lane ROI single-channel, the sign ROI BGR, both uint8.
-    2. Canny on the lane ROI, once; lanes and stop lines both read it.
-    3. Lane: take lines lying across the lane out of the edges (the stop
-       line, so it can't close into one contour with the lane lines), close
-       along-line gaps, filter contours, merge fragments.
-    4. Stop line: keep near-horizontal edges, split them into top (dark to
-       bright going down) and bottom edges, fit each, pair top with bottom,
-       gate by length, tilt, thickness and brightness.
-    5. Sign: redness mask of the sign ROI (Otsu, floored), close, then gate
-       the blobs largest first (area, vertex count, solidity, the ghost-sign
-       gates) and take the first that passes: a larger red thing in the ROI
-       (a chair, a box) refused no longer hides the sign behind it.
-    6. Package the three candidate lists with the frame identity.
+    1. Validate the ROIs.
+    2. Canny on the lane ROI and the gradient split, once.
+    3. Lanes (geometry_lanes), then stop lines (geometry_stop_line), from those edges.
+    4. The sign (geometry_sign), from the color sign ROI.
+    5. Package the three candidate lists.
 """
 import time
 
@@ -126,6 +89,7 @@ def _validate_rois(where: str, lane_roi: np.ndarray, sign_color_roi: np.ndarray)
             want = "single-channel grayscale (H,W)" if ndim == 2 else "BGR (H,W,3)"
             raise ValueError(f"{where}: {name} expected {want}, got {roi.shape}. "
                              "Color conversion belongs to preprocess.")
+
 
 def run_geometry_branch(
     lane_roi: np.ndarray,

@@ -1,34 +1,20 @@
-"""Phase 2's side branches on a second thread, so perception uses two cores.
+"""Phase 2's color and obstacle branches on a side thread, so perception uses two cores.
 
 Purpose:
-    Phase 2 ran every stage on the main thread, one after another: the main
-    thread sat near 100% of one core while the others were half idle
-    (2026-10-14 diag run: main 70% mean, 99.7% peak; the Pi 43%). Three
-    stages read only the cropped ROIs and nothing of each other's: geometry
-    (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With
-    PARALLEL_PERCEPTION on, color and obstacle run on one side thread while
-    the main thread runs geometry, then the lane offset and the stop line
-    (which need geometry's output), and only then waits for the side thread.
-
-    It's a thread, not a process: the heavy work is inside OpenCV calls,
-    which release the GIL, so the two run on two cores without copying a
-    frame. The Python between those calls still takes turns on the GIL,
-    which is why the gain is measured, not assumed: stage timing reports
-    branch_wait, the main thread's time spent waiting for the side thread
-    (0 when the side finished first), and the side thread's own times.
-
-    The results are the same either way: the branches are pure functions of
-    the ROIs and the config (test_parallel holds them equal frame by frame).
+    Geometry, color and obstacle read only the cropped ROIs, never each
+    other's output, so color and obstacle can run on a side thread while
+    the main thread runs geometry and what needs it. The results are the
+    same either way; whether it's faster is measured, not assumed
+    (docs/vision_pipeline/phase2_perception.md, "Parallel perception").
 
 Main package:
-    enabled(explicit) -> whether a call runs parallel: explicit when given,
-        else set_default()'s choice, else params.PARALLEL_PERCEPTION.
-    set_default(on) -> a run's choice (the linkers' --parallel / --serial).
-    add_arguments(ap) / apply(args) -> those two flags on a command line.
-    side_pool() -> the shared single-thread executor (named p2-side, so
-        diagnostics' per-thread CPU shows it), created on first use.
-    run_side(fns) -> (results, ms): run named callables in order, timing
-        each; what the side thread executes.
+    The side thread (side_pool(), named p2-side) and the run's choice of
+    mode (enabled(): --parallel / --serial, else params.PARALLEL_PERCEPTION).
+
+Flow:
+    1. A linker's --parallel or --serial sets the run's mode (apply()).
+    2. Per frame, the caller submits color and obstacle to the side thread
+       (run_side()), runs geometry itself, then waits for the side's results.
 """
 import time
 from concurrent.futures import ThreadPoolExecutor

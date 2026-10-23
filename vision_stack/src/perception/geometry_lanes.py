@@ -3,15 +3,19 @@
 Purpose:
     White tape on a dark mat gives intensity edges that Canny finds;
     contours are kept when their area, elongation, span and brightness match
-    tape. Lines lying across the lane (a stop line) are taken out of this
-    detector's copy of the edges first, so they can't close into one
-    contour with the lane lines. One of geometry's three detectors;
-    geometry.detect_geometry() runs it.
+    tape. Lines lying across the lane (a stop line) come out of this
+    detector's copy of the edges first, so they can't close into one contour
+    with the lane lines.
 
 Main package:
-    find_lane_candidates(): production, candidates only.
-    extract_lane_candidates(): the same with every contour's gate trace, for
-        the debug views and tests.
+    LaneCandidate: one accepted lane marking, its bbox, foot_x (where it
+    meets the bottom of the view), confidence and contour.
+
+Flow:
+    1. Take lines lying across the lane out of the edges.
+    2. Close along-line gaps; trace contours.
+    3. Gate each contour; score the survivors.
+    4. Merge fragments of one line.
 """
 
 import cv2
@@ -33,6 +37,7 @@ def _extreme_points(
     """Leftmost and rightmost [x, y] of a contour; fragment merging measures the gap between them."""
     pts = contour.reshape(-1, 2)
     return pts[pts[:, 0].argmin()], pts[pts[:, 0].argmax()]
+
 
 def _merge_collinear(
         candidates: list[LaneCandidate],
@@ -151,6 +156,7 @@ def _lane_confidence(
     score = 0.5 * length_score + 0.3 * intensity_score + 0.2 * width_score
     return round(clamp(score, 0.0, 1.0), 4)
 
+
 # @TODO split each gate into its own function, the way _mean_contour_intensity is
 def _extract_lane_candidates(
     contours: Sequence[np.ndarray],
@@ -264,6 +270,7 @@ def _extract_lane_candidates(
 
     return candidates
 
+
 def _filter_lane_contours(
     contours: Sequence[np.ndarray],
     lane_filter: LaneContourFilter,
@@ -338,6 +345,7 @@ def _filter_lane_contours(
         ))
 
     return candidates
+
 
 def extract_lane_candidates(
     lane_roi: np.ndarray,
@@ -478,6 +486,7 @@ def find_lane_candidates(
     )
 
     return _merge_collinear(candidates, lane_filter, lane_roi.shape[:2])
+
 
 def _strip_horizontal_lines(
         lane_roi: np.ndarray,

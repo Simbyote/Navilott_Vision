@@ -1,21 +1,18 @@
-"""Geometry's shared parts: the configs, the candidate types, and the edge helpers every detector uses.
+"""Geometry's shared parts: the configs, the candidate types, and the edge helpers more than one detector uses.
 
 Purpose:
-    The three geometry detectors (geometry_lanes, geometry_stop_line,
-    geometry_sign) each live in their own module; what more than one of
-    them needs lives here, so none imports another. geometry.py runs them
-    and re-exports all of it, so callers import from geometry as before.
+    The three detectors (geometry_lanes, geometry_stop_line, geometry_sign)
+    each live in their own module; what more than one of them needs lives
+    here, so no detector imports another. geometry.py re-exports all of it.
 
 Main package:
-    CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter,
-        GeometryConfig: the tuning.
-    LaneCandidate, SignCandidate, StopLineCandidate, GeometryBranchResult:
-        what the detectors find, ROI-relative.
-    contour_foot_x(): where a lane contour meets the bottom of the ROI.
-    _canny(), _close_edges(), _contours(), _mean_contour_intensity():
-        edge and contour helpers.
-    _horizontal_edges(): the lane ROI's edges split by gradient direction,
-        read by both the lane and the stop-line detectors.
+    GeometryBranchResult: one frame's LaneCandidates, SignCandidates and
+    StopLineCandidates, ROI-relative, with the frame identity; and the
+    GeometryConfig that tunes the detectors producing them.
+
+Flow:
+    None of its own: the detectors call the edge helpers (Canny, contours,
+    contour brightness, the gradient split) as each needs them.
 """
 import math
 
@@ -38,6 +35,7 @@ class CannyParams:
     # (width, height) px of the closing rectangle, lane branch only. Wider than
     # tall bridges gaps along horizontal lines. Width < 2 disables closing.
     close_kernel: tuple[int, int] = (9, 3)
+
 
 @dataclass
 class LaneContourFilter:
@@ -63,6 +61,7 @@ class LaneContourFilter:
     # ends of a piece of tape stay and it still traces as one contour
     horizontal_min_run_px: float = 46.0
     horizontal_band_px: float = 3.0
+
 
 @dataclass
 class SignContourFilter:
@@ -109,6 +108,7 @@ class SignContourFilter:
     # to radius 24 px, 1700 px^2; 11-16% from radius 28, 2150 px^2)
     letters_min_area: float = 2000.0
 
+
 @dataclass(frozen=True)
 class StopLineFilter:
     """
@@ -134,6 +134,7 @@ class StopLineFilter:
     close_kernel: tuple[int, int] = (15, 1)
     ref_length_px: float = 200.0        # length that scores full length confidence, about one lane
 
+
 @dataclass(frozen=True)
 class GeometryConfig:
     """
@@ -144,6 +145,7 @@ class GeometryConfig:
     lane: LaneContourFilter = field(default_factory=LaneContourFilter)
     sign: SignContourFilter = field(default_factory=SignContourFilter)
     stop_line: StopLineFilter = field(default_factory=StopLineFilter)   # reads the lane ROI's Canny edges
+
 
 def contour_foot_x(
         contour: np.ndarray,
@@ -189,6 +191,7 @@ class LaneCandidate:
     mean_intensity: float = 10.0         # 0-255 inside the filled contour; length-weighted when merged
     foot_x: float = -1.0                # see contour_foot_x; -1.0 = not computed
 
+
 @dataclass
 class SignCandidate:
     """Stop-sign candidate, ROI-relative. frame_id and timestamp_ms are carried from capture."""
@@ -201,6 +204,7 @@ class SignCandidate:
     timestamp_ms: int
     area: float = 0.0                   # raw contour area, px^2; 0.0 = not computed
     solidity: float = 0.0               # area / convex hull area; 0.0 = not computed
+
 
 @dataclass
 class StopLineCandidate:
@@ -227,6 +231,7 @@ class StopLineCandidate:
     timestamp_ms: int
     proximity: float = 0.0              # [0, 1] y_near_px / ROI height, as LaneCandidate's; 1.0 = at the ROI bottom
 
+
 @dataclass
 class GeometryBranchResult:
     """One frame's geometry detections, ROI-relative. Identity copied from ROICropResult."""
@@ -247,6 +252,7 @@ def _close_edges(
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, kernel_size)
     return cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
 
+
 def _canny(
         gray: np.ndarray,
         params: CannyParams
@@ -255,6 +261,7 @@ def _canny(
     return cv2.Canny(gray, params.threshold1, params.threshold2,
                         apertureSize=params.aperture_size)
 
+
 def _contours(
         edges: np.ndarray
     ) -> Sequence[np.ndarray]:
@@ -262,6 +269,7 @@ def _contours(
     contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     return contours
+
 
 # @TODO integrate into _extract_lane_candidates. Kept separate so it can be tested in isolation.
 def _mean_contour_intensity(
@@ -284,6 +292,7 @@ def _mean_contour_intensity(
     cv2.drawContours(mask, [shifted], -1, 255, thickness=cv2.FILLED)
     pixels = roi_patch[mask == 255]
     return float(np.mean(pixels)) if len(pixels) > 0 else 0.0
+
 
 def _horizontal_edges(
         lane_roi: np.ndarray,

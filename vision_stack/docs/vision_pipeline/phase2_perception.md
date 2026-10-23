@@ -336,7 +336,7 @@ One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+,
 
 **File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`guides/calibrate_stop_line.md`)
 
-The board-free alternative for the stop line. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C`, is then fit through them by linear least squares. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
+The board-free alternative for the stop line. The homography needs a checkerboard found flat and square on the floor, which is hard to get right; the stop line needs only one number, and it depends almost entirely on how many rows above the lane ROI's bottom the line appears. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C` (B is the horizon's height above the ROI bottom, in rows), is then fit through them by linear least squares. Measured by the detector the robot drives with, it needs no board, no corner finding and no squareness. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
 **Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (178) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
@@ -359,7 +359,7 @@ every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gr
 - **The floor level** is measured each frame on the lane ROI, which is wider than the path, so a box in the path leaves floor beside it. The course's floor runs from dark mats to light gray (95–130 at the 2026-10-12 run's intersections): a fixed level (a cap at 70, the first version) called the light floor an obstacle, 376 of 537 frames on that run against 131 once measured (the can's, by eye).
 - **`open_px` (47)** is wider than any lane tape (MEASURED's lane gate allows 45 px, the widest seen 41.7) and taller than any stop line (`max_thickness_px` 40; near the view bottom 1 cm of floor is ~10 rows). Tape wider than it would survive.
 - **`distance_px`** is the rows from the blob's lowest row (where an upright object meets the floor) to the lane ROI bottom, as for the stop line. **`distance_cm`** is the floor there: through the ground homography at the base's center, else the stop-line table, whose curve maps any floor row to cm. The table's reference is the robot's front edge, and its row 0 is ~10.2 cm ahead of it, so a blob running off the ROI bottom is **`clipped`**: its base isn't in view, "this near or nearer".
-- **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess.
+- **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. By brightness alone, also to a light object so wide it covers the whole lane ROI: it becomes the floor level (by color it is still seen). **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess; tune them on the course with the obstacle view (`make phase2 VIEWS=obstacle`).
 
 Phase 3 votes on it and holds the measurement through a missed frame, as for the stop line; Navigation's `ObstacleRule` brakes for one within 12 cm (or 24 rows with no cm, or clipped) and waits until it has been gone 1 s.
 
@@ -436,6 +436,23 @@ pytest --hardware --replay=src/tests/data/frames
 ```
 
 Each stage's test writes a timing CSV and histogram. The old tables (24–48 ms for the chain) were measured on the IMX219 at 480×360 with equalization on, and no longer apply. The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS.
+
+---
+
+## Parallel perception
+
+**File:** `parallel.py` · **Switch:** `params.PARALLEL_PERCEPTION` (off), or `--parallel` / `--serial` on a linker for one run
+
+Phase 2 ran every stage on the main thread, one after another: on the 2026-10-14 diag run the main thread sat at 70% of a core on average (99.7% peak) while the Pi as a whole was at 43%. Three stages read only the cropped ROIs and nothing of each other's: geometry (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With parallel perception on, color and obstacle run on one side thread (`p2-side`) while the main thread runs geometry, then the lane offset and the stop line (which need geometry), and only then waits for the side thread.
+
+```
+main:  preprocess → roi ─┬─ geometry → lane_offset → stop_line ─┬─ branch_wait → fusion → package
+side:                    └─ color → obstacle ────────────────────┘
+```
+
+It's a thread, not a process: the heavy work is inside OpenCV calls, which release the GIL, so the two run on two cores without copying a frame. The Python between those calls still takes turns on the GIL, which is why the gain is measured rather than assumed. Stage timing reports `branch_wait`, the main thread's time waiting for the side (0 when the side finished first), and the side thread's own color and obstacle times (`side_timings_ms`). The frame waits on the longer path, which is geometry: splitting color and obstacle onto separate threads would not shorten it. `make compare-parallel` times Phase 2 alone on the same frames both ways; `make ab-parallel` alternates whole runs.
+
+The results are the same either way: the branches are pure functions of the ROIs and the config, and `test_parallel` holds them equal frame by frame.
 
 ---
 

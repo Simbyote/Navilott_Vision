@@ -1,17 +1,19 @@
 """Stop-sign shapes from the color sign ROI: a redness mask, its blobs gated largest first.
 
 Purpose:
-    A red sign on a floor of similar brightness gives Canny almost no edge
-    in gray, so the sign is found by color: a redness mask (Otsu, floored),
-    closed, then the blobs gated largest first by area, vertex count of the
-    hull's polygon (an octagon gives about 8), solidity and the ghost-sign
-    gates; the first that passes is the sign. One of geometry's three
-    detectors; geometry.detect_geometry() runs it.
+    A red sign on a floor of similar brightness gives Canny almost no edge in
+    gray, so the sign is found by color. Blobs are gated largest first and the
+    first to pass is the sign, so a larger red thing in the ROI (a chair, a
+    box) that's refused doesn't hide the sign behind it.
 
 Main package:
-    find_sign_candidates(): production, candidates only.
-    extract_sign_candidates(): the same with every blob's gate trace, for
-        the debug views and tests.
+    SignCandidate: the sign's bbox, its hull's vertex count, solidity and
+    confidence. At most one per frame.
+
+Flow:
+    1. Redness of the sign ROI; threshold (Otsu, floored); close.
+    2. Gate the blobs largest first: area, vertex count, solidity, ghost gates.
+    3. Keep the first that passes.
 """
 
 import cv2
@@ -43,6 +45,7 @@ def _sign_confidence(
 # the failure the trace is there to show
 TRACE_MIN_BBOX_FRAC = 1.0
 
+
 def _trace_entry(
         contour: np.ndarray,
         gate: str | None,
@@ -63,11 +66,13 @@ def _trace_entry(
         "poly": poly,
     }
 
+
 def _redness(sign_color_roi: np.ndarray) -> np.ndarray:
     """R - max(G, B) per pixel, 0-255: bright on red, near 0 on gray, black and white alike."""
     b, g, r = cv2.split(sign_color_roi)
     # cv2.subtract saturates at 0; numpy '-' on uint8 would wrap gray-green pixels to ~255
     return cv2.subtract(r, cv2.max(g, b))
+
 
 def _red_mask(redness: np.ndarray, sign_filter: SignContourFilter) -> tuple[np.ndarray, float]:
     """0/255 mask of the red pixels (Otsu, never below min_redness), closed; and the threshold used."""
@@ -79,11 +84,13 @@ def _red_mask(redness: np.ndarray, sign_filter: SignContourFilter) -> tuple[np.n
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
     return mask, float(t)
 
+
 def _sign_polygon(contour: np.ndarray, sign_filter: SignContourFilter):
     """(hull, hull area, approxPolyDP of the hull at epsilon_factor x its perimeter)."""
     hull = cv2.convexHull(contour)
     epsilon = sign_filter.epsilon_factor * cv2.arcLength(hull, closed=True)
     return hull, cv2.contourArea(hull), cv2.approxPolyDP(hull, epsilon, closed=True)
+
 
 def _letter_share(sign_color_roi: np.ndarray, hull: np.ndarray, f: SignContourFilter) -> float:
     """Share of the hull's pixels that are white (the sign's letters), in [0, 1]."""
@@ -225,6 +232,7 @@ def _extract_sign_candidates(
             found = _sign_candidate(contour, area, got, frame_id, timestamp_ms)
     return [] if found is None else [found]
 
+
 def _filter_sign_contours(
     contours: Sequence[np.ndarray],
     sign_filter: SignContourFilter,
@@ -245,6 +253,7 @@ def _filter_sign_contours(
         if gate is None:
             return [_sign_candidate(contour, area, got, frame_id, timestamp_ms)]
     return []
+
 
 def extract_sign_candidates(
     sign_color_roi: np.ndarray,
