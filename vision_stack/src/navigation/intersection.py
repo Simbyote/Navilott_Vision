@@ -200,7 +200,9 @@ class IntersectionRule:
     record: {"reason": REASON_CROSSING or REASON_TURNING, "source", "steer",
         "heading_deg", "stage", "step" (progress.label()), "maneuver",
         "turn_end" (how this crossing's turn ended: TURN_END_GYRO,
-        TURN_END_TIME; None before it does, or with no turn), "approach_deg"
+        TURN_END_TIME; None before it does, or with no turn), "turn_deg" (the
+        heading the turn ended on, before the exit holds from 0; None before
+        it does, or with no turn), "approach_deg"
         (the approach angle the heading started at; 0.0 uncorrected), "stage_cm"
         (odometry cm driven in this stage; None without odometry), and while
         turning with wheels, "wheels" (WheelSpeed.record)} while crossing;
@@ -232,6 +234,7 @@ class IntersectionRule:
         self._heading = self._approach = 0.0
         self._turn_ms = self._driving_ms = self._advance_ms = 0
         self._turn_end: str | None = None
+        self._turn_deg: float | None = None           # the heading the turn ended on, for the logs
         self._two_boundary = self._any_boundary = 0
         self._last_ms: int | None = None
         self._stage_from_cm: float | None = None      # odometry where the current stage began
@@ -310,6 +313,7 @@ class IntersectionRule:
                 self._turn_ms += dt_ms
             if sign * self._heading >= TURN_TARGET_DEG or self._turn_ms >= max_ms:
                 self._turn_end = TURN_END_GYRO if sign * self._heading >= TURN_TARGET_DEG else TURN_END_TIME
+                self._turn_deg = round(self._heading, 1)
                 self.stage, self._heading = STAGE_EXIT, 0.0     # hold the heading the turn ended on
         if self.stage == STAGE_EXIT and not held:
             self._driving_ms += dt_ms
@@ -335,7 +339,7 @@ class IntersectionRule:
         self.record = {"reason": reason, "source": source, "steer": steer,
                        "heading_deg": round(self._heading, 2), "stage": self.stage,
                        "step": self.progress.label(), "maneuver": self._maneuver, "turn_end": self._turn_end,
-                       "approach_deg": round(self._approach, 1),
+                       "turn_deg": self._turn_deg, "approach_deg": round(self._approach, 1),
                        "stage_cm": None if (cm := self._stage_cm(packet)) is None else round(cm, 1)}
         if wheels is not None:
             self.record["wheels"] = wheels

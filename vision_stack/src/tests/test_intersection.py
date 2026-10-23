@@ -103,7 +103,7 @@ def test_it_drives_straight_from_the_line_leaving_the_view():
     assert active(out)[0] == LOST and out[LOST][0] == Command(BASE_SPEED, BASE_SPEED)   # ignores the offset
     assert out[LOST][1] == {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD, "steer": 0.0,
                             "heading_deg": 0.0, "stage": STAGE_TO_LINE, "step": "1/0 extra", "maneuver": STRAIGHT,
-                            "turn_end": None, "approach_deg": 0.0, "stage_cm": None}
+                            "turn_end": None, "turn_deg": None, "approach_deg": 0.0, "stage_cm": None}
 
 
 @pytest.mark.software
@@ -358,6 +358,16 @@ def test_after_a_turn_the_exit_holds_the_heading_the_turn_ended_on():
     exit_ = [(cmd, rec) for cmd, rec in out if rec.get("stage") == STAGE_EXIT]
     assert exit_[0][1]["heading_deg"] == 0.0 and exit_[0][1]["source"] == SOURCE_HEADING_HOLD
     assert exit_[-1][1]["heading_deg"] < 0 and exit_[-1][0].left > exit_[-1][0].right     # drifting left: steers right
+
+
+@pytest.mark.software
+def test_the_heading_a_turn_ended_on_is_logged_through_the_exit():
+    _, out = drive(turn_case(-YAW_DPS, after=[{"lane_mode": "none"}] * 3), maneuver=LEFT)
+    turning = [rec for _, rec in out if rec.get("stage") == STAGE_TURN]
+    exit_ = [rec for _, rec in out if rec.get("stage") == STAGE_EXIT]
+    assert all(rec["turn_deg"] is None for rec in turning)
+    assert exit_[0]["turn_deg"] <= -TURN_TARGET_DEG < turning[-1]["heading_deg"]         # the end frame's, not the last logged
+    assert {rec["turn_deg"] for rec in exit_} == {exit_[0]["turn_deg"]}
 
 
 @pytest.mark.software

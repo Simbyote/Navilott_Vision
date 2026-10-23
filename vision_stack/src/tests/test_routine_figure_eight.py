@@ -28,16 +28,23 @@ DT = 0.05
 
 
 def lap_rows(laps=1, t0=0.0, step0=0, heading=lambda step, m: fe.EXPECTED_DEG[m], turn_end=TURN_END_GYRO,
-             volts=lambda step: 12.0 - step * 0.01, lane_back=True, lost_frames=0):
-    """Rows for laps of the figure 8: per intersection 10 frames of the turn, then lane keeping."""
+             volts=lambda step: 12.0 - step * 0.01, lane_back=True, lost_frames=0, drift=lambda step, m: 0.0):
+    """
+    Rows for laps of the figure 8, as the intersection rule logs them: per
+    intersection 8 frames turning (the heading rising toward heading()), 2
+    of the exit (turn_deg the heading the turn ended on, heading_deg the
+    exit's drift from it, from 0), then lane keeping.
+    """
     rows, t, total = [], t0, len(fe.ROUTE_LAP) * laps
     for k in range(total):
         step = step0 + k + 1
         m = fe.ROUTE_LAP[(step - 1) % 8]
         label = f"{step}/1600 {m}"
         for f in range(10):
-            rows.append({"t": round(t, 2), "rule": "intersection", "step": label, "stage": "turn",
-                         "turn_end": turn_end if f >= 8 else "", "heading_deg": heading(step, m) * (f + 1) / 10,
+            ended = f >= 8
+            rows.append({"t": round(t, 2), "rule": "intersection", "step": label, "stage": "exit" if ended else "turn",
+                         "turn_end": turn_end if ended else "", "turn_deg": heading(step, m) if ended else "",
+                         "heading_deg": drift(step, m) * (f - 8) if ended else heading(step, m) * (f + 1) / 9,
                          "lane_status": "stale", "reason": "turn", "battery_v": volts(step)})
             t += DT
         for f in range(lost_frames):
@@ -74,6 +81,58 @@ def test_each_intersection_its_maneuver_turn_heading_and_lane():
     assert (fifth["maneuver"], fifth["heading_deg"], fifth["lane_back"], fifth["battery_v"]) == (RIGHT, 90.0, True, 11.95)
     assert w.intersections[8]["lap"] == 2 and len(w.finished()) == 16
     assert w.frames == 16 * 20 and w.lane_lost_s == 0.0 and w.contract == 0
+
+
+@pytest.mark.software
+def test_a_turn_is_judged_on_the_heading_it_ended_on_plus_the_exit_drift():
+    # As the robot logs it on 2026-10-20: turns end near -88 / +88 and the
+    # exit's heading starts again from 0. Judged against the exit's heading
+    # alone, every turn was ~90 deg off
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, lap_rows(heading=lambda step, m: fe.EXPECTED_DEG[m] * 0.98, drift=lambda step, m: 1.5))
+    first = w.intersections[0]
+    assert (first["turn_deg"], first["exit_deg"], first["heading_deg"]) == (-88.2, 1.5, -86.7)
+    assert first["heading_off_deg"] == 3.3
+    assert fe.FigureEight._row(w, {"ended_by": fe.TIME_UP}, 0, 1)["turns_off_heading"] == 0
+
+
+@pytest.mark.software
+def test_a_turn_with_no_logged_end_heading_counts_as_off():
+    rows = [{k: v for k, v in r.items() if k != "turn_deg"} for r in lap_rows()]     # a nav.csv from before turn_deg
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, rows)
+    assert w.intersections[0]["heading_deg"] is None
+    assert fe.FigureEight._row(w, {"ended_by": fe.TIME_UP}, 0, 1)["turns_off_heading"] == 8
+
+
+@pytest.mark.software
+def test_each_touch_is_logged_with_where_the_robot_was():
+    keys = Keys([], on_frames=[0, 25, 25])                      # frame 25: twice, in the second turn
+    w = fe.EightWatch(seconds=1e9, touches=keys.pressed)
+    feed(w, lap_rows())
+    assert [(x["lap"], x["step"], x["maneuver"], x["stage"], x["rule"]) for x in w.touches] == \
+        [(1, 1, "left", "turn", "intersection"), (1, 2, "left", "turn", "intersection"),
+         (1, 2, "left", "turn", "intersection")]
+    assert w.touches[1]["t"] == w.touches[2]["t"] == round(25 * DT, 2)
+
+
+@pytest.mark.software
+def test_touch_keys_count_each_line_and_stop_cleanly():
+    import os
+    import time
+    r, wfd = os.pipe()
+    stream = os.fdopen(r)
+    keys = fe.TouchKeys(stream)
+    os.write(wfd, b"\n\n")
+    deadline = time.monotonic() + 2.0
+    got = 0
+    while got < 2 and time.monotonic() < deadline:
+        got += keys.pressed()
+        time.sleep(0.01)
+    keys.stop()
+    assert got == 2 and keys.pressed() == 0 and not keys._thread.is_alive()
+    os.close(wfd)
+    stream.close()
 
 
 @pytest.mark.software
@@ -141,9 +200,24 @@ def fake_run(rows, log, wall=None):
     return run
 
 
-def routine(rows, log, battery=True):
+class Keys:
+    """TouchKeys stand-in: Enter pressed on the given frames (counted from 0)."""
+    def __init__(self, log, on_frames=()):
+        self.log, self.on, self.frame = log, list(on_frames), 0
+
+    def pressed(self):
+        n = self.on.count(self.frame)
+        self.frame += 1
+        return n
+
+    def stop(self):
+        self.log.append("keys stopped")
+
+
+def routine(rows, log, battery=True, touch_frames=()):
     return fe.FigureEight(open_rig=Rig(log), navigation_run=fake_run(rows, log),
-                          open_battery=lambda: Battery(log) if battery else None)
+                          open_battery=lambda: Battery(log) if battery else None,
+                          touch_keys=lambda: Keys(log, touch_frames))
 
 
 def go(r, person, tmp_path, minutes=0.5, **options):
@@ -178,6 +252,19 @@ def test_one_continuous_run_judged_on_touches_time_laps_and_turns(tmp_path):
         assert len(list(csv.DictReader(f))) == 31                               # 30 s at 1 s an intersection
     with open(tmp_path / "out" / "attempt_01" / "laps.csv") as f:
         assert [r["lap"] for r in csv.DictReader(f)] == ["1", "2", "3"]
+
+
+@pytest.mark.software
+def test_touches_pressed_during_the_run_are_written_and_counted(tmp_path):
+    log = []
+    p = Person("", "2", "3", "")
+    res = go(routine(lap_rows(laps=4), log, touch_frames=[45, 300]), p, tmp_path)
+    assert "keys stopped" in log and "touches logged with Enter: 2" in p.said()
+    row = json.loads((tmp_path / "out" / "results.json").read_text())["rows"][0]
+    assert (row["touches"], row["touches_logged"]) == (2, 2) and res["verdict"] == h.FAIL
+    with open(tmp_path / "out" / "attempt_01" / "touches.csv") as f:
+        assert [(r["lap"], r["step"], r["maneuver"]) for r in csv.DictReader(f)] == \
+            [("1", "3", "left"), ("2", "16", "right")]
 
 
 @pytest.mark.software
