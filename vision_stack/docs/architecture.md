@@ -140,19 +140,56 @@ python process
 | The main loop tying them together | Shared | `src/main.py` (the run), `src/pipeline.py` (one frame's stages) |
 | Thread names, real-time priority | Shared | `src/os_threads.py` |
 
-- **Layers, bottom up; imports only point down:**
-  1. `params.py`, `utils.py`, `os_threads.py`: facts and helpers everything shares.
-  2. Drivers: `capture/` (the camera) and `peripherals/` (IMU, encoders, motors, display, battery). The only code that touches hardware.
-  3. Stages: `perception/` (Phase 2), `estimation/` (Phase 3), `navigation/` (Phase 4), each importing only the ones before it. No hardware.
-  4. `config.py`: every stage's tuning, assembled into `MEASURED`.
-  5. `pipeline.py`: one frame through the stages, `step(frame, sensors) -> Command`. It never opens hardware.
-  6. `main.py`: opens the camera, sensors and motors, feeds the pipeline, drives the motors.
-  7. Bench and tools: the linkers (`main.py`'s bench versions, with debug views), `debugger/`, `diagnostics/`, `analysis/`, `routines/`, `scripts/`.
-
-  Each boundary hands over one data type: `FrameData` (camera), `SensorSample` (sensors), `Phase2Output`, `EstimationPacket`, `Command`.
+- **The code is layered,** and imports only point down: see "Software layers" below.
 - **pigpio for all GPIO.** One daemon owns the pins, so the display, button and motor driver can't conflict. Start it with `sudo pigpiod` or the systemd service.
 - **The IMU runs on its own thread** because the frame rate is too slow to sample the gyro well. See `vision_pipeline/phase3_estimation.md`.
 - **The handoff to navigation is the `EstimationPacket`,** documented in `vision_pipeline/phase3_estimation.md`; what Navigation does with it is in `vision_pipeline/navigation_contract.md`.
+
+---
+
+## Software layers
+
+Seven layers. A module imports only from its own layer or the ones below it; nothing below knows what's above. Within the stages, each imports only the ones before it: perception, then estimation, then navigation.
+
+```
+ 7  Bench and tools   linkers, debugger/, diagnostics/, analysis/, routines/, scripts/
+ 6  The robot         main.py
+ 5  Orchestrator      pipeline.py
+ 4  Tuning            config.py
+ 3  Stages            perception/ -> estimation/ -> navigation/
+ 2  Drivers           capture/, peripherals/
+ 1  Base              params.py, utils.py, os_threads.py
+```
+
+| Layer | What lives there | Never |
+| --- | --- | --- |
+| 1. Base | `params.py`: hardware facts, paths, run-wide switches. `utils.py`: small shared helpers. `os_threads.py`: thread names and real-time priority | imports anything else from `src/` |
+| 2. Drivers | `capture/`: the camera. `peripherals/`: IMU, encoders and motors, the sensor hub, display and button, the battery ADC and its watch | decides anything about driving |
+| 3. Stages | `perception/` (Phase 2), `estimation/` (Phase 3), `navigation/` (Phase 4), and `maneuver.py` (the drive trial's steps) | opens hardware: they run on a laptop, in CI and on replays |
+| 4. Tuning | `config.py`: each stage's config, assembled into `MEASURED` and `MEASURED_ESTIMATION` | holds code that runs per frame |
+| 5. Orchestrator | `pipeline.py`: one frame through the stages, `step(frame, sensors) -> Command` | opens hardware |
+| 6. The robot | `main.py`: opens the camera, sensors and motors, and runs the loop | imports debug code |
+| 7. Bench and tools | the linkers (bench versions of `main.py`, with debug views), `debugger/`, `diagnostics/`, `analysis/`, `routines/`, `scripts/` | is imported by layers 1–6 |
+
+**Where hardware meets the pipeline.** Only in `main.py` (and its bench versions, the linkers). Each frame it reads the camera, takes the sensor hub's sample, calls `pipeline.step(...)` and sends the returned `Command` to the motors. `pipeline.py` never reaches down to a driver: it is handed data and hands data back.
+
+**What crosses each boundary.** One data type per hand-off, defined by the side that produces it:
+
+| From → to | Type | Defined in |
+| --- | --- | --- |
+| Camera → Phase 2 | `FrameData` | `capture/camera.py` |
+| Sensors → Phase 3 | `SensorSample` | `peripherals/sensing.py` |
+| Phase 2 → Phase 3 | `Phase2Output` | `perception/phase2_out.py` |
+| Phase 3 → Navigation | `EstimationPacket` | `estimation/estimation.py` |
+| Navigation → motors | `Command` | `navigation/navigation_contract.py` |
+
+**Why some things sit where they do:**
+
+- **`config.py` is above the stages, not at the base.** It builds `MEASURED` out of each stage's own config class, so it imports the stages; no stage imports it. A stage gets its tuning passed in.
+- **The linkers are with the tools, not beside `main.py`.** They run the same loop, but with debug views, recorders and reports, which `main.py` never imports.
+- **`os_threads.py` is at the base** because drivers, the pipeline's side thread and the tools all name their threads; in `diagnostics/` the drivers would have depended on a tools package (moved 2026-10-25).
+- **`SensorSample` is defined by the sensor hub,** as `FrameData` is by the camera: a driver says what it hands over, and Phase 3 imports it. The drivers behind `sensing.py` load only when sensors are opened, so importing the type pulls in no board libraries (moved from `estimation/` 2026-10-25).
+- **The battery code is in `peripherals/`:** the ADS1115 is a peripheral, and `main.py` watches the pack on every run. `diagnostics/` holds only tools; its pre-run `battery_check` imports the battery driver from below (moved 2026-10-25).
 
 ---
 

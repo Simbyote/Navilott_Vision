@@ -548,7 +548,7 @@ flowchart LR
 
 ### How it fits the bigger organization
 
-The Pi's code is layered. Each layer only calls down, and each layer's decisions live in one file:
+The Pi's code is layered. Each layer only calls down, and each layer's decisions live in one file. This is the coarse view; the full list of layers, what crosses each boundary, and why each module sits where it does are in `architecture.md`, "Software layers":
 
 ```mermaid
 flowchart TB
