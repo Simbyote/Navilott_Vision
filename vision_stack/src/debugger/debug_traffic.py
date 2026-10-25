@@ -1,22 +1,15 @@
 """Traffic-light view: what the color branch saw and decided on the traffic ROI.
 
 Purpose:
-    Lets the HSV ranges and the light's gates be calibrated on their own.
-    The masks are the calibration surface, so they sit beside the picture,
-    and the best candidate's mean HSV shows how close it sits to a band edge:
-    one lighting change from vanishing. In glow mode (MEASURED's, ColorConfig
-    .glow set) each clipped-white spot is labelled by the glow gate that
-    decided it. How to read both modes: docs/guides/phase2_linker.md.
+    Calibrates the HSV ranges and light gates on their own. The masks sit
+    beside the picture, and the best candidate's mean HSV shows how near a
+    band edge it is, one lighting change from vanishing. In glow mode
+    (MEASURED's) each white spot is labeled by the glow gate that decided it
+    (docs/guides/phase2_linker.md).
 
 Main package:
-    The rendered panel, in traffic-ROI coordinates: the ROI with every
-    traced blob or spot, beside the color masks (the white mask on top in
-    glow mode), under a header with the counts and the best candidate.
-
-Flow:
-    1. Pull the color debug, accepted candidates and fused light from the chain.
-    2. Classify each traced blob as pass, low or reject.
-    3. Draw the ROI panel, the mask column, the header and the footer.
+    The ROI with every traced blob or spot beside the color masks (white on
+    top in glow mode), under a header with counts and the best candidate.
 """
 import cv2
 import numpy as np
@@ -29,19 +22,11 @@ LIGHT_COLORS = {RED: (0, 0, 255), YELLOW: (0, 200, 255), GREEN: (0, 200, 0)}    
 WHITE = "white"
 WHITE_TINT = (255, 255, 255)                     # the glow white mask's tint
 GLOW_GATES = ("white", "shape", "ring", "smaller")
-# color branch gate names, shortened for labels
 GATE_SHORT = {"area": "area", "aspect": "asp"}
 
 
 class TrafficView(dv.CandidateView):
-    """
-    Traffic-light view; implements the view interface in debug_video, drawing on its own ROI.
-    Blob outlines use dv.STATE_COLORS; the light's own color is in the label.
-
-    conf_threshold: The confidence a light has to reach downstream. None
-        draws no threshold and no amber state.
-    zoom: Extra magnification on top of the run's scale.
-    """
+    """Outlines use dv.STATE_COLORS; the light's color is in the label. conf_threshold None draws no amber."""
     name = "traffic"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "enabled", "seen", "traced",
                   "passed", "low", "best_label", "best_conf", "best_area",
@@ -66,14 +51,7 @@ class TrafficView(dv.CandidateView):
         self._coverage = {c: [] for c in COLORS}
 
     def extract(self, chain, frame=None) -> dict:
-        """
-        This frame's color data from a chain result.
-
-        Reads chain.traffic, chain.traffic_debug (enabled, calibrated, roi,
-        the three masks, mask_px, reject_counts, glow and, in glow mode, the
-        white mask, and "trace" when the chain ran with trace=True), and chain.fusion / fusion_debug when the process
-        callable has fusion.
-        """
+        """This frame's color data from chain.traffic, traffic_debug, and fusion when present."""
         dbg = getattr(chain, "traffic_debug", None) or {}
         fusion = getattr(chain, "fusion", None)
         fdbg = getattr(chain, "fusion_debug", None) or {}
@@ -99,7 +77,7 @@ class TrafficView(dv.CandidateView):
         }
 
     def _entries(self, data):
-        """The trace, or one entry per accepted candidate if there is none."""
+        """The trace, or one entry per accepted candidate without one."""
         if data["trace"] is not None:
             return data["trace"]
         return [{"label": c.label, "bbox": c.bbox, "gate": None, "area": None,
@@ -107,7 +85,6 @@ class TrafficView(dv.CandidateView):
                  "hsv": None} for c in data["accepted"]]
 
     def _totals(self, data):
-        """Blob counts summed over the three colors."""
         tot = {"seen": 0, "area": 0, "aspect": 0, "accepted": 0}
         for rc in data["counts"].values():
             for k in tot:
@@ -117,10 +94,7 @@ class TrafficView(dv.CandidateView):
     @staticmethod
     def _glow_totals(data):
         """
-        Glow mode: spots seen and per glow gate.
-
-        From the trace when there is one, so spots with no ring color count
-        too; reject_counts holds only the spots a color claimed.
+        Spots seen and per glow gate, from the trace when present, since reject_counts holds only claimed spots.
         """
         tot = {"seen": 0, "accepted": 0, **{g: 0 for g in GLOW_GATES}}
         if data["trace"] is not None:
@@ -135,7 +109,7 @@ class TrafficView(dv.CandidateView):
 
     @staticmethod
     def _ring_share(e):
-        """The winning band's share of the spot's ring, or None (no ring, or not glow)."""
+        """The winning band's share of the spot's ring, or None."""
         votes, ring = e.get("votes"), e.get("ring")
         if not votes or not ring:
             return None
@@ -253,9 +227,7 @@ class TrafficView(dv.CandidateView):
         H, W = roi.shape[:2]
         pw, ph, gap = W * s, H * s, dv.GAP_PX * s
         glow = data.get("glow", False)
-        # glow mode stacks the white mask over the three colors: four tiles, each
-        # a quarter of the panel's height at the ROI's aspect, in the same column
-        # width as blob mode so the labels keep their room and the view its size
+        # Glow mode adds the white mask as a fourth tile, keeping blob mode's column width
         tiles = ([(WHITE, data.get("white"), WHITE_TINT)] if glow else []) + [
             (c, data["masks"][c], LIGHT_COLORS[c]) for c in COLORS]
         mw, mh = pw // 3, ph // len(tiles)
@@ -349,7 +321,7 @@ class TrafficView(dv.CandidateView):
         return canvas
 
     def _label(self, e: dict, state: str) -> str:
-        """Blob label: the failing gate and value when rejected, else confidence and fill."""
+        """The failing gate and value when rejected, else confidence and fill."""
         if e["gate"] in GLOW_GATES or "votes" in e:
             return self._glow_label(e, state)
         if state == "reject":
@@ -357,8 +329,7 @@ class TrafficView(dv.CandidateView):
                 return f"{e['label']} asp {e['aspect']:.2f}"
             return f"{e['label']} area {e['area']:.0f}"
         label = f"{e['label']} c{e['confidence']:.2f}"
-        # fill = blob area / bbox area. A round light fills about 0.78 (pi/4); a streak
-        # or slab fills more. There's no fill gate yet; this shows whether one would help.
+        # A round light fills ~0.78 (pi/4), a streak more; shown to judge a fill gate
         if e["fill"] is not None:
             label += f" f{e['fill']:.2f}"
         if state == "low":
@@ -367,11 +338,10 @@ class TrafficView(dv.CandidateView):
 
     def _glow_label(self, e: dict, state: str) -> str:
         """
-        Glow spot label: its ring's color and what decided it.
+        A spot's ring color and what decided it.
 
-        white: too few white px; shape: its width / height; ring: no band
-        held enough of the ring (the best share shown); smaller: another
-        spot had more white. Accepted: confidence, white px and ring share.
+        white: too few white px; shape: width / height; ring: no band held enough of
+        the ring; smaller: another spot had more white.
         """
         share = self._ring_share(e)
         ring = "" if share is None else f" ring {100 * share:.0f}%"

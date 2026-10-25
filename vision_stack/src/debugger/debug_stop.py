@@ -1,22 +1,15 @@
 """Stop-sign view: what the sign detector saw and decided on the sign ROI.
 
 Purpose:
-    Lets the sign filter be calibrated on its own, apart from the lane view.
-    Fusion forwards the best valid stop sign at any confidence; the threshold
-    here stands in for whatever Phase 3 applies, so a sign can be amber here
-    and still be in Phase2Output.detections. Without a trace (trace=False)
-    only accepted candidates are drawn, and the view says so.
+    Calibrates the sign filter apart from the lane view. Fusion forwards the
+    best sign at any confidence, and the threshold here stands in for Phase 3's,
+    so an amber sign can still be in Phase2Output.detections. Without a trace
+    only accepted candidates are drawn.
 
 Main package:
-    The rendered panel pair, in sign-ROI coordinates: the color ROI with
-    every traced contour labeled by its gate ("smaller" for blobs never
-    gated because a larger one passed), beside the redness image with its
-    red mask and threshold (docs/guides/phase2_linker.md).
-
-Flow:
-    1. Pull the sign debug, accepted candidates and fused stop sign from the chain.
-    2. Classify each traced contour as pass, low or reject.
-    3. Draw both panels, the header and the footer.
+    The color ROI with each traced contour labeled by gate ("smaller": never
+    gated, a larger one passed), beside the redness image with its mask and
+    threshold (docs/guides/phase2_linker.md).
 """
 import cv2
 import numpy as np
@@ -24,20 +17,13 @@ import numpy as np
 import src.debugger.debug_video as dv
 from src.params import STOP_SIGN
 
-# geometry sign gate names, shortened for labels
 GATE_SHORT = {"area": "area", "not_largest": "smaller", "vertices": "vert", "hull": "hull",
               "solidity": "sol", "aspect": "aspect", "extent": "extent", "letters": "letters"}
-C_MASK = (255, 255, 0)      # cyan: the red mask's outline on the redness panel
+C_MASK = (255, 255, 0)      # cyan mask outline
 
 
 class StopView(dv.CandidateView):
-    """
-    Stop-sign view; implements the view interface in debug_video, drawing on its own ROI.
-
-    conf_threshold: The confidence the sign has to reach downstream. None
-        draws no threshold and no amber state.
-    zoom: Extra magnification on top of the run's scale; the sign ROI is small.
-    """
+    """conf_threshold is the downstream confidence; None draws no threshold and no amber."""
     name = "stop"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "seen", "traced", "passed",
                   "low", "best_conf", "best_vertices", "best_area",
@@ -57,14 +43,7 @@ class StopView(dv.CandidateView):
         self._counts = {}
 
     def extract(self, chain, frame=None) -> dict:
-        """
-        This frame's sign data from a chain result.
-
-        Reads chain.geometry.sign_candidates, chain.sign_debug (sign_roi,
-        redness, mask, threshold, reject_counts, and "trace" when the chain
-        ran with trace=True),
-        and chain.fusion / fusion_debug when the process callable has fusion.
-        """
+        """This frame's sign data from chain.geometry, chain.sign_debug, and fusion when present."""
         dbg = getattr(chain, "sign_debug", None) or {}
         geo = chain.geometry
         fusion = getattr(chain, "fusion", None)
@@ -88,7 +67,7 @@ class StopView(dv.CandidateView):
         }
 
     def _entries(self, data):
-        """The trace, or one entry per accepted candidate if there is none."""
+        """The trace, or one entry per accepted candidate without one."""
         if data["trace"] is not None:
             return data["trace"]
         return [{"bbox": c.bbox, "gate": None, "area": c.area,
@@ -232,7 +211,7 @@ class StopView(dv.CandidateView):
         return canvas
 
     def _label(self, e: dict, state: str) -> str:
-        """Contour label: the failing gate and value when rejected, else vertices and confidence."""
+        """The failing gate and value when rejected, else vertices and confidence."""
         if state == "reject":
             g = e["gate"]
             if g == "vertices":

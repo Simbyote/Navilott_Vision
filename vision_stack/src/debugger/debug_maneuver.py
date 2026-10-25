@@ -1,21 +1,13 @@
 """Maneuver view: the drive trial's video, rendered after the run from what it recorded.
 
 Purpose:
-    maneuver_linker draws nothing while the robot moves, so rendering can't
-    slow the control loop: it records each frame's JPEG and a pickled
-    record of what the pipeline decided. This turns a run folder into video
-    afterwards, the Phase 3 view with a maneuver strip under it. Nothing is
-    re-run, so the video shows what happened, not a re-computation
+    maneuver_linker draws nothing while moving, so rendering can't slow the
+    control loop; it records JPEGs and a pickled record per frame. This
+    renders the Phase 3 view with a maneuver strip, re-running nothing
     (docs/guides/maneuver_linker.md).
 
 Main package:
     render_run(): run folder in, maneuver.avi and maneuver_video.csv out.
-
-Flow:
-    1. Read records.pkl in order; load each frame's JPEG (skipping any the
-       recorder dropped).
-    2. Rebuild the Phase3Result shape Phase3View reads; render it.
-    3. Stack the maneuver strip under it; record video and CSV.
 """
 import os
 import pickle
@@ -39,12 +31,11 @@ FRAMES_DIR, RECORDS_FILE = "frames", "records.pkl"
 
 
 def frame_path(out_dir: str, frame_id: int) -> str:
-    """Where maneuver_linker's recorder writes a frame's JPEG."""
     return os.path.join(out_dir, FRAMES_DIR, f"{frame_id:06d}.jpg")
 
 
 def read_records(out_dir: str):
-    """Yield the run's per-frame records in order; stops at the end or at a record cut short by a crash."""
+    """The run's records in order, stopping at the end or a record a crash cut short."""
     path = os.path.join(out_dir, RECORDS_FILE)
     if not os.path.exists(path):
         return
@@ -57,24 +48,17 @@ def read_records(out_dir: str):
 
 
 def as_result(rec: dict, frame: np.ndarray) -> SimpleNamespace:
-    """A record in the shape Phase3View.extract() reads from a Phase3Result."""
+    """A record in the shape Phase3View.extract() reads."""
     chain = SimpleNamespace(frame=SimpleNamespace(frame=frame), geometry=rec["geometry"],
                             offset=rec["offset"], offset_debug=rec["offset_debug"],
-                            obstacle=rec.get("obstacle"),       # recordings from before the obstacle detector have none
+                            obstacle=rec.get("obstacle"),       # absent in older recordings
                             roi=SimpleNamespace(lane_rect=rec["lane_rect"], obstacle_rect=rec.get("obstacle_rect")))
     return SimpleNamespace(chain=chain, packet=rec["packet"], p3_debug=rec["p3_debug"],
                            timings_ms=rec["timings"])
 
 
 def draw_strip(m: dict, cfg: ManeuverConfig, width: int, scale: int = 1) -> np.ndarray:
-    """
-    The maneuver strip for one frame.
-
-    Inputs:
-        m: The frame's Maneuver.record.
-        cfg: The trial's config, for the leg length and turn target the bars run to.
-        width: Output width in px, the Phase 3 view's.
-    """
+    """One frame's maneuver strip; cfg sets the leg length and turn target the bars run to."""
     s = max(1, int(scale))
     fs, th, lh = 0.38 * s, max(1, s // 2), 16 * s
     img = np.zeros((4 * lh, width, 3), np.uint8)
@@ -120,21 +104,10 @@ def draw_strip(m: dict, cfg: ManeuverConfig, width: int, scale: int = 1) -> np.n
 def render_run(out_dir: str, lane_config, cfg: ManeuverConfig, fps: float, scale: int = 1,
                on_frame=None) -> dict:
     """
-    Render a run folder's recording to maneuver.avi and maneuver_video.csv.
+    Render a run folder to maneuver.avi and maneuver_video.csv.
 
-    Inputs:
-        lane_config: The LaneOffsetConfig the run used, for the lane
-            overlay's candidate gates.
-        cfg: The run's ManeuverConfig, for the strip's bars.
-        fps: The video's rate; the run's measured rate plays it at real speed.
-        on_frame: Called with each finished image, e.g. to show it.
-
-    Outputs:
-        {"rendered": frames written, "missing": records whose JPEG wasn't
-        found, "report": the Phase 3 view's summary lines}.
-
-    Side effects:
-        Writes maneuver.avi and maneuver_video.csv into out_dir.
+    fps at the run's measured rate plays it at real speed. Returns rendered,
+    missing (no JPEG) and the Phase 3 view's report.
     """
     view = Phase3View(lane_config, fps)
     writer = dv.ViewWriter(os.path.join(out_dir, "maneuver.avi"), Phase3View.CSV_FIELDS,

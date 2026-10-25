@@ -1,21 +1,14 @@
 """Phase 3 debug twin: the production stages, run with a record of each decision and timed per stage.
 
 Purpose:
-    estimation.py is what the robot runs, and it carries no debug beyond its
-    log strings; this is phase3_linker's instrumented copy, as run_chain is
-    Phase 2's. Each Traced* stage subclasses its production stage and calls
-    the production update(), so the math exists once; test_estimation_debug
-    holds its packets identical to the production processor's. pipeline.py
-    never imports it (docs/vision_pipeline/phase3_estimation.md).
+    phase3_linker's instrumented copy of estimation.py, as run_chain is
+    Phase 2's. Each Traced* stage calls its production update(), so the math
+    exists once, and test_estimation_debug holds the packets identical.
+    pipeline.py never imports it (docs/vision_pipeline/phase3_estimation.md).
 
 Main package:
-    TracedPhase3Processor.process(phase2, sensors) -> (packet, debug): debug
-    holds Phase3Processor's fields, one record per stage (each Traced*
-    class's .record) and timings_ms per stage.
-
-Flow:
-    dt -> lane -> heading -> traffic -> stop sign -> stop line -> obstacle -> odometry -> packet,
-    as Phase3Processor.process(), with a lap after each.
+    TracedPhase3Processor.process(phase2, sensors) -> (packet, debug), with
+    each stage's .record and timings_ms per stage.
 """
 import time
 
@@ -33,12 +26,7 @@ NO_RESULT, UNUSABLE_MODE, JUMP_GATE = "no_result", "unusable_mode", "jump_gate"
 
 class TracedLaneFilter(LaneFilter):
     """
-    LaneFilter that records its decision.
-
-    record: raw_offset and mode (None without a result), accepted, reason
-        (None, "no_result", "unusable_mode" or "jump_gate"), jump (raw minus
-        the EMA before, when both exist), ema_before, ema_after (None once
-        stale clears it), missed, hold_max, status, offset.
+    record: raw_offset, mode, accepted, reason (no_result, unusable_mode, jump_gate), jump, EMA before and after, status.
     """
     record: dict | None = None         # set by every update()
 
@@ -47,8 +35,7 @@ class TracedLaneFilter(LaneFilter):
         result = results[0] if results else None
         before = self._ema.value
         jump = None if result is None or before is None else result.offset - before
-        # The same checks, in the same order, as LaneFilter.update(); the
-        # parity test holds "accepted" to the status it produces
+        # LaneFilter.update()'s checks in order; the parity test pins "accepted" to its status
         if result is None:
             reason = NO_RESULT
         elif result.mode not in USABLE_LANE_MODES:
@@ -77,12 +64,7 @@ class TracedLaneFilter(LaneFilter):
 
 
 class TracedHeadingTracker(HeadingTracker):
-    """
-    HeadingTracker that records its step.
-
-    record: yaw_rate (None when missing), dt, heading, reset (True on vision,
-        which zeroes it), integrated (a yaw step was added this frame).
-    """
+    """record: yaw_rate, dt, heading, reset (vision zeroes it), integrated."""
     record: dict | None = None         # set by every update()
 
     def update(self, lane_status, yaw_rate_dps, dt, log):
@@ -99,7 +81,7 @@ class TracedHeadingTracker(HeadingTracker):
 
 
 def _gated(detections, kind: str, gate: float) -> list[dict]:
-    """One record per detection of kind: label, confidence, the gate, passed, and where it is."""
+    """Per detection of kind: label, confidence, gate, passed, bbox."""
     return [{
         "label": d.label_detail,
         "confidence": d.confidence,
@@ -111,7 +93,7 @@ def _gated(detections, kind: str, gate: float) -> list[dict]:
 
 
 def _vote_record(vote, detections=None) -> dict:
-    """The vote after this frame's update: raw (the sample just added), buffer, window, state."""
+    """raw (the sample just added), buffer, window, state."""
     rec = {"raw_vote": vote.buffer[-1], "buffer": vote.buffer,
            "window": vote.window, "state": vote.state}
     if detections is not None:
@@ -120,7 +102,6 @@ def _vote_record(vote, detections=None) -> dict:
 
 
 class TracedTrafficClassifier(TrafficClassifier):
-    """TrafficClassifier that records detections (conf vs gate, passed), raw vote, buffer and state."""
     record: dict | None = None         # set by every update()
 
     def update(self, detections, log):
@@ -131,7 +112,6 @@ class TracedTrafficClassifier(TrafficClassifier):
 
 
 class TracedStopSignClassifier(StopSignClassifier):
-    """StopSignClassifier that records detections (conf vs gate, passed), raw vote, buffer and state."""
     record: dict | None = None         # set by every update()
 
     def update(self, detections, log):
@@ -143,12 +123,7 @@ class TracedStopSignClassifier(StopSignClassifier):
 
 class TracedStopLineClassifier(StopLineClassifier):
     """
-    StopLineClassifier that records seen vs held.
-
-    record: raw_vote, buffer, window, state as the other votes; seen (a
-        result this frame was detected), measured_px / measured_cm /
-        measured_tilt (this frame's, None when not seen), held (the vote stands on an earlier
-        frame's distance), reported_px / reported_cm (what the packet carries).
+    Adds seen, this frame's measured_*, held (on an earlier frame's distance), and the packet's reported_*.
     """
     record: dict | None = None         # set by every update()
 
@@ -169,15 +144,7 @@ class TracedStopLineClassifier(StopLineClassifier):
 
 
 class TracedObstacleClassifier(ObstacleClassifier):
-    """
-    ObstacleClassifier that records seen vs held.
-
-    record: raw_vote, buffer, window, state as the other votes; seen (a
-        result this frame was detected), measured_px / measured_cm (this
-        frame's, None when not seen), held (the vote stands on an earlier
-        frame's measurement), reported_px / reported_cm / clipped (what the
-        packet carries).
-    """
+    """Adds seen, this frame's measured_*, held, and the packet's reported_* and clipped."""
     record: dict | None = None         # set by every update()
 
     def update(self, results, log):
@@ -197,10 +164,7 @@ class TracedObstacleClassifier(ObstacleClassifier):
 
 
 class TracedPhase3Processor(Phase3Processor):
-    """
-    Phase3Processor with the traced stages and per-stage timing. Create once;
-    call process() on every frame in order.
-    """
+    """Phase3Processor with traced stages and per-stage timing; process() every frame in order."""
     STAGES = ("p3_dt", "p3_lane", "p3_heading", "p3_traffic", "p3_stop_sign",
               "p3_stop_line", "p3_obstacle", "p3_odometry", "p3_package")
 
@@ -219,21 +183,10 @@ class TracedPhase3Processor(Phase3Processor):
             sensors: SensorSample | None = None,
         ) -> tuple[EstimationPacket, dict]:
         """
-        Run one Phase 3 cycle, as Phase3Processor.process(), recording every stage.
+        One Phase 3 cycle, recording every stage.
 
-        Inputs:
-            phase2: This frame's Phase2Output.
-            sensors: Readings for the same frame window; None means no sensors.
-
-        Outputs:
-            (packet, debug). packet is what Phase3Processor would return.
-            debug holds its frame_id, timestamp_ms, dt and log, plus lane,
-            heading, traffic, stop_sign, stop_line, obstacle and odometry
-            (each stage's record)
-            and timings_ms (wall ms per STAGES name).
-
-        Raises:
-            ValueError: If phase2 is None.
+        packet is what Phase3Processor would return; debug holds its fields, each
+        stage's record and timings_ms per STAGES name. ValueError if phase2 is None.
         """
         if phase2 is None:
             raise ValueError("TracedPhase3Processor.process: phase2 output is None")

@@ -1,23 +1,16 @@
 """Lane view: what compute_lane_offset() decided, drawn on the frame it decided it on.
 
 Purpose:
-    Lets anchor selection and gating be reviewed frame by frame after a run
-    with no monitor on the robot. LaneView (what live_view runs) and
-    DebugVideoWriter (for a loop with the stage outputs but no chain result)
-    share one drawing. Only candidate_gates() imports lane_offset, at its
-    first call, so annotate() works anywhere and no import cycle is possible.
+    Anchor selection and gating reviewed frame by frame after a run, with no
+    monitor on the robot. LaneView (live_view) and DebugVideoWriter (a loop
+    without a chain result) share one drawing. Only candidate_gates() imports
+    lane_offset, at its first call, so no import cycle is possible.
 
 Main package:
-    The annotated frame from annotate(): every raw candidate (green usable,
-    red with its gate), the chosen left (cyan) and right (magenta)
-    boundaries, the robot (gray) and the lane center (yellow; red when the
-    offset is clamped), under a header with the mode, an offset gauge and
-    decision tags (docs/guides/phase2_linker.md).
-
-Flow:
-    1. Pair each raw candidate with the gate that rejected it (candidate_gates).
-    2. Draw the overlay and header onto the frame (annotate).
-    3. Record the frame and its decision-log row.
+    annotate(): raw candidates (green usable, red with their gate), left
+    (cyan) and right (magenta) boundaries, robot (gray) and lane center
+    (yellow, red when clamped), under a mode and offset header
+    (docs/guides/phase2_linker.md).
 """
 import re
 from collections import Counter
@@ -34,7 +27,6 @@ from src.params import (
 FRAME_SIZE = (FRAME_W, FRAME_H)      # (w, h) the lane_rect coordinates assume
 
 STEERING_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
-# The [TAG]s compute_lane_offset() opens its log entries with
 LOG_TAGS = ("BLIND", "MERGE", "SPAN", "ONE-SIDED", "UNCALIBRATED", "REJECT")
 
 MODE_COLORS = {                               # BGR
@@ -46,16 +38,14 @@ MODE_COLORS = {                               # BGR
 }
 TAG_COLORS = {"BLIND": (60, 60, 255), "MERGE": (60, 60, 255),
               "SPAN": (60, 60, 255)}          # everything else amber
-# lane_offset gate names, shortened for labels
 GATE_SHORT = {"confidence": "conf", "proximity": "prox", "length_px": "len",
               "width_px": "wid", "mean_intensity": "int", "stop_line": "on stop line"}
 
-HEADER_H = 52                                 # px at scale 1; annotate() draws its header over the frame's top rows
+HEADER_H = 52                                 # px at scale 1, over the frame's top rows
 C_LEFT   = (255, 255, 0)                      # cyan
 C_RIGHT  = (255, 0, 255)                      # magenta
 C_LANE   = (0, 255, 255)                      # yellow
 
-# Shared palette and label helper, from the generic module
 C_GRAY, C_WHITE, C_USABLE = dv.C_GRAY, dv.C_WHITE, dv.C_USABLE
 C_RED, C_AMBER, FONT = dv.C_RED, dv.C_AMBER, dv.FONT
 _text = dv.draw_text
@@ -68,23 +58,16 @@ _TAG_RE = re.compile(r"^\[([A-Z-]+)\]")
 
 
 def log_tags(log: list[str]) -> Counter:
-    """Counter of the [TAG] that opens each debug log entry."""
     return Counter(m.group(1) for m in map(_TAG_RE.match, log) if m)
 
 
 def load_source_frame(path: str, lane_rect: tuple[int, int, int, int],
                       frame_size: tuple[int, int] = FRAME_SIZE) -> np.ndarray | None:
     """
-    Read a saved frame as a BGR image at frame_size.
+    A saved frame as BGR at frame_size, or None if unreadable.
 
-    Inputs:
-        path: A full frame, or a lane-ROI crop the size of lane_rect. A crop
-            is placed back at lane_rect on a black canvas, so the same
-            lane_rect offset works for both kinds of dump. Other sizes are
-            resized to frame_size.
-
-    Outputs:
-        BGR (h, w, 3), or None if the file can't be read.
+    A lane-ROI crop is placed back at lane_rect on black, so one offset fits both
+    kinds of dump; other sizes are resized.
     """
     img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     if img is None:
@@ -105,7 +88,6 @@ def load_source_frame(path: str, lane_rect: tuple[int, int, int, int],
 
 
 def _blank(lane_rect, frame_size):
-    """Dark canvas with the lane ROI a shade lighter, for drawing without a source frame."""
     img = np.full((frame_size[1], frame_size[0], 3), 25, np.uint8)
     x, y, w, h = lane_rect
     img[y:y + h, x:x + w] = 55
@@ -113,7 +95,6 @@ def _blank(lane_rect, frame_size):
 
 
 def _csv_row(result, dbg):
-    """One decision-log row, in LANE_CSV_FIELDS order."""
     tags = log_tags(dbg.get("log", ()))
     opt = lambda v: "" if v is None else v
     return [
@@ -127,26 +108,12 @@ def _csv_row(result, dbg):
 
 def candidate_gates(geometry, config) -> list[tuple[tuple[int, int, int, int], str | None]]:
     """
-    Pair every raw lane candidate with the gate that rejected it, in the form annotate() expects.
+    [(bbox, gate)] per raw candidate, gate None when it passed; stop-line members get "stop_line".
 
-    Purpose:
-        Re-runs lane_offset's _usable() per candidate rather than parsing the
-        debug log: a passing candidate logs nothing, so log entries can't be
-        aligned back to their candidates by position.
-
-    Inputs:
-        geometry: GeometryBranchResult.
-        config: The LaneOffsetConfig the chain ran with; a different one
-            reports different gates than the chain applied.
-
-    Outputs:
-        [(bbox, gate)], gate None when the candidate passed. A candidate
-        lane_offset skipped because it belongs to a stop line gets gate
-        "stop_line", checked first, in the order lane_offset applies them.
+    Re-runs lane_offset's _usable(), since a passing candidate logs nothing and the
+    log can't be aligned back. config must be the chain's, or the gates differ.
     """
-    # _usable and _on_stop_line are private to lane_offset and imported at
-    # the first call, so nothing else here depends on lane_offset. A public
-    # classify function there would remove the need.
+    # Private to lane_offset; imported here so nothing else depends on it
     from src.perception.lane_offset import _on_stop_line, _usable
 
     pairs = []
@@ -169,15 +136,9 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
              lane_rect: tuple[int, int, int, int], candidates=(), scale: int = 1,
              frame_size: tuple[int, int] = FRAME_SIZE) -> np.ndarray:
     """
-    Annotated copy of frame at frame_size * scale.
+    Annotated copy at frame_size * scale; frame None draws on a blank canvas.
 
-    Inputs:
-        frame: BGR at frame_size, or None to draw on a blank canvas, so
-            candidate geometry and decisions can be reviewed without source images.
-        result, dbg: compute_lane_offset()'s LaneOffsetResult and debug summary.
-        lane_rect: roi.lane_rect; shifts lane-ROI coordinates into the frame.
-        candidates: [(bbox, gate)] per raw candidate, from candidate_gates().
-        scale: Integer magnification of the output.
+    lane_rect shifts lane-ROI coordinates into the frame.
     """
     s = max(1, int(scale))
     base = _blank(lane_rect, frame_size) if frame is None else frame
@@ -187,7 +148,6 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
     rx, ry, rw, rh = lane_rect
 
     def P(x, y):
-        """lane-ROI coordinates -> output pixel"""
         return int(round((rx + x) * s)), int(round((ry + y) * s))
 
     top, bot = P(0, 0)[1], P(0, rh - 1)[1]
@@ -265,13 +225,7 @@ def annotate(frame: np.ndarray | None, result, dbg: dict,
 
 
 class LaneView:
-    """
-    Lane view; implements the view interface in debug_video, drawing on the source frame.
-
-    lane_config: The LaneOffsetConfig the chain ran with, used to say which
-        gate rejected each candidate. None draws no candidate boxes; the
-        decision, anchors and boundaries still draw.
-    """
+    """Lane view for debug_video. lane_config None skips candidate boxes; the decision still draws."""
     name = "lane"
     CSV_FIELDS = LANE_CSV_FIELDS
 
@@ -369,12 +323,9 @@ class LaneView:
 
 class DebugVideoWriter(dv.ViewWriter):
     """
-    The lane view's video and CSV, for a loop that has the stage outputs and
-    no chain result. live_view does not use this: it runs LaneView through
-    ViewWriter like every other view.
+    The lane view's video and CSV for a loop with stage outputs but no chain result.
 
-    csv_path: "auto" puts it beside the video with a .csv extension; None disables it.
-    stride: Keep every Nth frame, for CPU relief on the robot.
+    csv_path "auto" puts it beside the video; stride keeps every Nth frame.
     """
     CSV_FIELDS = LANE_CSV_FIELDS
 
@@ -384,7 +335,7 @@ class DebugVideoWriter(dv.ViewWriter):
 
     def write(self, frame, result, dbg, lane_rect, candidates=(), scale=1,
               frame_size=FRAME_SIZE):
-        """Annotate and write one frame. Returns the image, or None if skipped."""
+        """Annotate and write one frame; the image, or None if skipped."""
         if not self.take():
             return None
 

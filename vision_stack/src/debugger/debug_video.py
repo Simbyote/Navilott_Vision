@@ -1,9 +1,7 @@
 """Shared recording, drawing and interface pieces for the debug views.
 
 Purpose:
-    Everything view-agnostic: each view records through ViewWriter and
-    draws with draw_text and the shared palette. Nothing here imports a
-    pipeline stage or another view.
+    Everything view-agnostic; nothing here imports a pipeline stage or a view.
 
 Main package:
     The view interface. live_view runs any object that has:
@@ -17,9 +15,8 @@ Main package:
         report() -> [str]           lines for summary.txt
 
 Flow:
-    Per frame, live_view calls extract() and observe() on every view, then
-    ViewWriter.take(); kept frames go through render() and row() into
-    ViewWriter.push().
+    Per frame, extract() and observe() on every view, then ViewWriter.take();
+    kept frames go through render() and row() into ViewWriter.push().
 """
 import csv
 import os
@@ -41,8 +38,7 @@ C_RED    = (60, 60, 255)
 C_AMBER  = (0, 190, 255)
 FONT     = cv2.FONT_HERSHEY_SIMPLEX
 
-# pass: accepted and at or above conf_threshold (if set); low: accepted but below it,
-# so the threshold is what hides it; reject: failed a gate, labeled with the gate and value
+# low: accepted but under conf_threshold, so the threshold is what hides it
 STATE_COLORS = {"pass": C_USABLE, "low": C_AMBER, "reject": C_RED}
 REPORT_THRESHOLDS = (0.30, 0.40, 0.50, 0.60, 0.70)    # summary.txt: share of frames passing at each
 GAP_PX = 6                                            # between panels, before zoom
@@ -50,7 +46,7 @@ GAP_PX = 6                                            # between panels, before z
 
 def draw_text(img: np.ndarray, s: str, org: tuple[int, int], color: tuple[int, int, int],
               fs: float, th: int = 1) -> None:
-    """Label with a black outline underneath, so it stays readable over white tape."""
+    """Label with a black outline, readable over white tape."""
     cv2.putText(img, s, org, FONT, fs, (0, 0, 0), th + 2, cv2.LINE_AA)
     cv2.putText(img, s, org, FONT, fs, color, th, cv2.LINE_AA)
 
@@ -58,13 +54,12 @@ _text = draw_text
 
 
 def offset_x(v: float, x0: int, x1: int) -> int:
-    """x of a [-1, 1] value on an offset bar running from x0 to x1; clamped to the ends."""
+    """x of a [-1, 1] value on a bar from x0 to x1, clamped."""
     return int(x0 + (clamp(v, -1.0, 1.0) + 1) / 2 * (x1 - x0))
 
 
 def draw_offset_axis(img: np.ndarray, x0: int, x1: int, y: int, tick: int,
                      color: tuple[int, int, int] = C_GRAY) -> None:
-    """The offset bar's axis: a line from x0 to x1 with ticks at -1, 0 and +1."""
     cv2.line(img, (x0, y), (x1, y), color, 1)
     for v in (-1.0, 0.0, 1.0):
         tx = offset_x(v, x0, x1)
@@ -73,16 +68,11 @@ def draw_offset_axis(img: np.ndarray, x0: int, x1: int, y: int, tick: int,
 
 class CandidateView:
     """
-    Base for views that grade a detector's candidates against a downstream confidence threshold.
+    Base for views grading candidates against a downstream confidence threshold.
 
-    A subclass provides _entries(data): one dict per candidate the detector
-    looked at, each with at least gate (None when accepted) and confidence.
-    The pass / low / reject grading, the per-frame summary, the render sizing
-    and the threshold report are shared. debug_stop and debug_traffic build on it.
-
-    conf_threshold: The confidence a candidate has to reach downstream. None
-        draws no threshold and no amber state.
-    zoom: Extra magnification on top of the run's scale; the ROIs are small.
+    A subclass provides _entries(data): dicts with at least gate (None when
+    accepted) and confidence. Grading, summary, sizing and the threshold report
+    are shared.
     """
     def __init__(self, conf_threshold: float | None = None, zoom: int = 2) -> None:
         self.conf_threshold = conf_threshold
@@ -92,7 +82,6 @@ class CandidateView:
         raise NotImplementedError
 
     def _state(self, e: dict) -> str:
-        """pass, low or reject; see STATE_COLORS."""
         if e["gate"] is not None:
             return "reject"
         thr = self.conf_threshold
@@ -101,7 +90,7 @@ class CandidateView:
         return "pass"
 
     def _summary(self, data: dict) -> dict:
-        """This frame's entries, best accepted entry, and pass / low / reject counts."""
+        """This frame's entries, best accepted entry, and state counts."""
         entries = self._entries(data)
         accepted = [e for e in entries if e["gate"] is None]
         states = [self._state(e) for e in entries]
@@ -115,7 +104,7 @@ class CandidateView:
         }
 
     def _metrics(self, scale: int) -> tuple[int, float, int, int, int, int]:
-        """(s, fs, th, lh, hh, fh): pixel scale, font scale, thickness, line, header and footer heights."""
+        """(s, fs, th, lh, hh, fh): pixel scale, font scale, thickness, line, header, footer."""
         s = max(1, int(scale)) * self.zoom
         fs = max(0.34, 0.18 * s)
         th = 1 if s < 4 else 2
@@ -124,7 +113,7 @@ class CandidateView:
         return s, fs, th, lh, hh, fh
 
     def _header(self, sm: dict) -> tuple[tuple[int, int, int], str]:
-        """Title color (green if any passed, amber if only low, else white) and the counts text."""
+        """Title color (green any passed, amber only low, else white) and counts text."""
         color = (C_USABLE if sm["passed"]
                  else C_AMBER if sm["low"] else C_WHITE)
         counts = f"pass {sm['passed']}"
@@ -134,7 +123,7 @@ class CandidateView:
         return color, counts
 
     def _threshold_report(self, best_conf: list[float], n: int) -> list[str]:
-        """summary.txt lines: best confidence per frame, and the share of frames passing at each REPORT_THRESHOLDS."""
+        """Best confidence per frame, and the share passing at each REPORT_THRESHOLDS."""
         if not best_conf:
             return []
         s = sorted(best_conf)
@@ -150,16 +139,10 @@ class CandidateView:
 
 class ViewWriter:
     """
-    Recorder for one debug view: an .avi and an optional CSV sidecar.
+    One view's .avi and optional CSV, opened on the first frame so the size is real.
 
-    Opens on the first frame so the output size comes from real data. Call
-    take() first, so a frame the stride skips costs no rendering, then push()
-    the finished image and its CSV row.
-
-    csv_fields: Header row for the sidecar; empty disables it.
-    csv_path: "auto" puts it beside the video with a .csv extension; None disables it.
-    stride: Keep every Nth frame, for CPU relief on the robot. The overlay
-        frame id is the real one, so skipped frames show as gaps.
+    take() first, so stride-skipped frames cost no rendering, then push(). Skipped
+    frames show as gaps in the frame id.
     """
     def __init__(self, path: str, csv_fields=(), fps: float = DEFAULT_FPS,
                  fourcc: str = FOURCC, csv_path: str | None = "auto", stride: int = 1) -> None:
@@ -181,7 +164,6 @@ class ViewWriter:
         self._csv = None
 
     def take(self) -> bool:
-        """Count one incoming frame. True if the stride keeps it."""
         self._seen += 1
         return (self._seen - 1) % self.stride == 0
 
@@ -201,7 +183,7 @@ class ViewWriter:
             self._csv.writerow(self.csv_fields)
 
     def push(self, img: np.ndarray, row: list | None = None) -> np.ndarray:
-        """Write one finished image and, if given, its CSV row. Returns the image."""
+        """Write one image and its optional CSV row; returns the image."""
         h, w = img.shape[:2]
         if self._vw is None:
             self._open(w, h)
