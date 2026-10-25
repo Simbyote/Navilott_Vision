@@ -1,21 +1,15 @@
-"""Power profile: how the pack's voltage, the Pi's load and its heat respond to each part of the robot running.
+"""Power profile: how pack voltage, Pi load and heat respond to each part of the robot running.
 
 Purpose:
-    The robot measures its battery's voltage (ADS1115), not its current, so
-    there are no watts: this gives each load's sag against rest, the drain,
-    whether the pack stays above the warning level, and whether the Pi's
-    supply dips or the SoC throttles. One trial per stage (rest, camera,
-    pipeline, motors, full). Stages and pass: docs/guides/routines.md,
-    section 2; card docs/routines/requests/power-profile.md.
+    The ADS1115 measures volts, not current, so there are no watts. Per stage
+    (rest, camera, pipeline, motors, full) this gives the sag against rest,
+    the drain, whether the pack stays above warning, and supply dips or
+    throttling (docs/guides/routines.md section 2;
+    docs/routines/requests/power-profile.md).
 
 Main package:
-    PowerProfile: the routine (make routine-power-profile), one row per
-    stage (stage_row) and every sample in samples.csv.
-
-Flow (per trial = per stage, in STAGES order):
-    1. The stage's set-up said (wheels up for the driving stages); Enter starts it.
-    2. Its load runs on a thread for stage_s; the sampler reads every SAMPLE_S.
-    3. The load stops (motors first); the stage's row; its samples, by attempt.
+    PowerProfile (make routine-power-profile): one row per stage, every
+    sample in samples.csv.
 """
 import csv
 import statistics
@@ -29,7 +23,7 @@ from src.routines.harness import Routine, criterion
 
 STAGE_S = 60.0              # per stage: long enough for the pack to settle at the new load
 SAMPLE_S = 0.5              # sampler period; the ADS1115 read itself is ~9 ms
-MOTOR_REFRESH_S = 0.1       # drive() this often: the motor watchdog brakes after MOTOR_WATCHDOG_S of quiet
+MOTOR_REFRESH_S = 0.1       # under the motor watchdog
 STAGES = (
     ("rest", "Nothing to do: the baseline, with only this routine running."),
     ("camera", "The camera captures for the stage; nothing moves."),
@@ -42,7 +36,7 @@ THROTTLES = ("freq_capped", "throttled", "soft_temp_limit")
 
 
 def read_cpu_times(path: Path = Path("/proc/stat")) -> tuple[int, int] | None:
-    """(busy, total) jiffies from /proc/stat's cpu line; None where unreadable."""
+    """(busy, total) jiffies from /proc/stat; None where unreadable."""
     try:
         f = [int(x) for x in path.read_text().splitlines()[0].split()[1:]]
     except (OSError, ValueError, IndexError):
@@ -52,14 +46,13 @@ def read_cpu_times(path: Path = Path("/proc/stat")) -> tuple[int, int] | None:
 
 
 def cpu_busy(prev, cur) -> float | None:
-    """The whole CPU's busy % between two read_cpu_times() readings."""
     if prev is None or cur is None or cur[1] <= prev[1]:
         return None
     return round(100.0 * (cur[0] - prev[0]) / (cur[1] - prev[1]), 1)
 
 
 def _slope_per_min(ts: list[float], vs: list[float]) -> float | None:
-    """Least-squares volts per minute; None with under 2 points or no spread in time."""
+    """Least-squares volts per minute; None under 2 points or with no time spread."""
     if len(ts) < 2:
         return None
     mt, mv = statistics.fmean(ts), statistics.fmean(vs)
@@ -69,10 +62,7 @@ def _slope_per_min(ts: list[float], vs: list[float]) -> float | None:
 
 def stage_row(name: str, samples: list[dict], rest_v: float | None) -> dict:
     """
-    One stage's numbers: its pack volts (mean, min), the sag against the
-    rest stage's mean, the drain in mV per minute (a fit over the stage:
-    rough over a minute, steadier over longer stages), CPU and temperature,
-    and whether under-voltage or throttling showed.
+    Pack volts (mean, min), sag against rest, drain mV/min (rough over a minute), CPU, temperature, throttle flags.
     """
     v = [s["battery_v"] for s in samples if s["battery_v"] is not None]
     tv = [(s["t_s"], s["battery_v"]) for s in samples if s["battery_v"] is not None]
@@ -113,8 +103,6 @@ stage; q stops after keeping the stage just run."""
         self._clock, self._sleep = clock, sleep
         self._power = None
 
-    # ── set-up and readings ───────────────────────────────────────────
-
     def setup(self, ctx):
         ctx.options.setdefault("stage_s", STAGE_S)
         ctx.options.setdefault("duty", BASE_SPEED)
@@ -154,8 +142,6 @@ stage; q stops after keeping the stage just run."""
         if self._power is not None:
             self._power.cleanup()
 
-    # ── the stages ────────────────────────────────────────────────────
-
     def trial(self, ctx, i):
         name, what = STAGES[i % len(STAGES)]           # i: the trial being filled, so a redo repeats its stage
         ctx.console.say(f"  stage {name}: {what}")
@@ -181,7 +167,7 @@ stage; q stops after keeping the stage just run."""
             stop.set()
             worker.join(timeout=10.0)
         ctx.state["samples"] += samples
-        # the sag is against the latest rest stage (a redone rest replaces the first); rest is the baseline
+        # sag against the latest rest stage
         rest = None if name == "rest" else next(
             (s["v_mean"] for s in reversed(ctx.state.get("rows", [])) if s["stage"] == "rest"), None)
         row = stage_row(name, samples, rest)
@@ -203,7 +189,7 @@ stage; q stops after keeping the stage just run."""
                 criterion("stages throttled", sum(r["throttled"] for r in rows), "<=", 0)]
 
 
-# ── the loads: each runs until stop is set (or seconds pass) ──────────
+# Loads run until stop is set or seconds pass
 
 
 def _rest(ctx, seconds, stop):
@@ -240,7 +226,7 @@ def _motors(ctx, seconds, stop):
     motor = MotorController(pi)
     try:
         while not stop.is_set():
-            motor.drive(duty, duty)                    # refreshed: the watchdog brakes a quiet motor
+            motor.drive(duty, duty)
             stop.wait(MOTOR_REFRESH_S)
     finally:
         motor.stop()

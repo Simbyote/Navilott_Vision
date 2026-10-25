@@ -2,10 +2,8 @@
 
 Purpose:
     Each routine answers one question on the real robot, judged against
-    pass criteria agreed on a test request card (docs/routines/request_card.md).
-    The shared flow is in harness.py; a routine is a module here with a
-    Routine subclass, listed in ROUTINES. What each one asks and how it is
-    judged: docs/guides/routines.md, section 2.
+    criteria agreed on a test request card (docs/routines/request_card.md).
+    What each asks and how it's judged: docs/guides/routines.md, section 2.
 
 Main package:
     ROUTINES: {name: Routine class}, what make routines lists and

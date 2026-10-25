@@ -1,22 +1,13 @@
-"""Course run: the Design Day rehearsal, the whole course from the start button to the finish, judged.
+"""Course run: the Design Day rehearsal, start button to finish, judged.
 
 Purpose:
-    D2's competition, once per trial: the route file, the start button and
-    countdown, the motors on, every frame recorded. Afterwards the tester
-    answers what a judge would (completed, touches, signs or lights run, the
-    stopwatch time); the stopwatch against the robot's own run time also
-    checks the elapsed-time display. Pass and settings:
-    docs/guides/routines.md, section 2; card docs/routines/requests/course-run.md.
+    D2 once per trial with the route file, countdown, motors and recording.
+    The tester answers as a judge would (completed, touches, signs or lights
+    run, stopwatch); the stopwatch also checks the elapsed-time display
+    (docs/guides/routines.md section 2; docs/routines/requests/course-run.md).
 
 Main package:
-    CourseRun: the routine (make routine-course-run); CourseWatch follows
-    each run (route steps, holds, waits, time off vision, contract brakes).
-
-Flow (per trial):
-    1. Rig and battery opened; the robot on the start; Enter arms it.
-    2. The start button, the countdown, the run until the route's finish
-       (or ended early, the cap, a critical battery, Ctrl-C).
-    3. The tester's answers; the row. The run folder is attempt_NN/.
+    CourseRun (make routine-course-run), with CourseWatch following each run.
 """
 import statistics
 from pathlib import Path
@@ -27,17 +18,15 @@ from src.routines.figure_eight import _num, _step
 from src.routines.harness import Routine, criterion
 
 MAX_S = 300.0               # main.MAX_RUN_S: the production run's cap
-FINISHED = "end of course"  # navigation_linker.END_COURSE: the navigator finished the route
+FINISHED = "end of course"  # navigation_linker.END_COURSE
 
 
 class CourseWatch:
     """
     Follows one run's nav.csv rows; never ends it.
 
-    steps: the highest route step reached. holds, reds: how many times the
-    run came to a stop sign's hold, and to a wait at a red light.
-    lane_lost_s: time in lane keeping off vision. contract: frames braked
-    because a command broke the contract. volts: the pack, per frame.
+    holds and reds count stop-sign holds and red-light waits; lane_lost_s is time
+    off vision; contract counts frames braked for a broken command contract.
     """
     def __init__(self):
         self.steps = self.holds = self.reds = self.contract = self.frames = 0

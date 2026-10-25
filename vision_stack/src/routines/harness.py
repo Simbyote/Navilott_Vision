@@ -1,23 +1,19 @@
 """Routine harness: a hardware test a teammate runs by following prompts, judged PASS or FAIL.
 
 Purpose:
-    A routine repeats a trial and compares what it measured, or what the
-    tester measured by hand, with pass criteria agreed up front. The tester
-    shouldn't need to know which linker, which flags or where files go: the
-    routine prompts each step, checks the answers, and writes one folder.
-    This module is what every routine shares; a routine itself is a
-    question, its trial and its criteria (docs/guides/routines.md).
+    The tester shouldn't need to know linkers, flags or file locations: the
+    routine prompts each step, checks the answers and writes one folder.
+    A routine itself is a question, its trial and its criteria
+    (docs/guides/routines.md).
 
 Main package:
-    run_routine(): one routine run, its folder runs/routine_<name>_<time>/
-    (trials.csv, results.json, summary.txt) and its verdict: PASS, FAIL,
+    run_routine() -> runs/routine_<name>_<time>/ and a verdict: PASS, FAIL,
     INCOMPLETE (stopped early) or RECORDED (no criteria).
 
 Flow:
-    1. needs checked (pigpiod running...); question and instructions shown;
-       conditions recorded.
-    2. Each trial: trial(), its row shown, then keep, redo, discard or stop.
-    3. teardown() whatever happened; conditions again; judge() on the kept trials.
+    1. Check needs (pigpiod...), show the instructions, record conditions.
+    2. Each trial: run, show its row, then keep, redo, discard or stop.
+    3. teardown() whatever happened, conditions again, judge() the kept trials.
 """
 import csv
 import json
@@ -35,14 +31,11 @@ KEEP, REDO, DISCARD = "keep", "redo", "discard"
 
 
 class Quit(Exception):
-    """The tester stopped the routine at a prompt."""
+    pass
 
 
 class Console:
-    """
-    Prompts on the terminal. input and output are injectable, so tests
-    script the tester's answers.
-    """
+    """Terminal prompts; input and output are injectable so tests can script the tester."""
     def __init__(self, inp=input, out=print):
         self._in, self._out = inp, out
 
@@ -50,7 +43,7 @@ class Console:
         self._out(text)
 
     def ask(self, prompt: str, default: str | None = None) -> str:
-        """A line of text; default for an empty answer. q stops the routine."""
+        """default answers an empty line; q stops the routine."""
         hint = f" [{default}]" if default not in (None, "") else ""
         try:
             answer = self._in(f"{prompt}{hint}: ").strip()
@@ -61,7 +54,6 @@ class Console:
         return answer if answer or default is None else default
 
     def ask_number(self, prompt: str, lo: float | None = None, hi: float | None = None, unit: str = "") -> float:
-        """A number, asked again until it parses and sits within [lo, hi]."""
         rng = ("" if lo is None and hi is None else
                f" ({'' if lo is None else lo}..{'' if hi is None else hi}{' ' + unit if unit else ''})")
         while True:
@@ -77,7 +69,6 @@ class Console:
             return value
 
     def ask_yes(self, prompt: str) -> bool:
-        """y or n, asked again until it's one of them."""
         while True:
             answer = self.ask(f"{prompt} (y/n)").lower()
             if answer in ("y", "yes"):
@@ -87,11 +78,10 @@ class Console:
             self.say("  y or n (q stops)")
 
     def wait(self, prompt: str = "Press Enter to go on") -> None:
-        """Wait for Enter; q stops the routine."""
         self.ask(prompt, default="")
 
     def after_trial(self) -> str:
-        """Keep, redo or discard the trial just run; q stops (the trial is kept first)."""
+        """Keep, redo or discard the trial just run; q keeps it, then stops."""
         while True:
             answer = self.ask("Enter = keep, r = redo, d = discard, q = keep and stop", default="").lower()
             if answer in ("", "k"):
@@ -104,10 +94,7 @@ class Console:
 
 
 def criterion(name: str, value: float | None, op: str, limit, unit: str = "") -> dict:
-    """
-    One pass criterion: value against limit with op ("<=", ">=", or
-    "within": limit is (lo, hi)). A value of None (nothing to judge) fails.
-    """
+    """op is "<=", ">=" or "within" (limit is (lo, hi)). A value of None fails."""
     if value is None:
         passed = False
     elif op == "<=":
@@ -127,7 +114,7 @@ def criterion(name: str, value: float | None, op: str, limit, unit: str = "") ->
 
 
 def stats(values) -> dict | None:
-    """n, mean, sd (sample), min, max of the numbers given; None without any."""
+    """n, mean, sample sd, min, max; None without values."""
     v = [float(x) for x in values if x is not None]
     if not v:
         return None
@@ -137,18 +124,10 @@ def stats(values) -> dict | None:
 
 class Routine:
     """
-    A routine: subclass it, fill the fields, write trial() (and judge()).
+    Subclass it, fill the fields, write trial() and judge().
 
-    name: The command-line name (make routine-<name>).
-    title, question: What the routine is and the one question it answers.
-    requirement: The requirements.md row it verifies (P3, D4...), or "".
-    trials: How many trials by default (--trials overrides); plan() can
-        work it out from the settings instead.
-    fields: The columns a trial's row has, in order.
-    needs: What must be running first, checked by check_needs: "pigpiod".
-    instructions: What the tester sets up before the first trial.
-    settings: The routine's own options ({name: description}), given as
-        --set name=value and read from ctx.options.
+    requirement is the requirements.md row it verifies (P3, D4...). settings are
+    the routine's own --set options, read from ctx.options.
     """
     name = ""
     title = ""
@@ -158,37 +137,30 @@ class Routine:
     fields: tuple = ()
     needs: tuple = ()
     instructions = ""
-    settings: dict = {}             # {name: what it is}: the routine's own --set KEY=VALUE options
+    settings: dict = {}             # {name: what it is}
 
     def plan(self, options: dict) -> int:
-        """How many trials by default for these --set options: trials, unless they change it."""
+        """Default trial count for these --set options."""
         return self.trials
 
     def setup(self, ctx: "Context") -> None:
-        """Before the first trial: open hardware, ask set-up questions."""
+        pass
 
     def trial(self, ctx: "Context", i: int) -> dict:
-        """
-        One trial: prompt, measure, return a row with the fields. i is the
-        trial being filled (0-based): a redo runs the same i again.
-        """
+        """One row with the fields. A redo runs the same i again."""
         raise NotImplementedError
 
     def teardown(self, ctx: "Context") -> None:
-        """After the last trial, or a stop or an error: release hardware."""
+        """Runs after the last trial, a stop or an error."""
 
     def judge(self, rows: list[dict]) -> list[dict]:
-        """The pass criteria (criterion()) on the kept rows; none: a characterization."""
+        """criterion() results on the kept rows; none makes it a characterization."""
         return []
 
 
 @dataclass
 class Context:
-    """
-    What a routine's methods get: the console, its folder, the options, a
-    scratch dict, and attempt: how many trials have been started before
-    this one (redone and discarded ones too), for naming per-attempt files.
-    """
+    """attempt counts every trial started before this one, redone and discarded too, for naming files."""
     console: Console
     out_dir: Path
     options: dict = field(default_factory=dict)
@@ -197,7 +169,7 @@ class Context:
 
 
 def read_battery_volts() -> float | None:
-    """One resting reading of the pack, or None without the ADC (a laptop, or no I2C)."""
+    """One resting pack reading, or None without the ADC."""
     from src.peripherals import battery_run
     power = battery_run.open_battery(say=lambda s: None)
     if power is None:
@@ -212,9 +184,7 @@ def read_battery_volts() -> float | None:
 
 def conditions(tester: str = "", notes: str = "", battery=read_battery_volts, system=None) -> dict:
     """
-    What the run is under: when, which code (commit, and whether it had
-    uncommitted changes), which machine, who, the SoC's temperature, clock
-    and throttling, and the pack's volts. Every reading is optional.
+    When, which commit (and if dirty), which machine, who, SoC temperature, clock, throttling, pack volts. All optional.
     """
     if system is None:
         from src.diagnostics.system_monitor import sample
@@ -236,12 +206,12 @@ def _process_running(name: str, proc: Path = Path("/proc")) -> bool:
     return False
 
 
-# What each need checks, and what to do when it's missing
+# need -> (check, what to do when missing)
 NEEDS = {"pigpiod": (lambda: _process_running("pigpiod"), "the GPIO daemon isn't running: make pigpiod")}
 
 
 def check_needs(needs: tuple, checks: dict = NEEDS) -> list[str]:
-    """What's missing, as instructions; [] when everything the routine needs is there."""
+    """What's missing, as instructions; [] when all is there."""
     out = []
     for n in needs:
         ok, why = checks.get(n, (lambda: False, f"unknown need {n!r}"))
@@ -251,7 +221,6 @@ def check_needs(needs: tuple, checks: dict = NEEDS) -> list[str]:
 
 
 def verdict(criteria: list[dict], complete: bool) -> str:
-    """PASS / FAIL on the criteria; INCOMPLETE when stopped early; RECORDED with no criteria."""
     if not complete:
         return INCOMPLETE
     if not criteria:
@@ -262,10 +231,8 @@ def verdict(criteria: list[dict], complete: bool) -> str:
 def run_routine(routine: Routine, console: Console, out_dir, trials: int | None = None, tester: str = "",
                 notes: str = "", options: dict | None = None, conditions_fn=conditions, clock=time.monotonic) -> dict:
     """
-    The whole routine, prompts to verdict; returns the result and writes
-    the folder. Stopping at a prompt (q, or Ctrl-D) keeps what was done.
-    An error in the routine is recorded as the verdict's reason and raised
-    after the folder is written.
+    The whole routine, prompts to verdict. q or Ctrl-D keeps what was done; an
+    error is recorded as the reason and raised after the folder is written.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)

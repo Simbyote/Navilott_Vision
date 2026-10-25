@@ -1,23 +1,14 @@
-"""Lane offset: does the robot's reported position in the lane match a ruler, to within 2 cm?
+"""Lane offset: does the robot's reported lane position match a ruler within 2 cm?
 
 Purpose:
-    P3, as requirements.md's procedure, prompted: the robot parked at
-    measured offsets from the lane's center, its reported offset in cm
-    against the ruler. The first, centered look measures the ground scale
-    (LANE_CM / the lane's median width in px) and the noise floor. Once it
-    passes, recover-offset can trust the robot's own offset. Pass and
-    settings: docs/guides/routines.md, section 2; card
-    docs/routines/requests/lane-offset.md.
+    P3 prompted: parked at measured offsets, reported cm against the ruler.
+    The first, centered look sets the ground scale (LANE_CM / median lane
+    width px) and the noise floor. Once it passes, recover-offset can trust
+    the robot's offset (docs/guides/routines.md section 2;
+    docs/routines/requests/lane-offset.md).
 
 Main package:
-    LaneOffset: the routine (make routine-lane-offset). Its summary gives
-    the cm_per_px to put in config.py.
-
-Flow (per trial):
-    1. The robot placed at the trial's planned offset (the first: centered);
-       the tester enters the offset they measured with a ruler.
-    2. One look; the first trial sets the scale from the lane's width.
-    3. The reported offset in cm against the measured one.
+    LaneOffset (make routine-lane-offset); its summary gives config.py's cm_per_px.
 """
 import statistics
 
@@ -32,21 +23,14 @@ TOLERANCE_CM = 2.0              # P3
 
 
 def to_cm(offset: float | None, roi_width_px: int | None, cm_per_px: float | None) -> float | None:
-    """lane_offset ([-1, 1] of half the lane ROI) in cm, as estimation's _to_cm; None without a scale."""
+    """lane_offset in cm as estimation's _to_cm does; None without a scale."""
     if offset is None or roi_width_px is None or cm_per_px is None:
         return None
     return offset * (roi_width_px / 2.0) * cm_per_px
 
 
 def offset_look(frames: list[dict]) -> dict:
-    """
-    One look's numbers.
-
-    offset, offset_sd: mean and spread of the filtered lane_offset over the
-        frames on vision; None without any (sd: fewer than two).
-    vision_pct: share of frames on vision.
-    lane_width_px: median of Phase 2's lane width where it measured one.
-    """
+    """offset and offset_sd over frames on vision (None without), vision_pct, median lane_width_px."""
     on = [f["lane_offset"] for f in frames if f["lane_status"] == LANE_VISION]
     widths = [f["lane_width_px"] for f in frames if f.get("lane_width_px")]
     return {"frames": len(frames), "vision_pct": round(100.0 * len(on) / len(frames), 1) if frames else 0.0,

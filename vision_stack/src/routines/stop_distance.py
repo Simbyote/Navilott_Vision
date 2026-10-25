@@ -1,23 +1,15 @@
 """Stop distance: how far before a stop line the robot stops, and how consistently.
 
 Purpose:
-    D4, the navigation side. Each trial drives toward an intersection with a
-    stop sign (or a red light) until navigation has braked for the line and
-    the wheels read stopped; the tester tapes the gap. The row keeps it
-    beside the last reported stop_line_cm, the speed as braking began and
-    the pack's volts, since the stop falls with the battery. Pass:
-    docs/guides/routines.md, section 2; card docs/routines/requests/stop-distance.md.
+    D4's navigation side. Each trial drives at a stop sign or red light until
+    navigation has braked and the wheels read stopped, then the tester tapes
+    the gap. The row keeps the last stop_line_cm, braking speed and pack volts,
+    since the stop falls with the battery (docs/guides/routines.md section 2;
+    docs/routines/requests/stop-distance.md).
 
 Main package:
-    StopDistance: the routine (make routine-stop-distance). StopWatch ends
-    each approach once it is stopped at the line.
-
-Flow (per trial):
-    1. The rig opened (camera, sensors, motors; no start button).
-    2. The tester places the robot on the start mark: Enter drives.
-    3. navigation_linker.run with a one-step straight route until StopWatch
-       ends it or TRIAL_MAX_S; the run folder lands in attempt_NN/.
-    4. The tester enters the taped gap (negative: past the line).
+    StopDistance (make routine-stop-distance). StopWatch ends each approach
+    once it is stopped at the line.
 """
 from src.navigation.stop_sign import REASON_HOLD, REASON_STOPPING, STOPPED_CPS
 from src.navigation.traffic_light import REASON_RED
@@ -25,11 +17,9 @@ from src.routines.harness import Routine, criterion, read_battery_volts, stats
 
 STOP_REASONS = (REASON_STOPPING, REASON_HOLD, REASON_RED)
 STOPPED = "stopped at the line"
-# The robot counts as stopped once braked for the line with both wheels at or
-# under STOPPED_CPS (stop_sign's own threshold) this long, or once the stop
-# sign's hold has begun (the rule saw it stopped)
+# Stopped: braked with both wheels at or under STOPPED_CPS this long, or the sign's hold began
 STILL_S = 0.3
-TRIAL_MAX_S = 20.0          # a trial's backstop: the approach is a few seconds
+TRIAL_MAX_S = 20.0          # backstop; the approach is a few seconds
 START_GAP_CM = 60           # the card's start mark, before the stop line
 GAP_RANGE_CM = (2.0, 6.0)   # the card: stop before the line, close enough to see the light
 MAX_SPREAD_CM = 2.0         # the card: max - min of the gaps
@@ -44,12 +34,10 @@ def _num(v) -> float | None:
 
 class StopWatch:
     """
-    Follows one approach's nav.csv rows; ends the run once the robot is
-    stopped for the line, keeping what it reported on the way.
+    Follows one approach's nav.csv rows; ends once stopped for the line.
 
-    Kept: reported_cm (the last stop_line_cm before braking began), brake_t
-    (s into the run), speed_cps (the mean wheel speed on the last driving
-    frame), reason (what it braked for), stopped (it ended the run).
+    reported_cm is the last stop_line_cm before braking; speed_cps the mean wheel
+    speed on the last driving frame.
     """
     def __init__(self, still_s: float = STILL_S, stopped_cps: float = STOPPED_CPS):
         self.still_s, self.stopped_cps = still_s, stopped_cps

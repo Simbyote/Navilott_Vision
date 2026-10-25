@@ -1,21 +1,14 @@
-"""Frame budget: does the whole chain keep 20 FPS, answer within 50 ms, and fit in the Pi's CPU and memory?
+"""Frame budget: does the whole chain keep 20 FPS, answer within 50 ms, and fit the Pi's CPU and memory?
 
 Purpose:
-    P1, P2 and R4, judged. Each trial is one run of the whole chain with
-    navigation deciding and the motors off, parked on a lane so lane keeping
-    has work. The sampler reads only /proc and the thermal zone (vcgencmd
-    only at the ends), so it doesn't disturb the timing it watches. Pass:
-    docs/guides/routines.md, section 2; card docs/routines/requests/frame-budget.md.
+    P1, P2 and R4, judged on runs of the whole chain parked on a lane with
+    navigation deciding and the motors off. The sampler reads only /proc and
+    the thermal zone, so it doesn't disturb the timing (docs/guides/routines.md
+    section 2; docs/routines/requests/frame-budget.md).
 
 Main package:
-    FrameBudget: the routine (make routine-frame-budget). BudgetWatch reads
-    each nav.csv row (budget, latency_ms, frame rate); Sampler reads CPU,
-    memory and heat on a thread.
-
-Flow (per trial):
-    rig opened (camera, sensors; no motors, no button) -> Enter -> the
-    sampler starts -> one run until BudgetWatch says the time is up ->
-    the sampler stops -> the row.
+    FrameBudget (make routine-frame-budget). BudgetWatch reads each nav.csv
+    row; Sampler reads CPU, memory and heat on a thread.
 """
 import statistics
 import threading
@@ -26,8 +19,8 @@ from src.routines.harness import Routine, criterion
 SECONDS = 60.0              # requirements.md P1: --limit 1200 at 20 FPS
 SAMPLE_S = 0.5
 TARGET_FPS = 20.0           # P1
-BUDGET_MS = 1000.0 / FPS    # one frame period: what phase3_linker's "over budget" counts against
-OVER_BUDGET_PCT = 5.0       # P1's "over budget near 0": a first guess
+BUDGET_MS = 1000.0 / FPS    # phase3_linker's "over budget" line
+OVER_BUDGET_PCT = 5.0       # P1's "near 0", a first guess
 LATENCY_MS = 50.0           # P2
 CPU_MAX_PCT = 70.0          # R4
 RSS_MAX_MB = 400.0          # R4
@@ -43,7 +36,7 @@ def _num(v) -> float | None:
 
 
 def p95(values: list[float]) -> float | None:
-    """The 95th percentile, nearest rank; None without values."""
+    """Nearest-rank 95th percentile; None without values."""
     if not values:
         return None
     s = sorted(values)
@@ -51,7 +44,7 @@ def p95(values: list[float]) -> float | None:
 
 
 class BudgetWatch:
-    """Follows one run's nav.csv rows; ends it once `seconds` have passed. Keeps per-frame timings."""
+    """Follows one run's nav.csv rows, ends it after `seconds`, keeps per-frame timings."""
     def __init__(self, seconds: float, budget_ms: float = BUDGET_MS):
         self.seconds, self.budget_ms = seconds, budget_ms
         self.work_ms: list[float] = []         # Phases 2 + 3
@@ -86,9 +79,10 @@ class BudgetWatch:
 
 class Sampler:
     """
-    CPU busy %, this process's RSS and the temperature every SAMPLE_S on a
-    thread; the throttle flags (since boot) at start() and stop(), so a
-    flag that newly appeared during the run shows. Readers are injectable.
+    CPU %, this process's RSS and temperature every SAMPLE_S on a thread.
+
+    Throttle flags are read at start() and stop(), so one that appears during the
+    run shows. Readers are injectable.
     """
     def __init__(self, read=None, throttled=None, period_s: float = SAMPLE_S):
         self._read, self._throttled, self.period = read, throttled, period_s
@@ -125,14 +119,13 @@ class Sampler:
         return self
 
     def stop(self) -> dict:
-        """Stop sampling: {cpu_mean_pct, cpu_max_pct, rss_max_mb, temp_max_c, throttled, under_voltage}."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
         after = self._flags()
 
         def new(flag):
-            k = f"{flag}_occurred"                  # latched since boot: only a change counts
+            k = f"{flag}_occurred"                  # latched since boot
             if after.get(k) is None:
                 return None
             return int(bool(after.get(flag)) or (bool(after[k]) and not (self._before or {}).get(k)))

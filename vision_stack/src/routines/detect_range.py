@@ -1,22 +1,15 @@
-"""Detect range: from how far before the stop line does the robot read the traffic light (or the stop sign, or the line itself) right?
+"""Detect range: how far before the stop line the robot reads the light, sign or line right.
 
 Purpose:
-    Navigation acts on the votes, so this asks what they say with the robot
-    parked at taped gaps before a stop line, for every state the tester can
-    set (the light red, yellow, green, off; the sign posted or taken away).
-    Each look reads OK, WRONG or MISSED; a wrong read anywhere is a hazard,
-    a miss farther out only limits the range. Read rules, poses and pass:
-    docs/guides/routines.md, section 2; card docs/routines/requests/detect-range.md.
+    Parked at taped gaps before a stop line, for every state the tester can
+    set (light red, yellow, green, off; sign posted or taken away). Each look
+    reads OK, WRONG or MISSED; a wrong read anywhere is a hazard, a far miss
+    only limits the range (docs/guides/routines.md section 2;
+    docs/routines/requests/detect-range.md).
 
 Main package:
-    DetectRange: the routine (make routine-detect-range). With target=line
-    at several angles, tilt_fit() gives TILT_ZERO_DEG and TILT_TO_HEADING
-    for navigation/intersection.py.
-
-Flow (per trial):
-    each gap, each pose (angle, offset), each state: the robot moved at a
-    pose's first state; the tester sets the state; Enter; one look; the row
-    and attempt_NN_<gap>cm[_<angle>deg][_<offset>cm]_<state>.jpg.
+    DetectRange (make routine-detect-range). With target=line at several
+    angles, tilt_fit() gives intersection.py's TILT_ZERO_DEG and TILT_TO_HEADING.
 """
 import statistics
 
@@ -27,8 +20,7 @@ from src.routines.harness import Routine, criterion
 
 LIGHT, SIGN, LINE = "light", "sign", "line"
 OFF, PRESENT, ABSENT = "off", "present", "absent"
-# The line can't be taken away between looks, so it has one state; a false
-# line is a look at another lane's line, run as its own session (--notes)
+# The line can't be taken away between looks; test a false line as its own session (--notes)
 STATES = {LIGHT: (RED, YELLOW, GREEN, OFF), SIGN: (PRESENT, ABSENT), LINE: (PRESENT,)}
 EXPECTED = {RED: STOP, YELLOW: CAUTION, GREEN: GO, OFF: GO, PRESENT: True, ABSENT: False}
 NOTHING = {LIGHT: GO, SIGN: False, LINE: False}     # what the vote falls back to when it sees nothing
@@ -43,13 +35,8 @@ OK, MISSED, WRONG = "ok", "missed", "wrong"
 
 def read_look(frames: list[dict], target: str, state: str) -> dict:
     """
-    One look against the scene.
-
-    seen_pct: share of frames that saw what's there (for off / absent:
-        share that saw anything, which is all wrong).
-    wrong_frames: frames that saw something that isn't there.
-    voted: the vote after the last frame (None without frames).
-    result: OK, MISSED or WRONG (module docstring).
+    seen_pct: share of frames that saw what's there (for off / absent, anything,
+    all wrong). wrong_frames saw what isn't there. voted is the last vote.
     """
     n = len(frames)
     tilt = None
@@ -84,13 +71,9 @@ def read_look(frames: list[dict], target: str, state: str) -> dict:
 
 def tilt_fit(rows: list[dict]) -> dict | None:
     """
-    The approach-angle correction from line looks at known angles.
+    Least-squares tilt = zero + slope x angle: TILT_ZERO_DEG = zero, TILT_TO_HEADING = 1 / slope.
 
-    A least-squares line tilt = zero + slope x angle over the rows with a
-    tilt; TILT_ZERO_DEG = zero (what a square robot reads), TILT_TO_HEADING
-    = 1 / slope (degrees turned per degree of tilt: intersection.py's
-    heading = (tilt - zero) x it). None with fewer than two angles, or a
-    tilt that doesn't change with the angle.
+    None with fewer than two angles or a tilt that doesn't move with angle.
     """
     pts = [(float(r["angle_deg"]), float(r["tilt_deg"])) for r in rows if r.get("tilt_deg") is not None]
     if len({a for a, _ in pts}) < 2:
@@ -105,7 +88,7 @@ def tilt_fit(rows: list[dict]) -> dict | None:
 
 
 def reliable_range(results: list[tuple[float, str]]) -> float | None:
-    """The largest gap up to which every trial (gap, result) read OK; None if the nearest didn't."""
+    """Largest gap up to which every trial read OK; None if the nearest didn't."""
     best = None
     for gap in sorted({g for g, _ in results}):
         if any(r != OK for g, r in results if g == gap):     # sorted: the nearer gaps passed already
@@ -115,7 +98,6 @@ def reliable_range(results: list[tuple[float, str]]) -> float | None:
 
 
 def pose_text(angle: float, offset: float) -> str:
-    """How the tester places the robot at a pose: "centered" when square and centered."""
     if not angle and not offset:
         return "centered"
     turn = f"turned {abs(angle):g} deg {'right' if angle > 0 else 'left'}" if angle else "square"
@@ -124,7 +106,6 @@ def pose_text(angle: float, offset: float) -> str:
 
 
 def pose_tag(angle: float, offset: float) -> str:
-    """A pose in a file name: empty for square and centered."""
     return (f"_{angle:g}deg" if angle else "") + (f"_{offset:g}cm" if offset else "")
 
 

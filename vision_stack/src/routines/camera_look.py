@@ -1,28 +1,21 @@
-"""The parked robot's camera through Phases 1-3, for the routines that judge what it sees without driving.
+"""The parked robot's camera through Phases 1-3, for routines that judge what it sees without driving.
 
 Purpose:
-    detect-range, lane-offset and obstacle-check place the robot, then ask
-    what the pipeline makes of the scene for a second or two. Each look runs
-    the same chain a run uses (phase3_linker.run_phase3_chain, MEASURED
-    tuning) with a fresh Phase 3 processor, so its votes and filters start
-    from nothing, as they would arriving at a new scene.
+    detect-range, lane-offset and obstacle-check place the robot, then look
+    for a second or two. Each look runs a run's chain (run_phase3_chain,
+    MEASURED) with a fresh Phase 3 processor, so votes start from nothing as
+    they would at a new scene.
 
 Main package:
-    Eyes.look(n): n frames as Seen dicts (what the routines compare), and
-    the last frame, saved beside the row so a wrong answer can be looked at.
-
-Flow (a look):
-    read frames until n have gone through (drops skipped, at most
-    MAX_READS_PER_FRAME reads a frame) -> run_phase3_chain on each with this
-    look's processor -> seen() per frame.
+    Eyes.look(n) -> n Seen dicts and the last frame, saved beside the row.
 """
 from src.params import STOP_SIGN, TRAFFIC_LIGHT
 
-MAX_READS_PER_FRAME = 3         # a camera that drops two reads in three has failed: the look ends short
+MAX_READS_PER_FRAME = 3         # two drops in three reads ends the look short
 
 
 def parse_numbers(v) -> list[float]:
-    """A --set list: "0,10,20" or a single number, as floats."""
+    """A --set list, "0,10,20" or one number, as floats."""
     if isinstance(v, (int, float)):
         return [float(v)]
     return [float(x) for x in str(v).replace(";", ",").split(",") if x.strip()]
@@ -30,25 +23,13 @@ def parse_numbers(v) -> list[float]:
 
 def seen(res, p3) -> dict:
     """
-    What one frame's result says, for comparing with the scene.
+    One frame's result, for comparing with the scene.
 
-    light: the colour of the frame's traffic light at or over Phase 3's
-        confidence gate (what its vote counts), else None.
-    sign: a stop sign at or over its gate this frame.
-    drive_state, stop_sign: the votes after this frame.
-    lane_offset, lane_status: the filtered offset ([-1, 1] of half the lane
-        ROI, + = robot right of center) and its status.
-    p2_offset, lane_mode, lane_width_px: Phase 2's raw lane measurement.
-    obstacle: Phase 2 saw an obstacle in the path this frame; obstacle_cm,
-        obstacle_clipped: its base's distance (None without cm) and whether
-        the base is below the view.
-    obstacle_voted, obstacle_voted_cm, obstacle_voted_clipped: the vote
-        after this frame, and the measurement it reports.
-    stop_line: Phase 2 found a stop line this frame; stop_line_voted: the
-        vote after this frame; stop_line_tilt: the voted line's tilt this
-        frame (deg, + = its right end nearer; None unless seen this frame),
-        what the intersection reads the approach angle from.
-    total_ms: Phases 2 and 3's time on the frame.
+    light and sign count only at or over Phase 3's gate; drive_state, stop_sign
+    and the *_voted keys are votes after this frame. lane_offset is [-1, 1] of
+    half the ROI, + = robot right; p2_* is Phase 2's raw measurement.
+    obstacle_cm is None without cm, *_clipped when the base is below the view.
+    stop_line_tilt (deg, + = right end nearer) is None unless seen this frame.
     """
     light = sign = None
     for d in res.chain.phase2.detections:
@@ -74,7 +55,7 @@ def seen(res, p3) -> dict:
 
 
 def save_frame(path, frame) -> bool:
-    """The frame as a JPEG at path; False when there's no frame or it can't be written."""
+    """JPEG at path; False with no frame or a failed write."""
     if frame is None:
         return False
     import cv2
@@ -85,14 +66,7 @@ def save_frame(path, frame) -> bool:
 
 
 class Eyes:
-    """
-    The camera, held open, and looks through Phases 1-3.
-
-    source: a live_view FrameSource; None opens the robot's camera at the
-        pipeline's size and rate in open().
-    config, p3: Phase 2 and Phase 3 tuning (MEASURED, MEASURED_ESTIMATION
-        when None).
-    """
+    """source None opens the robot's camera in open(); config and p3 default to MEASURED tuning."""
     def __init__(self, source=None, config=None, p3=None):
         self.source, self.config, self.p3 = source, config, p3
 
@@ -107,7 +81,7 @@ class Eyes:
         return self
 
     def look(self, n: int) -> tuple[list[dict], object]:
-        """n frames through Phases 1-3 with a fresh processor: their Seen dicts and the last frame."""
+        """Seen dicts for n frames through a fresh processor, and the last frame."""
         from src.phase3_linker import make_processor, run_phase3_chain
         out, last, processor = [], None, None
         for _ in range(n * MAX_READS_PER_FRAME):
@@ -127,7 +101,7 @@ class Eyes:
         return out, last
 
     def roi_width_px(self, frame) -> int:
-        """The lane ROI's width in px for this frame's size: what lane_offset's [-1, 1] is half of."""
+        """Lane ROI width in px, what lane_offset's [-1, 1] is half of."""
         from src.perception.roi_crop import resolve
         return int(resolve(self.config.roi.lane, frame.shape[:2])[2])
 

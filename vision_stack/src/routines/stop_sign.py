@@ -1,22 +1,15 @@
-"""Stop sign: does the robot come to a full stop at a stop sign's line, hold, drive on, and not stop when there's no sign?
+"""Stop sign: a full stop at the sign's line, hold, drive on, and no stop without a sign?
 
 Purpose:
-    detect-range asks whether the parked robot sees the sign; stop-distance
-    asks where it stops. This asks the whole behaviour: brake at the line,
-    hold STOP_SIGN_HOLD_TIME_MS, drive on across; and with the sign taken
-    away, cross without stopping. sign_seen tells a missing stop's cause:
-    False is the detector, True is navigation. Pass: docs/guides/routines.md,
-    section 2.
+    detect-range asks whether the parked robot sees the sign, stop-distance
+    where it stops. This checks the whole behavior: brake, hold
+    STOP_SIGN_HOLD_TIME_MS, cross, and cross without stopping when the sign
+    is gone. sign_seen tells a missed stop's cause: False is the detector,
+    True is navigation (docs/guides/routines.md section 2).
 
 Main package:
-    StopSign: the routine (make routine-stop-sign). SignWatch ends each run
-    EXIT_DRIVE_S into the intersection's exit stage.
-
-Flow (per trial):
-    sign trials first, then the trials without it: the rig opened; the
-    tester places the robot on the start mark (the sign posted, or taken
-    away); Enter drives; navigation_linker.run until the watch ends it or
-    max_s; the run folder lands in attempt_NN/.
+    StopSign (make routine-stop-sign). SignWatch ends each run EXIT_DRIVE_S
+    into the exit stage.
 """
 from src.navigation.intersection import STAGE_EXIT
 from src.navigation.navigation import RULE_STOP_SIGN
@@ -28,20 +21,17 @@ ACROSS = "across the intersection"
 SIGN_TRIALS = 5
 NO_SIGN_TRIALS = 3
 START_GAP_CM = 60           # the start mark, before the stop line (stop-distance's)
-TRIAL_MAX_S = 25.0          # a trial's backstop: approach, stop, hold, cross
-EXIT_DRIVE_S = 1.0          # this long into the exit stage ends the run: it's across
+TRIAL_MAX_S = 25.0          # backstop for approach, stop, hold, cross
+EXIT_DRIVE_S = 1.0          # this long into the exit stage counts as across
 HOLD_TOLERANCE_S = 0.3      # the hold, as nav.csv's frames time it, against the rule's
 
 
 class SignWatch:
     """
-    Follows one trial's nav.csv rows; ends the run EXIT_DRIVE_S into the
-    intersection's exit stage.
+    Follows one trial's nav.csv rows; ends EXIT_DRIVE_S into the exit stage.
 
-    Kept: sign_seen (the stop sign vote was on at some frame), stops
-    (stop-sign brake episodes), hold_s (the first episode's hold: from its
-    first REASON_HOLD frame to the first frame after it), resumed (it drove
-    after a stop), across (it reached the exit stage).
+    hold_s is the first stop's hold, from its first REASON_HOLD frame to the frame
+    after it. across means it reached the exit stage.
     """
     def __init__(self, exit_drive_s: float = EXIT_DRIVE_S):
         self.exit_drive_s = exit_drive_s

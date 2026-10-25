@@ -1,22 +1,14 @@
-"""Figure 8: the whole robot on the course, left four times then right four times, lap after lap, for minutes.
+"""Figure 8: four lefts then four rights, lap after lap, for minutes on the course.
 
 Purpose:
     Stop distance asks how accurately one maneuver lands; this asks whether
-    the robot keeps working: every rule over many intersections, left and
-    right turns side by side (an asymmetry shows), and what builds up over
-    minutes (the pack, heat). Turns, touches, laps and slip spots:
-    docs/guides/routines.md, section 2; card docs/routines/requests/figure-eight.md.
+    the robot keeps working over many intersections, with left and right side
+    by side and minutes for the pack and heat to build up
+    (docs/guides/routines.md section 2; docs/routines/requests/figure-eight.md).
 
 Main package:
-    FigureEight: the routine (make routine-figure-eight). EightWatch follows
-    each run; TouchKeys logs an Enter press per touch.
-
-Flow (per trial):
-    1. Rig and battery opened; the robot at the shared intersection's stop
-       line, about to turn left; Enter drives.
-    2. One run until the time is up (or it ends otherwise); motors stop.
-    3. The tester's touches and laps seen; intersections.csv, laps.csv,
-       touches.csv and slips.csv for the attempt; the trial's row.
+    FigureEight (make routine-figure-eight). EightWatch follows each run;
+    TouchKeys logs an Enter press per touch.
 """
 import csv
 import os
@@ -34,7 +26,7 @@ from src.routines.harness import Routine, criterion
 
 ROUTE_LAP = (LEFT,) * 4 + (RIGHT,) * 4
 MINUTES = 10.0
-MAX_LAPS = 200              # the route's length: far more than any run's minutes allow
+MAX_LAPS = 200              # far more than a run's minutes allow
 TIME_UP = "time up"
 EXPECTED_DEG = {LEFT: -90.0, RIGHT: 90.0}               # + = turned right
 INTERSECTION_FIELDS = ("step", "lap", "maneuver", "t_enter", "turn_end", "turn_deg", "exit_deg", "heading_deg",
@@ -42,11 +34,8 @@ INTERSECTION_FIELDS = ("step", "lap", "maneuver", "t_enter", "turn_end", "turn_d
 LAP_FIELDS = ("lap", "t_start", "seconds", "battery_v")
 TOUCH_FIELDS = ("t", "lap", "step", "maneuver", "stage", "rule")
 SLIP_FIELDS = ("t0", "t1", "frames", "lap", "step", "maneuver", "stage", "gyro_dps", "wheels_dps")
-# The chassis not turning the way its wheels do: the gyro's yaw rate against
-# the rate the wheels' speed difference gives (fit over every turn frame of
-# the run), off by more than SLIP_DPS for SLIP_FRAMES frames in a row while
-# driving. The 2026-10-20 figure-eight report's numbers: turn 3 sat at
-# ~3 deg/s against ~27 in the other lefts with both wheels at speed
+# Gyro yaw against the wheels' fitted yaw. On 2026-10-20 a slipping turn read ~3 deg/s
+# against ~27 for the other lefts, both wheels at speed
 SLIP_DPS = 12.0
 SLIP_FRAMES = 4             # ~0.2 s
 MIN_FIT_FRAMES = 20         # turn frames needed to fit the wheels' yaw
@@ -60,18 +49,17 @@ def _num(v) -> float | None:
 
 
 def _step(label) -> int:
-    """The step number from progress.label(): "9/1600 left" -> 9."""
     head = str(label or "0").split("/")[0].strip()
     return int(head) if head.isdigit() else 0
 
 
 def recording(value) -> bool:
-    """The record setting as a switch: 0 / off / no / false is off, anything else on."""
+    """0 / off / no / false is off, anything else on."""
     return str(value).strip().lower() not in ("0", "0.0", "off", "no", "false")
 
 
 def _fit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
-    """Least squares y = k x + c; None with under MIN_FIT_FRAMES points or no spread in x."""
+    """Least squares y = k x + c; None under MIN_FIT_FRAMES points or with no spread in x."""
     if len(points) < MIN_FIT_FRAMES:
         return None
     mx = statistics.fmean(x for x, _ in points)
@@ -85,17 +73,11 @@ def _fit(points: list[tuple[float, float]]) -> tuple[float, float] | None:
 
 class TouchKeys:
     """
-    Enter presses on the terminal while the robot runs: each line typed is
-    one touch. A thread waits on the stream with select, so stop() ends it
-    without a read pending, and the questions after the run read the
-    terminal on their own. It reads the file descriptor itself and counts
-    newlines: a buffered readline() takes two quick presses in one read and
-    then waits on a descriptor with nothing left in it.
+    Each Enter typed during the run is one touch; pressed() returns those since the last call.
 
-    Inputs:
-        stream: The terminal (sys.stdin); anything with fileno().
-
-    pressed(): touches since the last call.
+    A select() thread lets stop() end without a read pending. It reads the fd and
+    counts newlines, since a buffered readline() takes two quick presses in one
+    read and then blocks.
     """
     def __init__(self, stream=None) -> None:
         self._stream = sys.stdin if stream is None else stream
@@ -130,20 +112,11 @@ class TouchKeys:
 
 class EightWatch:
     """
-    Follows one run's nav.csv rows: ends it once `seconds` have passed and
-    keeps every intersection and lap.
+    Follows one run's nav.csv rows, ends it after `seconds`, keeps every intersection and lap.
 
-    intersections: one dict per intersection entered (INTERSECTION_FIELDS):
-        turn_deg is the heading the turn ended on (nav.csv's turn_deg; the
-        rule zeroes its heading there and the exit holds from 0), exit_deg
-        what the exit drifted from it (heading_deg in the exit), heading_deg
-        their sum: the turn as a whole, None while the turn hasn't ended.
-        heading_off_deg is heading_deg against the maneuver's -90 / +90.
-    lane_lost_s: time spent in lane keeping off vision.
-    contract: frames braked because a command broke the contract.
-    touches: one dict per touch logged (TOUCH_FIELDS): when, and where the
-        robot was, from touches() (TouchKeys.pressed) on the next frame.
-    slips(): after the run, where the chassis didn't follow its wheels.
+    Per intersection, turn_deg is where the turn ended, exit_deg the exit's drift
+    from it, and heading_deg their sum (None until the turn ends); heading_off_deg
+    compares it with -90 / +90. touches come from TouchKeys on the next frame.
     """
     def __init__(self, seconds: float, touches=None):
         self.seconds = seconds
@@ -203,10 +176,10 @@ class EightWatch:
 
     def slips(self) -> list[dict]:
         """
-        Runs of SLIP_FRAMES or more frames, while driving, where the gyro and
-        the wheels disagree on the turn rate by more than SLIP_DPS (SLIP_FIELDS).
-        Each one's seconds are added to its intersection's slip_s. [] when
-        the run had too few turn frames to fit the wheels' yaw.
+        SLIP_FRAMES+ driving frames where gyro and wheel yaw rates differ by over SLIP_DPS.
+
+        Each adds its seconds to its intersection's slip_s. [] with too few turn frames
+        to fit.
         """
         for i in self.intersections:
             i["slip_s"] = 0.0
@@ -214,8 +187,7 @@ class EightWatch:
         line = _fit(turns)
         if line is None:
             return []
-        # Again without the frames the first fit put past SLIP_DPS: the slips
-        # themselves pull the wheels' line toward them
+        # Refit without the slips, which pull the line toward them
         line = _fit([(d, y) for d, y in turns if abs(y - (line[0] * d + line[1])) <= SLIP_DPS]) or line
         k, c = line
         spots, run = [], []
@@ -240,11 +212,10 @@ class EightWatch:
                 "wheels_dps": round(statistics.median(k * r[3] + c for r in run), 1)}
 
     def finished(self) -> list[dict]:
-        """The intersections whose turn finished: the lane came back after them."""
+        """Intersections whose turn finished (the lane came back)."""
         return [i for i in self.intersections if i["lane_back"]]
 
     def laps(self) -> list[dict]:
-        """Each completed lap: from its first intersection to the next lap's."""
         firsts = [i for i in self.intersections if (i["step"] - 1) % len(ROUTE_LAP) == 0]
         return [{"lap": a["lap"], "t_start": a["t_enter"], "seconds": round(b["t_enter"] - a["t_enter"], 2),
                  "battery_v": a["battery_v"]} for a, b in zip(firsts, firsts[1:])]
@@ -357,8 +328,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
         volts = [i["battery_v"] for i in watch.intersections if i["battery_v"] is not None]
         wall = report.get("run", {}).get("wall_s") or watch.t
         return {"minutes": round(watch.t / 60, 2), "ended_by": report["ended_by"],
-                # a lap counts once its eighth turn finished (the lane came back): a run ended
-                # mid-turn doesn't count a lap the tester didn't see complete
+                # a lap counts once its eighth turn finished, as the tester saw it
                 "intersections": len(watch.intersections), "laps_robot": len(done) // len(ROUTE_LAP),
                 "laps_seen": laps_seen, "touches": touches, "touches_logged": len(watch.touches),
                 "turns_off_gyro": sum(1 for i in done if i["turn_end"] != TURN_END_GYRO),
