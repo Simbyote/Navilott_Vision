@@ -1,21 +1,14 @@
-"""End of course: finish the run at the route's finish, or end it early on a lane lost off course.
+"""End of course: finish the run at the route's finish, or end it early when the lane is lost.
 
 Purpose:
-    How a run ends depends on the route's finish (route.py): at the edge, a
-    lane that stays lost after the last maneuver is the course's end; with a
-    finish line, the first stop line after it. A lane that stays lost before
-    then is a safety stop. The count pauses while a higher rule holds the
-    frame: inside an intersection, or stopped at a sign or a light.
+    A lane that stays lost after the last maneuver is the course's end when
+    the route finishes at the edge; with a finish line, the first stop line
+    after it is. A lane lost before then ends the run early, as a safety
+    stop. The count pauses while a higher rule holds the frame.
 
 Main package:
-    EndOfCourseRule: update(packet, held) -> a creeping command, BRAKE once
-    finished, None while the lane is fine; and how the run ended (outcome,
-    end_step).
-
-Flow:
-    1. Lane on vision or hold: nothing to say; the count resets.
-    2. Lane stale, not held: creep at SLOW_DUTY on the heading; count the time.
-    3. END_STALE_MS of that, or the finish line reached: BRAKE, finished, from then on.
+    EndOfCourseRule.update(packet) -> a creep on a stale lane, BRAKE once
+    finished, else None; outcome and end_step say how the run ended.
 """
 from src.estimation.estimation import LANE_STALE, EstimationPacket
 from src.navigation.lane_keeping import SOURCE_HEADING, LaneKeepingNavigator
@@ -23,16 +16,12 @@ from src.navigation.navigation_contract import BRAKE, Command
 from src.navigation.route import FINISH_EDGE, RouteProgress
 from src.navigation.stop_line import StopLineTracker
 
-# Duty while the lane is stale. Half of lane keeping's 0.40 would be 0.20,
-# under the 0.25 stall duty; 0.30 is the maneuver trial's slow turn band,
-# which moved the robot (2026-09-30)
+# Above the 0.25 stall duty; the maneuver trial's slow band moved the robot (2026-09-30)
 SLOW_DUTY = 0.30
-# Steering clamp at SLOW_DUTY: as lane keeping's 0.40 at 0.40, the inner
-# wheel may stop but never reverse
+# The inner wheel may stop but never reverse
 SLOW_MAX_STEERING_ADJ = SLOW_DUTY
-# Stale this long at SLOW_DUTY (on top of Phase 3's ~0.35 s hold) ends the
-# run. A guess between ending on glare and rolling off the mat: measure the
-# roll-out past the lane's end on the mat and tune
+# A guess between ending on glare and rolling off the mat; counts after
+# Phase 3's ~0.35 s hold
 END_STALE_MS = 1000
 # Longest packet gap counted as one step, as Phase 3's max_dt_s
 MAX_DT_MS = 500
@@ -43,22 +32,9 @@ OUTCOME_FINISHED, OUTCOME_EARLY = "finished", "ended_early"
 
 class EndOfCourseRule:
     """
-    Creep on a stale lane; finish the run when it stays stale.
-
-    Inputs:
-        lane: The LaneKeepingNavigator whose steer() and heading gain it uses.
-        progress: The run's RouteProgress, which navigation.Navigation
-            advances; RouteProgress() (no maneuvers, finish at the edge)
-            makes any lost lane a normal finish.
-        tracker: The shared StopLineTracker, for the finish line; None
-            without one.
-        end_stale_ms: See END_STALE_MS.
-
-    finished: True once the run is over; stays True until reset().
-    outcome: OUTCOME_FINISHED or OUTCOME_EARLY once finished; None before.
-    end_step: progress.step when it ended.
-    record: {"reason": REASON_SLOW, "stale_ms", "source", "steer"} while
-        creeping, {"reason": REASON_FINISHED, "outcome"} once finished, {} otherwise.
+    progress defaults to RouteProgress() (finish at the edge), which makes any
+    lost lane a normal finish. tracker is needed only for a finish line.
+    Once finished, it stays finished until reset().
     """
     def __init__(self, lane: LaneKeepingNavigator, progress: RouteProgress | None = None,
                  tracker: StopLineTracker | None = None, end_stale_ms: int = END_STALE_MS) -> None:
@@ -78,7 +54,6 @@ class EndOfCourseRule:
         return BRAKE
 
     def reset(self) -> None:
-        """Not finished, no stale time."""
         self.outcome: str | None = None
         self.end_step: int | None = None
         self._stale_ms = 0
@@ -86,17 +61,7 @@ class EndOfCourseRule:
         self.record: dict = {}
 
     def update(self, packet: EstimationPacket, held: bool = False) -> Command | None:
-        """
-        This frame's say.
-
-        Inputs:
-            packet: This frame's packet.
-            held: A higher-priority rule (an intersection crossing, a stop
-                sign or red light) decided this frame: the time doesn't count.
-        Outputs:
-            BRAKE once finished; a slow command while the lane is stale;
-            None otherwise.
-        """
+        """A creep while stale, BRAKE once finished, else None. Held frames don't count toward the end."""
         now = packet.timestamp_ms
         dt_ms = 0 if self._last_ms is None else min(max(now - self._last_ms, 0), MAX_DT_MS)
         self._last_ms = now

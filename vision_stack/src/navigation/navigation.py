@@ -1,22 +1,17 @@
 """Navigation: one Command per frame, from the rules in priority order, else lane keeping.
 
 Purpose:
-    Each navigation decision lives in its own file as a rule with one job;
-    this is the one place that says in which order they're asked. The first
-    rule with a Command wins, and lane keeping steers when none speaks.
-    Every rule still sees every frame (held: a higher one decided), so its state
-    stays current (docs/vision_pipeline/navigation_contract.md, "The navigation subsystem").
+    Each decision lives in its own rule; this is the one place that sets the
+    order they're asked in. Every rule sees every frame, so its state stays
+    current even when a higher rule decided.
 
 Main package:
-    Navigation: the Navigator the pipeline and the linkers drive with:
-    update(packet) -> Command, plus record (which rule decided, and why),
-    finished, outcome and end_step.
+    Navigation.update(packet) -> Command, with record saying which rule decided.
 
 Flow, every frame:
-    1. StopLineTracker: has the robot reached a stop line? (a new one: the next intersection)
-    2. ObstacleRule, StopSignRule, TrafficLightRule, IntersectionRule,
-       EndOfCourseRule, in that order; the first Command wins.
-    3. LaneKeepingNavigator when none spoke. Once finished, every frame is BRAKE.
+    1. The stop-line tracker updates.
+    2. Obstacle, stop sign, traffic light, intersection, end of course: the first Command wins.
+    3. Lane keeping when none spoke; BRAKE on every frame once finished.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.end_of_course import EndOfCourseRule
@@ -30,8 +25,7 @@ from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 from src.navigation.wheel_speed import WheelSpeed
 
-# The contract types live in navigation_contract.py, so the rules can use them
-# without importing this module; re-exported here for everyone else
+# Re-exported: the rules import the contract directly, everyone else from here
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
            "RULE_OBSTACLE", "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
            "RULE_LANE_KEEPING"]
@@ -43,24 +37,10 @@ RULE_OBSTACLE = "obstacle"
 
 class Navigation:
     """
-    The robot's Navigator: the rules in priority order over lane keeping.
-
-    Inputs:
-        lane: The lane keeper; LaneKeepingNavigator() by default.
-        tracker: The shared stop-line tracker; StopLineTracker() by default.
-        gyro_bias_dps: For the intersection's heading hold (the packet's
-            yaw_rate is raw); the run's Phase 3 gyro bias.
-        route: The course plan (route.py); Route() (no maneuvers, finish at
-            the edge: every intersection straight, a lost lane the finish) by default.
-        obstacle: The obstacle rule; ObstacleRule() (its constants) by default.
-
-    wheels: The run's WheelSpeed: it learns the duty-to-speed gain from every
-        frame's command and wheel speeds, and the intersection's turns drive
-        through it, so a turn's arc holds as the battery drains.
-
-    record: Why the last update() returned what it did:
-        {"rule": RULE_*, "phase": the tracker's phase, "line_left_cm": its left_cm, plus the deciding
-        part's own record ("reason", and "source" / "steer" when steering)}.
+    gyro_bias_dps is for the intersection's heading hold, since the packet's
+    yaw_rate is raw. route defaults to Route(): every intersection straight,
+    the lost lane the finish. wheels learns the duty-to-speed gain each frame
+    so the turns' arcs hold as the battery drains.
     """
     def __init__(self, lane: LaneKeepingNavigator | None = None, tracker: StopLineTracker | None = None,
                  gyro_bias_dps: float = 0.0, route: Route | None = None,
@@ -83,7 +63,6 @@ class Navigation:
         self.record: dict = {}
 
     def reset(self) -> None:
-        """Forget everything: tracker, route progress, every rule, lane keeping."""
         self.tracker.reset()
         self.progress.reset()
         self.wheels.reset()
@@ -95,29 +74,24 @@ class Navigation:
 
     @property
     def finished(self) -> bool:
-        """The run is over (finished, or ended early); every command is BRAKE from here."""
         return self._end.finished
 
     @property
     def outcome(self) -> str | None:
-        """end_of_course.OUTCOME_FINISHED or OUTCOME_EARLY once finished; None before."""
         return self._end.outcome
 
     @property
     def end_step(self) -> int | None:
-        """The route step the run ended on; None before."""
         return self._end.end_step
 
     def update(self, packet: EstimationPacket) -> Command:
-        """This frame's command: BRAKE once finished, else the first rule that speaks, else lane keeping."""
-        # This packet's wheel speeds answer the last command: the gain learns from them
+        # This packet's wheel speeds answer the last command
         self.wheels.observe(self._last_cmd, packet)
         if self.finished:
             self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, "line_left_cm": self.tracker.left_cm, **self._end.record}
             self._last_cmd = BRAKE
             return BRAKE
-        # No new stop line while crossing: marks inside an intersection (the
-        # far side's lines) restarted the crossing and counted as intersections
+        # No new stop line while crossing: the far side's lines were counted as intersections
         self.tracker.update(packet, accept_new=not self._crossing.active)
         if self.tracker.entered:
             self.progress.enter()

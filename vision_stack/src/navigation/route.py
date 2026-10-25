@@ -1,21 +1,12 @@
 """Route: the course plan, one maneuver per intersection, and how the run finishes.
 
 Purpose:
-    The robot runs a programmed course: at the first intersection turn left,
-    at the second go straight, and so on, each stop line passing under the
-    view being one intersection. The plan is a JSON file (config.ROUTE_PATH),
-    read and checked once at startup, so it changes between runs without
-    code, and a typo stops the run before the start, not halfway round
-    (docs/vision_pipeline/navigation_contract.md, "The route").
+    Each stop line passing under the view is one intersection, and the plan
+    says what to do at each. It is a JSON file (config.ROUTE_PATH) checked at
+    startup, so a typo stops the run before the start, not halfway round.
 
 Main package:
-    Route: the maneuvers and the finish (the mat's edge, or a finish stop
-    line); RouteProgress says where the run is in it.
-
-Flow:
-    1. load_route() at startup; describe() for the startup screen.
-    2. RouteProgress.enter() at each intersection: the step it is.
-    3. done and at_finish_line tell end_of_course how the run ends.
+    Route: the maneuvers and the finish. RouteProgress tracks where a run is in it.
 """
 import json
 from dataclasses import dataclass
@@ -25,22 +16,15 @@ STRAIGHT, LEFT, RIGHT = "straight", "left", "right"
 MANEUVERS = (STRAIGHT, LEFT, RIGHT)
 FINISH_EDGE, FINISH_STOP_LINE = "edge", "stop_line"
 FINISHES = (FINISH_EDGE, FINISH_STOP_LINE)
-# RouteProgress.enter()'s kinds of intersection
 KIND_MANEUVER, KIND_FINISH, KIND_EXTRA = "maneuver", "finish", "extra"
 
 
 class RouteError(ValueError):
-    """The route file is missing, malformed or names something unknown; the message says which."""
+    """The message says what's wrong with the route file."""
 
 
 @dataclass(frozen=True)
 class Route:
-    """
-    The course plan.
-
-    maneuvers: One of MANEUVERS per intersection, in order.
-    finish: FINISH_EDGE or FINISH_STOP_LINE.
-    """
     maneuvers: tuple[str, ...] = ()
     finish: str = FINISH_EDGE
 
@@ -52,7 +36,7 @@ class Route:
             raise RouteError(f"unknown finish {self.finish!r}; must be one of {list(FINISHES)}")
 
     def describe(self) -> list[str]:
-        """The startup screen's lines: the step count, each maneuver, and the finish."""
+        """The startup screen's lines."""
         n = len(self.maneuvers)
         lines = [f"Route: {n} maneuver{'s' if n != 1 else ''}"]
         lines += [f"  {i}. {m}" for i, m in enumerate(self.maneuvers, 1)]
@@ -64,17 +48,8 @@ class Route:
 
 def load_route(path) -> Route:
     """
-    Read and check a route file.
-
-    Inputs:
-        path: The JSON file: {"maneuvers": [...], "finish": "edge" | "stop_line"}.
-            Maneuver and finish names are case-insensitive; "finish" may be
-            left out (FINISH_EDGE).
-    Outputs:
-        The Route.
-    Raises:
-        RouteError: Missing file, bad JSON, wrong shape or an unknown name,
-            with a message saying which.
+    {"maneuvers": [...], "finish": "edge" | "stop_line"}, case-insensitive;
+    finish defaults to edge. RouteError says what's wrong.
     """
     path = Path(path)
     if not path.is_file():
@@ -99,41 +74,26 @@ def load_route(path) -> Route:
 
 class RouteProgress:
     """
-    Where a run is in its route.
-
-    Attributes:
-        step: Intersections entered so far.
-        current: (step, kind, maneuver) for the latest intersection: kind
-            KIND_MANEUVER (maneuver from the plan), KIND_FINISH (the finish
-            line; maneuver None) or KIND_EXTRA (past the plan; straight).
-            None before the first.
+    step counts intersections entered. current is (step, kind, maneuver) for
+    the latest: past the plan it's the finish line, then extra (straight).
     """
     def __init__(self, route: Route | None = None) -> None:
         self.route = route or Route()
         self.reset()
 
     def reset(self) -> None:
-        """Back to the start of the route."""
         self.step = 0
         self.current: tuple[int, str, str | None] | None = None
 
     @property
     def done(self) -> bool:
-        """Every maneuver in the plan has been started."""
         return self.step >= len(self.route.maneuvers)
 
     @property
     def at_finish_line(self) -> bool:
-        """The latest intersection is the finish line."""
         return self.current is not None and self.current[1] == KIND_FINISH
 
     def enter(self) -> tuple[int, str, str | None]:
-        """
-        One more intersection: what it is in the plan.
-
-        Outputs:
-            (step, kind, maneuver), also kept in current.
-        """
         n = len(self.route.maneuvers)
         if self.step < n:
             self.current = (self.step + 1, KIND_MANEUVER, self.route.maneuvers[self.step])
@@ -145,7 +105,7 @@ class RouteProgress:
         return self.current
 
     def label(self) -> str:
-        """The latest intersection for logs and the video: "2/3 right", "4/3 finish", "5/3 extra"."""
+        """For logs and the video: "2/3 right", "4/3 finish", "5/3 extra"."""
         if self.current is None:
             return f"0/{len(self.route.maneuvers)}"
         step, kind, maneuver = self.current

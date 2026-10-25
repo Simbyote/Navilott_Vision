@@ -1,65 +1,34 @@
 """Lane keeping: proportional differential steering on the lane.
 
 Purpose:
-    The fallback every frame no rule speaks for: drive at a base duty and
-    steer against the lane offset, or, once vision is lost, against the
-    heading turned since. Pure logic, with no pigpio or motor driver, so it
-    runs and tests anywhere; whoever runs the loop drives what it returns.
+    The command for every frame no rule speaks for: a base duty, steered
+    against the lane offset, or against the heading turned once vision is
+    lost. Its steer() is shared by the intersection and end-of-course rules.
 
 Main package:
-    LaneKeepingNavigator: update(packet) -> Command, with record saying why
-    (REASON_*). Its steer() is shared by the intersection and end-of-course rules.
-
-Flow:
-    1. Steering: the offset on vision, times a gain that grows with |offset|;
-       the heading turned on hold or stale; clamped to max_steering_adj.
-    2. Left = base - steering, right = base + steering, each at least
-       STALL_DUTY; anything the contract rejects becomes BRAKE.
+    LaneKeepingNavigator.update(packet) -> Command.
 """
 from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
 
-# Gains and limits (2026-09-30, commit ae34566: variable gain
-# scaling, set on the bench demo); not yet tuned on the course
-BASE_SPEED = 0.40               # forward duty: maneuver_linker's leg duty, ~1166 counts/s per wheel
-KP_CM = 0.015                   # duty per cm of lane_offset_cm, at zero offset
-KP_NORM = 0.30                  # duty per unit of lane_offset at zero offset, used until cm_per_px is set
-# The gain grows by this fraction per cm of offset: kp x (1 + GAIN_SCALE x |offset cm|)
-GAIN_SCALE = 0.05
-# cm per unit of lane_offset, so the normalized path scales its gain like the
-# cm path. Carried from ae34566's mock packets; NOT measured. lane_offset is in
-# half lane-ROI widths and the lane is ~14 cm wide (docs/course.md), so this is
-# likely too large; it stops mattering once cm_per_px is set
+# Gains set on the bench demo (2026-09-30, ae34566), not yet tuned on the course
+BASE_SPEED = 0.40               # ~1166 counts/s per wheel
+KP_CM = 0.015                   # duty per cm of offset
+KP_NORM = 0.30                  # duty per unit of normalized offset, until cm_per_px is set
+GAIN_SCALE = 0.05               # gain grows by this per cm: kp x (1 + GAIN_SCALE x |cm|)
+# Not measured, likely too large for a ~14 cm lane; unused once cm_per_px is set
 NORM_TO_CM = 30.0
-KP_HEADING = 0.010              # duty per degree of heading_error while vision is lost
-MAX_STEERING_ADJ = 0.40         # largest steering duty either way
-# Duties this close to zero are treated as zero, not bumped up to the stall duty
-ZERO_DUTY_EPS = 1e-4
+KP_HEADING = 0.010              # duty per degree, while vision is lost
+MAX_STEERING_ADJ = 0.40
+ZERO_DUTY_EPS = 1e-4            # below this a duty is zero, not lifted to the stall duty
 
-# LaneKeepingNavigator.record["reason"]: what decided this frame's command
 REASON_REJECTED = "rejected"            # the contract refused the steered command
 REASON_STEER = "steer"
-# record["source"]: what the steering came from
 SOURCE_CM, SOURCE_NORM, SOURCE_HEADING, SOURCE_NONE = "offset_cm", "offset", "heading", "none"
 
 
 class LaneKeepingNavigator:
-    """
-    Proportional differential steering navigator for lane keeping.
-
-    Inputs:
-        base_speed: Forward duty on both wheels before steering; clamped to
-            [STALL_DUTY, 1].
-        kp_cm, kp_norm, kp_heading: Steering gains, see the constants above.
-        gain_scale: How fast the offset gains grow with |offset|; 0 is plain
-            proportional steering.
-        max_steering_adj: Steering clamp.
-
-    record: Why the last update() returned what it did, for the linkers'
-        logs and video: {"reason": REASON_*, "source": SOURCE_*,
-        "steer": clamped steering duty (0.0 when braking)}. Debug output
-        only; not part of the Navigator contract.
-    """
+    """base_speed is clamped to [STALL_DUTY, 1]. record (reason, source, steer) is for the linkers' logs only."""
     def __init__(
         self,
         base_speed: float = BASE_SPEED,
@@ -78,7 +47,6 @@ class LaneKeepingNavigator:
         self.record: dict = {}
 
     def reset(self) -> None:
-        """Nothing to forget: every command comes from the current packet alone."""
         self.record = {}
 
     def _brake(self, reason: str) -> Command:
@@ -86,14 +54,6 @@ class LaneKeepingNavigator:
         return BRAKE
 
     def update(self, packet: EstimationPacket) -> Command:
-        """
-        This frame's command.
-
-        Outputs:
-            BRAKE only if a command is rejected by the contract;
-            otherwise forward duty with the steering split across the wheels
-            (+ steering = left slower = turn left, against a + offset).
-        """
         steering_adj, source = 0.0, SOURCE_NONE
         if packet.lane_status == LANE_VISION:
             source = SOURCE_CM if packet.lane_offset_cm is not None else SOURCE_NORM
@@ -104,8 +64,7 @@ class LaneKeepingNavigator:
                 offset = packet.lane_offset
                 steering_adj = offset * self.kp_norm * (1.0 + self.gain_scale * abs(offset) * NORM_TO_CM)
         elif packet.lane_status in (LANE_HOLD, LANE_STALE):
-            # On a stale lane the contract says creep, then stop: EndOfCourseRule does
-            # that ahead of this rule in Navigation; alone, lane keeping holds the heading
+            # On a stale lane EndOfCourseRule creeps and stops ahead of this rule
             steering_adj = packet.heading_error * self.kp_heading
             source = SOURCE_HEADING
         return self.steer(steering_adj, source)
@@ -113,19 +72,9 @@ class LaneKeepingNavigator:
     def steer(self, steering_adj: float, source: str = SOURCE_NONE, base_speed: float | None = None,
               max_steering_adj: float | None = None) -> Command:
         """
-        Forward with this steering split across the wheels.
-
-        Shared with the intersection and end-of-course rules, so all steer
-        with the same split, clamp and stall floor.
-
-        Inputs:
-            steering_adj: + turns left (left wheel slower); clamped.
-            source: What the steering came from, for record.
-            base_speed, max_steering_adj: This call's base duty and clamp;
-                None uses the navigator's own (the end-of-course rule creeps
-                at a slower base with a smaller clamp).
-        Outputs:
-            The command; BRAKE if the contract rejects it.
+        Forward with steering_adj split across the wheels (+ turns left), or
+        BRAKE if the contract rejects it. base_speed and max_steering_adj
+        default to the navigator's own.
         """
         base = self.base_speed if base_speed is None else base_speed
         limit = self.max_steering_adj if max_steering_adj is None else max_steering_adj
@@ -138,7 +87,6 @@ class LaneKeepingNavigator:
         return cmd
 
     def _sanitize_duty(self, duty: float) -> float:
-        """Clamp to [-1, 1] and lift a nonzero duty to at least STALL_DUTY."""
         if abs(duty) < ZERO_DUTY_EPS:
             return 0.0
         clamped = max(-1.0, min(1.0, duty))

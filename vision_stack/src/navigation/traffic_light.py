@@ -1,21 +1,12 @@
 """Traffic light rule: at a stop line, wait while the light is red or yellow.
 
 Purpose:
-    At a reached stop line, a light voted red or yellow shortly before
-    brakes the robot until it has read green or nothing for a while; only
-    green drives on. The memory and the release time take the light from
-    the frames around the line, so one missed frame of a small LED can't
-    run it. Yellow stops too: a red LED's ring can read yellow
-    (docs/vision_pipeline/navigation_contract.md, item 4).
+    A light read red or yellow just before the line is reached brakes the
+    robot until the light has read green or nothing for a short while.
+    Yellow stops too, since a red LED's ring can read yellow.
 
 Main package:
-    TrafficLightRule: update(packet, held) -> BRAKE while waiting at a red
-    or yellow light, None otherwise.
-
-Flow:
-    1. Remember when the light last read red or yellow.
-    2. On the tracker's reached frame: one within RED_MEMORY_MS starts the wait.
-    3. While waiting: red or yellow -> BRAKE; neither for RELEASE_MS -> release.
+    TrafficLightRule.update(packet) -> BRAKE while waiting, else None.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import BRAKE, Command
@@ -26,25 +17,16 @@ CAUTION_STATE = "caution"       # ... and for a yellow one
 STOP_STATES = (RED_STATE, CAUTION_STATE)
 REASON_RED = "red_light"
 
-# Red (or yellow) seen this long before the robot reaches the line still stops it: a
-# light dropped on the reached frame alone ran the red. ~10 frames at 20
-# FPS; a light that turned green longer ago than this drives on. Tune on the mat
+# Red seen this long before the line still counts (~10 frames): a light
+# dropped on the reached frame alone once ran the red
 RED_MEMORY_MS = 500
-# Waiting ends once the light has read neither red nor yellow this long:
-# one dropped frame let the robot go on a red. ~5 frames at 20 FPS
+# Release after this long without red (~5 frames): one dropped frame once
+# let the robot go on a red
 RELEASE_MS = 250
 
 
 class TrafficLightRule:
-    """
-    Wait at a stop line while the light is red or yellow.
-
-    Inputs:
-        tracker: The StopLineTracker navigation.Navigation updates each frame.
-        red_memory_ms, release_ms: See the constants above.
-
-    record: {"reason": REASON_RED} while it brakes; {} otherwise.
-    """
+    """tracker is the one Navigation updates each frame. record holds the reason while braking."""
     def __init__(self, tracker: StopLineTracker, red_memory_ms: int = RED_MEMORY_MS,
                  release_ms: int = RELEASE_MS) -> None:
         self.tracker = tracker
@@ -53,24 +35,13 @@ class TrafficLightRule:
         self.reset()
 
     def reset(self) -> None:
-        """Not waiting, no red remembered."""
         self._waiting = False
         self._red_ms: int | None = None         # when the light last read red
         self._clear_ms: int | None = None       # while waiting: when it stopped reading red
         self.record: dict = {}
 
     def update(self, packet: EstimationPacket, held: bool = False) -> Command | None:
-        """
-        This frame's say.
-
-        Inputs:
-            packet: This frame's packet; the tracker has already seen it.
-            held: A higher-priority rule (the stop sign) decided this frame.
-                The light is still watched, so a red seen at the line holds
-                the robot after the stop sign's hold ends.
-        Outputs:
-            BRAKE while waiting at a red or yellow light; None otherwise.
-        """
+        """BRAKE while waiting, else None. The light is watched even when held, so a red holds past a stop sign."""
         now = packet.timestamp_ms
         red = packet.drive_state in STOP_STATES
         if red:
