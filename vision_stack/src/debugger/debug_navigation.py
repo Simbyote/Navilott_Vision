@@ -3,8 +3,7 @@
 Purpose:
     navigation_linker draws nothing while driving, so rendering can't slow
     the control loop. This renders its run folder (maneuver_linker's format)
-    as the Phase 3 view with a navigation strip, re-running nothing
-    (docs/guides/navigation_linker.md).
+    as the Phase 3 view with a navigation strip, re-running nothing.
 
 Main package:
     render_run(): run folder in, nav.avi and nav_video.csv out. draw_strip()

@@ -3,7 +3,7 @@
 Purpose:
     Tests driving, the IMU and the encoders together (maneuver.py's trial)
     with the whole vision chain running, so the load is real; vision only
-    records. maneuver.avi is rendered after the run (maneuver_linker.md).
+    records. maneuver.avi is rendered after the run.
 
 Main package:
     The run folder: maneuver.csv, p3.csv, report.json, summary.txt, frames/

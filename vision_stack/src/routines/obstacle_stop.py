@@ -4,7 +4,7 @@ Purpose:
     obstacle-check asks what the parked robot sees; this asks what the
     driving robot does. The rule should brake about OBSTACLE_STOP_CM out,
     hold, and drive on OBSTACLE_CLEAR_MS after the object is lifted. Clear
-    trials count false alarms (docs/guides/routines.md section 2).
+    trials count false alarms.
 
 Main package:
     ObstacleStop (make routine-obstacle-stop). ObstacleWatch ends each run

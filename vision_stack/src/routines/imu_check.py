@@ -3,8 +3,7 @@
 Purpose:
     A moved GYRO_BIAS_DPS drifts every heading hold, a scale error ends turns
     early or late, and a wrong IMU_YAW_SIGN turns the wrong way. This checks
-    them through the sensor hub, with real turns the bench can't do
-    (docs/guides/routines.md section 2; docs/routines/requests/imu-check.md).
+    them through the sensor hub, with real turns the bench can't do.
 
 Main package:
     ImuCheck (make routine-imu-check). Its summary gives config.py's bias,

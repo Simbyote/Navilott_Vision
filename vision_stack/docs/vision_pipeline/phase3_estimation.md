@@ -2,7 +2,7 @@
 
 > Per-frame perception plus sensors to a navigation packet.
 
-Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the last few frames, given the sensors". It smooths the lane offset, bridges short dropouts, tracks heading while vision is lost, and votes on traffic light and stop sign state. The result is one `EstimationPacket` per frame, handed to navigation.
+Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the last few frames, given the sensors". It smooths the lane offset, bridges short dropouts, tracks heading while vision is lost, votes on the traffic light, stop sign, stop line and obstacle, and turns the encoders into distance driven. The result is one `EstimationPacket` per frame, handed to navigation.
 
 **Code:** `src/estimation/estimation.py` · **Sensors:** `src/peripherals/sensing.py` over `src/peripherals/imu.py` and `drive.py` · **Harness:** `src/phase3_linker.py`, with `src/debugger/estimation_debug.py` (the traced twin) and `src/debugger/debug_phase3.py` (the video) · **Tests:** `src/tests/test_estimation.py`, `test_sensing.py`, `test_imu.py`
 
@@ -85,7 +85,7 @@ The hold only repeats the last value. It doesn't dead-reckon from the IMU or enc
 
 ## Heading tracker
 
-While the lane filter is on `vision`, the offset already carries any correction, so heading resets to 0. Once vision drops, the tracker adds each frame's turn, clamped to ±90°. The turn is the sensor window's `yaw_deg`: every IMU reading's rate times the time since the previous IMU reading, summed by `SensorBatch`, less `gyro_bias_dps` over the seconds it covers (`yaw_span_s`). A frame gap longer than `max_dt_s` is therefore counted in full, as long as the hub's 2 s buffer held its readings; only a reading gap over `MAX_YAW_GAP_S` (0.1 s: readings lost to I2C errors or a full buffer) is cut short. Without `yaw_deg` (a replay that logged only the rate) it falls back to the mean yaw rate times the frame's clamped `dt`.
+While the lane filter is on `vision`, the offset already carries any correction, so heading resets to 0. Once vision drops, the tracker adds each frame's turn, clamped to ±90°. The turn is the sensor window's `yaw_deg`: every IMU reading's rate times the time since the previous IMU reading, summed by `SensorBatch`, less `gyro_bias_dps` over the seconds it covers (`yaw_span_s`). A frame gap longer than `max_dt_s` is therefore counted in full, as long as its readings weren't lost (the FIFO holds 1.28 s, the hub's buffer 2 s); only a reading gap over `MAX_YAW_GAP_S` (0.1 s: readings lost to I2C errors or a full buffer) is cut short. Without `yaw_deg` (a replay that logged only the rate) it falls back to the mean yaw rate times the frame's clamped `dt`.
 
 The result is **how far the robot has turned since the last good frame**, not an absolute heading relative to the lane. That's what a recovery maneuver needs: "I've turned 20° right since I lost the lines".
 
@@ -108,7 +108,7 @@ Both use the same pattern: a confidence gate per frame, then a majority vote.
 
 Fusion already keeps at most one light and one sign per frame, so there's no candidate selection here.
 
-The traffic light path runs with `calibration/hsv_ranges.json`. Its bands were set on 2026-10-04 from `calibrate_lamps` on the course's lamp at the camera's normal exposure (red H 163-180 and 0-6, yellow 19-35, green 80-96, each 40 or more apart in hue), with S and V minimums looser than measured so other lighting doesn't drop the lamps; re-check them under the course's lighting (`calibrate_lamps.md`). On 2026-10-06 the course's light turned out to be bare LEDs that measurement can't separate from their reflections; its floors and blob gates now come from `sweep_lamps.md`, scored on labelled frames. The stop sign path is live, gated at 0.45 on geometry that hasn't been tuned on course frames yet. On synthetic frames every detected sign scores at least 0.53, so the gate is never reached from below there.
+The traffic light path runs with `calibration/hsv_ranges.json`: red H 165–180 and 0–10, yellow 20–40, green 76–92, with S and V floors (red 60 / 120, yellow 20 / 180, green 60 / 190). The first bands came from `make calib-lamps` on the course's lamp (2026-10-04). On 2026-10-06 the course's light turned out to be bare LEDs that measurement can't separate from their reflections, so the floors are now swept on labelled frames (`make sweep-lamps`), and in glow mode the bands only name each white spot's ring (`phase2_perception.md`, Stage 3B). Re-check them under the venue's light. The stop sign path is live, gated at 0.45; its shape gates were fit to the course's sign (2026-10-20), and on synthetic frames every detected sign scores at least 0.53, so the gate is never reached from below there.
 
 ## Stop line
 
@@ -130,18 +130,21 @@ The hold lasts only as long as the vote: with a window of 3, one missed frame ke
 
 ## Sensors
 
-The IMU and wheel encoders run faster than the camera (100 Hz against ~20 FPS), so `src/peripherals/sensing.py` collects them between frames and hands each frame one group. `SensorHub` reads both together on one background thread at 100 Hz (`SENSOR_RATE_HZ`), stamps each `SensorReading` on `time.monotonic` (the camera's clock), and keeps up to 2 s of them (`SENSOR_HISTORY_S`; older ones are dropped and counted).
+The IMU runs faster than the camera (100 Hz against ~20 FPS), so `src/peripherals/sensing.py` collects its readings between frames and hands each frame one group with the wheel encoders. `SensorHub` stamps each `SensorReading` on `time.monotonic` (the camera's clock) and keeps up to 2 s of them (`SENSOR_HISTORY_S`; older ones are dropped and counted). It works one of two ways, set by `params.IMU_FIFO`:
+
+- **FIFO (on, what the robot runs):** the MPU-6050 samples on its own clock into its FIFO, and no thread runs. Each `drain()` reads every sample since the last one (below).
+- **Polled (off):** a `sensor-hub` thread reads the IMU and the encoders together every 10 ms (`SENSOR_RATE_HZ`), at real-time priority where permitted.
 
 ```
 SensorHub.open(imu=, encoders=)   open only the drivers asked for
-start()     the first window's starting counts; background thread at 100 Hz
-drain()     once per frame: close the window with a fresh encoder reading
-            (no I2C in the frame loop) → SensorBatch of every reading since
+start()     the first window's starting counts; the FIFO, or the polling thread
+drain()     once per frame: the FIFO's samples (FIFO mode), then a fresh encoder
+            reading to close the window → SensorBatch of every reading since
             the last drain
-stop()      end the thread; release the encoders and pigpio
+stop()      end the thread if any; release the encoders and pigpio
 ```
 
-Each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (+1 on this robot: its IMU is upside down, so the driver's + = left already reads + = right; set 2026-10-01 once the motor sides were fixed), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
+Polled, each reading is one `IMUReader.read()` (bias-corrected gyro Z and accel Y) and one `EncoderReader.counts()` at the same instant. **Yaw is flipped into Estimation's + = turning right here, once**, by `IMU_YAW_SIGN` in `params.py` (+1 on this robot: its IMU is upside down, so the driver's + = left already reads + = right; set 2026-10-01 once the motor sides were fixed), so nothing downstream knows how the IMU is mounted. A failed IMU read leaves that reading's IMU fields empty and is counted, never raised.
 
 A `SensorBatch` gives Phase 3 what it needs: the yaw integrated reading by reading (`yaw_deg`, over `yaw_span_s`, each window starting at the previous window's last IMU reading so nothing is counted twice or skipped), the mean yaw rate over its IMU readings, the signed lateral acceleration with the largest magnitude, and each wheel's counts per second from the previous batch's last reading to this one's (0.0 stopped). It also carries the cumulative counts, which `SensorSample` passes on for odometry. `SensorSample.from_batch()` reads those by name, so `estimation.py` never imports `sensing.py` or the drivers, and it still runs on a laptop from replays with no sensors.
 
@@ -163,7 +166,7 @@ Using the encoder readings to control anything (checking that a steering correct
 
 It uses the cumulative counts, never counts per second × frame time, so a late or long frame loses nothing: the counts went on while the loop was busy, and the next frame catches up. A frame without counts holds the last distance.
 
-`cm_per_count` comes from `calibration/odometry.json`, measured by pushing or driving the robot a taped distance (`guides/calibrate_odometry.md`); `MEASURED_ESTIMATION` reads it at startup. Without the file it is `params.NOMINAL_CM_PER_COUNT`, from the wheel's 3.3 cm and 1400 counts per turn (200:1); without encoders every distance is `None`. Nothing drives by distance until its `*_CM` setting is set.
+`cm_per_count` comes from `calibration/odometry.json`, measured by pushing or driving the robot a taped distance (`make calib-odometry`); `MEASURED_ESTIMATION` reads it at startup. Without the file it is `params.NOMINAL_CM_PER_COUNT`, from the wheel's 3.3 cm and 1400 counts per turn (200:1); without encoders every distance is `None`. Nothing drives by distance until its `*_CM` setting is set.
 
 ---
 
@@ -231,7 +234,7 @@ python3 -m src.phase3_linker --camera --limit 200 --print-every 1
 | --- | --- |
 | Console | A status line once a second, plus an event line whenever `lane_status`, `drive_state`, `stop_sign_detected` or `stop_line_detected` changes |
 | `p3.csv` | Every frame: timings, the Phase 2 lane input and stop-line distance (`p2_stop_line_px`), the packet (`stop_line_detected`, `stop_line_distance_px` included), and Phase 3's log |
-| `p3_debug.avi` / `.csv` | The Phase 3 video and its per-frame decisions (on by default; `--no-video`); see `guides/phase3_linker.md` |
+| `p3_debug.avi` / `.csv` | The Phase 3 video and its per-frame decisions (on by default; `--no-video`): the lane overlay with each light and sign colored by its Phase 3 fate, the lane filter's raw and filtered offset, each vote's buffer, and a ~5 s timeline of the states |
 | `summary.txt` | Timing percentiles, frames over budget, lane status and mode histograms, longest hold and stale runs, offset statistics while on vision, per-stage timing (Phase 2, Phase 3, render), the `[PHASE 3]` decision counts |
 
 Replays are deterministic, so Phase 3 config changes can be compared on the same footage. With the robot parked centered, the offset standard deviation in `summary.txt` is the measurement noise floor.
@@ -240,8 +243,8 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 ## Not in Phase 3 (yet)
 
-- **Dead reckoning during a hold.** The hold repeats the last offset. Odometry (`distance_cm`) plus heading could propagate it instead; that isn't built yet (the `@TODO` in `LaneFilter.update()`).
-- **Scene awareness.** Stop lines are voted and measured, but intersections, turns and orientation are not modeled as states. Where the scene state machine lives (estimation or navigation) is still open.
+- **Dead reckoning during a hold.** The hold repeats the last offset. Odometry (`distance_cm`) plus heading could propagate it instead; that isn't built yet.
+- **Scene awareness.** Phase 3 votes and measures the stop line; the intersection itself (reaching the line, the advance, the turn, the exit) is navigation's state machine (`StopLineTracker`, `IntersectionRule`; `navigation_contract.md`).
 - **Out-of-bounds recovery** (stop, localize, correct). Deferred until basic lane keeping works.
 - **Control.** Phase 3 ends at the packet. Steering and speed are navigation's.
 
@@ -252,4 +255,4 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 - **Stop-sign gate.** The stop sign reaches the vote at `min_confidence_sign` (0.45). The sign's shape gates were fit to the course's sign on run frames (2026-10-20, `config.py`), but the gate itself hasn't been checked against course runs: `make routine-detect-range ARGS="--set target=sign"` and `make routine-stop-sign` measure it.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
 - **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement: `make routine-lane-offset` measures it and says the value to set.
-- **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior, the pass-through ambiguity above, and whether the packet carries cumulative encoder counts.
+- **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior and the pass-through ambiguity above.

@@ -4,7 +4,7 @@ Purpose:
     Auto exposure and white balance run in libcamera, and the robot's pipeline
     drops their metadata at the appsink. This opens the camera through
     Picamera2, set up like the robot, and logs each frame's exposure, gains
-    and timing next to the color branch's reading (diagnostics.md, section 9).
+    and timing next to the color branch's reading.
     The camera must be free.
 
 Main package:

@@ -4,8 +4,7 @@ Purpose:
     A frame crosses the sensor, Unicam, the ISP and libcamera before
     GStreamer hands it to OpenCV, none of it visible from Python. This
     records what the OS can show: the hardware graph, the caps at every pad,
-    each element's time per frame, libcamera's log, the VideoCore's clocks
-    (diagnostics.md, section 7). The camera must be free.
+    each element's time per frame, libcamera's log, the VideoCore's clocks. The camera must be free.
 
 Main package:
     The run folder: anatomy.json, latency.csv and summary.txt with its findings.

@@ -3,7 +3,7 @@
 Purpose:
     The kernel picks each thread's core, the GIL which Python thread runs,
     and heat throttles the clock. This records it all for any run without
-    touching its code: its own process, so it shares no GIL (diagnostics.md).
+    touching its code: its own process, so it shares no GIL.
 
 Main package:
     The recording: threads.csv, cores.csv, system.csv, irqs.csv, procs.csv,

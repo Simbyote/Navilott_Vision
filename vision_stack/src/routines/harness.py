@@ -3,8 +3,7 @@
 Purpose:
     The tester shouldn't need to know linkers, flags or file locations: the
     routine prompts each step, checks the answers and writes one folder.
-    A routine itself is a question, its trial and its criteria
-    (docs/guides/routines.md).
+    A routine itself is a question, its trial and its criteria.
 
 Main package:
     run_routine() -> runs/routine_<name>_<time>/ and a verdict: PASS, FAIL,

@@ -4,7 +4,7 @@ Purpose:
     What the robot runs on the course (python3 -m src.main): every frame
     through Pipeline.step(), its Command to the motors. The linkers are the
     instrumented twins. Every way a run ends stops the motors first, and the
-    display says which it was (production_run.md).
+    display says which it was.
 
 Main package:
     RunResult: how the run ended, its time and the route step it reached.

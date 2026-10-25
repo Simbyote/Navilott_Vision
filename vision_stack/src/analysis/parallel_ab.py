@@ -4,7 +4,7 @@ Purpose:
     parallel_compare times Phase 2 alone; a run also shares the cores and the
     GIL with the sensor hub, recorder, Phase 3 and navigation. This alternates
     whole navigation runs (S, P, S, P, ...) so heat and battery affect both
-    alike (docs/guides/analysis.md).
+    alike.
 
 Main package:
     ab.json in --out: per run and mode, frame rate, frame gaps, Phase 2 time,

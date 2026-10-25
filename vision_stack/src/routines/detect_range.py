@@ -4,8 +4,7 @@ Purpose:
     Parked at taped gaps before a stop line, for every state the tester can
     set (light red, yellow, green, off; sign posted or taken away). Each look
     reads OK, WRONG or MISSED; a wrong read anywhere is a hazard, a far miss
-    only limits the range (docs/guides/routines.md section 2;
-    docs/routines/requests/detect-range.md).
+    only limits the range.
 
 Main package:
     DetectRange (make routine-detect-range). With target=line at several

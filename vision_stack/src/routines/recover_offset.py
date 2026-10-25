@@ -4,8 +4,7 @@ Purpose:
     The IDR's two lane-keeping tests (slide 10): maximum recoverable offset
     and mean distance from center on a straight. It follows the robot's own
     lane_offset_cm, so it needs lane-offset's cm_per_px; the ruler at the end
-    decides recovery (docs/guides/routines.md section 2;
-    docs/routines/requests/recover-offset.md).
+    decides recovery.
 
 Main package:
     RecoverOffset (make routine-recover-offset). RecoverWatch ends each run

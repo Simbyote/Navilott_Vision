@@ -21,7 +21,7 @@ Two layouts were considered:
 - **PWM is in hardware already.** The motor PWM runs on GPIO12 and GPIO13, the Pi's two hardware PWM channels, through the pigpio daemon. The duty cycle holds steady even when Python is late, so scheduler jitter delays a command change but doesn't disturb the waveform.
 - **One board, one codebase.** No second firmware, no UART packet format, no checksums, and no link to debug between two processors.
 
-The MCU option and its packet format are in `archD1/architecture.md` (Option B).
+The MCU option got as far as a UART packet format on paper; nothing of it was built.
 
 ---
 
@@ -118,15 +118,20 @@ Still to measure: the current draw of the Pi and of each motor at stall. The rob
 ## Software on the Pi
 
 ```
-pigpiod (daemon)                     hardware PWM, GPIO, encoder callbacks
-│
+pigpiod (daemon)                     hardware PWM, GPIO, encoder callbacks, and a
+                                     watchdog script that brakes if Python goes quiet
 python process
 ├── main thread, once per frame:
-│     capture → Phase 2 → Phase 3 → navigation → motor command
-│     display update (throttled to 1 Hz)
-├── sensor hub thread: MPU-6050 and encoder counts together at 100 Hz, drained once per frame (src/peripherals/sensing.py)
-└── encoder counting: pigpio callbacks
+│     capture → drain the sensors → Phase 2 → Phase 3 → navigation → motor command
+│     display update (written once a second)
+├── GStreamer's capture thread (task0): C only, never takes the GIL
+├── battery monitor: one ADS1115 read a second, smoothed (src/peripherals/battery.py)
+├── motor watchdog: brakes after MOTOR_WATCHDOG_S without a command (src/peripherals/drive.py)
+├── p2-side: color and obstacle beside geometry, only with PARALLEL_PERCEPTION (off)
+└── pigpio's callback thread (pigpio-cb): encoder counting
 ```
+
+The MPU-6050 samples at 100 Hz on its own clock into its FIFO (`IMU_FIFO`), and the main thread reads everything since the last frame in two I²C transfers when it drains the sensors (`src/peripherals/sensing.py`). With `IMU_FIFO` off, a `sensor-hub` thread polls the IMU and encoders every 10 ms instead, at real-time priority where permitted.
 
 | Component | Owner | Code |
 | --- | --- | --- |
@@ -142,7 +147,7 @@ python process
 
 - **The code is layered,** and imports only point down: see "Software layers" below.
 - **pigpio for all GPIO.** One daemon owns the pins, so the display, button and motor driver can't conflict. Start it with `sudo pigpiod` or the systemd service.
-- **The IMU runs on its own thread** because the frame rate is too slow to sample the gyro well. See `vision_pipeline/phase3_estimation.md`.
+- **The IMU samples faster than the camera** (100 Hz against 20 FPS), because the frame rate is too slow to integrate the gyro well; its FIFO holds the samples between frames. See `vision_pipeline/phase3_estimation.md`, "Sensors".
 - **The handoff to navigation is the `EstimationPacket`,** documented in `vision_pipeline/phase3_estimation.md`; what Navigation does with it is in `vision_pipeline/navigation_contract.md`.
 
 ---
@@ -197,7 +202,7 @@ Seven layers. A module imports only from its own layer or the ones below it; not
 
 At 20 FPS each frame has 50 ms for Phase 2, Phase 3, navigation and the motor update. Capture overlaps with processing, since the appsink keeps only the newest frame.
 
-Measured with navigation in the same process: the frame rate is about 15 FPS on the IMX290 at 480×270, short of the 20 FPS target, with frames still over budget (`requirements.md`, P1). `make routine-frame-budget` judges the rate, the budget, latency, CPU and memory together, and `guides/diagnostics.md` shows where the time goes.
+Measured with navigation in the same process: the frame rate is about 15 FPS on the IMX290 at 480×270, short of the 20 FPS target, with frames still over budget (`requirements.md`, P1). `make routine-frame-budget` judges the rate, the budget, latency, CPU and memory together; `make diag-nav` then `make pi-load` shows where the time goes, thread by thread.
 
 ---
 
@@ -207,7 +212,7 @@ Measured with navigation in the same process: the frame rate is about 15 FPS on 
 | --- | --- | --- |
 | Scheduler jitter | Linux isn't real-time; a frame can arrive 5–20 ms late under load | PWM is in hardware, so only command updates are late. Phase 3 clamps large `dt` |
 | CPU contention | Navigation or logging slows perception; frame times spike | Profile first; see CPU contention below |
-| Single point of failure | A crash in the Python process leaves the motors at their last command | A watchdog in `drive.py` brakes the motors when no command arrives for `MOTOR_WATCHDOG_S` (0.5 s), and the run loop halts them on any exception (`main.py`) |
+| Single point of failure | A crash in the Python process leaves the motors at their last command | A watchdog in `drive.py` brakes the motors when no command arrives for `MOTOR_WATCHDOG_S` (0.5 s); a copy runs inside pigpiod, so it brakes even when Python stalls (a 1,558 ms frame on 2026-10-20 kept a turn's command on the wheels); the run loop halts them on any exception (`main.py`) |
 | Brownout | Motor current sags the battery and the Pi resets | Buck headroom; measure stall current |
 | Memory | 512 MB shared by the OS, libcamera, OpenCV and Python | Stay in one process; check peak memory during a full run |
 

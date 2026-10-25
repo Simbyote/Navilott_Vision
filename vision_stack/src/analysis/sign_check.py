@@ -4,7 +4,7 @@ Purpose:
     The detector gates red blobs largest first and takes the first that
     passes. This replays frames through Phases 1-2, gates every blob on its
     own, then relaxes one gate at a time, naming the gate that brings the sign
-    back (docs/guides/analysis.md, "Stop sign misses").
+    back.
 
 Main package:
     sign_check.csv (per frame: blobs, the largest's gate and values, ROI edges

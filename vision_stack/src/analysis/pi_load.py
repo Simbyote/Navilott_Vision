@@ -3,7 +3,7 @@
 Purpose:
     monitor's summary.txt gives averages; this reads the recording over time.
     Is the frame loop CPU-bound or serial, does the sensor hub keep cadence,
-    and what did slow frames coincide with (docs/guides/analysis.md, "Pi load").
+    and what did slow frames coincide with.
     With --run, frames are aligned on the monotonic clock and only the run's
     own time is judged.
 

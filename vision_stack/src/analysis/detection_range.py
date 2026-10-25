@@ -4,7 +4,7 @@ Purpose:
     First-seen distance less stopping distance is navigation's margin. From
     one still run per measured distance, this gives each distance's detection
     rate and the reliable range, out to which every distance from the nearest
-    meets --threshold (docs/guides/analysis.md).
+    meets --threshold.
 
 Main package:
     analyze(): per target and distance, rate and longest miss, the reliable

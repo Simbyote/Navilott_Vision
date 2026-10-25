@@ -9,7 +9,7 @@ _CLI_HELP = """\
 Run a hardware test routine: it prompts every step, asks for any hand
 measurement, and writes runs/routine_<name>_<time>/ with every trial, the
 conditions and a PASS / FAIL verdict. At any prompt, q stops and keeps what's
-done. docs/guides/routines.md has each routine; make routines lists them.
+done. make routines lists them.
 """
 
 

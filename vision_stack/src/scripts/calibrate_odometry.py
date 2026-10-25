@@ -4,7 +4,7 @@ Purpose:
     One number turns counts into cm, and it depends on the wheels, the
     gearbox and the decoding, so it's measured: move a measured distance,
     count, divide. Pushed by hand (no slip) or --drive (the slip it really
-    has); both wheels should agree within a few percent (calibrate_odometry.md).
+    has); both wheels should agree within a few percent.
 
 Main package:
     calibration/odometry.json: cm_per_count, each wheel's, and the trials' spread.

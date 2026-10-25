@@ -3,7 +3,7 @@
 Purpose:
     The instrumented twin of the production run. Nothing is drawn while it
     drives, so the run measures the real control loop; nav.avi is rendered
-    after. Replays and --no-motors are dry runs (navigation_linker.md).
+    after. Replays and --no-motors are dry runs.
 
 Main package:
     The run folder: nav.csv (every frame), p3.csv, report.json, summary.txt,

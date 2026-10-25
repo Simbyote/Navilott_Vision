@@ -4,8 +4,7 @@ Purpose:
     P3 prompted: parked at measured offsets, reported cm against the ruler.
     The first, centered look sets the ground scale (LANE_CM / median lane
     width px) and the noise floor. Once it passes, recover-offset can trust
-    the robot's offset (docs/guides/routines.md section 2;
-    docs/routines/requests/lane-offset.md).
+    the robot's offset.
 
 Main package:
     LaneOffset (make routine-lane-offset); its summary gives config.py's cm_per_px.

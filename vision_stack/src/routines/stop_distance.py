@@ -4,8 +4,7 @@ Purpose:
     D4's navigation side. Each trial drives at a stop sign or red light until
     navigation has braked and the wheels read stopped, then the tester tapes
     the gap. The row keeps the last stop_line_cm, braking speed and pack volts,
-    since the stop falls with the battery (docs/guides/routines.md section 2;
-    docs/routines/requests/stop-distance.md).
+    since the stop falls with the battery.
 
 Main package:
     StopDistance (make routine-stop-distance). StopWatch ends each approach

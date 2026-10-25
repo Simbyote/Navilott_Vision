@@ -3,8 +3,7 @@
 Purpose:
     The lane view shows what lane_offset decided; this shows the step before.
     Contours are red when geometry refused them, amber for lane_offset, green
-    when usable, over a panel of the edge map they came from
-    (docs/guides/phase2_linker.md). Rejected contours need trace=True.
+    when usable, over a panel of the edge map they came from. Rejected contours need trace=True.
 
 Main package:
     LaneGeometryView, a debug_video view in lane-ROI coordinates.

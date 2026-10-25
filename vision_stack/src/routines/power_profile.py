@@ -4,8 +4,7 @@ Purpose:
     The ADS1115 measures volts, not current, so there are no watts. Per stage
     (rest, camera, pipeline, motors, full) this gives the sag against rest,
     the drain, whether the pack stays above warning, and supply dips or
-    throttling (docs/guides/routines.md section 2;
-    docs/routines/requests/power-profile.md).
+    throttling.
 
 Main package:
     PowerProfile (make routine-power-profile): one row per stage, every

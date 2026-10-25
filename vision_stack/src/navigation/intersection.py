@@ -48,7 +48,7 @@ RIGHT_TURN = Command(0.78, 0.25)
 # 90 less the coast after the turn stops
 TURN_TARGET_DEG = 85.0
 # Heading deg per deg of stop-line tilt, measured with detect-range at
-# -6..6 deg (2026-10-20; how: navigation_linker.md). Negative and over 1: a
+# -6..6 deg (2026-10-20; how: navigation_contract.md). Negative and over 1: a
 # low camera flattens the line. Check its sign on the robot: wrong, it doubles the error
 TILT_TO_HEADING: float | None = -4.3
 # The tilt a square approach reads, from the same fit

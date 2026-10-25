@@ -3,8 +3,7 @@
 Purpose:
     D2 once per trial with the route file, countdown, motors and recording.
     The tester answers as a judge would (completed, touches, signs or lights
-    run, stopwatch); the stopwatch also checks the elapsed-time display
-    (docs/guides/routines.md section 2; docs/routines/requests/course-run.md).
+    run, stopwatch); the stopwatch also checks the elapsed-time display.
 
 Main package:
     CourseRun (make routine-course-run), with CourseWatch following each run.

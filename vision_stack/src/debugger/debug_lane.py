@@ -9,8 +9,7 @@ Purpose:
 Main package:
     annotate(): raw candidates (green usable, red with their gate), left
     (cyan) and right (magenta) boundaries, robot (gray) and lane center
-    (yellow, red when clamped), under a mode and offset header
-    (docs/guides/phase2_linker.md).
+    (yellow, red when clamped), under a mode and offset header.
 """
 import re
 from collections import Counter

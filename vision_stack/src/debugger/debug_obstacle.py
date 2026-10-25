@@ -4,7 +4,7 @@ Purpose:
     Checks the obstacle thresholds on real footage (make phase2 VIEWS=obstacle).
     The top panel boxes each surviving blob by fate with the measured one's
     distance; the bottom shows the not-floor and opened masks, which tell a
-    never-seen obstacle from one opened away (docs/guides/phase2_linker.md).
+    never-seen obstacle from one opened away.
 
 Main package:
     ObstacleView, a debug_video view in obstacle-ROI coordinates.

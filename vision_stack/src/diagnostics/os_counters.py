@@ -4,7 +4,7 @@ Purpose:
     Some of the robot's work happens outside its threads: camera interrupts,
     the ISP, I2C, pigpiod's PWM, the SD card. All of it is in /proc and
     vcgencmd as counters, read once a second for monitor.py; every source is
-    optional (diagnostics.md, section 8).
+    optional.
 
 Main package:
     OsCounters.take(): the system fields, and per-IRQ and per-process rates since the last take.

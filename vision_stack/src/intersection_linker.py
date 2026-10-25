@@ -3,7 +3,7 @@
 Purpose:
     Proves each maneuver on the mat before a full course. Each is a
     navigation_linker run with a one-step route, so the robot drives exactly
-    as in a course run, judged PASS or CHECK (intersection_linker.md).
+    as in a course run, judged PASS or CHECK.
 
 Main package:
     The verdict per maneuver: PASS when one intersection counted, the turn

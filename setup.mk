@@ -89,7 +89,7 @@ camera-deps: $(STAMP_DIR)
 	fi
 
 # --- Diagnostics -----------------------------------------------------------
-# What vision_stack's diagnostics call (docs/guides/diagnostics.md): media-ctl and
+# What vision_stack's diagnostics call (src/diagnostics/): media-ctl and
 # v4l2-ctl (capture-anatomy), graphviz to draw its graphs, cyclictest
 # (sched-latency), Picamera2 (frame-meta; a venv sees it with --system-site-packages)
 

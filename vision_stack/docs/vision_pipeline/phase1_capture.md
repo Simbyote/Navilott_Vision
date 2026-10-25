@@ -52,7 +52,7 @@ appsink drop=true max-buffers=1 sync=false
 
 **The image is turned upright once, at capture.** The camera is mounted upside down (`CAMERA_ROTATE_180`). `CameraSource.read()` turns every frame before handing it on, so every consumer, from the perception stages to recordings and the calibration script, sees the same upright frame. Every calibration (lens, ground, stop-line table) is tied to that orientation: changing `CAMERA_ROTATE_180` means recalibrating.
 
-**Exposure and white balance are the camera's own unless set.** `CAMERA_CONTROLS` (`params.py`) passes libcamerasrc controls as properties on the element, e.g. `{"ae-constraint-mode": "highlight", "exposure-value": -1.0, "awb-mode": "daylight"}`; empty, the camera's auto exposure and white balance run as they always have. The names the robot's camera takes are in `capture/camera.CAMERA_CONTROL_NAMES` (from `gst-inspect-1.0 libcamerasrc`), and an unknown one fails by name when the source is built, not as GStreamer's "unable to start pipeline". The driving linkers take `--camera-control KEY=VALUE` (repeatable) over these for one run, to try values before setting them. Why it matters: in a dim room the auto exposure brightens the scene until the traffic lamps blow out to white (`calibrate_lamps.md`), and the white balance follows the room's light. Any change also changes how the lanes look, so re-check lane detection with it.
+**Exposure and white balance are the camera's own unless set.** `CAMERA_CONTROLS` (`params.py`) passes libcamerasrc controls as properties on the element, e.g. `{"ae-constraint-mode": "highlight", "exposure-value": -1.0, "awb-mode": "daylight"}`; empty, the camera's auto exposure and white balance run as they always have. The names the robot's camera takes are in `capture/camera.CAMERA_CONTROL_NAMES` (from `gst-inspect-1.0 libcamerasrc`), and an unknown one fails by name when the source is built, not as GStreamer's "unable to start pipeline". The driving linkers take `--camera-control KEY=VALUE` (repeatable) over these for one run, to try values before setting them. Why it matters: in a dim room the auto exposure brightens the scene until the traffic lamps blow out to white (2026-10-04), and the white balance follows the room's light. Any change also changes how the lanes look, so re-check lane detection with it.
 
 **Only the newest frame is kept.** `drop=true max-buffers=1` makes the appsink throw away frames the pipeline didn't get to. If a frame takes too long to process, the next read gets the current view of the course instead of a backlog. For steering, a skipped frame is better than a late one.
 
@@ -96,7 +96,7 @@ All in `src/params.py`:
 | `MIN_FPS`, `MAX_FPS` | 5, 30 | Warning band |
 | `CAMERA_CALIB_PATH` | `calibration/camera_calibration.json` | Lens calibration for this mode |
 
-If you change the camera, the mode, the output size or the flip, the lens calibration is invalid. `test_calibration.py` catches the mismatch; see `guides/test_calibration.md`.
+If you change the camera, the mode, the output size or the flip, the lens calibration is invalid. `preprocess.undistort()` raises on a calibration whose image size doesn't match the frame; a new mode, flip or focus at the same size it can't see, so recalibrate.
 
 ---
 
@@ -110,7 +110,7 @@ Everything above `CameraSource` also accepts replayed frames, so perception and 
 | `VideoFrameSource` | A recorded clip, e.g. a `live_view` `run.avi` | Nominal frame rate |
 | `DirectoryFrameSource` | Image sequence, sorted by filename | Nominal frame rate |
 
-In pytest, `--replay=DIR` does the same for the hardware tests (`guides/pytest.md`).
+In pytest, `--replay=DIR` does the same for the hardware tests.
 
 `VideoSink` writes frames to a video file. It must be opened before writing and rejects frames whose size doesn't match.
 
@@ -120,8 +120,8 @@ In pytest, `--replay=DIR` does the same for the hardware tests (`guides/pytest.m
 
 The M12 lens has noticeable barrel distortion toward the edges. Calibration belongs to the camera, but the correction runs in Phase 2 (`preprocess.undistort()`) so both branches see the same geometry.
 
-- Capture and solve: `python3 -m src.scripts.calibrate_camera` (see `guides/calibrate_camera.md`)
-- Verify an existing calibration: `guides/test_calibration.md`
+- Capture, solve and verify: `make calib-camera` (`python3 -m src.scripts.calibrate_camera [capture|solve|verify|all]`; `--help` has the steps)
+- Verify an existing calibration: `python3 -m src.scripts.calibrate_camera verify`, which undistorts saved frames and scores how much straighter the board got; `pytest --hardware src/tests/test_calibration.py` times the undistortion per frame
 - It's valid only for the sensor mode, output size, flip and focus it was captured with
 
 ---
@@ -129,5 +129,5 @@ The M12 lens has noticeable barrel distortion toward the edges. Calibration belo
 ## Open items
 
 - **Camera choice.** The IMX290 is the robot's camera. Changing it again means updating `SENSOR_CONFIG`, `FRAME_W`/`FRAME_H`, possibly `CAMERA_ROTATE_180`, and recalibrating.
-- **Capture timing.** Re-measure with `pytest --hardware -k capture` on the current camera, or see the whole capture path with `make capture-anatomy` (`guides/diagnostics.md`). Numbers from the IMX219 at 480×360 no longer apply.
+- **Capture timing.** Re-measure with `pytest --hardware -k capture` on the current camera, or see the whole capture path with `make capture-anatomy`. Numbers from the IMX219 at 480×360 no longer apply.
 - **Exposure.** `params.CAMERA_CONTROLS` is empty, so libcamera runs its own auto exposure and white balance; a linker's `--camera-control KEY=VALUE` tries a setting for one run. In a dim room the auto exposure blew the lamps out to white (2026-10-04). Locking exposure and white balance at the venue is the main lighting fix (`concepts.md`, "Lighting"); if motion blur shows up at driving speed, a fixed shorter shutter is the first thing to try.

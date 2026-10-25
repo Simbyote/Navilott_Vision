@@ -3,8 +3,7 @@
 Purpose:
     Phase 3 acts only across frames (EMA, jump gate, hold, votes), so a wrong
     packet is bad input or a filter doing what it was told; this shows both.
-    It reads TracedPhase3Processor's records, re-deriving nothing
-    (docs/guides/phase3_linker.md).
+    It reads TracedPhase3Processor's records, re-deriving nothing.
 
 Main package:
     Phase3View, a debug_video view on a Phase3Result: the lane overlay with

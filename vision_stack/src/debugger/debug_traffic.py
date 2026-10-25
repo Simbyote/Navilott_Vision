@@ -4,8 +4,7 @@ Purpose:
     Calibrates the HSV ranges and light gates on their own. The masks sit
     beside the picture, and the best candidate's mean HSV shows how near a
     band edge it is, one lighting change from vanishing. In glow mode
-    (MEASURED's) each white spot is labeled by the glow gate that decided it
-    (docs/guides/phase2_linker.md).
+    (MEASURED's) each white spot is labeled by the glow gate that decided it.
 
 Main package:
     The ROI with every traced blob or spot beside the color masks (white on

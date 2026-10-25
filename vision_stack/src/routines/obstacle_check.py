@@ -4,7 +4,7 @@ Purpose:
     Obstacle detection was tuned on one day's runs with one can. This places
     objects at taped gaps and lateral offsets and records seen share, vote,
     reported distance and whether the rule would brake; clear-lane trials
-    count false alarms (docs/guides/routines.md section 2).
+    count false alarms.
 
 Main package:
     ObstacleCheck (make routine-obstacle-check). Its summary gives the range

@@ -4,8 +4,7 @@
 Purpose:
     The board-free way to give the stop line cm. Tape lies across the lane
     at a measured distance, and the robot's own Phase 2 says how many rows up
-    it sees it, so whatever the detector does is calibrated in
-    (calibrate_stop_line.md).
+    it sees it, so whatever the detector does is calibrated in.
 
 Main package:
     calibration/stop_line_table.json: the curve's A, B and C, each mark and
@@ -119,7 +118,7 @@ def build_record(marks: list[dict], preprocess, frame_size, reference: str) -> d
 def report_lines(rec: dict, roi_height: int) -> list[str]:
     a, b, c = rec["curve"]
     err = rec["error_cm"]["max"]
-    verdict = "GOOD" if err < GOOD_CM else "OK" if err < OK_CM else "POOR - see calibrate_stop_line.md"
+    verdict = "GOOD" if err < GOOD_CM else "OK" if err < OK_CM else "POOR - remeasure"
     out = [f"  {'mark cm':>8} {'rows':>7} {'fit cm':>7} {'error':>6}"]
     out += [f"  {m['cm']:>8.2f} {m['rows']:>7.1f} {m['fit_cm']:>7.2f} {m['error_cm']:>6.2f}" for m in rec["marks"]]
     out.append(f"  worst error {err:.2f} cm, mean {rec['error_cm']['mean']:.2f} cm -> {verdict}")

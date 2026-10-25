@@ -4,7 +4,7 @@ Purpose:
     An RTOS bounds the delay between a thread's wake-up time and when it
     runs; Linux usually keeps it small, occasionally not. The robot's
     deadlines are soft (a 50 ms frame, a 10 ms IMU tick), so the question is
-    how the worst case compares (diagnostics.md, section 11).
+    how the worst case compares.
 
 Main package:
     The run folder: per case (a Python thread, cyclictest normal and real-time)

@@ -3,8 +3,7 @@
 Purpose:
     P1, P2 and R4, judged on runs of the whole chain parked on a lane with
     navigation deciding and the motors off. The sampler reads only /proc and
-    the thermal zone, so it doesn't disturb the timing (docs/guides/routines.md
-    section 2; docs/routines/requests/frame-budget.md).
+    the thermal zone, so it doesn't disturb the timing.
 
 Main package:
     FrameBudget (make routine-frame-budget). BudgetWatch reads each nav.csv

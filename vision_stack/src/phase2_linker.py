@@ -4,7 +4,7 @@ Purpose:
     The live view, the other linkers and the tests all run frames through
     this one chain, so none can drift from it; pipeline.py is its debug-free
     twin. On the command line it's the live view
-    (python3 -m src.phase2_linker, phase2_linker.md).
+    (python3 -m src.phase2_linker).
 
 Main package:
     ChainResult: every stage's output and debug for one frame, ending in the Phase2Output.

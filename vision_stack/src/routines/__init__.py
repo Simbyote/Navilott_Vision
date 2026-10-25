@@ -2,8 +2,7 @@
 
 Purpose:
     Each routine answers one question on the real robot, judged against
-    criteria agreed on a test request card (docs/routines/request_card.md).
-    What each asks and how it's judged: docs/guides/routines.md, section 2.
+    criteria agreed up front; each routine's judge() holds them.
 
 Main package:
     ROUTINES: {name: Routine class}, what make routines lists and

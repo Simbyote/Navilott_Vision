@@ -3,7 +3,7 @@
 Purpose:
     Checks the stop-line gates on real footage. The top panel names the gate
     that refused a line; the bottom, the gradient split, shows whether its
-    edges reached the gates at all (docs/guides/phase2_linker.md). The
+    edges reached the gates at all. The
     threshold stands in for min_confidence, so an amber line can still be a
     geometry candidate.
 

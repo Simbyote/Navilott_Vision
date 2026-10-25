@@ -5,7 +5,7 @@ Purpose:
     where it stops. This checks the whole behavior: brake, hold
     STOP_SIGN_HOLD_TIME_MS, cross, and cross without stopping when the sign
     is gone. sign_seen tells a missed stop's cause: False is the detector,
-    True is navigation (docs/guides/routines.md section 2).
+    True is navigation.
 
 Main package:
     StopSign (make routine-stop-sign). SignWatch ends each run EXIT_DRIVE_S

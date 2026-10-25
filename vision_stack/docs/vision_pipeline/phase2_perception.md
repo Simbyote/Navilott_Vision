@@ -104,20 +104,7 @@ Cuts four regions so each branch only processes the part of the frame where its 
 | sign | x 0.55–1.00, y 0.00–0.85 | (264, 0, 216, 230) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane. Tall: near the line the sign rises in the frame, and a lower edge cut it into 5–7 vertices (sign_check, 2026-10-20). Right of the traffic ROI, so the two don't overlap |
 | obstacle | x 0.25–0.75, y 0.45–1.00 | (120, 122, 240, 148) | gray and BGR (`obstacle_roi`, `obstacle_color_roi`) | The robot's own path, from the view bottom up past the lane ROI: an upright object rises above its base. Not drawn by `draw_roi_overlay`; the obstacle view draws it |
 
-```
-x:  0       120      240      360      480
-    ┌────────┬────────┬────────┬────────┐  y 0
-    │        │traffic │traffic │        │
-    │        │        │ + sign │  sign  │
-    │        ├────────┴────────┤        │  y 135
-    │        │                 └────────┤  y 148
-    │                                   │
-    ├──┬─────────────────────────────┬──┤  y 189
-    │  │            lane             │  │
-    └──┴─────────────────────────────┴──┘  y 270
-```
-
-Traffic and sign overlap in x 240–360, y 0–135.
+Traffic and sign sit side by side and don't overlap (x 110–254 and 264–480). The obstacle ROI overlaps the lane ROI (y 189–270) and the bottom of the sign ROI (x 264–360, y 122–230); each branch reads only its own crop, so the overlap costs nothing.
 
 - ROIs are read-only views, not copies. A stage that needs to draw on one calls `.copy()`.
 - Every rect is in frame pixels. Branch detections are ROI-local, and the rect is what maps them back: `frame_x = roi_x + rect[0]`.
@@ -208,7 +195,7 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 | `extent` | off; `MEASURED`: contour area / box area 0.6–0.92 (0.68 until 2026-10-20) | Ghost signs: a chair back's boxy outline (a rectangle is 1.0, an octagon 0.83; the course's sign reads 0.63–0.75) |
 | `letters` | off; `MEASURED`: ≥ 3% of the hull white (each channel ≥ 150, redness ≤ 60), for contours ≥ 2000 px² | Ghost signs: any red blob without the sign's white letters. A far sign's letters blur into its red, so small ones aren't held to it |
 
-The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
+The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). At most one sign candidate comes out per frame: the first blob, largest first, that passes every gate. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
 The blobs are gated largest first until one passes: until 2026-10-20 only the largest was gated, so a larger red thing in the sign ROI (a box, a chair), refused, hid the sign behind it (`make sign-check` on the detect-range looks found it). With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the smaller blobs never gated, a larger one having passed, as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 
@@ -328,13 +315,13 @@ The reference is the bottom of the lane ROI, which is the bottom of the frame: t
 
 ### Ground homography
 
-**File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`guides/calibrate_ground.md`)
+**File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`make calib-ground`)
 
 One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+, origin at the reference point). It is fit on frames from `preprocess_frame` with `MEASURED`'s settings and records the lens calibration (a SHA-256 of its `image_size`, `camera_matrix` and `dist_coeffs`), `undistort_alpha` and image size it was fit under. `config.py` loads it once into `MEASURED.ground`; if it's missing, or any of those three differ from what preprocess uses, or undistortion is off, it warns and leaves `ground` None, which only turns the cm outputs off. `SCENE_CONFIG` has none, since synthetic frames aren't undistorted. Nothing reads it per frame.
 
 ### Stop-line table
 
-**File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`guides/calibrate_stop_line.md`)
+**File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`make calib-stopline`)
 
 The board-free alternative for the stop line. The homography needs a checkerboard found flat and square on the floor, which is hard to get right; the stop line needs only one number, and it depends almost entirely on how many rows above the lane ROI's bottom the line appears. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C` (B is the horizon's height above the ROI bottom, in rows), is then fit through them by linear least squares. Measured by the detector the robot drives with, it needs no board, no corner finding and no squareness. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
@@ -437,7 +424,7 @@ pytest --hardware --replay=src/tests/data/frames
 
 Each stage's test writes a timing CSV and histogram. Geometry, the longest stage, is also timed per part: `geometry.edges` (Canny and the gradient split every lane-ROI detector reads), `geometry.lanes`, `geometry.stop_line` and `geometry.sign` (`GEOMETRY_PARTS`). The parts print indented under `geometry` in `summary.txt`'s `[TIMING]` and aren't added to the total, since geometry's own time holds them.
 
-The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS (P1). On a run, `nav.csv`'s `phase2_ms` and `src.analysis.stage_timing` show where the time goes, and `make routine-frame-budget` judges it (`guides/routines.md`).
+The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS (P1). On a run, `nav.csv`'s `phase2_ms` and `src.analysis.stage_timing` show where the time goes, and `make routine-frame-budget` judges it.
 
 ---
 

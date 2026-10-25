@@ -3,7 +3,7 @@
 Purpose:
     Reading nav.csv by hand answers one question at a time. This reduces a
     run to whether the robot drove well and where it didn't, with findings in
-    plain words (docs/guides/analysis.md, "Navigation runs").
+    plain words.
 
 Main package:
     analyze(table) -> run, rules, braking, lane_keeping, intersections,

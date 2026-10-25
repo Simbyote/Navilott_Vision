@@ -4,7 +4,7 @@ Purpose:
     After a tuning change or a new commit, what moved? Every numeric value in
     two runs' JSON summaries becomes a dotted key (stage_ms.p95, ...) and those
     past a threshold are listed. Direction isn't judged; only the reader knows
-    whether lower is better (docs/guides/analysis.md).
+    whether lower is better.
 
 Main package:
     compare() -> base, new, delta and percent per key, written to compare.csv.

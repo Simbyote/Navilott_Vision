@@ -5,7 +5,7 @@ Purpose:
     A checkerboard lying flat across the lane ROI gives 54 points with known
     floor positions, and one homography through them maps the floor to cm.
     Frames go through preprocess_frame with MEASURED's settings, so the fit
-    is on the frames the pipeline sees (docs/guides/calibrate_ground.md).
+    is on the frames the pipeline sees.
 
 Main package:
     calibration/ground_homography.json (H, fit conditions, per-corner error,
@@ -311,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     span_w = (corners[:, 0].max() - corners[:, 0].min()) / w
     span_h = (corners[:, 1].max() - corners[:, 1].min()) / h
     err = rec["reprojection_cm"]
-    verdict = "GOOD" if err["max"] < 0.5 else "OK" if err["max"] < 1.0 else "POOR - see calibrate_ground.md"
+    verdict = "GOOD" if err["max"] < 0.5 else "OK" if err["max"] < 1.0 else "POOR - refit"
     print(f"\nGround homography written to {out}")
     print(f"  frames used       {used} of {len(frames)}")
     print(f"  reprojection      mean {err['mean']:.3f} cm   max {err['max']:.3f} cm "

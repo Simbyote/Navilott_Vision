@@ -9,7 +9,7 @@ Purpose:
 Main package:
     The color ROI with each traced contour labeled by gate ("smaller": never
     gated, a larger one passed), beside the redness image with its mask and
-    threshold (docs/guides/phase2_linker.md).
+    threshold.
 """
 import cv2
 import numpy as np

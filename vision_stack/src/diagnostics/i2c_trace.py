@@ -4,7 +4,7 @@ Purpose:
     Python sees only how long its own call took; the kernel's i2c tracepoints
     see every transfer from any process, to the microsecond. This gives
     per-transfer, per-bus and per-device timing: occupancy, wire time, gaps,
-    queueing, errors (diagnostics.md, section 10). Recording needs root;
+    queueing, errors. Recording needs root;
     --from re-analysis doesn't.
 
 Main package:

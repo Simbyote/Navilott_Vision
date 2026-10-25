@@ -2,7 +2,7 @@
 
 > The ideas the other docs use, explained once. Each entry says what the idea is, why Navilott needs it, and where it lives in the code, with the setting the robot runs.
 
-The guides assume these; read an entry when a term stops you. Values are the robot's (`MEASURED` in `src/config.py`, `src/params.py`) unless a line says otherwise.
+The other docs assume these; read an entry when a term stops you. Values are the robot's (`MEASURED` in `src/config.py`, `src/params.py`) unless a line says otherwise.
 
 **Contents:** [Design choices](#design-choices) · [Images](#images) · [Finding shapes](#finding-shapes) · [Geometry](#geometry) · [Across frames](#across-frames) · [Motors and sensors](#motors-and-sensors) · [The camera path](#the-camera-path) · [Python and the Pi](#python-and-the-pi)
 
@@ -52,11 +52,11 @@ A frame is a grid of pixels, 480 wide and 270 high on this robot. Each pixel hol
 
 ### Region of interest (ROI)
 
-A rectangle cut out of the frame so a detector only looks where its target can be. Three on this robot (`perception/roi_crop.py`): the **lane ROI** (the bottom 30% of the frame, 5–95% across: the road just ahead), the **traffic ROI** (narrow, around where the light stands) and the **sign ROI** (upper right, where stop signs are posted). Cropping makes each detector faster and stops it seeing things in the wrong place, such as a red shirt in the sky mistaken for a stop sign.
+A rectangle cut out of the frame so a detector only looks where its target can be. Four on this robot (`perception/roi_crop.py`): the **lane ROI** (the bottom 30% of the frame, 5–95% across: the road just ahead), the **traffic ROI** (narrow, around where the light stands), the **sign ROI** (upper right, where stop signs are posted) and the **obstacle ROI** (the middle half, from the view bottom up: the robot's own path). Cropping makes each detector faster and stops it seeing things in the wrong place, such as a red shirt in the sky mistaken for a stop sign.
 
 ### HSV
 
-Another way to write a color: **hue** (which color, as an angle around the color wheel; 0–179 in OpenCV), **saturation** (how vivid, 0–255) and **value** (how bright, 0–255). It suits color detection because "red" is a range of hue whatever the brightness, where in BGR red's three numbers all shift as the light changes. Red sits at both ends of the hue wheel, so it takes two bands: `red_low` and `red_high` in `calibration/hsv_ranges.json`. Calibrated from the real lamps by `guides/calibrate_lamps.md`.
+Another way to write a color: **hue** (which color, as an angle around the color wheel; 0–179 in OpenCV), **saturation** (how vivid, 0–255) and **value** (how bright, 0–255). It suits color detection because "red" is a range of hue whatever the brightness, where in BGR red's three numbers all shift as the light changes. Red sits at both ends of the hue wheel, so it takes two bands: `red_low` and `red_high` in `calibration/hsv_ranges.json`. Calibrated from the real lamps by `make calib-lamps` (`scripts/calibrate_lamps.py`).
 
 ### Blur
 
@@ -68,7 +68,7 @@ Stretches a gray image's brightness values to use the whole 0–255 range, raisi
 
 ### Lens distortion and camera calibration
 
-A wide lens bends straight lines near the edges of the image (**barrel distortion**). **Camera calibration** photographs a checkerboard from many angles and solves for the lens's **intrinsics** (focal length, image center) and **distortion coefficients**; the robot's strongest is k1 = −0.29. **Undistortion** then remaps each frame so straight lines are straight again, which the lane geometry and the ground homography rely on. `calibration/camera_calibration.json`, from `guides/calibrate_camera.md`.
+A wide lens bends straight lines near the edges of the image (**barrel distortion**). **Camera calibration** photographs a checkerboard from many angles and solves for the lens's **intrinsics** (focal length, image center) and **distortion coefficients**; the robot's strongest is k1 = −0.29. **Undistortion** then remaps each frame so straight lines are straight again, which the lane geometry and the ground homography rely on. `calibration/camera_calibration.json`, from `make calib-camera`.
 
 ---
 
@@ -80,11 +80,11 @@ A wide lens bends straight lines near the edges of the image (**barrel distortio
 
 **Otsu's method** chooses it automatically. It looks at the histogram of the image's values and picks the threshold that best splits them into two groups (formally, the one that maximizes the variance between the groups). It works well when the image really holds two populations, such as a red sign against a not-red background.
 
-Its catch: **it always splits**, even an image with only one population. On a sign ROI with no sign, Otsu still finds a threshold in the noise, often around 1, and outlines specks as "red". That's why the stop sign's redness threshold is floored: `min_redness` (20) is the lowest Otsu is allowed to go (`perception/geometry.py`). The dimmest synthetic sign measured needed 22.
+Its catch: **it always splits**, even an image with only one population. On a sign ROI with no sign, Otsu still finds a threshold in the noise, often around 1, and outlines specks as "red". That's why the stop sign's redness threshold is floored: `min_redness` (20) is the lowest Otsu is allowed to go (`SignContourFilter`, `perception/geometry_shared.py`). The dimmest synthetic sign measured needed 22.
 
 ### Edges: Canny and Sobel
 
-An **edge** is where brightness changes sharply, such as the side of a tape line. **Sobel** measures that change, the **gradient**, at each pixel, and its direction: a lane line's sides change left to right, a stop line's change top to bottom (`geometry.py` uses that to tell them apart).
+An **edge** is where brightness changes sharply, such as the side of a tape line. **Sobel** measures that change, the **gradient**, at each pixel, and its direction: a lane line's sides change left to right, a stop line's change top to bottom (the gradient split in `geometry_shared.py` uses that to tell them apart).
 
 **Canny** turns gradients into thin, clean edge lines. Its two thresholds, `Canny (80, 200)` on the lane ROI, work as **hysteresis**: a gradient above the high value (200) is surely an edge; one between the two (80–200) counts only if it connects to a sure edge; below the low value (80) it's discarded. That keeps a faint stretch of a real line while dropping isolated noise.
 
@@ -113,7 +113,7 @@ How far the robot sits from the lane's center, as a number from −1 to +1 of ha
 
 ### Homography
 
-A 3×3 matrix that maps points on one flat plane to another, here **from the image to the floor**. A camera looking down at an angle sees the floor in perspective: near things big, far things small. For points that lie on the floor, a homography undoes that exactly, turning an image pixel into centimeters on the mat. It's fit once from known marks on the floor (`guides/calibrate_ground.md`) and gives the stop line's distance in cm (`perception/ground.py`). It's only right for things on the floor plane, and only for the camera pose it was fit at: move the mount and refit it.
+A 3×3 matrix that maps points on one flat plane to another, here **from the image to the floor**. A camera looking down at an angle sees the floor in perspective: near things big, far things small. For points that lie on the floor, a homography undoes that exactly, turning an image pixel into centimeters on the mat. It's fit once from a checkerboard on the floor (`make calib-ground`) and gives the stop line's distance in cm (`perception/ground.py`). It's only right for things on the floor plane, and only for the camera pose it was fit at: move the mount and refit it.
 
 ---
 
@@ -133,7 +133,7 @@ A new lane offset more than `max_offset_jump` (0.5) from the estimate is treated
 
 ### Majority vote
 
-The traffic light, the stop sign and the stop line each change state only when one value holds a **strict majority of the last 3 frames** (2 of 3); otherwise the previous state stands. One wrong frame can't flip a decision, at the cost of about one frame of delay (`estimation._Vote`).
+The traffic light, the stop sign, the stop line and the obstacle each change state only when one value holds a **strict majority of the last 3 frames** (2 of 3); otherwise the previous state stands. One wrong frame can't flip a decision, at the cost of about one frame of delay (`estimation._Vote`).
 
 ### Gyro bias and heading
 
@@ -183,7 +183,7 @@ A timer that does something safe if a program goes quiet. If `drive()` hasn't be
 
 ## The camera path
 
-From light to a frame in Python (`guides/diagnostics.md` has the measured times):
+From light to a frame in Python (`make capture-anatomy` measures each step):
 
 | Step | What it is |
 |---|---|
@@ -210,19 +210,19 @@ The **global interpreter lock** is a lock inside CPython, the standard Python in
 
 What that means here:
 
-- **Threads that mostly wait are fine.** The sensor hub sleeps between its 10 ms reads and holds the GIL only briefly.
+- **Threads that mostly wait are fine.** The battery monitor and the motor watchdog sleep between checks and hold the GIL only briefly; the IMU fills its own FIFO, so no thread wakes 100 times a second for it.
 - **Python code doesn't get faster with threads.** Two threads both running Python take turns on one core's worth of Python.
 - **C code that releases the GIL does run in parallel.** OpenCV and NumPy release it inside their heavy calls, and OpenCV runs its own worker threads across the cores (`OPENCV_THREADS`, 2 on the robot): a run on the lane measured 165% of a core for the process, 189% with four threads (`params.py`, 2026-10-03). GStreamer's capture thread is pure C and never needs the GIL.
 
-So the main loop's Python is single-core, while most of the per-frame pixel work isn't. `guides/diagnostics.md` shows how to see the GIL's hand-offs in a run, and `py-spy --gil` shows who holds it.
+So the main loop's Python is single-core, while most of the per-frame pixel work isn't. `make diag-nav` then `make pi-load` splits a run's CPU into Python and native threads, and `py-spy --gil` shows who holds the GIL.
 
 ### Threads and processes
 
-A **thread** runs inside a program and shares its memory and its GIL. A **process** is a separate program with its own memory and its own GIL. Navilott is one process with a few threads (the main loop, the sensor hub, the motor watchdog, pigpio's callbacks, GStreamer's); the diagnostics recorder runs as a separate process so it can't slow the robot.
+A **thread** runs inside a program and shares its memory and its GIL. A **process** is a separate program with its own memory and its own GIL. Navilott is one process with a few threads (the main loop, the battery monitor, the motor watchdog, pigpio's callbacks, GStreamer's); the diagnostics recorder runs as a separate process so it can't slow the robot.
 
 ### Context switches
 
-Each time a core stops running one thread and starts another. **Voluntary**: the thread blocked (a sleep, an I²C wait, waiting for the GIL). **Involuntary**: the scheduler took the core away. `guides/diagnostics.md` reads them per thread.
+Each time a core stops running one thread and starts another. **Voluntary**: the thread blocked (a sleep, an I²C wait, waiting for the GIL). **Involuntary**: the scheduler took the core away. The diagnostics recorder (`make diag-nav`) counts them per thread.
 
 ### Monotonic clock
 

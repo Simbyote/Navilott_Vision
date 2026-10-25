@@ -5,8 +5,7 @@ Purpose:
     Generic tools draw structure without the why, and lose calls made through
     a list or attribute (code2flow drew Navigation.update() calling itself).
     A card puts each module's Purpose / Main package / Flow next to its
-    imports, users, classes and constants. The code is read, never imported
-    (docs/guides/code_cards.md).
+    imports, users, classes and constants. The code is read, never imported.
 
 Main package:
     One PNG card per module under src/ (tests skipped).
@@ -31,7 +30,7 @@ Run from vision_stack/:
 
 DEFAULT_OUT = RUNS_DIR / "code_cards"   # generated, so it lives with the other run output (not committed)
 
-# Inches; 16 wide matches docs/infographics, LINE is one 10.5 pt line. Wraps are characters per column
+# Inches; LINE is one 10.5 pt line. Wraps are characters per column
 CARD_W, LINE = 16.0, 0.215
 LEFT_X, LEFT_W, RIGHT_X = 0.4, 5.3, 6.0
 LEFT_CHARS, RIGHT_CHARS = 62, 108

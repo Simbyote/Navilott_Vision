@@ -5,7 +5,7 @@ Purpose:
     The course's light isn't one bright disc, so calibrate_lamps' measured
     bands passed nothing (2026-10-06). This runs the color branch itself on
     frames labelled with the lit lamp, for each setting in a grid, and scores
-    what Phase 3 would see. In glow mode only the bands are swept (sweep_lamps.md).
+    what Phase 3 would see. In glow mode only the bands are swept.
 
 Main package:
     The best settings, with the frames read right before and after; --write saves the bands.

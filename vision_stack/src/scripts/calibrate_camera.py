@@ -5,7 +5,7 @@ Purpose:
     The camera opens through capture's own pipeline string and verify uses
     preprocess's undistort(), so the script can't drift from the pipeline.
     Valid only for the sensor mode, size, flip and focus it was captured
-    with (docs/guides/calibrate_camera.md).
+    with.
 
 Main package:
     calibration/camera_calibration.json: image_size, camera_matrix,

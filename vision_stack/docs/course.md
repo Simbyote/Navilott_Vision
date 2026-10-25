@@ -15,10 +15,10 @@ Values marked **TBD** haven't been measured or written down yet.
 | Lane width | about 14 cm | Ground scale (cm per px); single-line lane center projection |
 | Lane line (tape) width | about 1 cm | Lane-line width gates in geometry and lane offset |
 | Full street width (two lanes) | about 29–30 cm | Maximum plausible lane width; choosing the robot's own lane over the whole street |
-| Intersection square | about 28–30 cm per side | Future intersection detection |
-| Center line | Dashed. Dash and gap length; 4 cm ech | Minimum line length for steering (so dashes don't anchor a boundary) |
+| Intersection square | about 28–30 cm per side | How far a turn drives in before turning and the longest crossing: `ADVANCE_CM` (22.3) and `MAX_CROSS_CM` (49.7) in `navigation/intersection.py` |
+| Center line | Dashed: dash and gap about 4 cm each | Minimum line length for steering (so dashes don't anchor a boundary) |
 | Surface / marking | White tape on dark mats | Edge thresholds and the minimum brightness gates |
-| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `geometry.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (5° in `MEASURED`). Check all three against real captures |
+| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `perception/geometry_shared.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (5° in `MEASURED`). Check all three against real captures |
 
 **How lane width is measured:** from the center of one line to the center of the other.
 

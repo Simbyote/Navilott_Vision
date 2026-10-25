@@ -9,7 +9,7 @@
 #     VIDEO=clip.mp4 / FRAMES=dir   replay instead of the camera (linkers)
 #     RUN=runs/<folder>             which run an analysis reads (default: the newest)
 #     ARGS="..."                    anything else, passed straight to the command
-# Each target's comment names the guide in docs/guides/ that explains it.
+# docs/README.md says where each part of the system is described.
 #
 # Session start and the Pi's install live in ../session.mk and ../setup.mk; this
 # file runs the robot's code. `make session TIME="YYYY-MM-DD HH:MM"` here is
@@ -90,11 +90,11 @@ session: ## every boot on the Pi: set the clock, start pigpiod, open a venv shel
 pigpiod: ## start the GPIO daemon if it isn't running (motors, encoders, button, display)
 	@$(MAKE) --no-print-directory -f $(SESSION_MK) pigpiod-start
 
-##@ Race day (production_run.md)
+##@ Race day
 run: $(HW) ## the course: route, St N, button, countdown, time on the display; nothing recorded
 	$(PY) -m src.main --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
 
-##@ Linkers: the chain up to one point, recorded (phase2_linker.md ... intersection_linker.md)
+##@ Linkers: the chain up to one point, recorded
 phase2: ## Phases 1-2 live with video (VIDEO= / FRAMES= to replay, VIEWS=lanegeo,stop,traffic,stopline,obstacle)
 	$(PY) -m src.phase2_linker $(SOURCE) $(if $(strip $(VIEWS)),--views $(strip $(VIEWS))) $(ARGS)
 
@@ -125,7 +125,7 @@ render: ## render an earlier navigation run's video (RUN=runs/nav_..., default t
 	@test -n "$(RENDER_RUN)" || (echo "no runs/nav_* folder: make render RUN=<run folder>"; exit 2)
 	$(PY) -m src.navigation_linker --render $(RENDER_RUN) $(ARGS)
 
-##@ Routines: prompted hardware tests, judged PASS / FAIL (routines.md)
+##@ Routines: prompted hardware tests, judged PASS / FAIL
 routines: ## list the routines; run one with make routine-<name> (ARGS="--trials 10 --notes ...")
 	$(PY) -m src.routines --list
 
@@ -133,7 +133,7 @@ routines: ## list the routines; run one with make routine-<name> (ARGS="--trials
 routine-%:
 	$(PY) -m src.routines $* $(ARGS)
 
-##@ Diagnostics: how the run uses the Pi (diagnostics.md)
+##@ Diagnostics: how the run uses the Pi
 diag-nav: $(HW) ## record threads, cores, heat while nav-dry runs; then: make pi-load
 	$(PY) -m src.diagnostics.monitor -- $(PY) -m src.navigation_linker --camera --no-motors --no-button \
 	    --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
@@ -156,7 +156,7 @@ i2c-trace: ## every I2C transfer from the kernel for 10 s (sudo; start a run fir
 sched-latency: ## how late Linux wakes a thread vs the 50 ms / 10 ms deadlines (sudo; ARGS="--label idle", then loaded)
 	sudo $(PY) -m src.diagnostics.sched_latency $(ARGS)
 
-##@ Analysis: graphs and findings from a run (analysis.md); RUN= picks the run, default the newest
+##@ Analysis: graphs and findings from a run; RUN= picks the run, default the newest
 pi-load: ## threads, cores, heat, memory from a diag_ recording (NAV=runs/nav_... to judge only the run)
 	$(PY) -m src.analysis.pi_load $(strip $(RUN)) $(if $(strip $(NAV)),--run $(strip $(NAV))) $(ARGS)
 
@@ -200,7 +200,7 @@ compare: ## every number that moved between two runs (BASE=... NEW=...)
 	@test -n "$(strip $(BASE))" -a -n "$(strip $(NEW))" || (echo "usage: make compare BASE=<older run> NEW=<newer run>"; exit 2)
 	$(PY) -m src.analysis.compare_runs $(strip $(BASE)) $(strip $(NEW)) $(ARGS)
 
-##@ Tests (pytest.md, tests.md)
+##@ Tests
 test: ## the software tests: any machine, no hardware
 	$(PY) -m pytest -q $(ARGS)
 
@@ -214,7 +214,7 @@ soak: ## the soak test for MINUTES (default 15), recorded with diagnostics; then
 lint: ## pyflakes over src/
 	$(PY) -m pyflakes src
 
-##@ Calibration (calibrate_*.md)
+##@ Calibration
 calib-camera: ## lens: capture checkerboard frames, solve, verify
 	$(PY) -m src.scripts.calibrate_camera $(ARGS)
 

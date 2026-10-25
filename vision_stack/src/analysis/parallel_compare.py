@@ -3,8 +3,7 @@
 Purpose:
     perception/parallel.py runs Phase 2's color and obstacle branches on a
     side thread beside geometry. The win depends on how much of each branch
-    is inside OpenCV, which releases the GIL, so it's measured
-    (docs/guides/analysis.md, "Parallel perception").
+    is inside OpenCV, which releases the GIL, so it's measured.
 
 Main package:
     compare.json in --out: per mode, Phase 2 wall ms, branch_wait, side-thread

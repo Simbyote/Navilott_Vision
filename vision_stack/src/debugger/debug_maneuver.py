@@ -3,8 +3,7 @@
 Purpose:
     maneuver_linker draws nothing while moving, so rendering can't slow the
     control loop; it records JPEGs and a pickled record per frame. This
-    renders the Phase 3 view with a maneuver strip, re-running nothing
-    (docs/guides/maneuver_linker.md).
+    renders the Phase 3 view with a maneuver strip, re-running nothing.
 
 Main package:
     render_run(): run folder in, maneuver.avi and maneuver_video.csv out.

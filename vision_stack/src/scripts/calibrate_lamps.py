@@ -5,8 +5,7 @@ Purpose:
     A lamp on camera is a bright core, a ring of its real color and a paler
     glow, and a band that takes the glow measures the glow. This measures each
     lamp against its glow, through the robot's own preprocess and crop. Given
-    a run with every lamp off, it also checks each lens lit against unlit
-    (docs/guides/calibrate_lamps.md).
+    a run with every lamp off, it also checks each lens lit against unlit.
 
 Main package:
     The bands in hsv_ranges.json form, with warnings and each lamp's blob

@@ -3,7 +3,7 @@
 Purpose:
     Phase 3 only means something across frames, so this shows each packet
     beside the Phase 2 input it came from: a bad packet traces to bad input
-    or bad filtering. The tests hold it to Pipeline's packets (phase3_linker.md).
+    or bad filtering. The tests hold it to Pipeline's packets.
 
 Main package:
     Phase3Result: one frame's chain result, packet, Phase 3 records and timings.

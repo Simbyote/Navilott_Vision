@@ -10,37 +10,15 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 
 | If you want to… | Read |
 | --- | --- |
-| Understand the whole system | `architecture.md`, then `vision_pipeline/` in order |
+| Understand the whole system: hardware, wiring, power, software layers | `architecture.md`, then `vision_pipeline/` in order |
 | Look up a term (Otsu, the GIL, HSV, a homography...) | `concepts.md` |
-| Know what the system must do, and what's proven so far | `requirements.md` |
+| Know what the system must do, how each requirement is checked, and what's proven | `requirements.md` |
 | Know the course and camera measurements the tuning depends on | `course.md` |
-| Know what Navigation receives, what it returns, how the robot responds | `vision_pipeline/navigation_contract.md` |
-| Consume the vision output in navigation code | `vision_pipeline/phase3_estimation.md`, "Contract" and "Sign conventions" |
-| Run anything without remembering its flags: `make` lists every command | `guides/make.md` |
-| Run the tests | `guides/pytest.md` |
-| Know which tests to run when | `guides/testing_procedure.md` |
-| Know what each test file covers | `guides/tests.md` |
-| Test the robot against a requirement, prompted, with a verdict | `guides/routines.md` (ask for one: `routines/request_card.md`) |
-| Analyze a run's recordings: nav.csv, timings, wheel balance | `guides/analysis.md` |
-| Find a command: every run, test and tool in one place | `guides/commands.md` |
-| Watch what the pipeline detects | `guides/phase2_linker.md` |
-| Check what estimation decides | `guides/phase3_linker.md` |
-| Run a drive trial: motors, encoders and IMU with vision recording | `guides/maneuver_linker.md` |
-| Drive the robot with the whole chain and the navigator | `guides/navigation_linker.md` |
-| Prove the intersection sequences (straight, left, right) | `guides/intersection_linker.md` |
-| Understand how navigation fits together (where a turn lives) | `guides/navigation_walkthrough.md` |
-| See the whole system as diagrams: the pipeline, the linkers, each phase, the tests | `guides/system_maps.md` |
-| Read a linker's code as diagrams: who builds what, one frame's calls, line by line | `guides/linker_code_maps.md` |
-| See any source file as a card: purpose, imports both ways, classes, calls, constants | `guides/code_cards.md` |
-| Run the course (start button, timed, nothing recorded) | `guides/production_run.md` |
-| Record how a run uses the Pi: threads, cores, throttling, memory | `guides/diagnostics.md` |
-| Calibrate the camera lens | `guides/calibrate_camera.md` |
-| Give the stop line a distance in cm (tape marks, no checkerboard) | `guides/calibrate_stop_line.md` |
-| Turn encoder counts into cm driven (odometry) | `guides/calibrate_odometry.md` |
-| Calibrate floor distances (cm) | `guides/calibrate_ground.md` |
-| Calibrate the traffic-light colors from the real lamps | `guides/calibrate_lamps.md` |
-| Sweep the traffic-light floors and blob gates on labelled frames | `guides/sweep_lamps.md` |
-| Check an existing calibration | `guides/test_calibration.md` |
+| Follow a frame through capture, perception and estimation | `vision_pipeline/phase1_capture.md`, `phase2_perception.md`, `phase3_estimation.md` |
+| Know what Navigation receives, what it returns, and how its rules decide | `vision_pipeline/navigation_contract.md` |
+| Run anything | `make` in `vision_stack/` lists every command (below) |
+
+How to use a tool is in the tool itself: each module's header says what it is for, and `--help` on every script, linker and analysis says how to run it.
 
 ---
 
@@ -48,71 +26,61 @@ Senior Design Team 2.08 Magnetronics, Texas State University.
 
 ```
 docs/
+    README.md                   this page
+    architecture.md             hardware, wiring, power, software layers, risks
+    concepts.md                 the ideas the docs use, explained once
+    requirements.md             requirements, how each is checked, status
+    course.md                   course dimensions and camera geometry
     vision_pipeline/
         phase1_capture.md       camera → timestamped frames
         phase2_perception.md    frame → detections and lane offset
-        phase3_estimation.md    detections + IMU → navigation packet
-        navigation_contract.md  packet in, motor command out; what Navigation must do
-    guides/
-        calibrate_camera.md     lens calibration
-        calibrate_ground.md     ground-plane homography: floor distances in cm
-        calibrate_stop_line.md  stop-line distance in cm from tape marks
-        calibrate_odometry.md   encoder cm per count, from a taped distance
-        calibrate_lamps.md      traffic-light HSV bands from the real lamps
-        sweep_lamps.md          traffic-light floors and blob gates swept on labelled frames
-        phase2_linker.md        watching the pipeline, with video
-        phase3_linker.md        checking estimation, with video
-        maneuver_linker.md      drive trial: straight legs and a 180° turn on encoders and IMU
-        navigation_linker.md    the whole chain driving: camera to navigator to motors
-        intersection_linker.md  one intersection per run, straight, left or right, judged
-        navigation_walkthrough.md  how a frame becomes a motor command; where to change things
-        system_maps.md          the system as diagrams: pipeline, linkers, phases, tests
-        linker_code_maps.md     each linker's code as diagrams, with line numbers
-        make.md                 the Makefile: every command by a short name (make, make run, ...)
-        code_cards.md           one generated card per source file: python3 -m src.scripts.code_cards
-        production_run.md       the course run: python3 -m src.main
-        diagnostics.md          recording threads, cores, throttling and memory during a run
-        pytest.md               running the test suite
-        testing_procedure.md    which tests to run when
-        tests.md                what each test file covers
-        routines.md             prompted hardware tests with verdicts
-        analysis.md             analyzing a run's recordings
-        commands.md             every command in one place
-        test_calibration.md     verifying a calibration
-    routines/
-        request_card.md         the card for asking for a routine
-        requests/               one filled card per routine
-    infographics/               numbered one-page explainers (01-44)
-    diagrams/                   diagrams of the pipeline, the linkers and each phase
-    architecture.md             hardware, wiring, power, software layout, risks
-    concepts.md                 the ideas the docs use, explained once
-    course.md                   course dimensions and camera geometry
-    README.md                   this page
-    _DOCUMENTATION.md           how code is documented: headers, docstrings, comments, tests
-    requirements.md             requirements, how each is checked, status
+        phase3_estimation.md    detections + sensors → navigation packet
+        navigation_contract.md  packet in, motor command out: Phase 4, the navigation rules
 ```
 
-Navigation (the rules, the route, intersections) is in `src/navigation/`; `guides/navigation_walkthrough.md` explains it and `vision_pipeline/navigation_contract.md` fixes its interface.
+Code lives in `src/`, layered as `architecture.md` ("Software layers") describes; the tests are in `src/tests/`.
 
 ---
 
-## System Overview
+## Running it
+
+Everything runs from `~/Navilott_Vision/vision_stack`, where `src` can be imported. `make` (or `make help`) prints every command with a one-line description, grouped:
+
+| Group | Commands | What for |
+| --- | --- | --- |
+| Start here | `make session TIME="YYYY-MM-DD HH:MM"`, `make pigpiod` | Every boot on the Pi: the clock (NTP is blocked), the GPIO daemon, the venv |
+| Race day | `make run` | The course: route, start button, countdown, time on the display; nothing recorded (`src/main.py`) |
+| Linkers | `make phase2`, `phase3`, `maneuver`, `navigate`, `nav-dry`, `intersection`, `render` | The chain up to one point, recorded with debug video: Phase 2 views, Phase 3 packets, a drive trial, the whole chain driving, one intersection judged |
+| Routines | `make routines`, `make routine-<name>` | Prompted hardware tests judged PASS / FAIL against a requirement (`src/routines/`) |
+| Diagnostics | `make diag-nav`, `diag-run`, `capture-anatomy`, `i2c-trace`, `sched-latency` | How a run uses the Pi: threads, cores, heat, the camera path, the I²C bus, wake-up latency |
+| Analysis | `make nav-report`, `pi-load`, `timing`, `timeline`, `jitter`, `sign-check`, `compare`... | Findings and figures from a run's recordings; `RUN=` picks the run, default the newest |
+| Tests | `make test`, `make test-hw`, `make soak`, `make lint` | Software tests on any machine; hardware characterization and the soak on the Pi |
+| Calibration | `make calib-camera`, `calib-stopline`, `calib-odometry`, `calib-ground`, `calib-lamps`, `sweep-lamps` | The lens, stop-line cm, encoder cm per count, the floor homography, the traffic-light bands; each writes to `calibration/` |
+
+Options are make variables: `VIDEO=` or `FRAMES=` replays instead of the camera, `RUN=` picks a run folder, `ARGS="..."` passes anything else through. Run folders land in `runs/`, hardware-test output in `artifacts/`.
+
+---
+
+## System overview
 
 ```
 IMX290 camera ──► Phase 1: capture      one frame, id and timestamp
                      │
                      ▼
-                  Phase 2: perception   lane boundaries, lane offset,
-                     │                  stop sign, traffic light (per frame)
+                  Phase 2: perception   lane boundaries, lane offset, stop line,
+                     │                  stop sign, traffic light, obstacle (per frame)
                      ▼
-MPU-6050 IMU ──►  Phase 3: estimation   smoothed offset, hold/stale status,
-                     │                  heading, voted drive state
+MPU-6050 IMU  ──► Phase 3: estimation   smoothed offset, hold/stale status,
+wheel encoders       │                  heading, votes, odometry
                      ▼
                   EstimationPacket
                      │
                      ▼
-                  Navigation ──► TB6612FNG ──► N20 motors
+                  Phase 4: navigation ──► TB6612FNG ──► N20 motors
+                  (route, rules, lane keeping)
 ```
+
+`src/pipeline.py` runs one frame through all four, `step(frame, sensors) -> Command`; `src/main.py` is the loop around it.
 
 ---
 
@@ -125,18 +93,16 @@ MPU-6050 IMU ──►  Phase 3: estimation   smoothed offset, hold/stale status
 | Time | Monotonic milliseconds, meaningful only as differences within one run |
 | Lane offset | [−1, +1] of half the lane ROI width. **+ = robot right of lane center, so steer left** |
 | Lane status | Steer only on `vision` or `hold`; `stale` means don't trust the offset |
-| Constants | Shared values live in `src/params.py`; each stage's tuning lives in its config, bundled in `PipelineConfig`; `PipelineConfig` and the robot's tuning `MEASURED` live in `src/config.py` |
-| Commands | Everything (the Makefile, `python3 -m src....`, pytest) runs from `~/Navilott_Vision/vision_stack`, where `src` can be imported (`guides/commands.md`) |
+| Heading and yaw | **+ = turning right** |
+| Constants | Hardware facts and run-wide switches in `src/params.py`; each stage's tuning in its config class, assembled into `MEASURED` and `MEASURED_ESTIMATION` in `src/config.py`; navigation's constants at the top of each rule in `src/navigation/` |
 
 ---
 
 ## Current status
 
-The whole chain runs on the robot, from the start button to the finish: lane keeping, stop signs, traffic lights, stop lines, intersections and the route. The software tests pass. On the IMX290, no requirement is formally verified on the course yet, apart from P4 by design; the routines (`guides/routines.md`) are how each gets verified. `requirements.md` has the per-requirement status, and each `vision_pipeline/` doc ends with its open items. The most important:
+The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. On the IMX290, no requirement is formally verified on the course yet, apart from P4 by design; the routines are how each gets verified. `requirements.md` has the per-requirement status, and each `vision_pipeline/` doc ends with its open items. The most important:
 
 - The frame rate: about 15 FPS against the 20 FPS target (P1); `make routine-frame-budget` measures it
 - The ground scale and lane offset accuracy against ±2 cm (P3): `make routine-lane-offset`
-- The traffic light and stop sign read on the course (D2, D3): `make routine-detect-range`
+- The traffic light and stop sign read on the course (D2, D3): `make routine-detect-range`; the traffic and sign ROI bounds need a small re-tune on the track
 - The whole course, timed: `make routine-course-run`
-
-Done since the first list: the IMU yaw sign (2026-10-01) and the motor watchdog (`drive.py`).

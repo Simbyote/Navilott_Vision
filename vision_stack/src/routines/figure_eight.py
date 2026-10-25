@@ -3,8 +3,7 @@
 Purpose:
     Stop distance asks how accurately one maneuver lands; this asks whether
     the robot keeps working over many intersections, with left and right side
-    by side and minutes for the pack and heat to build up
-    (docs/guides/routines.md section 2; docs/routines/requests/figure-eight.md).
+    by side and minutes for the pack and heat to build up.
 
 Main package:
     FigureEight (make routine-figure-eight). EightWatch follows each run;
