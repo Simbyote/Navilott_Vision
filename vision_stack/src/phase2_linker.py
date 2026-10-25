@@ -1,21 +1,13 @@
-"""Phase 1-2 linker: the one place the stage order is written down.
+"""Phase 1-2 linker: the one place the stage order is written down, with every debug dict.
 
 Purpose:
-    Runs a frame through every Phase 1-2 stage in order, with every debug
-    dict, so the live view, the other linkers and the tests all go through
-    one chain and can't drift from it; pipeline.py is its debug-free twin.
-    Every stage's tuning arrives as one PipelineConfig.
+    The live view, the other linkers and the tests all run frames through
+    this one chain, so none can drift from it; pipeline.py is its debug-free
+    twin. On the command line it's the live view
+    (python3 -m src.phase2_linker, phase2_linker.md).
 
 Main package:
-    ChainResult: every stage's output and debug data for one frame, ending
-    in the Phase2Output handed to Phase 3, plus per-stage timings.
-
-Flow:
-    1. preprocess -> ROIs -> geometry -> color -> lane offset -> stop line
-       -> obstacle -> fusion -> package (parallel: color and obstacle on a
-       side thread).
-    2. On the command line, the live view over a camera or a replay:
-       python3 -m src.phase2_linker --video clip.mp4 (docs/guides/phase2_linker.md).
+    ChainResult: every stage's output and debug for one frame, ending in the Phase2Output.
 """
 import time
 
@@ -39,30 +31,26 @@ from src.config import MEASURED, PipelineConfig      # re-exported: older import
 
 @dataclass(frozen=True)
 class ChainResult:
-    """
-    Every stage's output for one frame, so a failure can be traced to the
-    stage that produced it rather than only to the final number.
-    """
     frame: FrameData
     pre: PreprocessResult
     roi: ROICropResult
-    geometry: GeometryBranchResult          # stop signs travel in its sign_candidates
+    geometry: GeometryBranchResult
     offset: LaneOffsetResult
-    lane_debug: dict                        # geometry's lane debug dict
-    offset_debug: dict                      # compute_lane_offset's debug summary
-    sign_debug: dict = field(default_factory=dict)      # reject_counts and edge map, plus the per-contour trace when requested
+    lane_debug: dict
+    offset_debug: dict
+    sign_debug: dict = field(default_factory=dict)
     fusion: FusionResult | None = None
     fusion_debug: dict = field(default_factory=dict)
-    phase2: Phase2Output | None = None      # the Phase 3 handoff
-    timings_ms: dict = field(default_factory=dict)      # wall ms per stage: preprocess, roi, geometry, color, lane_offset, stop_line, obstacle, fusion, package
-    traffic: list = field(default_factory=list)         # TrafficLightCandidates; [] when the color branch is off
-    traffic_debug: dict = field(default_factory=dict)   # masks, counts and trace; just {"enabled": False} when off
-    stop_line: StopLineResult | None = None             # nearest stop line; its candidates are in geometry, their debug in lane_debug["stop_line"]
-    stop_line_debug: dict = field(default_factory=dict) # compute_stop_line_distance's debug summary
-    obstacle: ObstacleResult | None = None              # nearest obstacle in the robot's path
-    obstacle_debug: dict = field(default_factory=dict)  # compute_obstacle's debug summary: masks, every blob's fate
-    side_timings_ms: dict = field(default_factory=dict) # parallel only: color and obstacle as the side thread timed them
-    geometry_timings_ms: dict = field(default_factory=dict)  # geometry's parts (geometry.GEOMETRY_PARTS): inside timings_ms["geometry"]
+    phase2: Phase2Output | None = None
+    timings_ms: dict = field(default_factory=dict)      # wall ms per stage
+    traffic: list = field(default_factory=list)         # [] when the color branch is off
+    traffic_debug: dict = field(default_factory=dict)
+    stop_line: StopLineResult | None = None             # its candidates' debug is in lane_debug["stop_line"]
+    stop_line_debug: dict = field(default_factory=dict)
+    obstacle: ObstacleResult | None = None
+    obstacle_debug: dict = field(default_factory=dict)
+    side_timings_ms: dict = field(default_factory=dict) # parallel only
+    geometry_timings_ms: dict = field(default_factory=dict)  # parts, inside timings_ms["geometry"]
 
 
 def run_chain(
@@ -75,28 +63,9 @@ def run_chain(
         parallel: bool | None = None,
     ) -> ChainResult:
     """
-    Run one frame through every Phase 1-2 stage.
-
-    Inputs:
-        frame_bgr: (H, W, 3) uint8 BGR, as CameraSource.read() delivers it.
-        frame_id, timestamp_ms: The stamp capture would have assigned.
-        config: Defaults to PipelineConfig(), the shipped tuning.
-            run_live_view() defaults to MEASURED instead.
-        draw_overlays: Build the geometry debug overlays.
-        trace: Record the per-contour sign trace and the per-blob traffic
-            trace in the debug dicts.
-        parallel: Color and obstacle on Phase 2's side thread while geometry
-            runs here (perception/parallel.py), as Pipeline does; None is
-            the run's choice (perception/parallel.py), else
-            params.PARALLEL_PERCEPTION. The results are the same either way.
-
-    Outputs:
-        ChainResult, with each stage's wall time in timings_ms. Parallel,
-        color and obstacle are the side thread's own times (side_timings_ms)
-        and timings_ms has branch_wait in their place, the main thread's time
-        waiting for them, so timings_ms still adds up to the frame.
-        geometry_timings_ms splits timings_ms["geometry"] into its parts
-        (the shared edges, then each detector); they're inside it, not added.
+    config defaults to PipelineConfig(); run_live_view() uses MEASURED. Results are the same
+    parallel or not; parallel, timings_ms has branch_wait in place of color and obstacle, whose
+    own times are in side_timings_ms, so timings_ms still adds up to the frame.
     """
     timings = {}
     mark = [time.perf_counter()]    # a list so lap() can update it without nonlocal
@@ -116,8 +85,6 @@ def run_chain(
 
     side_ms, geo_ms = {}, {}
     if parallel_enabled(parallel):
-        # color and obstacle read only the ROIs: the side thread runs them
-        # while geometry and what needs it run here (perception/parallel.py)
         side = side_pool().submit(run_side, [
             ("color", lambda: run_color_stage(roi, config.color, trace)),
             ("obstacle", lambda: compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)),
@@ -165,18 +132,8 @@ def run_chain(
 
 def warm_up(frame_bgr: np.ndarray, config: PipelineConfig = PipelineConfig()) -> float:
     """
-    Run one frame through the chain and throw the result away.
-
-    A process's first frame pays costs no later frame does: undistortion's
-    maps (cached), OpenCV's worker threads and buffers, the side thread with
-    parallel perception. The 2026-10-20 runs' frame 0 took 1.4-1.5 s
-    (obstacle alone 1,089 ms), and the first motor command came from it.
-    The run loops call this before the start button, so the cost is paid
-    standing still. Phase 2 keeps nothing between frames (Phase 3 does), so
-    the frame leaves no trace in the run.
-
-    Outputs:
-        How long it took, ms.
+    One frame through the chain, thrown away, so the first driving frame doesn't pay the
+    first-call costs (1.4-1.5 s on 2026-10-20). Phase 2 keeps nothing between frames. Returns ms.
     """
     t0 = time.perf_counter()
     run_chain(frame_bgr, 0, 0, config)
@@ -186,31 +143,8 @@ def warm_up(frame_bgr: np.ndarray, config: PipelineConfig = PipelineConfig()) ->
 def run_live_view(source, config: PipelineConfig = MEASURED, trace: bool = True,
                   hsv_path: str | None = None, **options) -> "live_view.RunStats":
     """
-    Run a live_view frame source through run_chain() with the debug overlay.
-
-    Purpose:
-        Hands run_chain() to live_view.run() as a plain callable. live_view
-        never imports this module, so the dependency runs one way:
-
-            debug_video  <-  live_view  <-  phase2_linker
-
-    Inputs:
-        source: A live_view.FrameSource: camera, video file or image directory.
-        config: Drives both the chain and the overlay gating. Defaults to MEASURED.
-        trace: On by default, since this is the debug entry point; run_chain()
-            leaves it off.
-        hsv_path: HSV ranges JSON that replaces config.color's ranges for
-            this run; None keeps whatever config.color says (MEASURED
-            already loads calibration/hsv_ranges.json).
-        options: out_dir, display, scale, stride, limit, fps, views; passed
-            to live_view.run().
-
-    Outputs:
-        live_view.RunStats.
-
-    Side effects:
-        Reads hsv_path. Whatever live_view.run() does with the options:
-        display windows and recordings under out_dir.
+    run_chain() handed to live_view.run() as a callable, so live_view never imports this
+    module. hsv_path replaces config.color's ranges for the run. Returns live_view.RunStats.
     """
     if hsv_path:
         config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(hsv_path)))

@@ -1,17 +1,8 @@
-"""Small helpers shared across pipeline stages.
+"""Small helpers shared across the pipeline's stages.
 
-Purpose:
-    Functions more than one module needs, kept in one place so the copies
-    can't drift apart. Pure and dependency-free, so any stage can import it
-    without pulling in anything else.
-
-Main package:
-    None: helpers. The two that carry state are Laps (per-stage wall time,
-    the pipeline's opt-in stage timing) and GcWatch (the garbage collector
-    frozen before a control loop and timed in it).
-
-Flow:
-    None: each helper is called where it's needed.
+Kept in one place so copies can't drift, and dependency-free so any stage can
+import them. Laps times stages; GcWatch freezes and times the garbage collector
+for a control loop.
 """
 import subprocess
 import time
@@ -28,7 +19,6 @@ def _git(*args) -> str | None:
 
 
 def code_version() -> dict:
-    """{"commit": short hash or None, "uncommitted_changes": bool or None}: which code a run ran."""
     commit = _git("rev-parse", "--short", "HEAD")
     dirty = _git("status", "--porcelain")
     return {"commit": commit, "uncommitted_changes": None if dirty is None else bool(dirty)}
@@ -39,23 +29,12 @@ def clamp(value: float, lo: float, hi: float) -> float:
 
 
 def check_same_frame(geometry, roi, stage: str) -> None:
-    """
-    Reject a missing geometry result or ROI crop, or a pair from different frames.
-
-    Inputs:
-        geometry, roi: Anything with frame_id and timestamp_ms, normally a
-            GeometryBranchResult and the ROICropResult it was run on.
-        stage: The caller's name, so the error says which stage refused.
-
-    Raises:
-        ValueError: If either is None, or their stamps disagree.
-    """
+    """ValueError, naming stage, if either is None or their frame stamps disagree."""
     if geometry is None:
         raise ValueError(f"{stage}: geometry result is None")
     if roi is None:
         raise ValueError(f"{stage}: roi result is None")
-    # Both descend from one ROICropResult, so a mismatch means candidates from
-    # two frames reached one call and would be labeled with a frame they didn't come from
+    # A mismatch means candidates from two frames reached one call
     if (geometry.frame_id, geometry.timestamp_ms) != (roi.frame_id, roi.timestamp_ms):
         raise ValueError(
             f"{stage}: geometry stamp "
@@ -65,28 +44,13 @@ def check_same_frame(geometry, roi, stage: str) -> None:
 
 
 def check_frame_size(frame, size: tuple[int, int] | None, stage: str) -> None:
-    """
-    Reject a frame of another size than the one a setting was built for.
-
-    Inputs:
-        frame: (H, W, ...) array.
-        size: The (H, W) required; None accepts any size.
-        stage: The caller's name, so the error says which stage refused.
-    Raises:
-        ValueError: If the sizes differ.
-    """
+    """ValueError, naming stage, unless frame is size (H, W); None accepts any."""
     if size is not None and tuple(frame.shape[:2]) != tuple(size):
         raise ValueError(f"{stage}: frame is {tuple(frame.shape[:2])}, but the cm scale was set up for {tuple(size)}")
 
 
 class Laps:
-    """
-    Wall time per stage, in ms, keyed by stage name.
-
-    start() begins a frame with a fresh times dict; mark() restarts the
-    clock without recording; lap(name) records the time since the previous
-    lap, mark() or start() under name.
-    """
+    """lap(name) records ms since the previous lap, mark() or start()."""
     __slots__ = ("times", "_mark")
 
     def __init__(self) -> None:
@@ -108,24 +72,10 @@ class Laps:
 
 class GcWatch:
     """
-    Python's garbage collector, frozen and timed for a control loop.
-
-    Purpose:
-        A full (generation 2) collection walks every live object while
-        holding the GIL, so every thread stops: the 2026-10-12 runs had
-        0.6-1.6 s frames in whatever stage was running (geometry, obstacle,
-        capture) with the IMU thread's read stretched to 235 ms at the same
-        moment, past the motor watchdog's 0.5 s. start() collects once and
-        freezes everything alive (gc.freeze(): the imports, the configs, the
-        pipeline), so later collections skip it; take() says how long the
-        collector ran since the last call, so a slow frame can say whether it
-        was the collector.
-
-    Usage:
-        watch = GcWatch().start()      # once, before the loop
-        ms, gen = watch.take()         # each frame: collector ms since the last take, the highest generation run
-        watch.stop()                   # after the loop
-        tick()                         # once per frame
+    A full collection holds the GIL and stops every thread: 0.6-1.6 s frames on
+    2026-10-12, past the motor watchdog. start() collects once and freezes everything
+    alive, so later collections skip it; take() says how long the collector ran, so a
+    slow frame can say whether it was the collector. tick() once per frame.
     """
     def __init__(self, disable: bool = False, collect_every: int = 200) -> None:
         self._t: float | None = None
@@ -144,7 +94,6 @@ class GcWatch:
             self._t = None
 
     def start(self) -> "GcWatch":
-        """Collect, freeze what's alive, and start timing collections."""
         import gc
         gc.collect()
         gc.freeze()
@@ -154,13 +103,12 @@ class GcWatch:
         return self
 
     def take(self) -> tuple[float, int]:
-        """(ms the collector ran since the last take, the highest generation it collected; -1 for none)."""
+        """(collector ms since the last take, highest generation run; -1 for none)."""
         out = (round(self._ms, 2), self._gen)
         self._ms, self._gen = 0.0, -1
         return out
 
     def stop(self) -> None:
-        """Stop timing; frozen objects stay frozen (harmless)."""
         import gc
         if self._callback in gc.callbacks:
             gc.callbacks.remove(self._callback)
@@ -168,7 +116,9 @@ class GcWatch:
             gc.enable()
 
     def tick(self, braked: bool = False) -> None:
-        """Once per frame. With collection off, collect the youngest generation on a braked frame or every collect_every frames."""
+        """
+        With collection off, collect the youngest generation on a braked frame or every collect_every frames.
+        """
         import gc
         self._frames += 1
         if self._disable and (braked or self._frames % self._every == 0):

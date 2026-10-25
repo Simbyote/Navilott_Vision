@@ -1,21 +1,14 @@
-"""Intersection linker: one intersection per run, straight, left or right, with the whole chain driving, recorded and judged.
+"""Intersection linker: one intersection per run, straight, left or right, driven, recorded and judged.
 
 Purpose:
-    Proves the intersection sequences on the mat, one maneuver at a time,
-    before a full course. Each is a navigation_linker run with a one-step
-    route, so the robot drives exactly as in a course run, and each is
-    judged PASS or CHECK (docs/guides/intersection_linker.md).
+    Proves each maneuver on the mat before a full course. Each is a
+    navigation_linker run with a one-step route, so the robot drives exactly
+    as in a course run, judged PASS or CHECK (intersection_linker.md).
 
 Main package:
-    The verdict per sequence: PASS when one intersection counted, the turn
-    ended on the gyro, the lane came back, and the heading turned is within
-    HEADING_TOLERANCE_DEG of the maneuver's.
-
-Flow:
-    1. Per maneuver: the robot in its lane, the stop line ahead; the start.
-    2. navigation_linker.run with that one-step route; SequenceWatch ends it
-       once the lane has held SETTLE_S after the crossing.
-    3. The verdict into the sequence's folder; summary.txt and report.json beside them.
+    The verdict per maneuver: PASS when one intersection counted, the turn
+    ended on the gyro, the lane came back, and the heading is within
+    HEADING_TOLERANCE_DEG.
 """
 import argparse
 import json
@@ -35,38 +28,27 @@ from src.navigation_linker import run as navigation_run
 from src.params import RUNS_DIR
 from src.perception import parallel
 
-# Lane keeping on vision this long after the crossing ends the sequence:
-# the robot found its lane again and kept it
+# Lane keeping on vision this long after the crossing ends the sequence
 SETTLE_S = 1.0
-# A sequence's backstop: approach, the line, a turn's limit, the exit, settling
 SEQUENCE_MAX_S = 20.0
-# Heading each sequence should end on, deg; + = turned right
+# + = turned right
 EXPECTED_DEG = {STRAIGHT: 0.0, LEFT: -90.0, RIGHT: 90.0}
-# A sequence within this of its expected heading passes. Wide on purpose:
-# lane keeping straightens the robot out after the turn, and the trial
-# checks the sequence works; TURN_TARGET_DEG is tuned from the numbers
+# Wide: lane keeping straightens the robot after the turn; this checks the sequence works
 HEADING_TOLERANCE_DEG = 20.0
 SEQUENCE_DONE = "sequence done (lane held after the crossing)"
 
 
 class SequenceWatch:
     """
-    navigation_linker.run's stop_when for one sequence: follows its nav.csv
-    rows, ends the run SETTLE_S into lane keeping on vision after the
-    crossing, and keeps the findings.
-
-    Inputs:
-        gyro_bias_dps: Subtracted from each row's turn (raw) for the heading:
-            its yaw_deg over yaw_span_s, as the robot's rule counts it, or
-            yaw_rate x the row's step in a nav.csv without them.
-        settle_s: See SETTLE_S.
+    navigation_linker.run's stop_when for one maneuver: ends the run SETTLE_S into lane
+    keeping after the crossing, and keeps the findings. The heading counts turns as the rule does.
     """
     def __init__(self, gyro_bias_dps: float = 0.0, settle_s: float = SETTLE_S) -> None:
         self.gyro_bias_dps, self.settle_s = gyro_bias_dps, settle_s
         self.stage_s = {STAGE_TO_LINE: 0.0, STAGE_ADVANCE: 0.0, STAGE_TURN: 0.0, STAGE_EXIT: 0.0}
         self.steps = 0                      # intersections the route counted
         self.turn_end = None
-        self.heading = 0.0                  # deg turned since the crossing started, from the IMU
+        self.heading = 0.0                  # since the crossing started
         self.heading_at_turn_end = None
         self.started = self.crossed = False
         self._settled = 0.0
@@ -97,7 +79,6 @@ class SequenceWatch:
         return None
 
     def findings(self, maneuver: str) -> dict:
-        """What the sequence did, for judge() and the report."""
         return {"maneuver": maneuver, "intersections": self.steps,
                 "stage_s": {k: round(v, 2) for k, v in self.stage_s.items()},
                 "turn_end": self.turn_end,
@@ -108,13 +89,7 @@ class SequenceWatch:
 
 
 def judge(findings: dict) -> tuple[str, list[str]]:
-    """
-    PASS or CHECK for one sequence, with every reason for a CHECK.
-
-    Inputs:
-        findings: SequenceWatch.findings() plus "ended_by" and "rejected"
-            (commands braked for the contract) from the run's report.
-    """
+    """(PASS or CHECK, every reason for a CHECK)."""
     problems = []
     if findings["intersections"] != 1:
         problems.append(f"{findings['intersections']} intersections counted, not 1: "
@@ -134,7 +109,6 @@ def judge(findings: dict) -> tuple[str, list[str]]:
 
 
 def summary_lines(findings: dict) -> list[str]:
-    """summary.txt's lines for one sequence."""
     verdict, problems = judge(findings)
     s = findings["stage_s"]
     lines = [f"[{findings['maneuver'].upper()}] {verdict}   ended by {findings['ended_by']}",
@@ -151,24 +125,7 @@ def run_sequence(maneuver: str, source, sensors, motor, config: PipelineConfig =
                  p3_config: Phase3Config = MEASURED_ESTIMATION, out_dir: str = str(RUNS_DIR / "intersection"),
                  system=None, clock=time.perf_counter, max_run_s: float = SEQUENCE_MAX_S,
                  motors_on: bool = True, render: bool = True, settle_s: float = SETTLE_S) -> dict:
-    """
-    One maneuver: a navigation_linker run with a one-step route, watched.
-
-    Inputs:
-        maneuver: STRAIGHT, LEFT or RIGHT.
-        source, sensors, motor, system, clock, motors_on, render: As for
-            navigation_linker.run; it closes the source and stops the
-            sensors and the motors when it ends.
-        config, p3_config: Phase 2 and 3 tuning; p3_config's gyro bias is
-            Navigation's and the heading's too.
-        out_dir: This sequence's run folder.
-        max_run_s: The sequence's backstop.
-        settle_s: See SETTLE_S.
-
-    Outputs:
-        The findings (SequenceWatch's, the run's ended_by and contract
-        count) with "verdict", also written to the folder's sequence.json.
-    """
+    """One maneuver, watched; the findings with the verdict, also in sequence.json. It closes the rig."""
     watch = SequenceWatch(p3_config.gyro_bias_dps, settle_s)
     nav = Navigation(gyro_bias_dps=p3_config.gyro_bias_dps, route=Route((maneuver,)))
     report = navigation_run(source, sensors, motor, nav, config, p3_config, out_dir, system, clock=clock,
@@ -182,13 +139,7 @@ def run_sequence(maneuver: str, source, sensors, motor, config: PipelineConfig =
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """
-    Command line: python3 -m src.intersection_linker straight|left|right|all --camera
-
-    Outputs:
-        0 when every sequence passed, 1 when one needs a check, 2 when the
-        source or hardware wouldn't open or a replay was asked for "all".
-    """
+    """0 when every maneuver passed, 1 when one needs a check, 2 when the rig won't open."""
     ap = argparse.ArgumentParser(description="One intersection per run, straight, left or right, judged.")
     ap.add_argument("maneuver", choices=list(MANEUVERS) + ["all"])
     src = ap.add_mutually_exclusive_group(required=True)

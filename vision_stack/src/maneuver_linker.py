@@ -1,21 +1,13 @@
 """Phase 1-3 plus the motors: a scripted drive trial that records everything and renders it afterwards.
 
 Purpose:
-    The integration test of driving, the IMU and the encoders (maneuver.py's
-    trial), with the whole vision chain running on every frame so the load
-    is real; vision only records, it never steers. Frames go to disk on a
-    background thread and maneuver.avi is rendered after
-    (docs/guides/maneuver_linker.md).
+    Tests driving, the IMU and the encoders together (maneuver.py's trial)
+    with the whole vision chain running, so the load is real; vision only
+    records. maneuver.avi is rendered after the run (maneuver_linker.md).
 
 Main package:
-    The run folder: maneuver.csv, p3.csv, report.json and summary.txt (the
-    trial's findings, timing, lane re-acquisition after the turn), frames/
+    The run folder: maneuver.csv, p3.csv, report.json, summary.txt, frames/
     and maneuver.avi.
-
-Flow:
-    1. Open the rig; wait for the start.
-    2. Per frame: sensors, the maneuver's command, motors, vision, log.
-    3. Stop the motors first, however it ends; flush; summary; render.
 """
 import argparse
 import csv
@@ -39,7 +31,7 @@ from src.params import FPS, FRAME_H, FRAME_W, MODE_TWO_BOUNDARY, RUNS_DIR
 from src.perception.color_branch import load_hsv_ranges
 from src.phase3_linker import CsvLog, Phase3Stats, run_phase3_chain
 
-# --help text. Kept apart from the module docstring, which documents the code.
+# --help text, apart from the module docstring
 _CLI_HELP = """\
 Drive trial: settle, spin-check the IMU's yaw sign, drive a leg, turn 180,
 drive back, while the vision pipeline records. Straightness and the turn use
@@ -73,16 +65,11 @@ Output (--out DIR, default <root>/runs/maneuver_<timestamp>):
 
 
 def _record(res, machine: Maneuver) -> dict:
-    """What render_run() needs to redraw this frame: the chain plus the maneuver's record."""
     return {**chain_record(res), "maneuver": dict(machine.record)}
 
 
 class Resume:
-    """
-    --hold's continue signal: the start button (System.button_pressed(),
-    non-blocking) or Enter in the terminal, whichever comes first. Polled
-    once per frame while holding, so the loop never waits on it.
-    """
+    """--hold's continue signal: the start button or Enter, polled each frame so the loop never waits."""
     def __init__(self, system=None, stdin=None) -> None:
         self._system = system
         self._stdin = sys.stdin if stdin is None else stdin
@@ -114,34 +101,9 @@ def run(
         resume=None,
     ) -> dict:
     """
-    Run one drive trial.
-
-    Inputs:
-        source: A live_view FrameSource; the camera on the robot.
-        sensors: sensing.Sensors with the IMU and encoders started
-            (anything with read() -> (SensorSample, imu_frame, encoder_frame)
-            and stop()).
-        motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); NoMotors for a bench run.
-        cfg: The trial's tuning; MANEUVER from config.py plus any flags.
-        config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
-        system: peripherals.system.System for the start button, countdown
-            and run-time display; None starts at once.
-        clock: Seconds, monotonic; injected by tests.
-        render: Render maneuver.avi after the run.
-        display: Play the rendered video in a window afterwards.
-        hold: Brake after the pulses, each leg and the turn until resumed,
-            so each step can be measured by hand. Hold time doesn't count
-            against max_run_s.
-        resume: Called once per frame while holding; True continues.
-            Defaults to Resume(system): the start button or Enter.
-
-    Outputs:
-        The findings (see the module docstring), also written to report.json.
-
-    Side effects:
-        Drives the motors. Writes the run folder. Always stops the motors
-        before returning or raising, whatever ended the run.
+    One drive trial; returns the findings, also in report.json. hold brakes after each
+    step until resume() says go; hold time doesn't count against max_run_s. Always stops
+    the motors before returning or raising.
     """
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "config.json"), "w") as f:
@@ -193,7 +155,7 @@ def run(
                         left_cps=0.0 if sample is None or sample.left_wheel_cps is None else sample.left_wheel_cps,
                         right_cps=0.0 if sample is None or sample.right_wheel_cps is None else sample.right_wheel_cps)
             cmd = machine.step(tick)
-            # Before vision: control never waits on it
+            # Before vision, so control never waits on it
             if cmd.brake:
                 motor.brake()
             else:
@@ -211,7 +173,6 @@ def run(
                             res.packet.lane_offset, res.chain.offset.mode))
             recorder.put(fid, frame, _record(res, machine))
 
-            # Vision after the turn: how long until the lane is found again
             if m.get("event", "").startswith(f"-> {FORWARD_2}"):
                 reacquire["after_turn_t"] = tick.t
             if (reacquire["after_turn_t"] is not None and reacquire["lane_reacquired_s"] is None
@@ -237,8 +198,7 @@ def run(
             source.close()
             if system is not None:
                 system.show_final_time(0.0 if t0 is None else clock() - t0)
-                # Releases pigpio without blanking: the TM1637 holds the final time after the
-                # program exits, until the next run's "rdy", as main.py and navigation_linker do
+                # The display holds the final time after the program exits
                 system.cleanup(blank=False)
 
     wall = 0.0 if t0 is None else clock() - t0
@@ -278,7 +238,6 @@ def run(
 
 
 def summary_lines(report: dict, cfg: ManeuverConfig) -> list[str]:
-    """summary.txt's [MANEUVER] section, from run()'s findings."""
     out = ["[MANEUVER] " + ("completed" if report["completed"] else f"STOPPED: {report['abort_reason']}")]
     if "settle" in report:
         s = report["settle"]
@@ -336,7 +295,7 @@ _FLAGS = {"leg_counts": "--leg-counts", "leg_max_s": "--leg-max-s", "speed": "--
 
 
 def trial_config(base: ManeuverConfig, args) -> ManeuverConfig:
-    """base with the named flags and every --set field=value applied; raises ValueError on an unknown field."""
+    """base with the flags and every --set field=value applied; ValueError on an unknown field."""
     types_ = {f.name: f.type for f in fields(ManeuverConfig)}
     changes = {name: getattr(args, flag[2:].replace("-", "_"))
                for name, flag in _FLAGS.items() if getattr(args, flag[2:].replace("-", "_")) is not None}
@@ -351,11 +310,7 @@ def trial_config(base: ManeuverConfig, args) -> ManeuverConfig:
 
 def cli(argv: list[str] | None = None) -> int:
     """
-    Parse arguments, open the hardware, and run one trial (or only render one).
-
-    Outputs:
-        Process exit code: 0 when the trial completed, 1 when it stopped
-        early, 2 on a bad argument or hardware that won't open.
+    0 when the trial completed, 1 when it stopped early, 2 on a bad argument or hardware that won't open.
     """
     ap = argparse.ArgumentParser(prog="maneuver_linker", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)

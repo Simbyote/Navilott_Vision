@@ -1,22 +1,13 @@
 """Phases 1-3 plus Navigation: the whole chain driving the robot, recorded and rendered afterwards.
 
 Purpose:
-    The instrumented twin of the production run: every frame through
-    capture, Phase 2, the traced Phase 3 and Navigation, the command checked
-    against the contract and driven. Nothing is drawn while it drives, so the
-    run measures the real control loop; nav.avi is rendered after. Replays
-    and --no-motors are dry runs (docs/guides/navigation_linker.md).
+    The instrumented twin of the production run. Nothing is drawn while it
+    drives, so the run measures the real control loop; nav.avi is rendered
+    after. Replays and --no-motors are dry runs (navigation_linker.md).
 
 Main package:
-    The run folder: nav.csv (every frame), p3.csv, report.json and
-    summary.txt (how the run ended, which rule decided, steering, latency,
-    sensors, battery), frames/ and nav.avi.
-
-Flow:
-    1. Open the rig; check the battery at rest; wait for the start.
-    2. Per frame: sensors, vision, Navigation, contract check, motors, log.
-    3. Stop the motors first, however it ends; flush the recorder; summary.
-    4. Render nav.avi.
+    The run folder: nav.csv (every frame), p3.csv, report.json, summary.txt,
+    frames/ and nav.avi.
 """
 import argparse
 import csv
@@ -48,9 +39,7 @@ from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_ch
 from src.utils import GcWatch, code_version
 from src.perception import parallel
 
-# The run's backstop: brake and end after this long, whatever the navigator
-# does. The only linker-level safety stop (decided 2026-09-30); a run that
-# reaches a stop line stays braked there until it
+# The backstop, whatever the navigator does
 MAX_RUN_S = 30.0
 
 END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
@@ -58,10 +47,8 @@ END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
 END_COURSE = "end of course"                    # the navigator finished the route
 END_EARLY = "ended early (lane lost before the route was done)"
 END_BATTERY = "battery critical"
-REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
-# A frame whose Phases 1-3 took this long is named in nav.csv's event column
-# with its slowest stage: past the motor watchdog's 0.5 s the robot stops on
-# its own. The 2026-10-12 runs had 0.6-1.6 s frames mid-run, which braked it
+REASON_CONTRACT = "contract"        # the navigator's command broke the contract
+# Named in nav.csv with its slowest stage; 0.6-1.6 s frames braked the robot on 2026-10-12
 SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
@@ -74,18 +61,13 @@ NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms",
 
 
 def wheel_columns(rec: dict, wheels) -> dict:
-    """
-    nav.csv's wheel-speed columns: the turn's target counts/s (blank off a
-    turn) and each wheel's learned counts/s per duty (blank without a
-    WheelSpeed). The gains falling as the pack drains is the voltage the
-    turns no longer feel.
-    """
+    """The turn's target counts/s and each wheel's learned gain; the gains fall as the pack drains."""
     target = (rec.get("wheels") or {}).get("target", (None, None))
     gains = (None, None) if wheels is None else tuple(round(g, 1) for g in wheels.gains)
     return {"target_left_cps": target[0], "target_right_cps": target[1], "gain_left": gains[0], "gain_right": gains[1]}
 
 
-# --help text. Kept apart from the module docstring, which documents the code.
+# --help text, apart from the module docstring
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
 navigation (obstacle, stop sign, red light, intersection and end-of-course
@@ -117,10 +99,8 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
 
 def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen: int = -1) -> str:
     """
-    nav.csv's event for a frame whose capture + Phases 2-3 took limit_ms or
-    more, naming its slowest stage and, if it ran, the garbage collector's
-    time (it stops every thread, so it shows up in whatever stage was
-    running); "" otherwise.
+    The event for a frame of limit_ms or more: its slowest stage, and the garbage collector's
+    time if it ran (it stops every thread, so it shows up in whatever stage was running).
     """
     t = res.timings_ms
     total = t.get("capture", 0.0) + t.get("phase2", 0.0) + t.get("phase3", 0.0)
@@ -133,14 +113,13 @@ def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen:
 
 
 def obstacle_cm(pkt) -> float | str | None:
-    """nav.csv's obstacle_cm: the voted obstacle's cm, "view bottom" when clipped, None when there's none (or no cm)."""
+    """The voted obstacle's cm, "view bottom" when clipped, None when there's none."""
     if not pkt.obstacle_detected:
         return None
     return "view bottom" if pkt.obstacle_clipped else pkt.obstacle_distance_cm
 
 
 class NavStats:
-    """Per-frame navigation outcomes, summarized for summary.txt and report.json."""
     def __init__(self) -> None:
         self.frames = self.driving = self.rejected = 0
         self.brake_reasons: Counter = Counter()
@@ -150,7 +129,6 @@ class NavStats:
         self.latency_ms: list[float] = []
 
     def update(self, n: dict) -> None:
-        """Count one frame's record["nav"]."""
         self.frames += 1
         self.latency_ms.append(n["latency_ms"])
         self.rules[n.get("rule") or "-"] += 1
@@ -177,7 +155,6 @@ class NavStats:
 
 
 def summary_lines(report: dict) -> list[str]:
-    """summary.txt's [NAVIGATION] section, from run()'s findings."""
     n, r = report["nav"], report["run"]
     pct = lambda k: 100.0 * k / n["frames"] if n["frames"] else 0.0
     reasons = ", ".join(f"{k} {v}" for k, v in sorted(n["brake_reasons"].items())) or "none"
@@ -222,7 +199,6 @@ def summary_lines(report: dict) -> list[str]:
 
 
 def read_stats(ms: list[float]) -> dict | None:
-    """p50 / p95 / max of read times in ms; None without any."""
     if not ms:
         return None
     a = np.array(ms, dtype=float)
@@ -253,47 +229,11 @@ def run(
         label: str = "",
     ) -> dict:
     """
-    Run the navigator on every frame until the cap, the source's end or Ctrl-C.
-
-    Inputs:
-        source: A live_view FrameSource: the camera, or a replay.
-        sensors: sensing.Sensors (anything with read() -> (SensorSample,
-            batch) and stop()); None runs Phase 3 without sensors.
-        motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); NoMotors for a dry run.
-        navigator: A Navigator; navigation.Navigation. Its record, if it has
-            one, says which rule decided each command and why.
-        config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
-        system: peripherals.system.System for the start button, countdown
-            and run-time display; None starts at once.
-        clock: Seconds, monotonic; injected by tests.
-        max_run_s: Brake and end once this long has passed since the start.
-        limit: Stop after this many frames (replays); None runs to the end.
-        motors_on: Reported in the summary; False for a dry run.
-        render: Render nav.avi after the run.
-        display: Play the rendered video in a window afterwards.
-        stop_when: Called with each frame's nav.csv row once the motors have
-            its command; a non-empty string it returns ends the run, as
-            ended_by (intersection_linker ends a sequence this way).
-        battery: peripherals.battery.Power, or None: monitored from the
-            start, logged per frame, and the run ends once it should_stop().
-        record: Save every frame and its record (frames/, records.pkl) for
-            the video; False writes neither, and nothing is rendered. The
-            CSVs and the report are written either way.
-        warmup: Before the start, read one frame and run it through Phase 2
-            (phase2_linker.warm_up), so the first driving frame doesn't pay
-            the first-call costs. For the live camera; a replay would lose
-            its first frame.
-        label: What this run was for or under (free text, e.g. "recorder
-            off", "new tires"), kept in report.json and the summary with
-            the commit it ran.
-
-    Outputs:
-        The findings, also written to report.json.
-
-    Side effects:
-        Drives the motors. Writes the run folder. Always stops the motors
-        before returning or raising, whatever ended the run.
+    Drive the navigator on every frame until the cap, the source's end, Ctrl-C, or stop_when
+    returning an ended_by. record=False writes no frames or video; the CSVs and report are
+    written either way. warmup is for the live camera (a replay would lose its first frame).
+    label is kept in the report with the commit. Always stops the motors before returning or
+    raising; returns the findings, also in report.json.
     """
     os.makedirs(out_dir, exist_ok=True)
     navigator.reset()
@@ -361,7 +301,7 @@ def run(
             pkt = res.packet
 
             n0 = clock()
-            cmd, problems = enforce(navigator.update(pkt))     # as the pipeline: a bad command brakes
+            cmd, problems = enforce(navigator.update(pkt))
             rec = dict(getattr(navigator, "record", {}) or {})
             if problems:
                 rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
@@ -477,8 +417,7 @@ def run(
                       "recorder_written": recorder.written,
                       "warmup_ms": None if warmup_ms is None else round(warmup_ms, 1),
                       "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
-                      # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
-                      # Linux) a diagnostics recording lines up with it (analysis.pi_load --run)
+                      # nav.csv's t counts from here, so pi_load --run can line a recording up
                       "t0_monotonic": None if t0 is None else round(t0, 4)}}
     lines = summary_lines(report) + [""] + stats.report()
 
@@ -508,13 +447,7 @@ def run(
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """
-    Parse arguments, open the source and hardware, and run (or only render a run).
-
-    Outputs:
-        Process exit code: 0 after a run, 2 on a bad argument or a source or
-        hardware that won't open.
-    """
+    """0 after a run, 2 on a bad argument or a rig that won't open."""
     ap = argparse.ArgumentParser(prog="navigation_linker", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)

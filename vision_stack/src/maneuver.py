@@ -1,28 +1,24 @@
 """Drive trial: settle, check the yaw sign, drive a leg, turn 180, drive back, as a pure state machine.
 
 Purpose:
-    maneuver_linker's control logic, kept apart from the camera, the motors
-    and the sensors so it runs and tests anywhere. Each step() gets one
-    frame's sensor readings and returns one motor command, never blocking.
-    It tests the drive, IMU and encoder integration: vision never steers.
+    maneuver_linker's control logic, apart from the hardware so it tests
+    anywhere. It checks the drive, IMU and encoders together; vision never
+    steers.
 
 Main package:
-    Maneuver: step(Tick) -> Command per frame, and report(), the trial's
-    findings (gyro bias at rest, yaw sign, each leg, the 180 turn).
+    Maneuver.step(Tick) -> Command per frame; report() gives the findings.
 
 Flow:
-    1. SETTLE: still; measure the gyro bias and the lateral-accel baseline.
-    2. PULSE_LEFT / PULSE_RIGHT: short spins each way set the yaw sign.
-    3. FORWARD, STOP, TURN 180 on the gyro, FORWARD back, STOP, DONE.
-    Any safety check ends in ABORTED, motors off; with hold on, the robot
-    brakes after each step until resume().
+    1. SETTLE: still; measure the gyro bias.
+    2. Short spins each way set the yaw sign.
+    3. Forward, stop, turn 180 on the gyro, forward back, stop, done.
+    Any safety check ends in ABORTED, motors off.
 """
 import math
 from dataclasses import dataclass, field
 
 from src.navigation.navigation_contract import BRAKE, Command
 
-# Steps, in order. ABORTED can follow any of them
 SETTLE, PULSE_LEFT, PULSE_LEFT_REST, PULSE_RIGHT, PULSE_RIGHT_REST = (
     "settle", "pulse_left", "pulse_left_rest", "pulse_right", "pulse_right_rest")
 FORWARD_1, STOP_1, TURN, TURN_SETTLE, FORWARD_2, STOP_2 = (
@@ -43,48 +39,41 @@ HOLD_BEFORE = {
 @dataclass(frozen=True)
 class ManeuverConfig:
     """
-    The drive trial's tuning. Placeholders until course runs set them; every
-    field can be overridden per run from maneuver_linker's command line.
-
-    Motor values are TB6612 duty in [0, 1] as MotorController.drive() takes
-    them. A correction is added to the left wheel and taken from the right,
-    so + steers right.
+    Placeholders until course runs set them; maneuver_linker's flags override any field.
+    Duties in [0, 1]. A correction is added to the left wheel and taken from the right, so + steers right.
     """
     speed: float = 0.40                 # forward duty on the legs
-    min_speed: float = 0.25             # the drive floor: slower and the N20s stall (navigation's STALL_DUTY)
-    # Leg length in encoder counts, the mean of both wheels. Placeholder:
-    # set it on the mat, since counts per meter aren't measured yet
+    min_speed: float = 0.25             # STALL_DUTY
+    # Mean of both wheels' counts; a placeholder until counts per meter are measured
     leg_counts: int = 1500
-    leg_max_s: float = 8.0              # backstop: a leg ends here even short of leg_counts
-    kp_counts: float = 0.0015           # per count of (right - left) since the leg began; drive.py's kp
-    kp_heading: float = 0.01            # per degree turned left since the leg began; placeholder
-    max_correction: float = 0.15        # drive.py's max_corr
+    leg_max_s: float = 8.0
+    kp_counts: float = 0.0015           # per count of (right - left)
+    kp_heading: float = 0.01            # per degree turned left; a placeholder
+    max_correction: float = 0.15
     turn_speed: float = 0.45
-    turn_slow_speed: float = 0.30       # over the last turn_slow_band_deg, to limit overshoot
+    turn_slow_speed: float = 0.30       # over the last band, to limit overshoot
     turn_slow_band_deg: float = 20.0
     turn_target_deg: float = 171.0
     turn_tolerance_deg: float = 5.0     # pass: final angle within target +/- this
     turn_timeout_s: float = 6.0         # pass: target reached within this
-    turn_abort_deg: float = 270.0       # safety: a turn past this is stopped
-    # Starting gyro bias, deg/s, in sensing's + = right frame; config.MANEUVER
-    # sets this robot's (config.GYRO_BIAS_DPS). SETTLE measures it again and
-    # uses the measurement
+    turn_abort_deg: float = 270.0
+    # A starting value; SETTLE measures it again
     gyro_bias_dps: float = 0.0
     settle_s: float = 2.0
     pulse_speed: float = 0.40
     pulse_s: float = 0.25
-    pulse_rest_s: float = 0.5           # still after each pulse, so its coast is counted
-    # A pulse turning less than this can't show the yaw sign: the IMU or motors aren't responding
+    pulse_rest_s: float = 0.5           # so each pulse's coast is counted
+    # Less means the IMU or the motors aren't responding
     pulse_min_deg: float = 3.0
     stop_s: float = 1.0
     max_run_s: float = 60.0
-    max_frame_gap_s: float = 0.5        # a longer gap between frames stops the run
-    stall_s: float = 0.5                # motors commanded but no encoder counts for this long stops the run
+    max_frame_gap_s: float = 0.5        # longer stops the run
+    stall_s: float = 0.5                # driven without counts this long stops the run
 
 
 @dataclass(frozen=True)
 class Tick:
-    """One frame's sensor readings. yaw_dps and lateral_accel are None when the IMU gave nothing."""
+    """yaw_dps and lateral_accel are None when the IMU gave nothing."""
     t: float                    # s since the trial started
     dt: float                   # s since the previous tick; 0 on the first
     yaw_dps: float | None       # raw gyro Z mean over the window, before the bias
@@ -107,10 +96,7 @@ class _Leg:
 
 
 class Maneuver:
-    """
-    The trial's steps. Create one per run and call step() once per frame, in
-    order; done is True once it reaches DONE or ABORTED.
-    """
+    """One per run; step() once per frame, in order, until done."""
     RECORD_FIELDS = ("t", "dt", "step", "cmd_left", "cmd_right", "brake", "yaw_dps", "yaw_corrected",
                      "heading_deg", "turn_deg", "leg_progress", "c_counts", "c_heading",
                      "left_count", "right_count", "left_cps", "right_cps", "lateral_accel", "event",
@@ -120,7 +106,7 @@ class Maneuver:
         """hold: brake at each HOLD_BEFORE point until resume(), for measuring by hand."""
         self.cfg = cfg
         self.hold = hold
-        self._held_s = 0.0                      # time spent holding; not counted against max_run_s
+        self._held_s = 0.0                      # not counted against max_run_s
         self._hold_next = None                  # the step a hold resumes into
         self._resume = False
         self._holds: list[dict] = []
@@ -146,17 +132,7 @@ class Maneuver:
 
     def step(self, tick: Tick) -> Command:
         """
-        Advance one frame.
-
-        Inputs:
-            tick: This frame's readings. Its dt drives every integral and
-                timer, so a missing IMU reading (yaw None) adds nothing.
-
-        Outputs:
-            The motor command for this frame; BRAKE whenever the robot should be still.
-
-        Side effects:
-            Sets self.record, this frame's row for maneuver.csv.
+        BRAKE whenever the robot should be still. tick.dt drives every timer and integral. Sets self.record.
         """
         event = ""
         yaw = None if tick.yaw_dps is None else tick.yaw_dps - self._bias
@@ -191,17 +167,17 @@ class Maneuver:
         return self.step_name == HOLD
 
     def resume(self) -> None:
-        """Continue from a hold on the next step(). A call before a hold begins is dropped by it, so an early press can't skip one."""
+        """A press before a hold begins is dropped, so an early press can't skip one."""
         self._resume = True
 
     def abort(self, reason: str) -> None:
-        """Stop the trial from outside (Ctrl-C, a camera failure); the next command is stopped."""
+        """From outside (Ctrl-C, a camera failure)."""
         if not self.done:
             self._abort_reason = f"{reason} (during {self.step_name})"
             self.step_name = ABORTED
 
     def _safety(self, tick: Tick) -> str:
-        """The checks every step shares; returns the abort event, or ''."""
+        """The abort event, or ''."""
         cfg = self.cfg
         reason = None
         if self.holding:
@@ -244,7 +220,6 @@ class Maneuver:
         return f"-> {step}"
 
     def _advance(self, tick: Tick, yaw: float | None, elapsed: float) -> tuple[Command, str]:
-        """The current step's command, moving to the next step when it's finished."""
         cfg, step = self.cfg, self.step_name
         still = BRAKE
 
@@ -305,7 +280,7 @@ class Maneuver:
         return still, ""
 
     def _decide_sign(self, tick: Tick) -> str:
-        """+1 when a commanded left spin reads + yaw. Both pulses must move and disagree in sign."""
+        """+1 when a commanded left spin reads + yaw; both pulses must move, opposite ways."""
         left, right = self._pulses["left_deg"], self._pulses["right_deg"]
         moved = abs(tick.left_count - self._pulse_counts0[0]) + abs(tick.right_count - self._pulse_counts0[1])
         self._pulses["encoder_counts_moved"] = moved
@@ -380,7 +355,7 @@ class Maneuver:
         return self._go(FORWARD_2, tick) + f" (turn {'PASS' if t['success'] else 'FAIL'} {final:.1f} deg)"
 
     def report(self) -> dict:
-        """What the trial found; sections it never reached are missing."""
+        """Sections it never reached are missing."""
         cfg = self.cfg
         out = {"completed": self.step_name == DONE, "abort_reason": self._abort_reason}
         if self._settle_yaw:

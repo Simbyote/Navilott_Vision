@@ -2,21 +2,18 @@
 
 Purpose:
     What the robot runs on the course (python3 -m src.main): every frame
-    through Pipeline.step(), its Command to the motors. Nothing is recorded:
-    the linkers are the instrumented twins. Every way a run ends stops the
-    motors first, and the display says which it was
-    (docs/guides/production_run.md).
+    through Pipeline.step(), its Command to the motors. The linkers are the
+    instrumented twins. Every way a run ends stops the motors first, and the
+    display says which it was (production_run.md).
 
 Main package:
-    RunResult: how the run ended (finished, ended early, the time cap, a
-    critical battery, Ctrl-C, an error), its time and the step it reached.
+    RunResult: how the run ended, its time and the route step it reached.
 
 Flow:
-    1. Load and print the route; open the hardware; check the battery at rest.
-    2. Warm Phase 2 up on one frame; "St N" until the button; the countdown.
+    1. Load the route; open the hardware; check the battery at rest.
+    2. Warm Phase 2 up; "St N" until the button; the countdown.
     3. Per frame: camera -> Pipeline.step() -> motors; time on the display.
-    4. Halt the motors, release the camera and sensors.
-    5. The end screen, left up.
+    4. Halt the motors, release the hardware, leave the end screen up.
 """
 import argparse
 import sys
@@ -35,15 +32,10 @@ from src.pipeline import Pipeline
 from src.utils import GcWatch
 from src.perception import parallel
 
-# The run's backstop: brake and end after this long, whatever Navigation
-# does (decided 2026-10-01: a generous cap, in case the end of the course is
-# never seen). Course runs are well under a minute; raise it for a longer course
+# A backstop in case the course's end is never seen; runs are well under a minute
 MAX_RUN_S = 300.0
-# How long the halt holds the short brake before standby. The drive coasts
-# ~0.15-0.18 s past a zero duty (2026-09-30 trials); braking a little longer
-# than that stops it before the outputs float
+# A little longer than the drive's ~0.15-0.18 s coast, before the outputs float
 HALT_BRAKE_S = 0.3
-# The ended-early screen alternates its code and the time this often (decided 2026-10-01)
 ALTERNATE_S = 2.0
 
 END_FINISHED, END_EARLY, END_CAP, END_INTERRUPT, END_ERROR = (
@@ -54,15 +46,6 @@ CODE_CAP, CODE_ERROR = "E  t", "Err "
 
 @dataclass(frozen=True)
 class RunResult:
-    """
-    How a run went.
-
-    ended_by: One of the END_* names.
-    elapsed_s: From GO to the end; 0.0 if it never started.
-    frames: Frames driven.
-    end_step: The route step it ended on (Navigation's end_step, else its progress).
-    error: The exception, for END_ERROR.
-    """
     ended_by: str
     elapsed_s: float
     frames: int
@@ -71,27 +54,19 @@ class RunResult:
 
 
 def step_text(route: Route) -> str:
-    """The start screen: the route's maneuver count, "St 3" (capped at 99)."""
     return f"St{min(len(route.maneuvers), 99):>2}"
 
 
 def early_code(step: int | None) -> str:
-    """The ended-early code: "E  2" for step 2 (capped at 99)."""
     return f"E{min(step or 0, 99):>3}"
 
 
 def mm_ss(seconds: float) -> str:
-    """Seconds as the display shows them, "01:05" (minutes capped at 99)."""
     return f"{min(int(seconds) // 60, 99):02d}:{int(seconds) % 60:02d}"
 
 
 def halt(motor, sleep=time.sleep) -> None:
-    """
-    Stop the robot: short brake for HALT_BRAKE_S, then standby.
-
-    Side effects:
-        Always ends with motor.stop(), even if the brake fails.
-    """
+    """Short brake for HALT_BRAKE_S, then standby; always ends with motor.stop(), even if the brake fails."""
     try:
         motor.brake()
         sleep(HALT_BRAKE_S)
@@ -103,41 +78,21 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         clock=time.monotonic, sleep=time.sleep, max_run_s: float = MAX_RUN_S, battery=None,
         warmup: bool = True) -> RunResult:
     """
-    One run, from the start button to the halt.
-
-    Inputs:
-        camera: capture.CameraSource, opened: read() -> FrameData, or None
-            for a dropped frame; release().
-        sensors: sensing.Sensors (sample() -> SensorSample | None, stop()).
-        motor: drive.MotorController: drive(left, right), brake(), stop().
-        pipeline: A fresh Pipeline built with route.
-        system: peripherals.system.System: the button and display.
-        route: For the start screen.
-        clock, sleep: Seconds, monotonic; injected by tests.
-        max_run_s: Brake and end once this long has passed since GO.
-        battery: peripherals.battery.Power, or None: monitored from GO, and
-            the run ends once it should_stop() (CRITICAL).
-        warmup: Before the start screen, one frame through Phase 2, thrown
-            away (Pipeline.warm_up).
-
-    Outputs:
-        The RunResult. The display is left for end_screen().
-
-    Side effects:
-        Drives the motors. Always halts them first, then releases the
-        camera and stops the sensors, whatever ended the run.
+    One run, from the start button to the halt; the display is left for end_screen().
+    Always halts the motors first, then releases the camera and sensors, whatever ended it.
+    clock and sleep are injected by tests.
     """
     ended_by, error, frames, t0, gc_watch = END_INTERRUPT, None, 0, None, None
     try:
-        fd = camera.read() if warmup else None          # one frame through Phase 2, standing still: the
-        if fd is not None:                              # first driving frame then skips the first-call costs
+        fd = camera.read() if warmup else None
+        if fd is not None:
             pipeline.warm_up(fd.frame)
         system.wait_for_start(step_text(route))
         system.run_countdown()
         sensors.sample()                                # start the first window at GO
         if battery is not None and not battery_run.start(battery):
             battery = None
-        gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY).start()   # freeze the setup; no automatic collections while driving
+        gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY).start()
         t0 = clock()
         while True:
             if clock() - t0 >= max_run_s:
@@ -147,7 +102,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
                 ended_by = END_BATTERY
                 break
             fd = camera.read()
-            if fd is None:                              # a dropped frame: no id spent, carry on
+            if fd is None:                              # dropped: no id spent
                 continue
             cmd = pipeline.step(fd.frame, fd.frame_id, fd.timestamp_ms, sensors.sample())
             if cmd.brake:
@@ -179,14 +134,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
 
 
 def end_screen(result: RunResult) -> list:
-    """
-    What the display shows after a run.
-
-    Outputs:
-        The screens in order: a str is a code for show_text(), a float the
-        time for show_final_time(). One screen stays up; two alternate every
-        ALTERNATE_S until Ctrl-C.
-    """
+    """The screens: a str is a code, a float the time. One stays up; two alternate every ALTERNATE_S."""
     if result.ended_by == END_ERROR:
         return [CODE_ERROR]
     if result.ended_by == END_EARLY:
@@ -199,12 +147,7 @@ def end_screen(result: RunResult) -> list:
 
 
 def show_end(system, screens: list, sleep=time.sleep) -> None:
-    """
-    Put the end screen up: one screen once; two alternating until Ctrl-C.
-
-    Side effects:
-        Writes the display; blocks while alternating.
-    """
+    """Blocks while two screens alternate, until Ctrl-C."""
     def show(screen):
         if isinstance(screen, str):
             system.show_text(screen)
@@ -224,18 +167,13 @@ def show_end(system, screens: list, sleep=time.sleep) -> None:
 
 
 def summary(result: RunResult) -> str:
-    """The terminal's last line."""
     line = f"{result.ended_by} at step {result.end_step} after {mm_ss(result.elapsed_s)} ({result.frames} frames)"
     return line if result.error is None else f"{line}: {result.error!r}"
 
 
 def cli(argv: list[str] | None = None) -> int:
     """
-    Command line: python3 -m src.main [--route PATH] [--max-run-s S]
-
-    Outputs:
-        0 after a run (however it ended); 2 for a bad route, hardware
-        that wouldn't open or a critical pack, before anything moves.
+    0 after any run; 2 for a bad route, hardware that won't open or a critical pack, before anything moves.
     """
     ap = argparse.ArgumentParser(description="Run the course: start button, drive, time on the display.")
     ap.add_argument("--route", default=str(ROUTE_PATH), metavar="PATH",
@@ -255,7 +193,7 @@ def cli(argv: list[str] | None = None) -> int:
         return 2
     print("\n".join(route.describe()))
 
-    pipeline = Pipeline(MEASURED, MEASURED_ESTIMATION, route=route)      # its gyro bias: config.GYRO_BIAS_DPS
+    pipeline = Pipeline(MEASURED, MEASURED_ESTIMATION, route=route)
     camera = sensors = motor = system = None
     try:
         import pigpio
