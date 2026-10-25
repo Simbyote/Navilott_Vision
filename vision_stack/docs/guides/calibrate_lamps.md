@@ -51,7 +51,7 @@ make calib-lamps LAMPS="red=runs/lamp_red yellow=runs/lamp_yellow green=runs/lam
 
 With `off=`, each lamp is measured differently:
 
-- **Where the lamp is:** the pixels whose mean V rises at least `LIT_DELTA` (25) from the off run to its run. That's whatever lights up with the lamp, the LED and any reflection of it, and not what's there either way (the board, glare, the other lenses). The brightest spot isn't used: at the course's light it was a glare off the board, or the LED's reflection in the panel above. Each place that lit up is printed with its pixels and position. When more than a quarter of the ROI lit up, the scene changed between the runs (exposure, the robot moved), and it says so.
+- **Where the lamp is:** the pixels whose mean V rises at least `LIT_DELTA` (25) from the off run to its run (on the course, red rose 180 → 246 lit and yellow 213 → 243; auto exposure moves a scene 10-20). That's whatever lights up with the lamp, the LED and any reflection of it, and not what's there either way (the board, glare, the other lenses). The brightest spot isn't used: at the course's light it was a glare off the board, or the LED's reflection in the panel above. Each place that lit up is printed with its pixels and position. When more than a quarter of the ROI lit up, the scene changed between the runs (exposure, the robot moved), and it says so.
 - **The cross-check:** those pixels lit against the same pixels unlit, in the off run and in the other lamps' runs (a lens is off there too):
 
   ```

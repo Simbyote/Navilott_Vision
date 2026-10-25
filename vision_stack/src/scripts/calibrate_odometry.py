@@ -1,21 +1,13 @@
 """Odometry calibration: floor cm per encoder count, from measured runs.
 
 Purpose:
-    Odometry turns encoder counts into cm with one number, cm_per_count,
-    which depends on the wheels, the gearbox and the decoding, so it's
-    measured: move the robot a measured distance, count, divide. Push it by
-    hand (exact, no slip) or drive it (--drive: the slip it really has);
-    both wheels should agree within a few percent
-    (docs/guides/calibrate_odometry.md).
+    One number turns counts into cm, and it depends on the wheels, the
+    gearbox and the decoding, so it's measured: move a measured distance,
+    count, divide. Pushed by hand (no slip) or --drive (the slip it really
+    has); both wheels should agree within a few percent (calibrate_odometry.md).
 
 Main package:
-    calibration/odometry.json: cm_per_count, each wheel's, and the trials'
-    spread; MEASURED_ESTIMATION reads it at startup.
-
-Flow:
-    1. Open the encoders (and the motors for --drive).
-    2. Per trial: read counts, move the robot, read counts, the distance.
-    3. Summarize, print, write the JSON (unless --dry-run).
+    calibration/odometry.json: cm_per_count, each wheel's, and the trials' spread.
 """
 import argparse
 import json
@@ -29,11 +21,9 @@ from src.params import ENCODER_COUNTS_PER_REV, NOMINAL_CM_PER_COUNT, ODOMETRY_PA
 DEFAULT_CM = 100.0
 DEFAULT_TRIALS = 3
 DEFAULT_DUTY = 0.40           # lane keeping's BASE_SPEED
-# A drive trial re-sends its command this often: the motor watchdog brakes
-# after MOTOR_WATCHDOG_S (0.5 s) without one
+# Under the motor watchdog's 0.5 s
 DRIVE_RESEND_S = 0.1
-# Wheels further apart than this in one trial: the push or drive wasn't
-# straight, or a wheel slipped. Reported, and the trial still counts
+# Past this the push wasn't straight or a wheel slipped; reported, still counted
 WHEEL_MISMATCH_PCT = 3.0
 
 _CLI_HELP = """\
@@ -47,17 +37,7 @@ examples:
 
 def trial(cm: float, before: tuple[int, int], after: tuple[int, int]) -> dict:
     """
-    One measured move.
-
-    Inputs:
-        cm: Floor distance moved, measured.
-        before, after: (left, right) cumulative counts at its start and end.
-    Outputs:
-        {cm, left, right (counts moved), counts_per_cm (the mean wheel),
-        mismatch_pct (how far the wheels differ, % of their mean)}.
-    Raises:
-        ValueError: A distance that isn't positive, or wheels that counted
-            backwards or not at all (a reversed encoder, pigpiod not running).
+    One measured move. ValueError for a distance that isn't positive, or wheels that counted backwards or not at all.
     """
     if cm <= 0:
         raise ValueError(f"distance must be positive, got {cm}")
@@ -72,14 +52,7 @@ def trial(cm: float, before: tuple[int, int], after: tuple[int, int]) -> dict:
 
 def summarize(trials: list[dict]) -> dict:
     """
-    Every trial into one scale.
-
-    Outputs:
-        cm_per_count (what odometry uses), counts_per_cm, each wheel's
-        counts_per_cm, spread_pct (largest minus smallest trial, % of the
-        mean: how repeatable the trials were) and the trials.
-    Raises:
-        ValueError: No trials.
+    cm_per_count, each wheel's counts_per_cm, and spread_pct: how repeatable the trials were. ValueError with none.
     """
     if not trials:
         raise ValueError("no trials")
@@ -96,19 +69,7 @@ def summarize(trials: list[dict]) -> dict:
 def run(counts, ask=input, say=print, cm: float = DEFAULT_CM, trials: int = DEFAULT_TRIALS,
         motor=None, drive_s: float | None = None, duty: float = DEFAULT_DUTY, sleep=time.sleep) -> list[dict]:
     """
-    The trials, with their prompts.
-
-    Inputs:
-        counts: counts() -> (left, right) cumulative, + = forward.
-        ask, say: Typed input and printed output.
-        cm: The pushed distance; ignored with drive_s (each drive is measured).
-        trials: How many.
-        motor: drive(left, right) / brake(), for drive_s.
-        drive_s: Drive for this long instead of pushing.
-        duty: Both wheels' duty while driving.
-    Outputs:
-        One trial() per move kept. A trial that fails (no counts, a bad
-        distance) is said and redone; q at any prompt stops.
+    One trial() per move kept. A failed trial is said and redone; q stops. drive_s drives instead of pushing.
     """
     done = []
     while len(done) < trials:
@@ -133,7 +94,7 @@ def run(counts, ask=input, say=print, cm: float = DEFAULT_CM, trials: int = DEFA
                     left -= DRIVE_RESEND_S
             finally:
                 motor.brake()
-            sleep(0.5)                          # let it coast to a stop before counting
+            sleep(0.5)                          # coast to a stop before counting
             after = counts()
             typed = ask("  how far did it go, cm (axle to axle)? ").strip()
             if typed == "q":
@@ -156,11 +117,7 @@ def run(counts, ask=input, say=print, cm: float = DEFAULT_CM, trials: int = DEFA
 
 
 def against_nominal(s: dict, nominal: float = NOMINAL_CM_PER_COUNT) -> dict:
-    """
-    The measured scale against the nominal one: the difference in %, and
-    what it means for the wheel (its effective diameter at the nominal
-    counts per turn) and the gearbox (counts per turn at the nominal wheel).
-    """
+    """The measured scale against the nominal, as a wheel diameter and as counts per turn."""
     cpc = s["cm_per_count"]
     return {"vs_nominal_pct": round(100.0 * (cpc - nominal) / nominal, 1),
             "effective_diameter_cm": round(cpc * ENCODER_COUNTS_PER_REV / math.pi, 3),
@@ -168,7 +125,6 @@ def against_nominal(s: dict, nominal: float = NOMINAL_CM_PER_COUNT) -> dict:
 
 
 def report(s: dict) -> str:
-    """The summary as printed."""
     n = against_nominal(s)
     return "\n".join([
         f"cm per count   {s['cm_per_count']:.6f}  ({s['counts_per_cm']:.3f} counts/cm)",
@@ -182,10 +138,7 @@ def report(s: dict) -> str:
 
 
 def main(argv: list[str] | None = None, hardware=None, ask=input, say=print) -> int:
-    """
-    Command line. hardware: () -> (counts, motor_or_None, close), for tests;
-    None opens the real encoders (and motors with --drive).
-    """
+    """hardware: () -> (counts, motor or None, close), for tests; None opens the real encoders."""
     p = argparse.ArgumentParser(prog="calibrate_odometry", description="Floor cm per encoder count, from measured runs.",
                                 epilog=_CLI_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--cm", type=float, default=DEFAULT_CM, help="distance pushed per trial (default %(default)s)")
@@ -218,7 +171,6 @@ def main(argv: list[str] | None = None, hardware=None, ask=input, say=print) -> 
 
 
 def _open(with_motors: bool):
-    """The real encoders (and motors): (counts, motor or None, close)."""
     import pigpio
     from src.peripherals.drive import EncoderReader, MotorController
     pi = pigpio.pi()

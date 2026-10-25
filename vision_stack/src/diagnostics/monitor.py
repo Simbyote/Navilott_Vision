@@ -1,11 +1,9 @@
 """Pi diagnostics recorder: a run's threads, cores and system health, recorded from a separate process.
 
 Purpose:
-    The Pi's OS is part of the robot: the kernel picks each thread's core,
-    the GIL picks which Python thread runs, heat or a weak supply throttles
-    the clock. This records all of it for any run without touching that
-    run's code: its own process, reading /proc and the Pi's sensors, so it
-    shares no GIL (docs/guides/diagnostics.md).
+    The kernel picks each thread's core, the GIL which Python thread runs,
+    and heat throttles the clock. This records it all for any run without
+    touching its code: its own process, so it shares no GIL (diagnostics.md).
 
 Main package:
     The recording: threads.csv, cores.csv, system.csv, irqs.csv, procs.csv,
@@ -13,8 +11,7 @@ Main package:
 
 Flow:
     1. The process: a command launched here, --pid, or --match.
-    2. Every --interval: per-thread and per-core rates; every second: the
-       system's health and the rest of the Pi (os_counters).
+    2. Per-thread and per-core rates every --interval; system health every second.
     3. Until the process exits, --duration, or Ctrl-C; then the files.
 """
 import argparse
@@ -33,12 +30,10 @@ from src.diagnostics.system_monitor import FIELDS as SYSTEM_FIELDS, THROTTLE_BIT
 from src.diagnostics.threads import CLK_TCK, CORE_FIELDS, PROC, THREAD_FIELDS, ThreadSampler
 from src.params import RUNS_DIR
 
-INTERVAL_S = 0.5            # thread and core sampling; short enough to see a frame-rate pattern, cheap to read
-SYSTEM_EVERY_S = 1.0        # vcgencmd is a subprocess: once a second is plenty for heat and clock
-MATCH_WAIT_S = 30.0         # --match waits this long for the process to appear
-CHILD_EXIT_WAIT_S = 15.0    # after Ctrl-C, how long a launched run gets to halt and exit
-# system.csv: SystemMonitor's columns, each throttle flag latched since boot, and the
-# OS counters (the camera's memory pool, VideoCore clocks, SD card, pressure)
+INTERVAL_S = 0.5            # short enough to see a frame-rate pattern
+SYSTEM_EVERY_S = 1.0        # vcgencmd is a subprocess
+MATCH_WAIT_S = 30.0
+CHILD_EXIT_WAIT_S = 15.0    # after Ctrl-C, for a launched run to halt
 SYSTEM_COLUMNS = (*SYSTEM_FIELDS, *(f"{k}_occurred" for k in THROTTLE_BITS), *osc.SYSTEM_FIELDS)
 
 _CLI_HELP = """\
@@ -67,13 +62,7 @@ Output (--out DIR, default <root>/runs/diag_<timestamp>):
 
 
 def find_pid(pattern: str, proc: Path = PROC, exclude: tuple[int, ...] = ()) -> int | None:
-    """
-    The newest process (highest pid) whose command line contains pattern.
-
-    Inputs:
-        exclude: pids to skip; this process and its parent are always skipped,
-            so the recorder's own command line never matches.
-    """
+    """The newest process whose command line contains pattern, never this recorder or its parent."""
     skip = {os.getpid(), os.getppid(), *exclude}
     found = []
     for entry in proc.iterdir():
@@ -92,22 +81,8 @@ def record(pid: int, interval_s: float = INTERVAL_S, duration_s: float | None = 
            alive=None, clock=time.perf_counter, sleep=time.sleep, proc: Path = PROC,
            system_reader=None, counters=None) -> dict:
     """
-    Sample pid until it ends, duration_s passes or Ctrl-C.
-
-    Inputs:
-        alive: () -> bool, whether to keep going (a launched child's poll());
-            None keeps going until the process is gone.
-        system_reader: () -> one system sample dict; default reads the Pi,
-            with this pid's memory.
-        counters: An os_counters.OsCounters (take(elapsed, now)); default
-            reads this /proc, leaving pid out of the other processes.
-    Outputs:
-        {"threads": [...], "cores": [...], "system": [...], "irqs": [...],
-        "procs": [...], "interrupted": bool,
-        "elapsed_s": float, "t0_monotonic": float}; rows in THREAD_FIELDS /
-        CORE_FIELDS / SYSTEM_COLUMNS order. t0_monotonic is the clock at the
-        start (time.perf_counter, the monotonic clock on Linux), which every
-        elapsed_s counts from: a run that saves its own t0 lines up with it.
+    Sample pid until it ends, duration_s passes or Ctrl-C. Every elapsed_s counts from
+    t0_monotonic, so a run that saves its own t0 lines up with the recording.
     """
     status = proc / str(pid) / "status"
     system_reader = system_reader or (lambda: system_sample(status_path=status))
@@ -152,12 +127,8 @@ def _mean(xs: list) -> float:
 
 def thread_summary(rows: list[dict]) -> list[dict]:
     """
-    One entry per thread (by tid), busiest first.
-
-    Each: name, tid, samples, cpu_mean, cpu_max, core_share {core: fraction
-    of samples}, moves (samples on a different core than the one before: a
-    floor on migrations, since only the last core is visible), vol_ctx_s and
-    invol_ctx_s means.
+    One entry per thread, busiest first. moves counts samples on another core than the one
+    before: a floor on migrations, since only the last core is visible.
     """
     by_tid = defaultdict(list)
     for r in rows:
@@ -177,7 +148,7 @@ def thread_summary(rows: list[dict]) -> list[dict]:
 
 
 def system_summary(rows: list[dict]) -> dict:
-    """Extremes of the system rows, and every throttle flag seen during the run or latched since boot."""
+    """Extremes, and every throttle flag seen during the run or latched since boot."""
     def col(k):
         return [r[k] for r in rows if r.get(k) is not None]
     return {"temp_max_c": max(col("temp_c"), default=None),
@@ -191,7 +162,6 @@ def system_summary(rows: list[dict]) -> dict:
 
 
 def summary_lines(meta: dict, rec: dict) -> list[str]:
-    """summary.txt: the run, each thread, each core, the system."""
     threads = thread_summary(rec["threads"])
     lines = [f"diagnostics  pid {meta['pid']}  {meta['command']}",
              f"  {rec['elapsed_s']:.1f} s, sampled every {meta['interval_s']} s on {meta['cores']} cores"
@@ -230,7 +200,7 @@ def summary_lines(meta: dict, rec: dict) -> list[str]:
 
 
 def write(out_dir: str, meta: dict, rec: dict) -> list[str]:
-    """Write the run folder; returns the summary lines."""
+    """Returns the summary lines."""
     os.makedirs(out_dir, exist_ok=True)
     for name, fields, rows in (("threads.csv", THREAD_FIELDS, rec["threads"]),
                                ("cores.csv", CORE_FIELDS, rec["cores"]),
@@ -251,13 +221,7 @@ def write(out_dir: str, meta: dict, rec: dict) -> list[str]:
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """
-    Command line: python3 -m src.diagnostics.monitor [options] (-- COMMAND | --pid N | --match TEXT)
-
-    Outputs:
-        A launched command's exit code; otherwise 0, or 2 when there is no
-        process to watch.
-    """
+    """A launched command's exit code; else 0, or 2 with no process to watch."""
     argv = sys.argv[1:] if argv is None else argv
     command = []
     if "--" in argv:

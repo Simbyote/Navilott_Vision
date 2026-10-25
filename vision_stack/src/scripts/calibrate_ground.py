@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
-"""Ground-plane calibration: fit the homography from undistorted frame pixels to floor centimeters.
+"""Ground-plane calibration: the homography from undistorted frame pixels to floor cm.
 
 Purpose:
-    A checkerboard lying flat across the lane ROI gives 54 points whose
-    floor positions follow from the square size; one homography through
-    them maps any floor point in the frame to cm. Frames go through
-    preprocess_frame with MEASURED's settings, so the fit is on exactly the
-    frames the pipeline sees (docs/guides/calibrate_ground.md).
+    A checkerboard lying flat across the lane ROI gives 54 points with known
+    floor positions, and one homography through them maps the floor to cm.
+    Frames go through preprocess_frame with MEASURED's settings, so the fit
+    is on the frames the pipeline sees (docs/guides/calibrate_ground.md).
 
 Main package:
-    calibration/ground_homography.json: H (frame px -> floor cm), the
-    conditions it was fit under, the per-corner error in cm, and the averaged
-    corners for a refit; ground_debug.png, the board and a projected 5 cm grid.
-
-Flow:
-    1. Grab frames (camera or --image), turned upright and preprocessed.
-    2. Find and average the board's inner corners; order them from the far-left.
-    3. Each corner's floor position from --square-cm and corner 0's position.
-    4. Fit, origin at the robot's reference point; write the JSON and the debug image.
+    calibration/ground_homography.json (H, fit conditions, per-corner error,
+    averaged corners) and ground_debug.png.
 """
 
 import argparse
@@ -40,7 +32,7 @@ from src.scripts.calibrate_camera import FIND_FLAGS, SUBPIX_CRITERIA, grab_uprig
 DEFAULT_DEBUG = CALIBRATION_DIR / "ground_debug.png"
 DEFAULT_RAW = CALIBRATION_DIR / "ground_raw.png"
 
-# --help text. Kept apart from the module docstring, which documents the code.
+# --help text, apart from the module docstring
 _CLI_HELP = """\
 Fit the ground-plane homography (undistorted frame px -> floor cm) from a
 checkerboard lying flat on the floor across the lane ROI. Writes
@@ -67,23 +59,16 @@ size, or the lens calibration.
 
 
 def undistorted_gray(frame_bgr: np.ndarray, preprocess: PreprocessParams) -> tuple[np.ndarray, np.ndarray]:
-    """(undistorted BGR, its gray) through preprocess_frame, the pipeline's own undistortion."""
     und = preprocess_frame(FrameData(frame_bgr, 0, 0), preprocess).undistorted
     return und, cv2.cvtColor(und, cv2.COLOR_BGR2GRAY)
 
 
 def order_corners(corners: np.ndarray, pattern: tuple[int, int]) -> np.ndarray:
     """
-    (N, 2) corners in row-major order with corner 0 at the top-left of the image.
+    Corners row-major with corner 0 at the image's top-left, the far-left corner on the floor.
 
-    Purpose:
-        findChessboardCorners may start from either end of a 9x6 board. With
-        the board square to the robot, top-left in the image is the far-left
-        inner corner on the floor, so fixing it here fixes the floor axes.
-
-    Raises:
-        ValueError: If the board's 9-corner side runs up the image instead of
-            across it; the board has to be turned a quarter turn.
+    findChessboardCorners may start from either end. ValueError if the 9-corner
+    side runs up the image (turn the board a quarter turn).
     """
     cols, rows = pattern
     pts = np.asarray(corners, np.float64).reshape(-1, 2)
@@ -100,19 +85,11 @@ def order_corners(corners: np.ndarray, pattern: tuple[int, int]) -> np.ndarray:
 
 def find_ground_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarray | None:
     """
-    Ordered sub-pixel corners of a board lying on the floor, or None if the whole board isn't visible.
+    Ordered sub-pixel corners of a board on the floor, or None if it isn't all visible.
 
-    Purpose:
-        calibrate_camera.find_corners refines in a fixed 11x11 window, fine
-        for a board held up to the lens. A board on the floor is squeezed by
-        perspective: a 2.5 cm square can be 7 px tall at the far edge of the
-        lane ROI, so that window spans neighboring squares and pulls corners
-        toward the wrong edges (1.8 px, 0.6 cm mean error on a synthetic
-        floor). The window here is half the smallest spacing between
-        neighboring corners, at most calibrate_camera's.
-
-    Outputs:
-        (N, 2), ordered by order_corners().
+    The refine window is half the smallest corner spacing. A fixed 11x11 spans
+    neighboring squares at the far edge (a 2.5 cm square can be 7 px tall) and
+    gave 1.8 px, 0.6 cm mean error on a synthetic floor.
     """
     ok, corners = cv2.findChessboardCorners(gray, pattern, FIND_FLAGS & ~cv2.CALIB_CB_FAST_CHECK)
     if not ok:
@@ -127,12 +104,7 @@ def find_ground_corners(gray: np.ndarray, pattern: tuple[int, int]) -> np.ndarra
 
 
 def average_corners(frames, pattern, preprocess) -> tuple[np.ndarray | None, int, np.ndarray | None]:
-    """
-    Corners found in each undistorted frame, ordered and averaged.
-
-    Outputs:
-        (corners (N, 2) or None, frames used, the last undistorted frame with a board).
-    """
+    """(averaged corners or None, frames used, the last undistorted frame with a board)."""
     found, last = [], None
     for frame in frames:
         und, gray = undistorted_gray(frame, preprocess)
@@ -146,12 +118,7 @@ def average_corners(frames, pattern, preprocess) -> tuple[np.ndarray | None, int
 
 
 def board_points_cm(pattern, square_cm: float, origin_x_cm: float, origin_y_cm: float) -> np.ndarray:
-    """
-    Floor position of each inner corner, row-major like order_corners().
-
-    Corner (c, r) is c squares right of corner 0 and r squares nearer the
-    robot: (x0 + c*s, y0 - r*s), with corner 0 at (origin_x_cm, origin_y_cm).
-    """
+    """Corner (c, r) sits at (x0 + c*s, y0 - r*s), row-major like order_corners()."""
     cols, rows = pattern
     c, r = np.meshgrid(np.arange(cols), np.arange(rows))
     return np.stack([origin_x_cm + c.ravel() * square_cm,
@@ -160,16 +127,10 @@ def board_points_cm(pattern, square_cm: float, origin_x_cm: float, origin_y_cm: 
 
 def reference_at_view_bottom(H: np.ndarray, frame_w: int, frame_h: int) -> tuple[np.ndarray, float]:
     """
-    Move the floor origin forward/back so the bottom-center of the frame is at Y = 0.
+    Shift Y so the frame's bottom-center lands at Y = 0; returns (H, shift cm).
 
-    Purpose:
-        The robot reference point is the floor at the bottom of the camera's
-        view. It's hard to find with a tape measure and exact from the fit:
-        project the frame's bottom-center and translate Y by it. X is kept,
-        since the robot's centerline comes from the measured --origin-x-cm.
-
-    Outputs:
-        (H with the new origin, the Y shift applied in cm).
+    That point is the robot reference, exact from the fit and hard to tape-measure.
+    X stays on the measured --origin-x-cm.
     """
     y_bottom = float(cv2.perspectiveTransform(np.array([[[frame_w / 2.0, float(frame_h)]]]), H)[0, 0, 1])
     T = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, -y_bottom], [0.0, 0.0, 1.0]])
@@ -179,16 +140,7 @@ def reference_at_view_bottom(H: np.ndarray, frame_w: int, frame_h: int) -> tuple
 
 def fit(corners_px, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size) -> dict:
     """
-    The homography and its quality from ordered corners.
-
-    Inputs:
-        frame_size: (width, height).
-        origin_y_cm: Corner 0's distance ahead of the reference; None puts
-            the reference at the bottom-center of the view.
-
-    Outputs:
-        dict with H, errors_cm (per corner), corner0_cm (its floor position
-        under the final origin) and y_shift_cm.
+    origin_y_cm None puts the reference at the view's bottom-center. Returns H, errors_cm, corner0_cm, y_shift_cm.
     """
     board = board_points_cm(pattern, square_cm, origin_x_cm, 0.0 if origin_y_cm is None else origin_y_cm)
     H, errors = fit_ground_homography(corners_px, board)
@@ -203,11 +155,10 @@ def fit(corners_px, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size) ->
 def debug_image(und: np.ndarray, corners_px: np.ndarray, pattern, H: np.ndarray, lane_rect,
                 corner0_cm, scale: int = 3) -> np.ndarray:
     """
-    The undistorted frame, enlarged, with the corners, corner 0, the floor axes, the lane ROI and a projected 5 cm grid.
+    Enlarged frame with corners, floor axes, lane ROI and a projected 5 cm grid.
 
-    If corner 0 isn't the far-left corner of the board, or the grid doesn't
-    sit square on the floor, the fit isn't to be trusted. The yellow line is
-    the robot's centerline (X = 0) and the triangle the reference point.
+    Distrust the fit if corner 0 isn't the board's far-left corner or the grid
+    isn't square on the floor.
     """
     k = float(scale)
     img = cv2.resize(und, None, fx=k, fy=k, interpolation=cv2.INTER_LINEAR)
@@ -261,7 +212,7 @@ def debug_image(und: np.ndarray, corners_px: np.ndarray, pattern, H: np.ndarray,
 
 def record(result: dict, pattern, square_cm, origin_x_cm, origin_y_cm, frame_size,
            preprocess: PreprocessParams, corners_px, frames_used: int) -> dict:
-    """The JSON load_ground_homography reads, plus what's needed to audit or refit it."""
+    """load_ground_homography's JSON, plus what's needed to audit or refit it."""
     lens_path = Path(preprocess.calibration_path)
     lens = json.loads(lens_path.read_text())
     errors = result["errors_cm"]
@@ -288,7 +239,6 @@ def record(result: dict, pattern, square_cm, origin_x_cm, origin_y_cm, frame_siz
 
 
 def grab_frames(args) -> list[np.ndarray]:
-    """--image files, or --frames frames from the camera."""
     if args.image:
         frames = [cv2.imread(p) for p in args.image]
         missing = [p for p, f in zip(args.image, frames) if f is None]
@@ -303,7 +253,6 @@ def grab_frames(args) -> list[np.ndarray]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Parse arguments, fit, and write the JSON and the debug image."""
     p = argparse.ArgumentParser(prog="calibrate_ground", description=_CLI_HELP,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--square-cm", type=float, required=True,

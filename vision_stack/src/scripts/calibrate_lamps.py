@@ -1,23 +1,16 @@
 #!/usr/bin/env python3
-"""Traffic-light lamp calibration: frames of each lit lamp -> the HSV bands the color branch detects them with.
+"""Traffic-light lamp calibration: frames of each lit lamp -> the color branch's HSV bands.
 
 Purpose:
     A lamp on camera is a bright core, a ring of its real color and a paler
-    glow beyond; a band that takes the glow measures the glow. This measures
-    the lamp against its glow on frames recorded with one lamp lit, through
-    the robot's own preprocess and crop, and puts each band's floors between
-    the two. Given a run with every lamp off, it also checks each lens lit
-    against unlit, since unlit lenses can pass for lit (docs/guides/calibrate_lamps.md).
+    glow, and a band that takes the glow measures the glow. This measures each
+    lamp against its glow, through the robot's own preprocess and crop. Given
+    a run with every lamp off, it also checks each lens lit against unlit
+    (docs/guides/calibrate_lamps.md).
 
 Main package:
-    The bands, in hsv_ranges.json form, with warnings (no threshold
-    separates, hues overlap, a lens nothing separates) and each lamp's blob
-    area under its band; --write merges them into calibration/hsv_ranges.json.
-
-Flow:
-    1. Per color=path: read its frames; preprocess, crop, find the brightest blob.
-    2. Measure the lamp disc against the glow ring; the median band over the frames.
-    3. With an off run: each lens lit against off. Print; --write merges.
+    The bands in hsv_ranges.json form, with warnings and each lamp's blob
+    area; --write merges them into calibration/hsv_ranges.json.
 """
 import argparse
 import json
@@ -35,44 +28,31 @@ from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
 
 COLORS = ("red", "yellow", "green")
-# A lamp's disc around its brightest blob: the lamps measure 200-300 px^2 in
-# the robot's 480x270 frames (2 cm lamps, 2026-10-04), a disc of radius 8-10;
-# 8 stays inside the lamp
+# 2 cm lamps measure 200-300 px^2 at 480x270 (radius 8-10, 2026-10-04); 8 stays inside
 LAMP_RADIUS_PX = 8
-# The glow ring, in lamp radii: clear of the lamp's edge, close enough to be its glow
+# Glow ring, in lamp radii
 GLOW_INNER, GLOW_OUTER = 1.5, 3.0
 BRIGHT_MARGIN = 5           # V within this of the frame's maximum is the brightest blob
 HUE_MARGIN = 4              # widen the lamp's hue span (5th-95th percentile) by this each side
-# S and V thresholds: halfway between the lamp's 10th percentile and the glow's 90th
+# S and V floors sit halfway between these percentiles of lamp and glow
 LAMP_PCT, GLOW_PCT = 10, 90
 FRAMES_PER_LAMP = 15        # frames read from a folder, spread across it
 IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png")
-# What a lamp with a color to measure looks like. The 2026-10-04 green lamp's
-# ring read S ~50; a clipped white spot reads S under ~10 and its hue is
-# noise (the first home run, 2026-10-04: lamp S median 3, hue spread 0-114)
+# A colored lamp: green's ring read S ~50, a clipped white spot S 3 with hue 0-114 (2026-10-04)
 MIN_LAMP_S = 25             # the lamp disc's median saturation
 MAX_HUE_SPREAD = 30         # the lamp disc's 5th-95th percentile hue span, OpenCV units (60 degrees)
-# A band comes from the frames that found a colored lamp, when at least this
-# share of them did; the others found something white and brighter, which is
-# reported. On 2026-10-04 the first frame found the red lamp (S 214) and most
-# of the others a white spot, and the median over all of them hid the lamp
+# Band only from frames that found a colored lamp; on 2026-10-04 most red frames
+# found a white spot, and the median over all of them hid the lamp
 MIN_COLORED_SHARE = 0.5
-# The lamp's hue is read from its colored pixels only (saturation at least
-# MIN_LAMP_S): dark or washed-out pixels at the disc's edge have a hue that's
-# noise. Their spread flagged real lamp frames as mixed and stretched red's
-# band to hue 150 (2026-10-04, S ~160 frames). Fewer colored pixels than this,
-# and every pixel's hue is used, so a white spot still reads as one
+# Hue from pixels with S >= MIN_LAMP_S; edge pixels stretched red's band to 150 (2026-10-04).
+# Below this count every pixel is used, so a white spot still reads as one
 MIN_HUE_PIXELS = 10
-# Lens lit against lens off: the lit lens's 10th percentile against the off
-# lens's 90th, per pixel of its disc that shares the band's hue (a pixel of
-# another hue can't pass the band whatever its S and V)
+# Lit lens percentile against unlit, over pixels of the band's hue only
 ON_PCT, OFF_PCT = 10, 90
-OFF = "off"                 # the label for a run with every lamp off
-# A pixel is the lamp's when its mean V rises this much from the off run to
-# the lit run: the course's red lens rose ~66 lit (180 -> 246), yellow ~30
-# (213 -> 243) and its reflection more; auto exposure moves a scene ~10-20
+OFF = "off"                 # label for the every-lamp-off run
+# Red lens rose ~66 V lit, yellow ~30; auto exposure moves a scene ~10-20 (course)
 LIT_DELTA = 25
-# More of the ROI than this lighting up is the scene changing, not a lamp
+# More of the ROI lighting up is the scene changing
 MAX_LIT_SHARE = 0.25
 
 _CLI_HELP = """\
@@ -95,13 +75,12 @@ also checked lit against off; its S and V floors then sit between the two:
 
 
 def traffic_roi(frame_bgr: np.ndarray, config=MEASURED) -> np.ndarray:
-    """The traffic ROI the color branch reads: preprocess (undistortion included), then the crop."""
     pre = preprocess_frame(FrameData(frame_bgr, 0, 0), config.preprocess)
     return crop_rois(pre, config.roi).traffic_roi
 
 
 def _unwrap(h: np.ndarray) -> np.ndarray:
-    """Hues made continuous across red's wrap at 180 when most sit near it: those below 90 move up by 180."""
+    """Hues below 90 move up by 180, so red stays continuous across the wrap."""
     return np.where(h < 90, h + 180, h) if np.mean((h < 20) | (h > 160)) > 0.5 else h
 
 
@@ -111,15 +90,11 @@ def _pcts(a: np.ndarray) -> list[float]:
 
 def measure_lamp(roi_bgr: np.ndarray) -> dict:
     """
-    One frame's lamp: the disc of LAMP_RADIUS_PX around the brightest blob's
-    middle, against the ring GLOW_INNER-GLOW_OUTER radii out.
+    One frame: the LAMP_RADIUS_PX disc around the brightest blob against its glow ring.
 
-    Outputs:
-        {"center": (x, y) in ROI px, "lamp" / "glow": {"h", "s", "v"} 5/50/95th
-         percentiles (h unwrapped past 180 for red; the lamp's hue from its
-         colored pixels, see MIN_HUE_PIXELS), "band": {"h_lo", "h_hi",
-         "s_min", "v_min"} (h_hi may pass 179 for red), "s_gap", "v_gap": the
-         lamp's 10th percentile minus the glow's 90th (> 0: that channel separates them)}
+    Returns center, "lamp" / "glow" 5/50/95th HSV percentiles, "band" (h_hi may
+    pass 179 for red), and "s_gap" / "v_gap": lamp's 10th minus glow's 90th
+    percentile, positive when that channel separates them.
     """
     hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
     v = hsv[..., 2]
@@ -151,7 +126,6 @@ def measure_lamp(roi_bgr: np.ndarray) -> dict:
 
 
 def combine(measures: list[dict]) -> dict:
-    """The median band, gaps and color checks over a lamp's frames."""
     med = lambda key: float(np.median([m["band"][key] for m in measures]))       # noqa: E731
     return {"band": {k: med(k) for k in ("h_lo", "h_hi", "s_min", "v_min")},
             "s_median": float(np.median([m["s_median"] for m in measures])),
@@ -163,7 +137,7 @@ def combine(measures: list[dict]) -> dict:
 
 
 def no_color(res: dict) -> str | None:
-    """Why the spot measured has no color to calibrate, or None when it has one."""
+    """Why the spot measured has no color to calibrate, or None."""
     if res["s_median"] < MIN_LAMP_S:
         return (f"the spot found is white, not colored (median saturation {res['s_median']:.0f}, "
                 f"a lamp's is over {MIN_LAMP_S}): the lamp is blown out, or the brightest thing in the "
@@ -175,24 +149,21 @@ def no_color(res: dict) -> str | None:
 
 
 def is_colored(m: dict) -> bool:
-    """True when one frame's spot is a lamp with a color: saturated, and of one hue."""
     return m["s_median"] >= MIN_LAMP_S and m["hue_spread"] <= MAX_HUE_SPREAD
 
 
 def colored_frames(measures: list[dict]) -> list[dict] | None:
-    """The frames that found a colored lamp, when they're at least MIN_COLORED_SHARE of them; else None."""
     colored = [m for m in measures if is_colored(m)]
     return colored if colored and len(colored) >= MIN_COLORED_SHARE * len(measures) else None
 
 
 def at_edge(m: dict) -> bool:
-    """True when the lamp's disc runs past the traffic ROI's border: part of the lamp is out of it."""
     (x, y), (w, h) = m["center"], m["roi_size"]
     return min(x, y, w - 1 - x, h - 1 - y) < LAMP_RADIUS_PX
 
 
 def same_spot(results: dict) -> list[tuple[str, str]]:
-    """Pairs of colors whose lamps were found within a lamp radius of each other: one of them isn't its lamp."""
+    """Color pairs whose lamps were found within a lamp radius of each other: one isn't its lamp."""
     names = sorted(results)
     return [(a, b) for i, a in enumerate(names) for b in names[i + 1:]
             if np.hypot(*np.subtract(results[a]["center"], results[b]["center"])) < LAMP_RADIUS_PX]
@@ -200,9 +171,8 @@ def same_spot(results: dict) -> list[tuple[str, str]]:
 
 def bands_for(color: str, band: dict) -> dict:
     """
-    The color's entries for hsv_ranges.json. Red always gets both halves:
-    a span crossing 180 splits at the wrap; one that doesn't leaves the
-    other half a single hue at the edge (0 or 180), still red.
+    hsv_ranges.json entries. Red always gets both halves; a span not crossing 180
+    leaves the other half a single hue at the edge.
     """
     s, v = int(round(np.clip(band["s_min"], 0, 255))), int(round(np.clip(band["v_min"], 0, 255)))
     lo, hi = band["h_lo"], band["h_hi"]
@@ -220,7 +190,7 @@ def bands_for(color: str, band: dict) -> dict:
 
 
 def blob_area(roi_bgr: np.ndarray, entries: dict) -> float:
-    """The largest blob under the color's band(s), measured as the color branch does (outer contour's area)."""
+    """Largest blob under the band(s), by outer contour area as the color branch measures it."""
     hsv = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2HSV)
     mask = np.zeros(hsv.shape[:2], np.uint8)
     for e in entries.values():
@@ -234,7 +204,6 @@ def _spans(color: str, entries: dict) -> list[tuple[int, int]]:
 
 
 def hue_overlaps(per_color: dict) -> list[tuple[str, str]]:
-    """Pairs of colors whose hue spans share a hue: a lamp of one could pass as the other."""
     out = []
     names = sorted(per_color)
     for i, a in enumerate(names):
@@ -246,23 +215,21 @@ def hue_overlaps(per_color: dict) -> list[tuple[str, str]]:
 
 
 def _in_span(h: np.ndarray, lo: float, hi: float) -> np.ndarray:
-    """Hues inside lo-hi, which may run past 179 for red (unwrapped)."""
     return ((h >= lo) & (h <= hi)) | ((h + 180 >= lo) & (h + 180 <= hi))
 
 
 def lit_pixels(on_rois: list, off_rois: list) -> np.ndarray:
     """
-    Where the lamp is: the pixels whose mean V rises at least LIT_DELTA from
-    the off run to the lit run. Whatever lights up with the lamp, the LED and
-    any reflection of it, and nothing that's there either way (the board,
-    glare, the other lenses).
+    Pixels whose mean V rises at least LIT_DELTA from the off run to the lit run.
+
+    That's the LED and its reflections, not what's there either way (board, glare,
+    other lenses).
     """
     v = lambda rois: np.mean([cv2.cvtColor(r, cv2.COLOR_BGR2HSV)[..., 2] for r in rois], axis=0)    # noqa: E731
     return (v(on_rois) - v(off_rois)) >= LIT_DELTA
 
 
 def regions(mask: np.ndarray) -> list[tuple[float, float, int]]:
-    """Each connected region of a mask: (x, y) center and its pixels, largest first."""
     n, _, stats, cents = cv2.connectedComponentsWithStats(mask.astype(np.uint8))
     found = [(round(float(cents[k][0]), 1), round(float(cents[k][1]), 1), int(stats[k, cv2.CC_STAT_AREA]))
              for k in range(1, n)]
@@ -271,23 +238,11 @@ def regions(mask: np.ndarray) -> list[tuple[float, float, int]]:
 
 def cross_check(on_rois: list, unlit_rois: list, mask: np.ndarray) -> dict:
     """
-    The lamp's pixels (mask) lit against the same pixels unlit.
+    The lamp's pixels (mask) lit against the same pixels unlit; None for an empty mask.
 
-    Inputs:
-        on_rois / unlit_rois: traffic ROIs with this lamp lit / off (the off
-            run and the other lamps' runs).
-        mask: the lamp's pixels, lit_pixels().
-
-    Outputs:
-        None when the mask is empty (nothing lit up). Else {"band": {"h_lo",
-        "h_hi", "s_min", "v_min"} (h from the lit pixels' colored ones; s / v
-        the floor where a channel separates, else the lit ON_PCT percentile),
-        "s" / "v": {"on", "off", "gap", "floor"} (the lit colored pixels'
-        ON_PCT percentile, the unlit pixels' OFF_PCT percentile over those of
-        the band's hue, None if there are none, on minus off, and the floor
-        halfway between, None unless the gap is positive), "white": {"on",
-        "off"} (near-white pixels, the core gate's, per frame: ON_PCT /
-        OFF_PCT percentile), "colored": the lit colored pixels, "frames": (on, unlit)}
+    unlit_rois are the off run and the other lamps' runs. Returns "band", per
+    channel "s" / "v" {on, off, gap, floor} (floor halfway, None unless the gap
+    is positive), "white" counts for the core gate, "colored", and "frames".
     """
     if not mask.any():
         return None
@@ -320,7 +275,7 @@ def cross_check(on_rois: list, unlit_rois: list, mask: np.ndarray) -> dict:
 
 
 def read_frames(path: str, limit: int = FRAMES_PER_LAMP) -> list[np.ndarray]:
-    """An image, or up to limit images spread across a folder (searched below it)."""
+    """An image, or up to limit images spread across a folder and its subfolders."""
     p = Path(path)
     if p.is_file():
         files = [p]
@@ -337,7 +292,9 @@ def read_frames(path: str, limit: int = FRAMES_PER_LAMP) -> list[np.ndarray]:
 
 
 def write_ranges(path, entries: dict) -> None:
-    """Merge entries into hsv_ranges.json, keeping the bands not measured; refused unless its loader accepts the result."""
+    """
+    Merge entries into hsv_ranges.json, keeping unmeasured bands; refused unless its loader accepts the result.
+    """
     path = Path(path)
     data = json.loads(path.read_text()) if path.is_file() else {}
     data.update(entries)
@@ -362,7 +319,7 @@ def _parse(args: list[str]) -> dict:
 
 
 def _on_off(color: str, frames: list, off_rois: list, others: list, say, warnings: list) -> dict | None:
-    """One lamp from its lit run against the off run: prints the check, returns its hsv_ranges.json entries or None."""
+    """One lamp's lit run against the off run: prints the check, returns its entries or None."""
     mask = lit_pixels(frames, off_rois)
     lit = regions(mask)
     say(f"\n{color}: {len(frames)} frame(s) lit, {len(off_rois)} off (+{len(others)} from the other lamps' runs)")

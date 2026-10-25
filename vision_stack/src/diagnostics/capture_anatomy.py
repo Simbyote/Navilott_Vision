@@ -1,22 +1,14 @@
 """Capture anatomy: how a frame gets from the IMX290 to OpenCV on this Pi, recorded once.
 
 Purpose:
-    A frame crosses the sensor, Unicam (the CSI-2 receiver), the VideoCore
-    ISP and libcamera's IPA before GStreamer hands it to OpenCV, and none of
-    it is visible from Python. This records what the OS can show: the
-    hardware graph, the caps negotiated at every pad, how long each element
-    holds a frame, libcamera's log, the VideoCore's clocks and memory
-    (docs/guides/diagnostics.md, section 7). The camera must be free.
+    A frame crosses the sensor, Unicam, the ISP and libcamera before
+    GStreamer hands it to OpenCV, none of it visible from Python. This
+    records what the OS can show: the hardware graph, the caps at every pad,
+    each element's time per frame, libcamera's log, the VideoCore's clocks
+    (diagnostics.md, section 7). The camera must be free.
 
 Main package:
-    The run folder: anatomy.json (everything parsed), latency.csv and
-    summary.txt (findings, such as any CPU-side conversion and its cost).
-
-Flow:
-    1. Static probes: uname, v4l2-ctl, rpicam-hello, gst-inspect, vcgencmd, media-ctl.
-    2. The pipeline under gst-launch -v: the caps (bisected if it stalls).
-    3. The pipeline under pad_timing.py: the time per element.
-    4. Parse; write the folder.
+    The run folder: anatomy.json, latency.csv and summary.txt with its findings.
 """
 import argparse
 import csv
@@ -36,25 +28,23 @@ from src.capture.camera import build_gst_pipeline, parse_controls
 from src.diagnostics.os_counters import parse_vcgencmd, read_cma_mb
 from src.params import CAMERA_CONTROLS, FPS, RUNS_DIR
 
-DURATION_S = 10.0           # long enough for AGC to settle and a few hundred frames at 20 FPS
-STOP_WAIT_S = 5.0           # after Ctrl-C, how long gst-launch gets to send EOS and exit
-# The sink takes duration_s x FPS buffers and ends the run itself (EOS); this
-# is the extra time allowed before it's interrupted. Ending on Ctrl-C lost
-# gst-launch's buffered output and left no way to tell a camera that never
-# started from one that ran (2026-10-12: by hand, 100 frames in 5.2 s)
+DURATION_S = 10.0           # for AGC to settle
+STOP_WAIT_S = 5.0
+# The sink ends the run itself at EOS; this is the slack before it's interrupted.
+# Ending on Ctrl-C lost gst-launch's buffered output (2026-10-12)
 STARTUP_S = 10.0
-INTERRUPTED = "[capture_anatomy] interrupted:"   # appended to gst_launch.txt when the run had to be stopped
-# The probe timer, standalone (stdlib + gi) so the system python3 can run it
+INTERRUPTED = "[capture_anatomy] interrupted:"
+# Standalone (stdlib + gi), so the system python3 can run it
 PAD_TIMING = Path(__file__).with_name("pad_timing.py")
-PAD_TAG = "[pad-timing]"            # pad_timing.TAG: it's kept free of src imports, so it's repeated here
-SYSTEM_PYTHON = "/usr/bin/python3"  # has python3-gi on Raspberry Pi OS when the venv doesn't
-LIBCAMERA_LOG_LEVELS = "*:INFO"     # INFO holds the mode selection; DEBUG logs every frame
+PAD_TAG = "[pad-timing]"            # repeated: pad_timing imports nothing from src
+SYSTEM_PYTHON = "/usr/bin/python3"  # has python3-gi when the venv doesn't
+LIBCAMERA_LOG_LEVELS = "*:INFO"     # holds the mode selection; DEBUG logs every frame
 FRAME_BUDGET_MS = 1000.0 / FPS
-# videoconvert + videoflip together over this many ms of each frame earns a finding
+# videoconvert + videoflip over this per frame is a finding
 CONVERT_FINDING_MS = 2.0
 VC_CLOCKS = ("arm", "core", "isp", "v3d", "h264")
 MEMINFO_PATH = Path("/proc/meminfo")
-SINK = "fakesink sync=false silent=true"     # silent: -v would print every buffer
+SINK = "fakesink sync=false silent=true"     # silent, or -v prints every buffer
 LATENCY_FIELDS = ("ts_ms", "kind", "element", "ms")
 
 _CLI_HELP = """\
@@ -78,9 +68,7 @@ Output (--out DIR, default <root>/runs/anatomy_<timestamp>):
 
 
 def run_tool(argv: list[str], timeout: float = 10.0) -> tuple[int | None, str]:
-    """
-    (exit code, stdout + stderr) of a command; (None, why) when it can't run.
-    """
+    """(exit code, output), or (None, why) when it can't run."""
     try:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -91,11 +79,7 @@ def run_tool(argv: list[str], timeout: float = 10.0) -> tuple[int | None, str]:
 
 
 def launch_for(argv: list[str], env: dict, duration_s: float) -> tuple[int | None, str]:
-    """
-    Run argv until it ends or duration_s passes, then Ctrl-C it (then kill
-    it); (exit code, stdout + stderr, with an INTERRUPTED line when it had
-    to be stopped). (None, why) when it can't start.
-    """
+    """Run argv until it ends or duration_s passes, then Ctrl-C it; an INTERRUPTED line says so."""
     try:
         p = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     except FileNotFoundError:
@@ -116,13 +100,13 @@ def launch_for(argv: list[str], env: dict, duration_s: float) -> tuple[int | Non
 
 
 def anatomy_pipeline(controls: dict | None = None, num_buffers: int | None = None) -> str:
-    """The robot's capture pipeline string with its appsink swapped for SINK, ending itself after num_buffers."""
+    """The robot's capture pipeline with its appsink swapped for SINK, ending after num_buffers."""
     sink = SINK if num_buffers is None else f"{SINK} num-buffers={int(num_buffers)}"
     return build_gst_pipeline(controls=controls).rsplit(" ! ", 1)[0] + " ! " + sink
 
 
 def gi_python(run) -> str | None:
-    """The first of this interpreter and SYSTEM_PYTHON that imports Gst 1.0 through gi; None if neither does."""
+    """This interpreter or SYSTEM_PYTHON, whichever imports Gst through gi first; None if neither."""
     check = "import gi; gi.require_version('Gst', '1.0'); from gi.repository import Gst"
     for py in dict.fromkeys((sys.executable, SYSTEM_PYTHON)):
         code, _ = run([py, "-c", check])
@@ -140,12 +124,8 @@ _DRIVER = re.compile(r"^driver\s+(\S+)", re.M)
 
 def parse_media(text: str) -> dict:
     """
-    media-ctl -p output: {"driver", "entities": [{name, node, fmt}], "links": [(from, to)]}.
-
-    Only enabled links count (the route a frame takes); fmt is the first
-    format on the entity's pads, e.g. "SRGGB10_1X10 1920x1080". It's the
-    format at the time media-ctl ran: before libcamera configures the
-    sensor, that's the driver's default, not the mode that streams.
+    media-ctl -p: the driver, the entities on the enabled route, and the links. fmt is the
+    format when media-ctl ran, before libcamera configures the sensor, so not the streaming mode.
     """
     driver = _DRIVER.search(text)
     entities, links, cur = [], [], None
@@ -171,16 +151,11 @@ _FIELD = re.compile(r"([\w-]+)=\((\w+)\)(\"(?:[^\"\\]|\\.)*\"|[^,;]*)")
 
 
 def _fields(text: str) -> dict:
-    """A GstStructure's fields, key=(type)value, as {key: value string}."""
     return {k: v.strip().strip('"') for k, _, v in _FIELD.findall(text)}
 
 
 def parse_caps(text: str) -> list[dict]:
-    """
-    gst-launch -v's caps lines: one {element, pad, format, size, framerate,
-    caps} per pad, the last caps each pad settled on, in order of first
-    appearance.
-    """
+    """The last caps each pad settled on, in order of first appearance."""
     out = {}
     for line in text.splitlines():
         m = _CAPS_LINE.match(line.strip())
@@ -198,11 +173,7 @@ PAD_KINDS = ("element", "pipeline", "camera")
 
 
 def parse_pad_timing(text: str) -> list[dict]:
-    """
-    pad_timing.py's lines: one {ts_ms, kind, element, ms} per buffer, the
-    same rows parse_tracer gives (plus kind "camera": sensor timestamp to
-    the source's first pad).
-    """
+    """pad_timing.py's rows, as parse_tracer gives them, plus kind camera."""
     rows = []
     for line in text.splitlines():
         p = line.rstrip("\n").split("\t")
@@ -216,7 +187,7 @@ def parse_pad_timing(text: str) -> list[dict]:
 
 
 def pad_timing_status(text: str) -> tuple[str | None, str]:
-    """pad_timing.py's last status line: ("EOS" | "ERROR" | "NOGI" | None, the message)."""
+    """(EOS, ERROR, NOGI or None, the message)."""
     for line in reversed(text.splitlines()):
         p = line.split("\t", 2)
         if len(p) >= 2 and p[0] == PAD_TAG and p[1] in ("EOS", "ERROR", "NOGI"):
@@ -229,13 +200,7 @@ _TRACE = re.compile(r"\b(element-latency|latency), (.*)$")
 
 def parse_tracer(text: str) -> list[dict]:
     """
-    GStreamer's latency tracer lines: one {ts_ms, kind, element, ms} per
-    buffer. No longer recorded (the tracer stalls libcamerasrc on the Pi);
-    kept to read a gst_trace.log taken elsewhere.
-
-    kind "element": the time the element held the buffer (element-latency).
-    kind "pipeline": source pad to sink pad ("latency"), element
-    "<src> -> <sink>".
+    GStreamer's latency tracer lines. No longer recorded (it stalls libcamerasrc); kept for logs taken elsewhere.
     """
     rows = []
     for line in text.splitlines():
@@ -262,7 +227,6 @@ def _pct(xs: list[float], q: float) -> float:
 
 
 def latency_stats(rows: list[dict]) -> list[dict]:
-    """Per (kind, element): frames, median, p95 and max ms, and frames per second over the run."""
     groups = {}
     for r in rows:
         groups.setdefault((r["kind"], r["element"]), []).append(r)
@@ -277,14 +241,13 @@ def latency_stats(rows: list[dict]) -> list[dict]:
     return out
 
 
-# libcamera's log lines worth keeping: its version, the sensor mode and Unicam format it
-# picked, and the streams it configured
+# Its version, the mode and format it picked, the streams it configured
 LIBCAMERA_KEEP = ("libcamera v", "Selected", "configuring streams")
 _LIBCAMERA_PREFIX = re.compile(r"^\[[^\]]*\]\s*\[\d+\]\s*[A-Z]+\s+\S+\s+\S+:\d+\s+")
 
 
 def libcamera_selected(text: str) -> list[str]:
-    """libcamera's log lines holding LIBCAMERA_KEEP, once each, without the [time] [pid] LEVEL Category file:line prefix."""
+    """The lines holding LIBCAMERA_KEEP, once each, without their prefix."""
     keep = []
     for line in (text or "").splitlines():
         if any(k in line for k in LIBCAMERA_KEEP):
@@ -312,7 +275,7 @@ def _save(out_dir: Path, name: str, text: str) -> None:
 
 
 def _draw(dot_path: Path, run) -> str | None:
-    """Render a .dot to .png with graphviz; the png's name, or None without graphviz."""
+    """The png's name, or None without graphviz."""
     png = dot_path.with_suffix(".png")
     code, _ = run(["dot", "-Tpng", str(dot_path), "-o", str(png)])
     return png.name if code == 0 else None
@@ -326,17 +289,8 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
            run=run_tool, launch=launch_for, media_glob: str = "/dev/media*",
            meminfo: Path = MEMINFO_PATH) -> dict:
     """
-    Every probe, the pipeline for duration_s (twice: gst-launch for the caps,
-    pad_timing.py for the time per element), and the folder written.
-
-    Inputs:
-        out_dir: The folder; made if missing.
-        controls: libcamerasrc controls; None is params.CAMERA_CONTROLS.
-        run: (argv) -> (code | None, text), a short command (run_tool).
-        launch: (argv, env, duration_s) -> (code | None, text), the
-            pipeline (launch_for). Both injectable for tests.
-    Outputs:
-        The parsed result (anatomy.json); see summary_lines for its use.
+    Every probe, the pipeline twice (gst-launch for the caps, pad_timing.py for the times),
+    and the folder written. run and launch are injectable for tests.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -380,15 +334,13 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
         "libcamera log": {"LIBCAMERA_LOG_FILE": str(out / "libcamera.log"), "LIBCAMERA_LOG_LEVELS": LIBCAMERA_LOG_LEVELS},
     }
     env = {**os.environ, **{k: v for g in groups.values() for k, v in g.items()}}
-    # one argv word per token, as a shell would split it: gst-launch escapes the spaces
-    # inside a single argument, so the whole pipeline as one word is a syntax error
+    # One word per token: gst-launch escapes spaces inside one argument
     code, text = launch(["gst-launch-1.0", "-v", "-e", *shlex.split(pipeline)], env, duration_s + STARTUP_S)
     _save(out, "gst_launch.txt", text)
     res["gst_code"] = code
     res["gst_errors"] = gst_errors(text)
     res["gst_playing"] = "Setting pipeline to PLAYING" in text
     res["gst_interrupted"] = INTERRUPTED in text
-    # Ending on its own at EOS means the sink took every buffer it asked for
     res["gst_eos"] = "Got EOS from element" in text and not res["gst_interrupted"]
     res["stall_bisect"] = (bisect_stall(controls, groups, out, launch)
                            if res["gst_interrupted"] and not res["gst_eos"] else {})
@@ -397,7 +349,7 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
     res["caps"] = parse_caps(text)
     if res["caps"]:
         res["caps_from"] = "gst_launch.txt"
-    # the main run stalled: a bisect run that reached EOS printed the same caps
+    # The main run stalled; a bisect run that reached EOS printed the same caps
     for name, ran in res["stall_bisect"].items():
         if res["caps"]:
             break
@@ -425,7 +377,7 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
 
     log = out / "libcamera.log"
     res["libcamera"] = libcamera_selected(log.read_text(errors="replace")) if log.exists() else []
-    # the dump made as the pipeline started playing shows the caps every link settled on
+    # The dump made as it started playing shows the caps every link settled on
     for dot in sorted(dot_dir.glob("*.dot")):
         if "PAUSED_PLAYING" in dot.name:
             target = out / "gst_pipeline.dot"
@@ -443,12 +395,12 @@ def record(out_dir, duration_s: float = DURATION_S, controls: dict | None = None
 
 
 def _element_ms(res: dict, factory: str) -> float:
-    """The median ms of the elements whose name starts with factory (videoconvert0...), summed."""
+    """Summed median ms of the elements whose name starts with factory."""
     return sum(s["median_ms"] for s in res["latency"] if s["kind"] == "element" and s["element"].startswith(factory))
 
 
 _BUSY = ("busy", "acquire", "in use")
-BISECT_BUFFERS = 40         # 2 s at 20 FPS: enough to show the camera runs
+BISECT_BUFFERS = 40         # 2 s: enough to show the camera runs
 
 
 def _ran(text: str) -> bool:
@@ -457,15 +409,8 @@ def _ran(text: str) -> bool:
 
 def bisect_stall(controls, groups: dict, out: Path, launch) -> dict:
     """
-    When the recording stalled: which of the tool's settings stalls it.
-
-    Runs the pipeline for BISECT_BUFFERS with none of them ("none"), then
-    with each group alone. By hand, with none, it ran (2026-10-12), so a
-    group that stalls it alone is the cause. Each run's output is saved as
-    gst_bisect_<group>.txt.
-
-    Outputs:
-        {"none": ran, group: ran, ...}; True = it reached EOS on its own.
+    When the recording stalled: runs the pipeline with none of the tool's settings, then
+    each alone. By hand with none it ran (2026-10-12), so a group that stalls alone is the cause.
     """
     argv = ["gst-launch-1.0", "-v", "-e", *shlex.split(anatomy_pipeline(controls, num_buffers=BISECT_BUFFERS))]
     timeout = BISECT_BUFFERS / FPS + STARTUP_S
@@ -475,12 +420,12 @@ def bisect_stall(controls, groups: dict, out: Path, launch) -> dict:
         _save(out, _bisect_file(name), text)
         found[name] = _ran(text)
         if name == "none" and not found[name]:
-            break                           # stalls with nothing added: the settings aren't it
+            break                           # stalls with none: the settings aren't it
     return found
 
 
 def gst_errors(text: str) -> list[str]:
-    """gst-launch's ERROR lines, each with the debug-info line under it, in order."""
+    """Each ERROR line with the debug line under it."""
     lines, out = text.splitlines(), []
     for i, line in enumerate(lines):
         if line.startswith("ERROR"):
@@ -490,16 +435,13 @@ def gst_errors(text: str) -> list[str]:
 
 
 def frames_flowed(res: dict) -> bool:
-    """
-    Buffers reached the sink: the probes saw some, or gst-launch ended on its
-    own at EOS (the sink's num-buffers) with no error.
-    """
+    """The probes saw buffers, or gst-launch reached EOS on its own without an error."""
     return (bool(res["latency"]) or bool(res.get("gst_eos") and not res.get("gst_errors"))
             or bool((res.get("stall_bisect") or {}).get("none")))
 
 
 def _no_timing(res: dict) -> str | None:
-    """Why pad_timing.py gave no rows, when the recording can tell; None when it can't."""
+    """Why pad_timing.py gave no rows, when the recording can tell."""
     pt = res.get("pad_timing")
     if "PyGObject (gi)" in res["missing"]:
         return (f"no time per element: neither this python nor {SYSTEM_PYTHON} imports Gst through gi "
@@ -515,7 +457,6 @@ def _no_timing(res: dict) -> str | None:
 
 
 def _no_pipeline_latency(res: dict) -> str:
-    """Why there's no source-to-sink time, as far as the recording can tell."""
     if "gst-launch-1.0" in res["missing"]:
         return "no GStreamer here: only the static probes ran"
     errors = res.get("gst_errors") or []
@@ -554,13 +495,12 @@ def _no_pipeline_latency(res: dict) -> str:
 
 
 def findings(res: dict) -> list[str]:
-    """What the recording says, in words."""
     out = []
     pipe = [s for s in res["latency"] if s["kind"] == "pipeline"]
     if not pipe:
         return [_no_pipeline_latency(res)]
     if res.get("stall_bisect"):
-        out.append(_no_pipeline_latency(res))       # the stall is still worth saying when timing came anyway
+        out.append(_no_pipeline_latency(res))
     p = pipe[0]
     if p["fps"] is not None and p["fps"] < 0.9 * FPS:
         out.append(f"the pipeline delivered {p['fps']:.1f} fps, under the {FPS} asked for")
@@ -587,7 +527,6 @@ _KIND_LABEL = {"pipeline": "pipeline ", "camera": "sensor -> "}
 
 
 def summary_lines(res: dict) -> list[str]:
-    """summary.txt: the route, the caps, time per element, the VideoCore side, libcamera, findings."""
     fmt = lambda v, spec="": "--" if v is None else f"{v:{spec}}"      # noqa: E731
     lines = [f"capture anatomy  {res['started']}  ({res['duration_s']:.0f} s of the pipeline)",
              f"  {res.get('pipeline', '')}"]
@@ -639,7 +578,6 @@ def summary_lines(res: dict) -> list[str]:
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """python3 -m src.diagnostics.capture_anatomy [--seconds S] [--camera-control K=V ...] [--out DIR]"""
     ap = argparse.ArgumentParser(prog="python3 -m src.diagnostics.capture_anatomy", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=DURATION_S, metavar="S",
@@ -649,7 +587,6 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--out", default=None, metavar="DIR")
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        # added to params.CAMERA_CONTROLS for this recording, as the linkers do
         controls = {**CAMERA_CONTROLS, **parse_controls(args.camera_control)} if args.camera_control else None
     except ValueError as exc:
         print(exc)

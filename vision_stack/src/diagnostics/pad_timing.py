@@ -1,27 +1,17 @@
 """Pad timing: how long each element of a GStreamer pipeline holds each frame, by buffer probes.
 
-Purpose:
-    GStreamer's latency tracer stalls libcamerasrc before PLAYING on the
-    robot's Pi (2026-10-14). This measures the same from inside the
-    pipeline: a probe on each element's pads stamps each frame in and out,
-    with nothing injected into the stream. Stdlib and PyGObject only, so the
-    system python3 can run it when the venv can't import gi.
+Usage: python3 pad_timing.py "PIPELINE"   (one that ends itself, e.g. num-buffers)
 
-Main package:
-    Its stdout, after the run: "[pad-timing] KIND ELEMENT TS_MS MS" rows,
-    KIND element (sink pad in to src pad out), pipeline (source to sink) or
-    camera (sensor timestamp to the source's pad), then EOS, ERROR or NOGI.
-
-Flow:
-    1. python3 pad_timing.py "PIPELINE" (one that ends itself: num-buffers).
-    2. Probes on every pad; run to EOS or an error.
-    3. Print the rows.
+GStreamer's latency tracer stalls libcamerasrc on the robot (2026-10-14), so
+this stamps each frame in and out at every pad instead. Stdlib and PyGObject
+only, for the system python3. Prints "[pad-timing] KIND ELEMENT TS_MS MS" rows
+(KIND: element, pipeline or camera), then EOS, ERROR or NOGI.
 """
 import sys
 import time
 
 TAG = "[pad-timing]"
-SKIP_FACTORIES = ("capsfilter",)     # pass-through: ~0 ms, only noise in the table
+SKIP_FACTORIES = ("capsfilter",)     # pass-through, ~0 ms
 
 
 def _out(*fields) -> None:

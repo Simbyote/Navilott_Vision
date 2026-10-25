@@ -1,18 +1,8 @@
-"""Pre-run battery check on the TM1637 display.
+"""Pre-run battery check on the TM1637 display: python3 -m src.diagnostics.battery_check, motors idle.
 
-Purpose:
-    Shows whether the pack is good before a run, and keeps watching it: run
-    on the Pi with the motors idle (python3 -m src.diagnostics.battery_check).
-    A standalone check, not alongside src.main, which owns the display
-    during a run.
-
-Main package:
-    None: what it shows. "rdy " or "Lo-b" from the resting reading, then
-    "Lo-b" at WARNING, "Stop" at CRITICAL, "Err " on an ADC fault.
-
-Flow:
-    1. Power.preflight(): the resting reading on the display.
-    2. Monitor until Ctrl-C, the display following each transition.
+Shows "rdy " or "Lo-b" from the resting reading, then follows the pack until
+Ctrl-C: "Lo-b" at WARNING, "Stop" at CRITICAL, "Err " on an ADC fault. Not
+alongside src.main, which owns the display during a run.
 """
 
 import time

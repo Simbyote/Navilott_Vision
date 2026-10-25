@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""Code cards: one structure infographic per source file, from its docstring and its syntax tree.
+"""Code cards: one structure infographic per source file, from its docstring and syntax tree.
 
 Purpose:
-    Generic tools draw structure without the why, and lose calls made
-    through a list or an attribute (code2flow drew Navigation.update() as
-    calling itself). Every module opens with a Purpose / Main package / Flow
-    docstring, so a card puts the why next to the structure: what the file
-    is for, which modules it uses and which use it, its classes, constants
-    and flow. The code is only read, never imported (docs/guides/code_cards.md).
+    Generic tools draw structure without the why, and lose calls made through
+    a list or attribute (code2flow drew Navigation.update() calling itself).
+    A card puts each module's Purpose / Main package / Flow next to its
+    imports, users, classes and constants. The code is read, never imported
+    (docs/guides/code_cards.md).
 
 Main package:
     One PNG card per module under src/ (tests skipped).
-
-Flow:
-    1. Parse every module: docstring sections, imports, classes, functions, constants.
-    2. Turn the imports around into "used by".
-    3. Draw one card per module (or per --only) into --out.
 """
 import argparse
 import ast
@@ -37,9 +31,7 @@ Run from vision_stack/:
 
 DEFAULT_OUT = RUNS_DIR / "code_cards"   # generated, so it lives with the other run output (not committed)
 
-# Card layout, inches. 16 wide matches the docs/infographics slides; LINE fits
-# one 10.5 pt line; the wrap widths are characters that fit each column at
-# that size (left: proportional text, right: monospace)
+# Inches; 16 wide matches docs/infographics, LINE is one 10.5 pt line. Wraps are characters per column
 CARD_W, LINE = 16.0, 0.215
 LEFT_X, LEFT_W, RIGHT_X = 0.4, 5.3, 6.0
 LEFT_CHARS, RIGHT_CHARS = 62, 108
@@ -49,9 +41,7 @@ MAX_FLOW_LINES = 18
 MAX_CALL_LINES = 3          # per method
 MAX_COMMENT_LINES = 2       # per constant
 
-# Calls dropped from "calls": container and string methods (log.append,
-# d.get) are real calls but noise on a structure card; library namespaces
-# are outside the project
+# Container and string methods: real calls, noise on a card
 NOISE_METHODS = frozenset({
     "append", "extend", "get", "items", "keys", "values", "pop", "setdefault", "join", "format", "copy",
     "strip", "split", "add", "sort", "insert", "remove", "clear", "lower", "upper", "startswith", "endswith",
@@ -103,9 +93,8 @@ def doc_sections(doc: str) -> tuple[str, dict]:
     """
     A module docstring's first line and its sections.
 
-    A section starts at an unindented line ending in ':' that begins with a
-    capital ("Purpose:", "Flow (process() is the order):"); its body is the
-    following lines, one indent level removed.
+    A section starts at an unindented, capitalized line ending in ':'; its body
+    is the following lines, one indent removed.
     """
     if not doc:
         return "", {}
@@ -135,8 +124,7 @@ def first_line(node) -> str:
 
 def call_name(call: ast.Call) -> tuple[str, bool] | None:
     """
-    (name, through self): 'self.tracker.update(...)' -> ('tracker.update', True),
-    'rule.update(...)' -> ('rule.update', False), 'clamp(...)' -> ('clamp', False);
+    (name, through self): self.tracker.update() -> ('tracker.update', True), clamp() -> ('clamp', False).
     None for calls on an expression (f()(), x[0].y()).
     """
     parts, n = [], call.func
@@ -155,14 +143,11 @@ def call_name(call: ast.Call) -> tuple[str, bool] | None:
 
 def calls_in(fn, known: set, project_methods: set | None = None) -> list:
     """
-    The calls a function makes, in source order, once each.
+    A function's calls in source order, once each.
 
-    Kept: names in known (this module's own and what it imports from the
-    project), anything through self (self.tracker.update, self._pi.write),
-    and a method call on a local (rule.update) when the method is one the
-    project defines; project_methods None keeps every local method call.
-    Left out: library namespaces, NOISE_METHODS, and local helpers'
-    methods (ax.text, p.add_argument).
+    Keeps known names, anything through self, and local method calls whose method
+    the project defines (all of them when project_methods is None). Drops library
+    namespaces, NOISE_METHODS and helpers like ax.text.
     """
     out = []
     for n in sorted((n for n in ast.walk(fn) if isinstance(n, ast.Call)), key=lambda n: (n.lineno, n.col_offset)):
@@ -181,7 +166,7 @@ def calls_in(fn, known: set, project_methods: set | None = None) -> list:
 
 
 def constructed(expr) -> list:
-    """Capitalized callables called anywhere in expr, in source order: what `self.x = ...` builds."""
+    """Capitalized callables in expr, in order: what `self.x = ...` builds."""
     found = []
     for n in ast.walk(expr):
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id[:1].isupper()
@@ -196,9 +181,7 @@ def constructed(expr) -> list:
 
 def _imports(tree) -> tuple[dict, set, list]:
     """
-    (project module -> names, lazy, outside packages). lazy holds the
-    (module, name) pairs imported only inside a function; name is None for
-    `import src.x`.
+    (project module -> names, lazy, outside packages); lazy holds (module, name) imported inside a function.
     """
     uses, external, top_pairs, inner_pairs = {}, [], set(), set()
     top = {id(n) for n in tree.body}
@@ -223,7 +206,6 @@ def _imports(tree) -> tuple[dict, set, list]:
 
 
 def lazy_module(info, module: str) -> bool:
-    """Every import from module in info happens inside a function."""
     return all((module, n) in info.lazy for n in (info.uses[module] or [None]))
 
 
@@ -252,7 +234,7 @@ def _class(node: ast.ClassDef, known: set, project_methods: set | None) -> Class
 
 
 def _constant(node, source_lines: list) -> tuple | None:
-    """(names, value, comment) for an UPPER_CASE module-level assignment; None otherwise."""
+    """(names, value, comment) for an UPPER_CASE module-level assignment, else None."""
     targets = node.targets if isinstance(node, ast.Assign) else [node.target]
     names = [t.id for t in targets if isinstance(t, ast.Name)]
     names += [e.id for t in targets if isinstance(t, ast.Tuple) for e in t.elts if isinstance(e, ast.Name)]
@@ -265,16 +247,11 @@ def _constant(node, source_lines: list) -> tuple | None:
 
 
 def defined_names(path: Path) -> set:
-    """Every function and method name a file defines."""
     return {n.name for n in ast.walk(ast.parse(path.read_text())) if isinstance(n, ast.FunctionDef)}
 
 
 def read_module(path: Path, root: Path, project_methods: set | None = None) -> ModuleInfo:
-    """
-    One source file, read without importing it. root is the folder holding
-    src/; project_methods (from defined_names over the project) narrows the
-    method calls on locals that "calls" keeps.
-    """
+    """One file, read without importing it. project_methods narrows which local method calls are kept."""
     source = path.read_text()
     tree = ast.parse(source)
     module = ".".join(path.relative_to(root).with_suffix("").parts)
@@ -297,13 +274,12 @@ def read_module(path: Path, root: Path, project_methods: set | None = None) -> M
 
 
 def source_files(root: Path) -> list:
-    """Every module under root/src except tests, caches and package __init__ files."""
+    """Modules under root/src, minus tests, caches and package __init__ files."""
     return [p for p in sorted((root / "src").rglob("*.py"))
             if "tests" not in p.parts and "__pycache__" not in p.parts and p.name != "__init__.py"]
 
 
 def scan(root: Path) -> dict:
-    """{dotted module: ModuleInfo} for every source file under root/src."""
     files = source_files(root)
     methods = set().union(*(defined_names(p) for p in files)) if files else set()
     return {i.module: i for i in (read_module(p, root, methods) for p in files)}
@@ -313,8 +289,8 @@ def used_by(mods: dict, root: Path) -> dict:
     """
     {module: (importing modules, test files importing it)}.
 
-    `from src.pkg import mod` counts as importing src.pkg.mod. An importer
-    that only imports inside a function is marked "(inside a function)".
+    `from src.pkg import mod` counts as importing src.pkg.mod; function-only
+    importers are marked "(inside a function)".
     """
     out = {m: ([], 0) for m in mods}
 
@@ -341,7 +317,7 @@ def used_by(mods: dict, root: Path) -> dict:
 
 
 def reflow(text: str) -> str:
-    """Join a docstring's hard-wrapped prose into paragraphs; list items and indented lines stay as they are."""
+    """Join hard-wrapped prose into paragraphs; list items and indented lines stay."""
     out, joinable = [], False
     for line in text.splitlines():
         s = line.strip()
@@ -355,7 +331,6 @@ def reflow(text: str) -> str:
 
 
 def wrap(text: str, width: int) -> list:
-    """Lines of at most width characters; a list item's or indented line's continuation is indented."""
     out = []
     for para in text.splitlines():
         lead = len(para) - len(para.lstrip())
@@ -366,7 +341,6 @@ def wrap(text: str, width: int) -> list:
 
 
 def _calls_rows(calls: list) -> list:
-    """The "calls →" lines; a list cut at MAX_CALL_LINES ends with "…"."""
     lines = wrap(", ".join(calls), RIGHT_CHARS - 14)
     if len(lines) > MAX_CALL_LINES:
         lines = lines[:MAX_CALL_LINES]
@@ -375,7 +349,7 @@ def _calls_rows(calls: list) -> list:
 
 
 def card_boxes(info: ModuleInfo, users: tuple) -> tuple[list, list]:
-    """(left boxes, right boxes), each box (title, color, [(text, style)]); empty boxes left out."""
+    """(left boxes, right boxes) of (title, color, [(text, style)]), empty ones left out."""
     left, right = [], []
     purpose = wrap(reflow(section(info.sections, "Purpose")), LEFT_CHARS)
     if len(purpose) > MAX_PURPOSE_LINES:
@@ -455,7 +429,6 @@ def _draw_column(ax, boxes, x, w, top) -> None:
 
 
 def draw(info: ModuleInfo, users: tuple, out_path: Path, plt) -> Path:
-    """One card for info at out_path; users is used_by()'s entry for it."""
     left, right = card_boxes(info, users)
     height = 1.55 + max(_column_height(left), _column_height(right)) + 0.5
     fig = plt.figure(figsize=(CARD_W, height), dpi=110, facecolor=BG)
@@ -484,7 +457,7 @@ def card_name(module: str) -> str:
 
 
 def resolve(names: list, mods: dict, root: Path) -> list:
-    """--only entries (dotted modules or .py paths) as module names; ValueError naming any unknown."""
+    """--only entries (modules or .py paths) as module names; ValueError naming any unknown."""
     out, unknown = [], []
     for n in names:
         p = Path(n)

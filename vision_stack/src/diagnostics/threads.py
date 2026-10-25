@@ -1,20 +1,13 @@
-"""Threads and cores: what each of a process's threads is doing, on which core, read from the kernel.
+"""Threads and cores: what each of a process's threads is doing, on which core, read from /proc.
 
 Purpose:
-    The robot's process runs several threads (the frame loop, the sensor
-    hub, pigpio's callbacks, GStreamer's, the recorder), scheduled across
-    the Pi's cores with the GIL letting one run Python at a time. The kernel
-    shows how that plays out, in /proc. Naming threads and real-time
-    priority are src/os_threads.py's.
+    The robot runs several threads across the Pi's cores, with the GIL
+    letting one run Python at a time; the kernel shows how that plays out.
+    Naming threads and real-time priority are os_threads.py's.
 
 Main package:
-    ThreadSampler: per-thread CPU, core, state and context switches, and
-    per-core busy time, as rates between two reads.
-
-Flow:
-    1. Threads name themselves (os_threads.name_os_thread); drive.py names pigpio's.
-    2. A sampler reads /proc/<pid>/task/*/stat and /proc/stat at an interval.
-    3. Each read after the first: rates over the interval.
+    ThreadSampler: per-thread CPU, core and context switches, and per-core
+    busy time, as rates between two reads.
 """
 import os
 from dataclasses import dataclass
@@ -22,7 +15,7 @@ from pathlib import Path
 
 PROC = Path("/proc")
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100   # utime / stime units per second
-MAIN_THREAD = "main"        # the process's first thread (tid == pid), whose kernel name is the program's
+MAIN_THREAD = "main"        # tid == pid
 
 THREAD_FIELDS = ("elapsed_s", "tid", "name", "state", "core", "cpu_pct", "user_pct", "sys_pct",
                  "vol_ctx_s", "invol_ctx_s")
@@ -31,39 +24,32 @@ CORE_FIELDS = ("elapsed_s", "core", "busy_pct")
 
 @dataclass(frozen=True)
 class TaskTimes:
-    """One thread's counters at one moment. Times in clock ticks (CLK_TCK per second)."""
+    """Times in clock ticks."""
     tid: int
     name: str
     state: str          # R running, S sleeping, D in I/O, ...
     core: int           # the core it last ran on
     utime: int
     stime: int
-    vol_ctx: int        # times it blocked (sleep, I/O, a lock: the GIL included)
-    invol_ctx: int      # times the kernel took the core from it
+    vol_ctx: int        # it blocked (sleep, I/O, a lock, the GIL)
+    invol_ctx: int      # the kernel took the core from it
 
 
 @dataclass(frozen=True)
 class CoreTimes:
-    """One core's /proc/stat counters, in clock ticks."""
     busy: int
     total: int
 
 
 def parse_stat(text: str) -> tuple[str, str, int, int, int]:
-    """
-    (name, state, core, utime, stime) from a /proc/.../stat line.
-
-    The name sits in parentheses and may itself hold spaces or ')', so the
-    fields are counted from the last ')': state is field 3, utime 14, stime
-    15, the last core 39 (proc(5)).
-    """
+    """(name, state, core, utime, stime). Counted from the last ')', since the name may hold spaces or ')'."""
     name = text[text.index("(") + 1:text.rindex(")")]
     rest = text[text.rindex(")") + 2:].split()
     return name, rest[0], int(rest[36]), int(rest[11]), int(rest[12])
 
 
 def parse_ctx(text: str) -> tuple[int, int]:
-    """(voluntary, nonvoluntary) context switches from a /proc/.../status file."""
+    """(voluntary, nonvoluntary) context switches."""
     vol = invol = 0
     for line in text.splitlines():
         if line.startswith("voluntary_ctxt_switches:"):
@@ -74,15 +60,7 @@ def parse_ctx(text: str) -> tuple[int, int]:
 
 
 def read_tasks(pid: int, proc: Path = PROC) -> dict[int, TaskTimes]:
-    """
-    Every thread of pid, as it stands now.
-
-    Outputs:
-        {tid: TaskTimes}; a thread that ends mid-read is left out. The
-        process's first thread (tid == pid) is named MAIN_THREAD.
-    Raises:
-        ProcessLookupError: If the process is gone.
-    """
+    """{tid: TaskTimes}, the first thread named MAIN_THREAD. ProcessLookupError if the process is gone."""
     task_dir = proc / str(pid) / "task"
     try:
         tids = sorted(int(p.name) for p in task_dir.iterdir())
@@ -100,12 +78,7 @@ def read_tasks(pid: int, proc: Path = PROC) -> dict[int, TaskTimes]:
 
 
 def parse_core_times(text: str) -> dict[int, CoreTimes]:
-    """
-    {core: CoreTimes} from /proc/stat's cpuN lines (the all-core "cpu" line skipped).
-
-    busy is everything but idle and iowait; guest time is already inside
-    user and nice, so only the first 8 columns count toward total.
-    """
+    """busy is everything but idle and iowait; guest time is already inside user, so 8 columns count."""
     out = {}
     for line in text.splitlines():
         if line.startswith("cpu") and line[3:4].isdigit():
@@ -122,19 +95,9 @@ def read_core_times(proc: Path = PROC) -> dict[int, CoreTimes]:
 
 class ThreadSampler:
     """
-    Turns successive /proc reads into rates over each interval.
-
-    Inputs:
-        pid: The process to watch.
-        python_names: {tid: name} for threads still called by the program's
-            name, e.g. from threading.enumerate() when watching this process.
-        proc: /proc, injectable for tests.
-
-    take(elapsed_s, dt) -> (thread_rows, core_rows) in THREAD_FIELDS /
-    CORE_FIELDS order: one row per thread and per core, rates over the dt
-    seconds since the previous take(). The first take() only primes the
-    counters and returns no rows; a thread first seen in this take() gets
-    its rates from the next one.
+    take(elapsed_s, dt) -> (thread rows, core rows) of rates since the previous take(). The
+    first take() only primes; a new thread gets rates from its second. python_names stand in
+    for threads nobody named.
     """
     def __init__(self, pid: int, python_names: dict[int, str] | None = None, proc: Path = PROC) -> None:
         self.pid, self.proc = pid, proc
@@ -158,7 +121,7 @@ class ThreadSampler:
                 continue
             user = (now.utime - before.utime) / CLK_TCK / dt * 100.0
             system = (now.stime - before.stime) / CLK_TCK / dt * 100.0
-            # A thread nobody named still carries the program's name: use its Python name if known
+            # An unnamed thread carries the program's name; use its Python name if known
             name = self.python_names.get(tid, now.name) if now.name == program else now.name
             threads.append({"elapsed_s": elapsed_s, "tid": tid, "name": name, "state": now.state,
                             "core": now.core, "cpu_pct": round(user + system, 1),
@@ -176,7 +139,6 @@ class ThreadSampler:
         return threads, core_rows
 
     def _program_name(self) -> str | None:
-        """The kernel name the program's threads inherit (its first thread's)."""
         try:
             return parse_stat((self.proc / str(self.pid) / "stat").read_text())[0]
         except (OSError, ValueError):
