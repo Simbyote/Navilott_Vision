@@ -1,21 +1,14 @@
 """Ground plane: undistorted frame pixels to floor centimeters, through one homography.
 
 Purpose:
-    The camera is rigidly mounted and the floor is flat, so one 3x3
-    homography maps any floor point in the preprocessed frame to floor
-    coordinates. It is valid only for the lens calibration, undistort_alpha
-    and output size it was fit under, and loading refuses any other: a
-    mismatch would shift every distance without raising anything.
+    The camera is fixed and the floor flat, so one homography maps any floor
+    point to floor cm. It holds only for the lens calibration, undistort_alpha
+    and size it was fit under, so loading refuses any other: a mismatch would
+    shift every distance silently.
 
 Main package:
-    GroundHomography: H (frame px -> floor cm) and the conditions it was fit
-    under. Floor axes: X_cm right+, Y_cm forward+, origin at the robot's
-    reference point (by default the floor at the frame's bottom center).
-
-Flow:
-    1. scripts/calibrate_ground.py fits H on undistorted frames, writes the JSON.
-    2. config.py loads it once into MEASURED.ground; nothing reads it per frame.
-    3. Stages project points with to_floor(); None means no ground plane.
+    GroundHomography: frame px -> floor cm, X right+, Y forward+, from the
+    robot's reference point.
 """
 import hashlib
 import json
@@ -29,16 +22,7 @@ import numpy as np
 
 def lens_id(calibration_path: str | Path | None) -> str | None:
     """
-    SHA-256 of a lens calibration's image_size, camera_matrix and dist_coeffs.
-
-    Purpose:
-        A homography is only valid for the lens model the frames were
-        undistorted with. The file's "created" stamp isn't enough: a
-        recalibration in the same second or a hand edit keeps it. Hashing the
-        values preprocess actually uses catches both.
-
-    Outputs:
-        Hex digest, or None if the path is None or the file doesn't exist.
+    SHA-256 of the lens values preprocess uses; a recalibration or hand edit changes it, a timestamp may not.
     """
     if calibration_path is None or not Path(calibration_path).is_file():
         return None
@@ -49,11 +33,7 @@ def lens_id(calibration_path: str | Path | None) -> str | None:
 
 @dataclass(frozen=True)
 class GroundHomography:
-    """
-    Frame px -> floor cm for one camera setup. Frozen and hashable, so it can sit in PipelineConfig.
-
-    Floor axes: X_cm right+, Y_cm forward+, origin at the robot reference point.
-    """
+    """Frozen and hashable, so it can sit in PipelineConfig."""
     H: tuple[tuple[float, float, float], ...]   # 3x3, row-major, frame px -> floor cm
     image_size: tuple[int, int]                 # (width, height) of the frames it was fit on
     undistort_alpha: float                      # preprocess's alpha at fit time
@@ -67,14 +47,12 @@ class GroundHomography:
         H = np.asarray(self.H, np.float64).reshape(3, 3)
         if abs(np.linalg.det(H)) < 1e-12:
             raise ValueError("GroundHomography: H is singular")
-        # Frozen: the cached arrays go in through object.__setattr__
         object.__setattr__(self, "_H", H)
         object.__setattr__(self, "_H_inv", np.linalg.inv(H))
 
     @classmethod
     def from_matrix(cls, H: np.ndarray, image_size, undistort_alpha: float,
                     lens_sha256: str | None, mean_cm: float = 0.0, max_cm: float = 0.0):
-        """Build from a numpy 3x3, normalized so H[2][2] = 1."""
         H = np.asarray(H, np.float64).reshape(3, 3)
         H = H / H[2, 2]
         return cls(tuple(tuple(float(v) for v in row) for row in H),
@@ -82,28 +60,17 @@ class GroundHomography:
                    lens_sha256, float(mean_cm), float(max_cm))
 
     def to_floor(self, points_px) -> np.ndarray:
-        """(N, 2) frame px -> (N, 2) floor cm."""
         pts = np.asarray(points_px, np.float64).reshape(-1, 1, 2)
         return cv2.perspectiveTransform(pts, self._H).reshape(-1, 2)
 
     def to_image(self, points_cm) -> np.ndarray:
-        """(N, 2) floor cm -> (N, 2) frame px."""
         pts = np.asarray(points_cm, np.float64).reshape(-1, 1, 2)
         return cv2.perspectiveTransform(pts, self._H_inv).reshape(-1, 2)
 
     def forward_at_centerline(self, p0_px, p1_px) -> float | None:
         """
-        Forward distance (Y_cm) where the floor line through two frame points crosses X = 0.
-
-        Purpose:
-            The distance to a stop line that matters for stopping is along the
-            robot's own path, not to the line's nearest pixel. A straight line
-            on the floor stays straight through the homography, so the
-            crossing is exact even when the line is seen off to one side and
-            has to be extended to reach X = 0.
-
-        Outputs:
-            Y_cm at X = 0, or None if the line runs (nearly) along the robot's axis.
+        Y_cm where the floor line through two frame points crosses X = 0; None if
+        the line runs along the robot's axis. Exact even for a line seen off to one side.
         """
         (x0, y0), (x1, y1) = self.to_floor([p0_px, p1_px])
         if abs(x1 - x0) < 1e-6:
@@ -115,20 +82,7 @@ def fit_ground_homography(
         points_px,
         points_cm,
     ) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Least-squares homography over every point pair, and each pair's error in cm.
-
-    Inputs:
-        points_px: (N, 2) frame points, N >= 4, from undistorted frames.
-        points_cm: (N, 2) the same points on the floor.
-
-    Outputs:
-        (H, errors_cm): H maps frame px -> floor cm, normalized so H[2][2] = 1;
-        errors_cm is |H(px) - cm| per point.
-
-    Raises:
-        ValueError: Fewer than 4 points, mismatched lengths, or no fit.
-    """
+    """Least squares over N >= 4 point pairs: (H, |error| cm per point). ValueError if it can't fit."""
     px = np.asarray(points_px, np.float64).reshape(-1, 2)
     cm = np.asarray(points_cm, np.float64).reshape(-1, 2)
     if len(px) < 4 or len(px) != len(cm):
@@ -143,15 +97,7 @@ def fit_ground_homography(
 
 def fit_conditions_problem(size, alpha: float, lens: str | None, preprocess,
                            frame_size: tuple[int, int]) -> str | None:
-    """
-    Why a calibration fit on undistorted frames can't be used now, or None if it can.
-
-    Inputs:
-        size: (width, height) it was fit at.
-        alpha, lens: The undistort_alpha and lens_id() it was fit under.
-        preprocess: The PreprocessParams the pipeline runs with.
-        frame_size: (height, width) of the frames the pipeline will see.
-    """
+    """Why a fit can't be used with this preprocess and frame size, or None."""
     height, width = frame_size
     if tuple(size) != (width, height):
         return f"fit at {size[0]}x{size[1]}, frames are {width}x{height}"
@@ -180,22 +126,8 @@ def load_ground_homography(
         frame_size: tuple[int, int],
     ) -> GroundHomography | None:
     """
-    Load the ground calibration, if it matches how preprocess will run.
-
-    Inputs:
-        path: calibration/ground_homography.json, from calibrate_ground.py.
-        preprocess: The PreprocessParams the pipeline runs with.
-        frame_size: (height, width) of the frames the pipeline will see.
-
-    Outputs:
-        GroundHomography; None, silently, when there's no file (it's
-        optional: the stop-line table gives the stop line's cm without it,
-        and nothing else reads it); None with a warning when it's malformed
-        or was fit under a different image size, undistort_alpha or lens
-        calibration, or undistortion is off. Never raises.
-
-    Side effects:
-        Reads path and the lens calibration file. Call once at startup.
+    None without a file (it's optional); None with a warning if it's malformed, fit
+    under another setup, or undistortion is off. Reads the files once, at startup.
     """
     path = Path(path)
     if not path.is_file():

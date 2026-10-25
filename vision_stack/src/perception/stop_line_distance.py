@@ -1,22 +1,12 @@
 """Stop-line distance: how far ahead of the robot the nearest stop line is.
 
 Purpose:
-    Geometry only detects; this module measures, turning stop-line
-    candidates into one distance per frame the way lane_offset turns lane
-    candidates into a steering error. distance_px needs no calibration;
-    distance_cm comes from the ground homography, else the stop-line table
-    (docs/vision_pipeline/phase2_perception.md, "Stage 4B").
+    Geometry only detects; this turns the stop-line candidates into one
+    distance per frame. distance_px needs no calibration; distance_cm comes
+    from the ground homography, else the stop-line table.
 
 Main package:
-    StopLineResult: whether a line was found, distance_px and distance_cm
-    (0 once the line is under the robot), a [0, 1] proximity, the line's
-    ends, tilt and confidence. One per frame; detected False when none.
-
-Flow:
-    1. Gate each candidate by confidence.
-    2. Keep the one nearest the robot (largest y_near_px).
-    3. distance_px = lane ROI height - y_near_px.
-    4. distance_cm: the homography at the robot's centerline, else the table.
+    StopLineResult: one per frame, detected False when there's no line.
 """
 import math
 from dataclasses import dataclass
@@ -30,19 +20,12 @@ from src.utils import check_same_frame
 
 @dataclass(frozen=True)
 class StopLineDistanceConfig:
-    """Tuning for the stop-line measurement."""
     min_confidence: float = 0.4     # candidates below this aren't measured
 
 
 @dataclass(frozen=True)
 class StopLineResult:
-    """
-    The nearest stop line in one frame. frame_id and timestamp_ms are carried
-    from capture, never re-derived.
-
-    Rows grow downward, toward the robot; the reference row is the bottom of
-    the lane ROI, which is the bottom of the frame and of the camera's view.
-    """
+    """Rows grow downward, toward the robot; the reference is the lane ROI's bottom, the view's edge."""
     detected: bool
     distance_px: float | None       # rows from the line's nearest point to the lane ROI bottom; 0 when on it; None if not detected
     y_near_px: float | None         # lane-ROI row of the line's nearest point
@@ -54,8 +37,7 @@ class StopLineResult:
     candidate_count: int            # candidates geometry found, before the confidence gate
     frame_id: int
     timestamp_ms: int
-    # Floor cm from the robot reference to where the near edge crosses the robot's centerline;
-    # from the stop-line table, cm ahead of where its marks were measured from. 0 on it, None without either
+    # cm ahead along the robot's centerline; 0 on the line, None without a ground plane or table
     distance_cm: float | None = None
     proximity: float = 0.0          # [0, 1] y_near_px / ROI height; 1.0 = at the ROI bottom
 
@@ -70,10 +52,7 @@ def _nothing(count: int, frame_id: int, timestamp_ms: int) -> StopLineResult:
 
 
 def _table_cm(c: StopLineCandidate, roi: ROICropResult, table: StopLineTable | None) -> float | None:
-    """
-    The stop-line table's distance for the candidate; 0 for a clipped line.
-    None without a table, or when the frame isn't the size it was fit at.
-    """
+    """0 for a clipped line; None without a table or at another frame size."""
     if table is None or tuple(roi.source_shape[:2]) != (table.image_size[1], table.image_size[0]):
         return None
     if c.clipped:
@@ -88,13 +67,8 @@ def _distance_cm(
         table: StopLineTable | None = None,
     ) -> float | None:
     """
-    Floor distance to where the candidate's near edge crosses the robot's centerline.
-
-    The near (bottom) edge is rebuilt at both ends from its midpoint row and
-    tilt; for a clipped line it is the ROI bottom, where the robot already
-    is. Lane-ROI coordinates become frame coordinates by adding the ROI
-    origin before projecting. Without a usable ground plane (none, or fit at
-    another frame size), the stop-line table's distance, or None.
+    Floor cm to where the near edge crosses the robot's centerline, rebuilt from
+    its midpoint row and tilt. Without a usable ground plane, the table's cm.
     """
     if ground is None or tuple(roi.source_shape[:2]) != (ground.image_size[1], ground.image_size[0]):
         return _table_cm(c, roi, table)
@@ -139,24 +113,7 @@ def compute_stop_line_distance(
         ground: GroundHomography | None = None,
         table: StopLineTable | None = None,
     ) -> tuple[StopLineResult, dict]:
-    """
-    Measure the distance to the nearest confident stop line.
-
-    Inputs:
-        geometry: From run_geometry_stage().
-        roi: Supplies the lane ROI's origin and height (the reference row),
-            the frame size and the frame stamp.
-        ground: The ground homography (PipelineConfig.ground).
-        table: The stop-line table (PipelineConfig.stop_line_table), used
-            when there's no ground homography. Neither leaves distance_cm None.
-
-    Outputs:
-        (result, debug_summary). debug_summary holds frame_id, timestamp_ms,
-        candidate_count, usable_count and log.
-
-    Raises:
-        ValueError: If either input is None, or their frame stamps disagree.
-    """
+    """(result, debug summary). ValueError if an input is None or the frames disagree."""
     check_same_frame(geometry, roi, "compute_stop_line_distance")
     log = []
     candidates = geometry.stop_line_candidates
@@ -193,12 +150,7 @@ def estimate_stop_line_distance(
         ground: GroundHomography | None = None,
         table: StopLineTable | None = None,
     ) -> StopLineResult:
-    """
-    Production twin of compute_stop_line_distance(): same measurement, no debug summary or log.
-
-    Raises:
-        ValueError: If either input is None, or their frame stamps disagree.
-    """
+    """Production twin of compute_stop_line_distance(), without the debug summary."""
     check_same_frame(geometry, roi, "estimate_stop_line_distance")
     candidates = geometry.stop_line_candidates
     nearest = None

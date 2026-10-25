@@ -1,30 +1,19 @@
 """Geometry branch: lane boundaries, stop lines and the stop sign, each from its own detector.
 
 Purpose:
-    Answers three structural questions per frame. Lanes and stop lines come
-    from the gray lane ROI's Canny edges, computed once here and shared; the
-    stop sign from the color sign ROI's redness, since a red sign on a floor
-    of similar brightness gives Canny almost no edge. This module runs the
-    three detectors and re-exports their names (phase2_perception.md, "Stage 3A").
+    Lanes and stop lines come from the lane ROI's Canny edges, computed once
+    here; the sign from the color sign ROI's redness, since a red sign on a
+    floor of similar brightness gives Canny almost no edge.
 
 Main package:
-    GeometryBranchResult: one frame's accepted lane, stop-line and sign
-    candidates, ROI-relative, with the frame identity.
-
-Flow:
-    1. Validate the ROIs.
-    2. Canny on the lane ROI and the gradient split, once.
-    3. Lanes (geometry_lanes), then stop lines (geometry_stop_line), from those edges.
-    4. The sign (geometry_sign), from the color sign ROI.
-    5. Package the three candidate lists.
+    GeometryBranchResult: one frame's lane, stop-line and sign candidates.
 """
 import time
 
 import numpy as np
 
 from src.perception.roi_crop import ROICropResult
-# The detectors and what they share, each in its own module; every name is
-# re-exported here so callers (and tests) import from geometry as before
+# Re-exported, so callers and tests import from geometry as before
 from src.perception.geometry_shared import (
     CannyParams, GeometryBranchResult, GeometryConfig, LaneCandidate, LaneContourFilter, SignCandidate,
     SignContourFilter, StopLineCandidate, StopLineFilter, _canny, _close_edges, _contours, _horizontal_edges,
@@ -59,13 +48,12 @@ __all__ = [
 ]
 
 
-# The parts a geometry call times when given timings={}: the edges every
-# lane-ROI detector reads (Canny and the gradient split), then each detector
+# What timings={} reports: the shared edges (Canny and the gradient split), then each detector
 GEOMETRY_PARTS = ("edges", "lanes", "stop_line", "sign")
 
 
 class _PartClock:
-    """Wall ms per part into timings, as each part ends; nothing at all when timings is None."""
+    """Wall ms per part into timings; nothing when timings is None."""
     __slots__ = ("_timings", "_mark")
 
     def __init__(self, timings: dict | None) -> None:
@@ -81,11 +69,7 @@ class _PartClock:
 
 def _splits(lane_roi, lane_edges, lane_filter: LaneContourFilter, stop_filter: StopLineFilter):
     """
-    The gradient split each lane-ROI detector needs, computed once when their angles agree.
-
-    Outputs:
-        (stop-line split, lane split); the lane split is None when the lane
-        filter is off or uses another angle (it then computes its own).
+    (stop-line split, lane split), computed once when their angles agree; lane split None when it needs its own.
     """
     stop_split = _horizontal_edges(lane_roi, lane_edges, stop_filter.max_tilt_deg)
     lane_split = stop_split if lane_filter.horizontal_edge_deg == stop_filter.max_tilt_deg else None
@@ -93,7 +77,6 @@ def _splits(lane_roi, lane_edges, lane_filter: LaneContourFilter, stop_filter: S
 
 
 def _validate_rois(where: str, lane_roi: np.ndarray, sign_color_roi: np.ndarray) -> None:
-    """Raise, naming the ROI, unless lane_roi is (h, w) uint8 and sign_color_roi (h, w, 3) uint8."""
     for name, roi, ndim in (("lane_roi", lane_roi, 2), ("sign_color_roi", sign_color_roi, 3)):
         if roi is None:
             raise ValueError(f"{where}: {name} is None")
@@ -119,30 +102,9 @@ def run_geometry_branch(
     timings: dict | None = None,
 ) -> tuple[GeometryBranchResult, dict, dict]:
     """
-    Run lane, stop-line and sign detection on loose ROI arrays.
-
-    Purpose:
-        The entry point for tuning work. The pipeline calls run_geometry_stage().
-
-    Inputs:
-        lane_roi: (h, w) uint8 gray; sign_color_roi: (h, w, 3) uint8 BGR;
-            e.g. from ROICropResult.
-        canny_params: The lane ROI's Canny; the sign is found by color.
-        draw_overlays: Build the debug overlays in both branches. False skips
-            four full-ROI allocations and two contour rasterizations per frame.
-        trace: Record the per-contour sign trace (see extract_sign_candidates)
-            and the lane contour trace (see extract_lane_candidates).
-        stop_filter: Stop-line gates. Stop lines read the lane ROI's Canny
-            edges and never change the lane or sign results.
-        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
-
-    Outputs:
-        (result, lane_debug, sign_debug). lane_debug["stop_line"] holds the
-        stop-line detector's debug (see extract_stop_line_candidates).
-
-    Raises:
-        ValueError / TypeError: If either ROI is None, not uint8, or the
-            wrong shape. The message names the offending ROI.
+    Geometry on loose ROI arrays, for tuning work; the pipeline calls run_geometry_stage().
+    Returns (result, lane_debug, sign_debug). draw_overlays=False skips the debug images;
+    timings, a dict, gets each GEOMETRY_PARTS' wall ms. ValueError or TypeError names a malformed ROI.
     """
     _validate_rois("run_geometry_branch", lane_roi, sign_color_roi)
     clock = _PartClock(timings)
@@ -202,25 +164,7 @@ def run_geometry_stage(
         trace: bool = False,
         timings: dict | None = None,
     ) -> tuple[GeometryBranchResult, dict, dict]:
-    """
-    Stage entry point: run the geometry branch on one ROICropResult.
-
-    Purpose:
-        Same shape as preprocess_frame() and crop_rois(), so the orchestrator
-        chains single-argument calls instead of re-threading the frame
-        identity by hand. A thin adapter over run_geometry_branch().
-
-    Inputs:
-        draw_overlays: Off by default; the live loop discards the debug dicts,
-            so building them would cost allocations nothing reads. The
-            dataset harness passes True.
-        trace: Off by default. Records the sign trace for the debug views.
-        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
-
-    Outputs:
-        (result, lane_debug, sign_debug), with frame_id and timestamp_ms
-        carried from the ROICropResult.
-    """
+    """run_geometry_branch() on one ROICropResult, carrying its frame identity."""
     return run_geometry_branch(
         lane_roi = roi.lane_roi,
         sign_color_roi = roi.sign_color_roi,
@@ -241,19 +185,7 @@ def detect_geometry(
         config: GeometryConfig = GeometryConfig(),
         timings: dict | None = None,
     ) -> GeometryBranchResult:
-    """
-    Production twin of run_geometry_stage(): same stage, result only.
-
-    Inputs:
-        timings: A dict to fill with each GEOMETRY_PARTS' wall ms; None times nothing.
-
-    Outputs:
-        GeometryBranchResult, with frame_id and timestamp_ms carried from roi.
-
-    Raises:
-        ValueError / TypeError: If either ROI is None, not uint8, or the
-            wrong shape. The message names the offending ROI.
-    """
+    """Production twin of run_geometry_stage(): the result only."""
     _validate_rois("detect_geometry", roi.lane_roi, roi.sign_color_roi)
     clock = _PartClock(timings)
 

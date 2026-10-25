@@ -2,20 +2,12 @@
 
 Purpose:
     A stop line's edges run across the lane, so their gradient points up or
-    down where a lane line's points sideways. Splitting the shared Canny
-    edges by gradient keeps only lines near horizontal, before any contour
-    can join a stop line to the lane lines it touches. The distance to the
-    line is stop_line_distance's job.
+    down where a lane line's points sideways. Splitting the edges by gradient
+    keeps only near-horizontal lines, before any contour can join a stop line
+    to the lane lines it touches.
 
 Main package:
-    StopLineCandidate: one painted line: its ends, near row (y_near_px),
-    tilt, thickness, brightness, confidence, and whether it runs off the
-    bottom of the view (clipped: the robot is on it).
-
-Flow:
-    1. Split the edges into top and bottom edges of near-horizontal lines.
-    2. Fit each edge; join pieces broken by lane tape.
-    3. Pair each top edge with a bottom edge below it; gate the pairs.
+    StopLineCandidate: one painted line; clipped when it runs off the view's bottom.
 """
 import math
 
@@ -46,7 +38,7 @@ class _EdgeSegment:
 
     @property
     def tilt_deg(self) -> float:
-        """Signed angle from horizontal; + = the right end is lower (nearer the robot)."""
+        """+ = right end lower, nearer the robot."""
         return math.degrees(math.atan(self.slope))
 
     @property
@@ -57,7 +49,7 @@ class _EdgeSegment:
 def _fit_segment(
         points: np.ndarray,
     ) -> _EdgeSegment | None:
-    """Fit a line through edge points; None if they span under 2 px in x (not a horizontal edge)."""
+    """None if the points span under 2 px in x."""
     x0, x1 = float(points[:, 0].min()), float(points[:, 0].max())
     if x1 - x0 < 2.0:
         return None
@@ -72,16 +64,8 @@ def _edge_segments(
         f: StopLineFilter,
     ) -> list[_EdgeSegment]:
     """
-    Near-horizontal edges of one polarity as fitted segments, with pieces of one edge joined.
-
-    Purpose:
-        A lane line crossing a stop line breaks the stop line's edge for the
-        width of the lane tape. Pieces whose facing ends are within
-        max_thickness_px in x and whose fitted lines agree within 3 px there
-        are refit as one edge.
-
-    Outputs:
-        Segments sorted by x0.
+    Fitted segments of one polarity, sorted by x0. Pieces broken by a crossing lane line
+    (ends within max_thickness_px, lines within 3 px) are refit as one.
     """
     kw, kh = f.close_kernel
     if kw >= 2 or kh >= 2:
@@ -115,7 +99,7 @@ def _stop_line_confidence(
         mean_intensity: float,
         f: StopLineFilter,
     ) -> float:
-    """[0, 1], rounded to 4 places: 50% length, 30% intensity margin above min_intensity, 20% squareness."""
+    """[0, 1]: 50% length, 30% brightness above min_intensity, 20% squareness."""
     length_score = clamp(length_px / max(f.ref_length_px, 1.0), 0.0, 1.0)
     intensity_score = clamp((mean_intensity - f.min_intensity) / max(255.0 - f.min_intensity, 1.0), 0.0, 1.0)
     square_score = clamp(1.0 - abs(tilt_deg) / max(f.max_tilt_deg, 1e-6), 0.0, 1.0)
@@ -131,22 +115,8 @@ def _stop_line_from(
         timestamp_ms: int,
     ) -> tuple[StopLineCandidate | None, str]:
     """
-    Gate one top edge and pair it with the bottom edge of the same tape.
-
-    Purpose:
-        Shared by the debug and production detectors, so their gates can't
-        drift; the debug one counts the returned reason, the production one
-        ignores it.
-
-    Inputs:
-        top: A top edge (brightness rising going down).
-        bottoms: Every bottom edge in the ROI.
-
-    Outputs:
-        (candidate, "accepted"), or (None, reason) with reason one of
-        "short", "tilt", "unpaired", "intensity". Unpaired means no bottom
-        edge overlaps it at a plausible thickness, and it isn't close enough
-        to the ROI bottom to be a line the robot is already on.
+    Gate one top edge and pair it with the bottom edge of the same tape: (candidate,
+    "accepted") or (None, the failed gate). Shared by both detectors, so their gates can't drift.
     """
     roi_h = lane_roi.shape[0]
     if top.length_px < f.min_length_px:
@@ -173,7 +143,7 @@ def _stop_line_from(
         y_bottom_at = b.y_at
         clipped = False
     else:
-        # The robot may already be on the line: its bottom edge is below the ROI
+        # The robot may be on the line, its bottom edge below the ROI
         x_left, x_right, tilt = top.x0, top.x1, top.tilt_deg
         mid = (x_left + x_right) / 2.0
         visible = (roi_h - top.y_at(mid)) * math.cos(math.radians(tilt))
@@ -226,24 +196,7 @@ def extract_stop_line_candidates(
         timestamp_ms: int,
         split: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> tuple[list[StopLineCandidate], dict]:
-    """
-    Find stop lines in the lane ROI from its Canny edges.
-
-    Inputs:
-        lane_roi: (h, w) uint8 gray.
-        edges_raw: Canny of lane_roi, the same map the lane detector reads.
-        split: _horizontal_edges at stop_filter.max_tilt_deg, if the caller
-            has it; computed here otherwise.
-
-    Outputs:
-        (candidates, debug). Candidates are lane-ROI-relative, nearest the
-        robot first. debug holds edges_top and edges_bottom (the gradient
-        split), top_count, bottom_count, reject_counts per gate, and for the
-        stop-line view: trace, one entry per top edge ({"ends": ((x0, y0),
-        (x1, y1)) of its fitted line, "gate": None or the rejecting gate,
-        "length", "tilt", "candidate": the StopLineCandidate or None}), and
-        bottoms, the fitted ends of every bottom edge.
-    """
+    """(candidates nearest first, debug with the edge split, counts and per-edge trace)."""
     edges_top, edges_bottom = split or _horizontal_edges(lane_roi, edges_raw, stop_filter.max_tilt_deg)
     tops = _edge_segments(edges_top, stop_filter)
     bottoms = _edge_segments(edges_bottom, stop_filter)
@@ -282,12 +235,7 @@ def find_stop_line_candidates(
         timestamp_ms: int,
         split: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> list[StopLineCandidate]:
-    """
-    Production twin of extract_stop_line_candidates(): no debug dict or reject counts.
-
-    Outputs:
-        Lane-ROI-relative candidates, nearest the robot first.
-    """
+    """Production twin of extract_stop_line_candidates(), without the debug dict."""
     edges_top, edges_bottom = split or _horizontal_edges(lane_roi, edges_raw, stop_filter.max_tilt_deg)
     bottoms = _edge_segments(edges_bottom, stop_filter)
     candidates = []

@@ -1,19 +1,12 @@
 """Stop-sign shapes from the color sign ROI: a redness mask, its blobs gated largest first.
 
 Purpose:
-    A red sign on a floor of similar brightness gives Canny almost no edge in
-    gray, so the sign is found by color. Blobs are gated largest first and the
-    first to pass is the sign, so a larger red thing in the ROI (a chair, a
-    box) that's refused doesn't hide the sign behind it.
+    A red sign on a floor of similar brightness gives Canny almost no edge,
+    so the sign is found by color. The first blob to pass, largest first, is
+    the sign, so a larger red thing that's refused can't hide it.
 
 Main package:
-    SignCandidate: the sign's bbox, its hull's vertex count, solidity and
-    confidence. At most one per frame.
-
-Flow:
-    1. Redness of the sign ROI; threshold (Otsu, floored); close.
-    2. Gate the blobs largest first: area, vertex count, solidity, ghost gates.
-    3. Keep the first that passes.
+    SignCandidate: at most one per frame.
 """
 
 import cv2
@@ -31,18 +24,15 @@ def _sign_confidence(
         vertex_count: int,
         f: SignContourFilter
     ) -> float:
-    """Equal blend of closeness to 8 vertices (an octagon) and area up to ref_area, in [0, 1]."""
+    """Equal blend of closeness to 8 vertices and area up to ref_area, in [0, 1]."""
     vertex_score = clamp(1.0 - abs(vertex_count - 8) / 8.0, 0.0, 1.0)
     denom = max(f.ref_area - f.min_area, 1.0)
     area_score = clamp((area - f.min_area) / denom, 0.0, 1.0)
     return round(0.5 * vertex_score + 0.5 * area_score, 4)
 
 
-# An area-rejected contour is traced only if its bounding box covers at least
-# this fraction of min_area; smaller ones are edge noise and are only counted.
-# Judged by bbox, not contour area: a Canny outline with a gap traces as a thin
-# sliver with almost no enclosed area but a sign-sized box, and that is exactly
-# the failure the trace is there to show
+# Area rejects are traced only if their bbox reaches this share of min_area. By
+# bbox, since a broken outline encloses almost nothing but has a sign-sized box
 TRACE_MIN_BBOX_FRAC = 1.0
 
 
@@ -55,7 +45,6 @@ def _trace_entry(
         confidence: float | None = None,
         poly: np.ndarray | None = None,
     ) -> dict:
-    """One sign-trace row: bbox plus the gate that decided (None = accepted); unmeasured fields stay None."""
     return {
         "bbox": cv2.boundingRect(contour),
         "gate": gate,
@@ -68,14 +57,14 @@ def _trace_entry(
 
 
 def _redness(sign_color_roi: np.ndarray) -> np.ndarray:
-    """R - max(G, B) per pixel, 0-255: bright on red, near 0 on gray, black and white alike."""
+    """R - max(G, B): bright on red, near 0 on gray, black and white alike."""
     b, g, r = cv2.split(sign_color_roi)
-    # cv2.subtract saturates at 0; numpy '-' on uint8 would wrap gray-green pixels to ~255
+    # Saturates at 0, where numpy's uint8 '-' would wrap
     return cv2.subtract(r, cv2.max(g, b))
 
 
 def _red_mask(redness: np.ndarray, sign_filter: SignContourFilter) -> tuple[np.ndarray, float]:
-    """0/255 mask of the red pixels (Otsu, never below min_redness), closed; and the threshold used."""
+    """The closed red mask (Otsu, never under min_redness), and the threshold used."""
     t, mask = cv2.threshold(redness, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if t < sign_filter.min_redness:
         t, mask = cv2.threshold(redness, sign_filter.min_redness, 255, cv2.THRESH_BINARY)
@@ -86,14 +75,12 @@ def _red_mask(redness: np.ndarray, sign_filter: SignContourFilter) -> tuple[np.n
 
 
 def _sign_polygon(contour: np.ndarray, sign_filter: SignContourFilter):
-    """(hull, hull area, approxPolyDP of the hull at epsilon_factor x its perimeter)."""
     hull = cv2.convexHull(contour)
     epsilon = sign_filter.epsilon_factor * cv2.arcLength(hull, closed=True)
     return hull, cv2.contourArea(hull), cv2.approxPolyDP(hull, epsilon, closed=True)
 
 
 def _letter_share(sign_color_roi: np.ndarray, hull: np.ndarray, f: SignContourFilter) -> float:
-    """Share of the hull's pixels that are white (the sign's letters), in [0, 1]."""
     region = np.zeros(sign_color_roi.shape[:2], np.uint8)
     cv2.fillPoly(region, [hull.reshape(-1, 2).astype(np.int32)], 255)
     inside = region > 0
@@ -108,9 +95,7 @@ def _letter_share(sign_color_roi: np.ndarray, hull: np.ndarray, f: SignContourFi
 def _shape_gate(contour: np.ndarray, area: float, hull: np.ndarray, sign_color_roi: np.ndarray | None,
                 f: SignContourFilter) -> tuple[str | None, dict]:
     """
-    The ghost-sign gates after solidity, in order: aspect, extent, letters.
-    (the gate that failed or None, the measured values). A gate whose
-    setting is None is skipped; letters is skipped without the ROI.
+    The ghost-sign gates (aspect, extent, letters): (failed gate or None, values). A None setting is skipped.
     """
     _, _, bw, bh = cv2.boundingRect(contour)
     got = {"aspect": round(bw / max(bh, 1), 3), "extent": round(area / max(bw * bh, 1), 3)}
@@ -127,12 +112,7 @@ def _shape_gate(contour: np.ndarray, area: float, hull: np.ndarray, sign_color_r
 
 def _gate_sign(contour: np.ndarray, area: float, sign_filter: SignContourFilter,
                sign_color_roi: np.ndarray | None) -> tuple[str | None, dict]:
-    """
-    One sized blob through the sign gates after min_area: max_area, hull,
-    vertex count, solidity, then the ghost-sign gates. (the gate that
-    refused it or None, what was measured: hull, approx, vertices,
-    solidity, confidence as far as it got).
-    """
+    """One blob through the gates after min_area: (refusing gate or None, what was measured so far)."""
     got = {}
     if area > sign_filter.max_area:
         return "area", got
@@ -175,27 +155,9 @@ def _extract_sign_candidates(
     sign_color_roi: np.ndarray | None = None,
 ) -> list[SignCandidate]:
     """
-    Gate the red-mask contours: below min_area dropped, then the rest
-    largest first through max_area, hull, vertex count, solidity, and the
-    ghost-sign gates (aspect, extent, letters; the letters read
-    sign_color_roi), until one passes. Only the largest used to be gated, so
-    a larger red thing in the ROI, refused, hid the sign behind it
-    (sign_check on detect-range looks, 2026-10-20).
-
-    Inputs:
-        contours: External contours of the red mask.
-        reject_counts: Filled with one count per gate. Every contour lands in
-            exactly one bucket ("not_largest" for the smaller ones never
-            gated, a larger one having passed), so the buckets sum to "seen".
-        trace: A list to receive one _trace_entry() per contour that reached a
-            gate, accepted or not, or None to skip tracing. Area rejects are
-            traced only when their bbox clears TRACE_MIN_BBOX_FRAC.
-
-    Outputs:
-        At most one candidate, holding the hull's approxPolyDP polygon.
-
-    Side effects:
-        Mutates reject_counts and trace.
+    At most one candidate: blobs over min_area, largest first, until one passes. Every
+    contour lands in one reject_counts bucket ("not_largest" for those never gated);
+    trace gets each gated contour.
     """
     rc = reject_counts if reject_counts is not None else {}
     for _k in ("seen", "area", "not_largest", "vertices", "hull", "solidity", "aspect", "extent", "letters",
@@ -215,7 +177,7 @@ def _extract_sign_candidates(
             continue
         sized.append((area, contour))
 
-    # Largest first; sorted() keeps equal areas in contour order, as _filter_sign_contours does
+    # sorted() keeps equal areas in contour order, as _filter_sign_contours does
     found = None
     for area, contour in sorted(sized, key=lambda ac: -ac[0]):
         if found is not None:
@@ -240,13 +202,7 @@ def _filter_sign_contours(
     timestamp_ms: int,
     sign_color_roi: np.ndarray | None = None,
 ) -> list[SignCandidate]:
-    """
-    Production twin of _extract_sign_candidates(): same gates in the same
-    order, without reject counting or tracing.
-
-    Outputs:
-        At most one candidate, holding the hull's approxPolyDP polygon.
-    """
+    """Production twin of _extract_sign_candidates(), without counts or trace."""
     sized = [(cv2.contourArea(c), c) for c in contours]
     for area, contour in sorted((ac for ac in sized if ac[0] >= sign_filter.min_area), key=lambda ac: -ac[0]):
         gate, got = _gate_sign(contour, area, sign_filter, sign_color_roi)
@@ -263,25 +219,7 @@ def extract_sign_candidates(
     draw_overlays: bool = True,
     trace: bool = False,
 ) -> tuple[list[SignCandidate], dict]:
-    """
-    Find the stop-sign-shaped red blob in the sign ROI.
-
-    Inputs:
-        sign_color_roi: (h, w, 3) uint8 BGR.
-        draw_overlays: Also build contour_overlay and accepted_overlay. False
-            skips two full-ROI allocations and a contour rasterization per frame.
-        trace: Record every contour that reached a gate, and the gate that
-            decided it, under debug["trace"]. Off by default; the live loop
-            doesn't read it.
-
-    Outputs:
-        (candidates, debug); at most one candidate. debug always holds
-        sign_roi (the BGR ROI), redness (0-255), mask (0/255, closed),
-        threshold (the redness threshold used) and reject_counts. With
-        trace, debug["trace"] is a list of dicts (bbox, gate, area,
-        vertices, solidity, confidence, poly), ROI-relative; gate is None
-        for the accepted candidate.
-    """
+    """(at most one candidate, debug with the redness, mask, threshold and counts; trace if asked)."""
     redness = _redness(sign_color_roi)
     mask, threshold = _red_mask(redness, sign_filter)
     contours = _contours(mask)
@@ -334,12 +272,7 @@ def find_sign_candidates(
     frame_id: int,
     timestamp_ms: int,
 ) -> list[SignCandidate]:
-    """
-    Production twin of extract_sign_candidates(): no debug dict, overlays or trace.
-
-    Outputs:
-        ROI-relative candidates, at most one.
-    """
+    """Production twin of extract_sign_candidates(), without the debug dict."""
     mask, _ = _red_mask(_redness(sign_color_roi), sign_filter)
 
     return _filter_sign_contours(

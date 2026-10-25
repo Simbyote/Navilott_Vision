@@ -1,22 +1,14 @@
 """Phase 2 output packaging: one frame's results as the Phase 3 contract.
 
 Purpose:
-    The last Phase 2 stage and the contract boundary with Phase 3. It
-    computes nothing: it collects one frame's detections and measurements,
-    checks that they belong to that frame, and packages them. Frame identity
-    lives on the container, so a frame with no detections is still
-    identifiable.
+    The boundary with Phase 3. It computes nothing: it collects one frame's
+    detections and measurements, checks they all belong to that frame, and
+    packages them, so even a frame with no detections is identifiable.
 
 Main package:
-    Phase2Output: fusion's detections in fusion's order, the lane offset,
-    stop-line and obstacle results, and the frame identity. Phase 3 steers
-    from lane_offset_results, not from lane_boundary positions: those are
-    bbox centroids, which for an angled marking aren't where it meets the robot.
-
-Flow:
-    1. Take the detections and frame stamp from the FusionResult.
-    2. Wrap each measurement in a list (empty when there is none).
-    3. Check list types, required fields, per-item stamps and the count.
+    Phase2Output. Phase 3 steers from lane_offset_results, not from the
+    lane_boundary centroids, which for an angled line aren't where it meets
+    the robot.
 """
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,8 +18,7 @@ from src.perception.lane_offset import LaneOffsetResult
 from src.perception.obstacle import ObstacleResult
 from src.perception.stop_line_distance import StopLineResult
 
-# The Phase 2 schema plus what Phase 3 needs to interpret a detection: which
-# frame it is from and which ROI its position is local to
+# Plus the frame and the ROI a detection's position is local to
 DETECTION_FIELDS = ("type", "position", "confidence", "timestamp", "frame_id",
                     "source_roi", "source_rect")
 LANE_OFFSET_FIELDS = ("offset", "mode", "frame_id", "timestamp_ms")
@@ -38,38 +29,19 @@ OBSTACLE_FIELDS = ("detected", "distance_px", "distance_cm", "clipped", "frame_i
 @dataclass(frozen=True)
 class Phase2Output:
     """
-    Phase 2 -> Phase 3 handoff for one frame.
+    Lists are taken as-is, never reordered or filtered, and every item carries
+    the container's frame_id and timestamp_ms.
 
-    Packaging rules:
-        PR-1  detections, lane_offset_results, stop_line_results and
-              obstacle_results are taken as-is: no re-ordering, no filtering.
-        PR-2  detection_count is always len(detections).
-        PR-3  frame_id and timestamp_ms come from the caller, never from a
-              candidate or a clock.
-        PR-4  Every detection, lane offset, stop-line and obstacle result
-              carries the container's (frame_id, timestamp_ms).
-
-    Failure cases, raised on construction:
-        F1  detections, lane_offset_results, stop_line_results or
-            obstacle_results is not a list (None included): TypeError. Pass
-            [] for "nothing detected".
-        F2  An item is missing a required field: AttributeError naming it.
-            Only presence is checked; upstream stages own completeness.
-        F3  detection_count is passed and isn't len(detections): ValueError.
-        F4  frame_id or timestamp_ms not supplied: TypeError. There is no
-            default, because a silent 0 would make Phase 3 treat every frame
-            as the same instant.
-        F5  An item's stamp differs from the container's: ValueError.
-            Everything descends from one ROICropResult, so a mismatch means
-            pieces from different frames were packaged together.
+    Raised on construction: TypeError if a list is None or a stamp is missing (a
+    silent 0 would make every frame the same instant); AttributeError for a
+    missing field; ValueError if detection_count is wrong or an item's stamp
+    differs, which means two frames were packaged together.
     """
     detections: list[DetectionObject]               # fusion order: traffic_light, lane_boundary by descending confidence, stop_sign
     lane_offset_results: list[LaneOffsetResult]     # one per frame from the chain (mode "none" when blind); [] if none supplied
     frame_id: int
     timestamp_ms: int
     detection_count: int | None = None              # None computes len(detections); a mismatch is rejected (F3)
-    # Measurements, like the lane offset, so they travel beside detections, not as
-    # them: one per frame from the chain (detected False when none), [] if none supplied
     stop_line_results: list[StopLineResult] = field(default_factory=list)
     obstacle_results: list[ObstacleResult] = field(default_factory=list)
 
@@ -97,7 +69,6 @@ class Phase2Output:
 
         n = len(self.detections)
         if self.detection_count is None:
-            # The dataclass is frozen, so the computed count goes in via object.__setattr__
             object.__setattr__(self, "detection_count", n)
         elif self.detection_count != n:
             raise ValueError(
@@ -113,7 +84,6 @@ def _check_items(
         stamp: tuple[int, int],
         item_stamp: Callable[[object], tuple[int, int]],
     ) -> None:
-    """Presence of every required field (F2), then agreement with the frame stamp (F5)."""
     for i, item in enumerate(items):
         for name in fields:
             if not hasattr(item, name):
@@ -134,25 +104,7 @@ def package_phase2(
         stop_line: StopLineResult | None = None,
         obstacle: ObstacleResult | None = None,
     ) -> Phase2Output:
-    """
-    Stage entry point: package one frame's fusion, lane offset, stop-line and obstacle results.
-
-    Inputs:
-        fusion: From fuse_detections(). An empty detections list is a valid frame.
-        lane_offset: From compute_lane_offset(), or None if there is none for
-            this frame.
-        stop_line: From compute_stop_line_distance(), or None if there is
-            none for this frame.
-        obstacle: From compute_obstacle(), or None if there is none for
-            this frame.
-
-    Outputs:
-        Phase2Output stamped with fusion's frame_id and timestamp_ms, which
-        fusion carried from the ROI crop.
-
-    Raises:
-        ValueError: If the lane offset, stop-line or obstacle result is from a different frame (F5).
-    """
+    """Stamped with fusion's frame. A None measurement becomes []; ValueError if one is from another frame."""
     return Phase2Output(
         detections = fusion.detections,
         lane_offset_results = [] if lane_offset is None else [lane_offset],

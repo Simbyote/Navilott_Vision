@@ -1,21 +1,13 @@
 """Lane boundaries from the gray lane ROI: Canny edges, gated contours, merged fragments.
 
 Purpose:
-    White tape on a dark mat gives intensity edges that Canny finds;
-    contours are kept when their area, elongation, span and brightness match
-    tape. Lines lying across the lane (a stop line) come out of this
-    detector's copy of the edges first, so they can't close into one contour
-    with the lane lines.
+    White tape on a dark mat gives strong edges; a contour is kept when its
+    area, elongation, span and brightness match tape. Lines across the lane
+    come out of this detector's copy of the edges first, so a stop line
+    can't close into one contour with the lane lines.
 
 Main package:
-    LaneCandidate: one accepted lane marking, its bbox, foot_x (where it
-    meets the bottom of the view), confidence and contour.
-
-Flow:
-    1. Take lines lying across the lane out of the edges.
-    2. Close along-line gaps; trace contours.
-    3. Gate each contour; score the survivors.
-    4. Merge fragments of one line.
+    LaneCandidate: one marking, with foot_x where it meets the view's bottom.
 """
 
 import cv2
@@ -34,7 +26,6 @@ from src.perception.geometry_shared import (  # noqa: F401
 def _extreme_points(
         contour: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
-    """Leftmost and rightmost [x, y] of a contour; fragment merging measures the gap between them."""
     pts = contour.reshape(-1, 2)
     return pts[pts[:, 0].argmin()], pts[pts[:, 0].argmax()]
 
@@ -46,21 +37,8 @@ def _merge_collinear(
         max_gap_px: float = 40.0,
     ) -> list[LaneCandidate]:
     """
-    Join fragments of one horizontal lane line into a single candidate.
-
-    Purpose:
-        Without this, lane_offset could select two pieces of the same line
-        as opposite boundaries.
-
-    Inputs:
-        roi_shape: (h, w) of the lane ROI.
-        max_gap_px: Largest endpoint gap, px, still treated as the same line
-            (inclusive). Larger heals wider breaks but risks joining two
-            separate lines.
-
-    Outputs:
-        Merged horizontal candidates followed by the vertical ones, which
-        pass through untouched. A fragment with no neighbor is returned as is.
+    Join fragments of one horizontal line, so lane_offset can't take two pieces of
+    it as opposite boundaries. Vertical candidates pass through.
     """
     roi_h, roi_w = roi_shape
     horiz = [c for c in candidates if c.bbox[2] >= c.bbox[3]]
@@ -89,8 +67,7 @@ def _merge_collinear(
         long_side = max(rect_w, rect_h)
         raw_short = min(rect_w, rect_h)
 
-        # Length-weighted mean of member intensities; refilling a concatenated
-        # point set would draw a polygon that is not the line
+        # Refilling the joined points would draw a polygon that isn't the line
         total_len = sum(c.length_px for c in g) or 1.0
         mean_intensity = sum(
             c.mean_intensity * c.length_px for c in g
@@ -128,28 +105,13 @@ def _lane_confidence(
         roi_w: float,
         f: LaneContourFilter
     ) -> float:
-    """
-    Score how far a lane candidate's measurements can be trusted.
-
-    Inputs:
-        long, short: minAreaRect sides, px.
-        horizontal: Whether the marking runs across the ROI. Picks which ROI
-            extent the length is normalized against.
-        mean_intensity: 0-255 mean inside the contour.
-
-    Outputs:
-        [0, 1], rounded to 4 places: 50% length, 30% intensity margin above
-        min_intensity, 20% thickness.
-    """
-    # Normalized against the ROI span in the direction of the contour
+    """[0, 1]: 50% length, 30% brightness above min_intensity, 20% thickness."""
     extent = roi_w if horizontal else roi_h
     ref_len = max(f.ref_length * max(extent, 1), 1.0)
     length_score = clamp(long / ref_len, 0.0, 1.0)
 
-    # Thickness separates tape from hairline edge traces
     width_score = clamp(short / max(f.ref_width, 1.0), 0.0, 1.0)
 
-    # Ranked by how far above the acceptance threshold it sits
     denom = max(255.0 - f.min_intensity, 1.0)
     intensity_score = clamp((mean_intensity - f.min_intensity) / denom, 0.0, 1.0)
 
@@ -168,22 +130,8 @@ def _extract_lane_candidates(
     trace: list | None = None,
 ) -> list[LaneCandidate]:
     """
-    Run contours through the lane gates and build a candidate for each survivor.
-
-    Inputs:
-        roi_shape: (h, w) of the lane ROI; normalizes span and proximity.
-        gray: The lane ROI, sampled by the intensity gate.
-        reject_counts: Filled with one count per gate. Every contour lands in
-            exactly one bucket, so the buckets sum to "seen".
-        trace: If given, one entry per contour is appended: {"contour",
-            "bbox", "gate" (None when accepted), "value" (what the gate
-            measured, or None)}, for the lane-geometry view.
-
-    Outputs:
-        Accepted candidates, not yet merged.
-
-    Side effects:
-        Mutates reject_counts.
+    Accepted candidates, not yet merged. Every contour lands in exactly one
+    reject_counts bucket; trace, if given, gets each contour with the gate that decided it.
     """
     candidates = []
     roi_h, roi_w = roi_shape
@@ -277,13 +225,7 @@ def _filter_lane_contours(
     roi_shape: tuple[int, int],
     gray: np.ndarray,
 ) -> list[LaneCandidate]:
-    """
-    Production twin of _extract_lane_candidates(): same gates in the same
-    order, without reject counting.
-
-    Outputs:
-        Accepted candidates, not yet merged.
-    """
+    """Production twin of _extract_lane_candidates(), without the counts."""
     candidates = []
     roi_h, roi_w = roi_shape
 
@@ -357,25 +299,8 @@ def extract_lane_candidates(
     trace: bool = False,
 ) -> tuple[list[LaneCandidate], dict]:
     """
-    Find lane-boundary candidates in the lane ROI.
-
-    Inputs:
-        lane_roi: (h, w) uint8 gray.
-        draw_overlays: Also build contour_overlay and accepted_overlay. False
-            skips two full-ROI allocations and a contour rasterization per frame.
-        edges_raw: Canny of lane_roi with canny_params, when the caller has
-            already run it (the stop-line detector shares it). None runs it here.
-        horizontal_split: _horizontal_edges(lane_roi, edges_raw,
-            lane_filter.horizontal_edge_deg), when the caller has it at that
-            angle. None computes it here if the filter is on.
-        trace: Record every contour with the gate that decided it in
-            debug["trace"] (see _extract_lane_candidates), before merging.
-
-    Outputs:
-        (candidates, debug). Candidates are merged and ROI-relative. debug
-        always holds lane_roi, edges, edges_raw, edges_lane (edges_raw with
-        the lines across the lane taken out, what the contours come from)
-        and reject_counts (including merged_into, the post-merge count).
+    (merged candidates, debug). edges_raw and horizontal_split, when the caller has
+    them, save recomputing; the stop-line detector shares them.
     """
     if edges_raw is None:
         edges_raw = _canny(lane_roi, canny_params)
@@ -409,7 +334,6 @@ def extract_lane_candidates(
     if trace:
         debug_images["trace"] = lane_trace
     if draw_overlays:
-        # 3-channel so the BGR annotations render (see extract_sign_candidates)
         contour_overlay = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR)
         accepted_overlay = cv2.cvtColor(lane_roi, cv2.COLOR_GRAY2BGR)
         cv2.drawContours(
@@ -436,7 +360,7 @@ def extract_lane_candidates(
                 (0, 200, 0),
                 2
             )
-            cv2.putText(    # confidence/proximity
+            cv2.putText(
                 accepted_overlay,
                 f"{c.confidence:.2f}/{c.proximity:.2f}",
                 (x, y),
@@ -459,15 +383,7 @@ def find_lane_candidates(
     edges_raw: np.ndarray | None = None,
     horizontal_split: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> list[LaneCandidate]:
-    """
-    Production twin of extract_lane_candidates(): no debug dict, no overlays.
-
-    Inputs:
-        edges_raw, horizontal_split: As for extract_lane_candidates().
-
-    Outputs:
-        Merged, ROI-relative candidates.
-    """
+    """Production twin of extract_lane_candidates(), without the debug dict."""
     if edges_raw is None:
         edges_raw = _canny(lane_roi, canny_params)
     edges_lane = _strip_horizontal_lines(lane_roi, edges_raw, lane_filter, horizontal_split)
@@ -492,26 +408,10 @@ def _strip_horizontal_lines(
         split: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> np.ndarray:
     """
-    The lane detector's edges, with lines lying across the lane taken out.
-
-    Purpose:
-        A stop line touching the lane lines otherwise closes into one
-        H-shaped contour with them, too wide for the lane gates, and the
-        lane is lost for as long as the line is in view. The stop-line
-        detector still reads the full edge map; only the lane detector's copy
-        loses them.
-
-        Only long horizontal edge runs go (at least horizontal_min_run_px),
-        with every horizontal edge within horizontal_band_px of their fitted
-        line, so the stubs of a stop line running past the tape go too. The
-        short ends of a piece of tape stay, so it still traces as one contour.
-
-    Inputs:
-        split: (top, bottom) from _horizontal_edges at
-            lane_filter.horizontal_edge_deg, if the caller has it.
-
-    Outputs:
-        edges_raw itself when the filter is off or finds nothing; otherwise a copy.
+    The lane detector's edges without the lines across the lane, which would otherwise
+    close into one H-shaped contour with the lane lines and lose the lane. Long
+    horizontal runs go, with their stubs within horizontal_band_px; a tape's own
+    short ends stay. edges_raw itself when nothing is removed.
     """
     if lane_filter.horizontal_edge_deg is None:
         return edges_raw

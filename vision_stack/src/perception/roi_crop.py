@@ -1,20 +1,13 @@
 """ROI cropping: each branch's region of the preprocessed frame, as read-only views.
 
 Purpose:
-    Each branch looks only where its target can be: the lane on the floor
-    ahead, the traffic light top-center, signs to the right, obstacles in
-    the robot's path. Cropping before any threshold shrinks each branch's
-    work and keeps unrelated scenery from becoming false positives.
+    Each branch looks only where its target can be: the lane ahead, the
+    light top-center, signs to the right, obstacles in the path. Cropping
+    first shrinks the work and keeps unrelated scenery out.
 
 Main package:
-    ROICropResult: the lane, sign, traffic and obstacle ROIs as read-only
-    views (gray, color or both, as each branch needs), each ROI's rect in
-    frame px to map detections back, and the frame identity.
-
-Flow:
-    1. Check that the gray and color frames share (H, W).
-    2. Resolve each fractional ROIBounds to pixels.
-    3. Slice each ROI as a read-only view; carry the frame identity forward.
+    ROICropResult: the four ROIs as read-only views, and each one's rect in
+    frame px to map detections back.
 """
 import numpy as np
 import cv2
@@ -27,7 +20,7 @@ from src.params import ROI_LANE, ROI_SIGN, ROI_TRAFFIC
 
 @dataclass(frozen=True)
 class ROIBounds:
-    """Fractional ROI bounds, each in [0, 1] of frame width/height. x0 < x1 and y0 < y1."""
+    """Fractions of frame width and height, x0 < x1 and y0 < y1."""
     x0: float   # top-left
     y0: float
     x1: float   # bottom-right
@@ -38,41 +31,28 @@ class ROIBounds:
                         ("x1", self.x1), ("y1", self.y1)):
             if not 0.0 <= v <= 1.0:
                 raise ValueError(f"ROIBounds: {name} must be in [0,1], got {v}")
-        # resolve() clamps x_end to at least x+1, so a reversed bound would
-        # otherwise yield a silent 1px ROI instead of an error
+        # resolve() would turn a reversed bound into a silent 1 px ROI
         if self.x0 >= self.x1:
             raise ValueError(f"ROIBounds: x0 must be < x1, got {self.x0} >= {self.x1}")
         if self.y0 >= self.y1:
             raise ValueError(f"ROIBounds: y0 must be < y1, got {self.y0} >= {self.y1}")
 
-# Bottom strip of the frame: the near-field road surface
 LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
-# Top-center, around the course's light as seen from its stop line (the board
-# spans x 142-208, y 28-55 px at 480x270, 2026-10-06). Narrow: to the right
-# (~x 270) a second traffic light read yellow while this one was green, and
-# below is a red box on a shelf. Up to the frame's top: stopped further
-# forward, at a stop sign, the light rises out of a lower y0. The clear panel
-# above the board reflects each lit LED ~30 px higher (red's reads yellow),
-# yet with the swept bands the frames at the stop read 139 of 139 right
+# Around the course's light from its stop line (2026-10-06). Narrow, to keep
+# out a second light to the right and a red box below; up to the frame's top,
+# since the light rises in view when the robot stops further forward
 TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
-# Upper-right: signs are posted right of the lane. Up to the frame's top: near
-# the line the sign rises in the frame, and a top edge at 0.20 cut it into 5-7
-# vertices from ~20 cm in (sign_check, 2026-10-20). Starts right of the
-# traffic ROI's x 0.53, so the two don't overlap
+# Signs are posted right of the lane. Up to the frame's top: a top edge at
+# 0.20 cut a near sign into 5-7 vertices (sign_check, 2026-10-20)
 SIGN = ROIBounds(x0=0.55, y0=0.00, x1=1.00, y1=0.85)
-# The robot's path ahead (perception/obstacle.py): the middle half of the
-# frame, where the robot's own body will go, from the bottom of the view up
-# past the lane ROI. Upright objects rise above their base, so the extra
-# rows let one be measured before its base reaches the lane ROI. Inside the
-# lane lines at the bottom (the lane is ~456 px wide there); the lines
-# converge into it higher up, but tape is too thin to survive the
-# detector's opening
+# The robot's path, up past the lane ROI so an upright object is measured
+# before its base reaches it. The lane lines converge into it higher up, but
+# tape is too thin to survive the detector's opening
 OBSTACLE = ROIBounds(x0=0.25, y0=0.45, x1=0.75, y1=1.00)
 
 
 @dataclass(frozen=True)
 class ROIConfig:
-    """Bounds for each ROI. Lane and sign are cut from the gray frame, traffic from the color frame, obstacle from both."""
     lane: ROIBounds = LANE
     traffic: ROIBounds = TRAFFIC
     sign: ROIBounds = SIGN
@@ -81,13 +61,7 @@ class ROIConfig:
 
 @dataclass(frozen=True)
 class ROICropResult:
-    """
-    Output of the ROI cropping stage.
-
-    ROIs are read-only views into the preprocessed frames. Every branch works
-    in ROI space; the rects are what place its detections back in the frame.
-    frame_id and timestamp_ms are copied from PreprocessResult.
-    """
+    """Views into the preprocessed frames; the rects place each branch's detections back in the frame."""
     lane_roi: np.ndarray                        # (h, w) uint8 view of the gray frame
     traffic_roi: np.ndarray                     # (h, w, 3) uint8 BGR view of the color frame
     sign_roi: np.ndarray                        # (h, w) uint8 view of the gray frame
@@ -97,24 +71,19 @@ class ROICropResult:
     frame_id: int
     timestamp_ms: int
     source_shape: tuple[int, int]               # (H, W) the ROIs were cut from
-    # The sign ROI again, from the color frame: the stop sign is found by color.
-    # No stage reads the gray sign_roi; a view costs nothing to keep
+    # The sign is found by color; no stage reads the gray sign_roi
     sign_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect as sign_rect
-    # The path ahead, from both frames: brightness from gray, saturation from
-    # color (perception/obstacle.py). crop_rois always fills all three
     obstacle_roi: np.ndarray | None = None          # (h, w) uint8 view of the gray frame
     obstacle_color_roi: np.ndarray | None = None    # (h, w, 3) uint8 BGR view, same rect
     obstacle_rect: tuple[int, int, int, int] | None = None     # (x, y, w, h) in source-frame px
-    # The whole color frame, read-only: the obstacle detector's reference for
-    # the scene's color cast (an object near the robot can fill a ROI, but
-    # not the frame)
+    # The obstacle detector's reference for the scene's color cast: an object
+    # can fill a ROI, but not the frame
     color_frame: np.ndarray | None = None           # (H, W, 3) uint8 BGR view
 
 
 def _validate(
         frame: np.ndarray
     ) -> None:
-    """Reject frames that can't be cropped, naming what arrived."""
     if frame is None:
         raise ValueError("crop: frame is None")
     if frame.ndim not in (2, 3):
@@ -127,16 +96,7 @@ def resolve(
         bounds: ROIBounds,
         shape: tuple[int, ...]
     ) -> tuple[int, int, int, int]:
-    """
-    Convert fractional bounds to integer pixel coordinates, clamped to the frame.
-
-    Inputs:
-        shape: (H, W) or (H, W, C); only (H, W) is read.
-
-    Outputs:
-        (x, y, w, h) in source-frame px. Always at least 1x1, inside the
-        frame, and the same for the same (bounds, H, W).
-    """
+    """(x, y, w, h) in frame px, clamped to the frame and at least 1x1."""
     H, W = shape[:2]
     x = min(max(round(bounds.x0 * W), 0), W - 1)
     y = min(max(round(bounds.y0 * H), 0), H - 1)
@@ -150,19 +110,7 @@ def crop(
         frame: np.ndarray,
         bounds: ROIBounds
     ) -> tuple[np.ndarray, tuple[int, int, int, int]]:
-    """
-    Cut one ROI out of a frame as a read-only view.
-
-    Inputs:
-        frame: (H, W) gray or (H, W, 3) BGR, uint8. The ROI keeps the same layout.
-
-    Outputs:
-        (roi, rect). roi is a read-only view; call .copy() to modify it.
-        rect is (x, y, w, h) in source-frame px.
-
-    Raises:
-        ValueError: If the frame is None or not (H, W) / (H, W, 3).
-    """
+    """(read-only view, rect). ValueError unless the frame is (H, W) or (H, W, 3)."""
     _validate(frame)
     x, y, w, h = resolve(bounds, frame.shape)
     view = frame[y : y + h, x : x + w]
@@ -174,23 +122,10 @@ def crop_rois(
         pre: PreprocessResult,
         config: ROIConfig = ROIConfig()
     ) -> ROICropResult:
-    """
-    Cut the branch ROIs from one preprocessed frame: lane and sign from gray,
-    traffic and the sign again from color, the obstacle ROI from both.
-
-    Inputs:
-        config: ROI bounds. Defaults to LANE, TRAFFIC, SIGN and OBSTACLE.
-
-    Outputs:
-        ROICropResult, with frame_id and timestamp_ms carried forward unchanged.
-
-    Raises:
-        ValueError: If either frame is malformed, or gray and color differ in (H, W).
-    """
+    """ValueError if a frame is malformed or gray and color differ in size."""
     _validate(pre.gray)
     _validate(pre.color)
-    # preprocess_frame can't produce a mismatch; this catches a hand-assembled
-    # PreprocessResult mixing two frames, which would misplace every rect
+    # Catches a hand-assembled PreprocessResult mixing two frames
     if pre.gray.shape[:2] != pre.color.shape[:2]:
         raise ValueError(
             f"crop: gray {pre.gray.shape[:2]} and color {pre.color.shape[:2]} "
@@ -234,21 +169,12 @@ def draw_roi_overlay(
         frame: np.ndarray,
         result: ROICropResult
     ) -> np.ndarray:
-    """
-    Draw the three ROI rectangles, labeled, on a copy of the frame.
-
-    Inputs:
-        frame: (H, W, 3) BGR at the resolution the ROIs were cut from.
-
-    Outputs:
-        Annotated copy; the input is untouched.
-    """
+    """The ROI rectangles, labeled, on a copy of the frame."""
     overlay = frame.copy()
 
     def _draw(rect, color, label):
         x, y, w, h = rect
         cv2.rectangle(overlay, (x, y), (x + w - 1, y + h - 1), color, RECT_THICKNESS)
-        # (x + 4, y + 18) is the text baseline: keeps a 0.55-scale label inside the rect
         cv2.putText(overlay, label, (x + 4, y + 18),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
 

@@ -1,16 +1,7 @@
-"""Phase 2 perception: every per-frame image stage, and OpenCV's thread count for the process.
+"""Phase 2 perception: the per-frame image stages.
 
-Purpose:
-    Importing any stage imports this package first, so it is where the
-    process-wide OpenCV setting lives. main.py, every linker, the replays
-    and the tests all get the same thread count before the first frame
-    (params.OPENCV_THREADS has the measurements behind the number).
-
-Main package:
-    None: the stages are the package's modules.
-
-Flow:
-    1. On first import, cv2.setNumThreads(OPENCV_THREADS).
+Importing any stage imports this package first, so it sets OpenCV's thread
+count for the whole process (params.OPENCV_THREADS) before the first frame.
 """
 import cv2
 
