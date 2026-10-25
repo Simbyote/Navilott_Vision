@@ -15,7 +15,7 @@ Flow:
     2. preflight() before the start screen; start() at GO.
     3. The caller ends the run once should_stop(); cleanup() at the end.
 """
-from src.diagnostics.battery import Power
+from src.peripherals.battery import Power
 
 GO, LOW, REFUSE = "ok", "low", "refuse"
 CODE_BATTERY = "Lo-b"           # as diagnostics.battery_check shows it

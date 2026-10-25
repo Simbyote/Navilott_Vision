@@ -98,7 +98,7 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             from src.navigation_linker import run
             self._run = run
         if self._open_battery is None:
-            from src.diagnostics import battery_run
+            from src.peripherals import battery_run
             self._open_battery = lambda: battery_run.open_battery(say=ctx.console.say)
         ctx.options.setdefault("route", str(ROUTE_PATH))
         ctx.options.setdefault("max_s", MAX_S)

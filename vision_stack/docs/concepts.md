@@ -169,7 +169,7 @@ A two-wire bus (data SDA, clock SCL) that lets the Pi talk to several chips, eac
 
 ### ADC and the voltage divider
 
-The Pi can't measure a voltage itself, so an **ADC** (analog-to-digital converter, the ADS1115) does. The pack's up-to-12.6 V is too high for the ADC's input, so a **voltage divider** of two resistors (30 kΩ and 10 kΩ) feeds it a quarter: the code multiplies the reading by 4 (`DIVIDER_RATIO`, `diagnostics/battery.py`).
+The Pi can't measure a voltage itself, so an **ADC** (analog-to-digital converter, the ADS1115) does. The pack's up-to-12.6 V is too high for the ADC's input, so a **voltage divider** of two resistors (30 kΩ and 10 kΩ) feeds it a quarter: the code multiplies the reading by 4 (`DIVIDER_RATIO`, `peripherals/battery.py`).
 
 ### pigpio and its daemon
 

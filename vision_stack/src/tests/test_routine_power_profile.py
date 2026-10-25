@@ -20,7 +20,7 @@ import pytest
 
 import src.routines.harness as h
 import src.routines.power_profile as pp
-from src.diagnostics.battery import Power
+from src.peripherals.battery import Power
 from src.tests.test_routines import Person, no_conditions
 
 

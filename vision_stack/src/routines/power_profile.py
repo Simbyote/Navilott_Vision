@@ -23,7 +23,7 @@ import threading
 import time
 from pathlib import Path
 
-from src.diagnostics.battery import Power
+from src.peripherals.battery import Power
 from src.navigation.lane_keeping import BASE_SPEED
 from src.routines.harness import Routine, criterion
 
@@ -119,7 +119,7 @@ stage; q stops after keeping the stage just run."""
         ctx.options.setdefault("stage_s", STAGE_S)
         ctx.options.setdefault("duty", BASE_SPEED)
         if self._read is None:
-            from src.diagnostics import battery_run
+            from src.peripherals import battery_run
             self._power = battery_run.open_battery(say=ctx.console.say, factory=self._power_factory)
             if self._power is None:
                 ctx.console.say("  no battery ADC: CPU, heat and throttling still record, the volts don't")

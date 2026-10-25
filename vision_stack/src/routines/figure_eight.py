@@ -287,7 +287,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
         if self._touch_keys is None:
             self._touch_keys = TouchKeys
         if self._open_battery is None:
-            from src.diagnostics import battery_run
+            from src.peripherals import battery_run
             self._open_battery = lambda: battery_run.open_battery(say=ctx.console.say)
         ctx.options.setdefault("minutes", MINUTES)
         ctx.options.setdefault("record", 1)

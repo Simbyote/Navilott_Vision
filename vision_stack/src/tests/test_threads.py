@@ -5,8 +5,7 @@ Parsing /proc's stat and status lines (a thread name with spaces and
 parentheses included) and /proc/stat's per-core lines; reading a process's
 threads from a fake /proc tree; the sampler's rates over an interval, exact
 on known counters; Python names standing in only for unnamed threads; and,
-on this machine's real /proc, that naming a thread shows in the kernel and a
-busy thread reads as busy.
+on this machine's real /proc, that a busy named thread reads as busy.
 
 --software  Fake /proc trees and this process's own threads. Linux only for
             the real-/proc tests (skipped elsewhere).
@@ -20,6 +19,7 @@ from pathlib import Path
 import pytest
 
 import src.diagnostics.threads as th
+from src.os_threads import name_os_thread
 
 LINUX = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 
@@ -111,53 +111,13 @@ def test_python_names_stand_in_only_for_threads_nobody_named(tmp_path):
     assert names == {100: "main", 101: "Thread-3", 102: "sensor-hub"}
 
 
-def _comm(thread):
-    return Path(f"/proc/self/task/{thread.native_id}/comm").read_text().strip()
-
-
-@LINUX
-@pytest.mark.software
-def test_a_thread_can_be_named_from_inside_or_outside_and_long_names_are_cut():
-    go, named = threading.Event(), threading.Event()
-
-    def body():
-        th.name_os_thread("inside-name")
-        named.set()
-        go.wait(5)
-    t = threading.Thread(target=body)
-    t.start()
-    named.wait(5)
-    assert _comm(t) == "inside-name"
-    assert th.name_os_thread("a-very-long-thread-name", t) and _comm(t) == "a-very-long-thr"
-    go.set()
-    t.join()
-    assert not th.name_os_thread("x", threading.Thread(target=lambda: None))   # never started
-
-
-@LINUX
-@pytest.mark.software
-def test_pigpio_callback_threads_are_found_and_named():
-    stop = threading.Event()
-
-    class _callback_thread(threading.Thread):           # pigpio's class name
-        def run(self):
-            stop.wait(5)
-    t = _callback_thread()
-    t.start()
-    try:
-        assert th.name_pigpio_threads() >= 1 and _comm(t) == th.PIGPIO_CALLBACK
-    finally:
-        stop.set()
-        t.join()
-
-
 @LINUX
 @pytest.mark.software
 def test_a_busy_named_thread_reads_busy_on_its_core():
     stop = threading.Event()
 
     def spin():
-        th.name_os_thread("diag-busy")
+        name_os_thread("diag-busy")
         while not stop.is_set():
             pass
     t = threading.Thread(target=spin)
@@ -174,41 +134,3 @@ def test_a_busy_named_thread_reads_busy_on_its_core():
     busy = rows["diag-busy"]
     assert busy["cpu_pct"] > 30 and 0 <= busy["core"] < (os.cpu_count() or 1)
     assert rows["main"]["cpu_pct"] < busy["cpu_pct"]                     # main only slept
-
-
-def comm_of(thread, timeout_s=2.0):
-    """The kernel's name for a started thread, once it has named itself (polled: naming is its first act)."""
-    path = Path(f"/proc/self/task/{thread.native_id}/comm")
-    end = time.perf_counter() + timeout_s
-    name = path.read_text().strip()
-    while time.perf_counter() < end and name.startswith("python"):
-        time.sleep(0.01)
-        name = path.read_text().strip()
-    return name
-
-
-@pytest.mark.software
-def test_set_realtime_asks_for_fifo_on_the_calling_thread(monkeypatch):
-    calls = []
-    monkeypatch.setattr(th.os, "sched_setscheduler", lambda pid, policy, param: calls.append(
-        (pid, policy, param.sched_priority)), raising=False)
-    monkeypatch.setattr(th.os, "SCHED_FIFO", 1, raising=False)
-    assert th.set_realtime(20) == ""
-    assert calls == [(0, 1, 20)]                     # pid 0: this thread only
-
-
-@pytest.mark.software
-def test_set_realtime_says_why_not_and_never_raises(monkeypatch):
-    def denied(pid, policy, param):
-        raise PermissionError(1, "Operation not permitted")
-    monkeypatch.setattr(th.os, "SCHED_FIFO", 1, raising=False)
-    monkeypatch.setattr(th.os, "sched_setscheduler", denied, raising=False)
-    assert th.set_realtime(20).startswith("not permitted: Operation not permitted (rtprio limit ")
-
-    def bad(pid, policy, param):
-        raise OSError(22, "Invalid argument")
-    monkeypatch.setattr(th.os, "sched_setscheduler", bad)
-    assert th.set_realtime(500).startswith("refused: ")
-
-    monkeypatch.delattr(th.os, "sched_setscheduler")
-    assert th.set_realtime(20) == "not supported here"

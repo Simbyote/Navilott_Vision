@@ -33,6 +33,7 @@ from src.perception.obstacle import ObstacleResult
 from src.perception.phase2_out import Phase2Output
 from src.perception.roi_crop import ROIConfig, resolve
 from src.perception.stop_line_distance import StopLineResult
+from src.peripherals.sensing import SensorSample
 
 # LaneOffsetResult modes that carry a measurement. "none" and
 # "single_uncalibrated" report offset 0.0 with no information behind it
@@ -87,45 +88,6 @@ def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
     if estimation.cm_per_px is None or estimation.lane_roi_width_px is not None:
         return estimation
     return replace(estimation, lane_roi_width_px=int(resolve(roi.lane, frame_size)[2]))
-
-
-@dataclass(frozen=True)
-class SensorSample:
-    """Sensor readings for one frame window. None means not available."""
-    yaw_rate_dps: float | None = None          # mean gyro Z over the window, deg/s; + = turning right
-    lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
-    left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
-    right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
-    left_count: int | None = None              # cumulative left count at the window's end; + = forward
-    right_count: int | None = None             # cumulative right count at the window's end
-    # Degrees turned over the window, integrated reading by reading (raw: the
-    # gyro bias is subtracted over yaw_span_s). None leaves the heading to
-    # yaw_rate_dps x the frame step, as replays without it do
-    yaw_deg: float | None = None
-    yaw_span_s: float | None = None
-
-    @classmethod
-    def from_batch(cls, batch) -> "SensorSample":
-        """
-        Build a SensorSample from one frame window's sensing.SensorBatch.
-
-        Inputs:
-            batch: Duck-typed on mean_yaw_dps (already + = turning right),
-                peak_lateral_accel, left_cps, right_cps, left_count,
-                right_count, yaw_deg and yaw_span_s, so this module never
-                imports sensing. Each is None when its sensor isn't there or
-                gave nothing this window.
-        """
-        return cls(
-            yaw_rate_dps = batch.mean_yaw_dps,
-            lateral_accel_mps2 = batch.peak_lateral_accel,
-            left_wheel_cps = batch.left_cps,
-            right_wheel_cps = batch.right_cps,
-            left_count = getattr(batch, "left_count", None),
-            right_count = getattr(batch, "right_count", None),
-            yaw_deg = getattr(batch, "yaw_deg", None),
-            yaw_span_s = getattr(batch, "yaw_span_s", None),
-        )
 
 
 @dataclass(frozen=True)

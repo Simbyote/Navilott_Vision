@@ -204,7 +204,7 @@ def test_find_pid_takes_the_newest_match_and_never_itself(tmp_path):
 @pytest.mark.software
 def test_cli_launches_a_run_records_it_and_returns_its_exit_code(tmp_path):
     child = ("import threading, time, sys\n"
-             "from src.diagnostics.threads import name_os_thread\n"
+             "from src.os_threads import name_os_thread\n"
              "def w():\n    name_os_thread('child-worker')\n    time.sleep(1.0)\n"
              "t = threading.Thread(target=w); t.start(); t.join(); sys.exit(3)\n")
     code = mon.cli(["--interval", "0.2", "--out", str(tmp_path), "--", sys.executable, "-c", child])

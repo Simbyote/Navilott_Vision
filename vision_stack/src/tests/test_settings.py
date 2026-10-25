@@ -11,8 +11,8 @@ that updates one copy and not the others fails here instead of on the course.
 import pytest
 
 from src import params
-from src.diagnostics.battery import Power
-from src.diagnostics.battery_state import BatteryStateMachine
+from src.peripherals.battery import Power
+from src.peripherals.battery_state import BatteryStateMachine
 from src.estimation.estimation import Phase3Config
 from src.navigation import end_of_course, intersection, wheel_speed
 from src.navigation.lane_keeping import BASE_SPEED

@@ -16,7 +16,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.estimation.estimation import Phase3Config, Phase3Processor, SensorSample
+from src.estimation.estimation import Phase3Config, Phase3Processor
+from src.peripherals.sensing import SensorSample
 from src.estimation.odometry import NO_ODOMETRY, Odometer, Odometry, load_odometry
 from src.perception.phase2_out import Phase2Output
 from src.tests.test_estimation import lane

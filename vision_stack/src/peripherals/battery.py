@@ -25,7 +25,7 @@ import time
 from collections import deque
 from typing import Callable, List, Tuple
 
-from src.diagnostics.battery_state import BatteryState, BatteryStateMachine
+from src.peripherals.battery_state import BatteryState, BatteryStateMachine
 from src.params import ADS1115_CONTINUOUS, ADS1115_I2C_ADDRESS
 
 log = logging.getLogger(__name__)

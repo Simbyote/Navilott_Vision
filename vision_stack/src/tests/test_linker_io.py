@@ -196,7 +196,7 @@ def test_no_linker_loads_the_drive_trial_for_these(linker):
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 @pytest.mark.software
 def test_the_recorder_thread_carries_its_name_into_the_kernel(tmp_path):
-    from src.tests.test_threads import comm_of
+    from src.tests.test_os_threads import comm_of
     rec = io.FrameRecorder(str(tmp_path))
     try:
         assert comm_of(rec._thread) == "frame-recorder"

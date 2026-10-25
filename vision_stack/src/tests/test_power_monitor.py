@@ -1,4 +1,4 @@
-"""test_power_monitor.py  --  src/diagnostics/battery_state.py
+"""test_power_monitor.py  --  src/peripherals/battery_state.py
 
 The battery state machine: the warning ignores a brief sag under motor
 load, doesn't flicker while the voltage hovers at a threshold, and never
@@ -9,7 +9,7 @@ un-latches CRITICAL mid-run.
 
 import pytest
 
-from src.diagnostics.battery_state import BatteryState as S, BatteryStateMachine
+from src.peripherals.battery_state import BatteryState as S, BatteryStateMachine
 
 
 def run(volts, **kw):

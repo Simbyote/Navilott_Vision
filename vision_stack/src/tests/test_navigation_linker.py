@@ -26,7 +26,7 @@ import src.linker_io as lio
 import src.navigation_linker as nl
 from src.tests.navigation_checks import reach_frames
 from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
-from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorSample
 from src.peripherals.sensing import SensorBatch, SensorReading
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command

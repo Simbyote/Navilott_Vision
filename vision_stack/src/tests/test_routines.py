@@ -130,7 +130,7 @@ def test_conditions_record_the_code_the_machine_the_tester_and_the_pi():
 
 @pytest.mark.software
 def test_battery_volts_from_the_adc_or_none_without_it(monkeypatch):
-    from src.diagnostics import battery_run
+    from src.peripherals import battery_run
     cleaned = []
 
     class Power:

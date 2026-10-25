@@ -24,7 +24,7 @@ import cv2
 import numpy as np
 
 from src.config import MEASURED, MEASURED_ESTIMATION
-from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorSample
 from src.params import FRAME_H, FRAME_W
 from src.navigation.intersection import ADVANCE_MS
 from src.perception.color_branch import BlobFilter

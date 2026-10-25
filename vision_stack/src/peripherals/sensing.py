@@ -24,8 +24,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from src.diagnostics.threads import name_os_thread, set_realtime
-from src.estimation.estimation import SensorSample
+from src.os_threads import name_os_thread, set_realtime
 from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_HUB_RT_PRIORITY, SENSOR_RATE_HZ
 
 log = logging.getLogger(__name__)
@@ -178,6 +177,45 @@ class SensorBatch:
     def right_cps(self) -> float | None:
         """Right counts per second from base to the window's end; 0.0 stopped, None without encoders."""
         return self._cps("right_count")
+
+
+@dataclass(frozen=True)
+class SensorSample:
+    """Sensor readings for one frame window. None means not available."""
+    yaw_rate_dps: float | None = None          # mean gyro Z over the window, deg/s; + = turning right
+    lateral_accel_mps2: float | None = None    # signed accel Y with the largest |a| over the window, m/s^2
+    left_wheel_cps: float | None = None        # left encoder counts/s over the frame window; + = forward
+    right_wheel_cps: float | None = None       # right encoder counts/s over the frame window; + = forward
+    left_count: int | None = None              # cumulative left count at the window's end; + = forward
+    right_count: int | None = None             # cumulative right count at the window's end
+    # Degrees turned over the window, integrated reading by reading (raw: the
+    # gyro bias is subtracted over yaw_span_s). None leaves the heading to
+    # yaw_rate_dps x the frame step, as replays without it do
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
+
+    @classmethod
+    def from_batch(cls, batch) -> "SensorSample":
+        """
+        Build a SensorSample from one frame window's SensorBatch.
+
+        Inputs:
+            batch: Duck-typed on mean_yaw_dps (already + = turning right),
+                peak_lateral_accel, left_cps, right_cps, left_count,
+                right_count, yaw_deg and yaw_span_s, so test fakes need only
+                the fields they set. Each is None when its sensor isn't there
+                or gave nothing this window.
+        """
+        return cls(
+            yaw_rate_dps = batch.mean_yaw_dps,
+            lateral_accel_mps2 = batch.peak_lateral_accel,
+            left_wheel_cps = batch.left_cps,
+            right_wheel_cps = batch.right_cps,
+            left_count = getattr(batch, "left_count", None),
+            right_count = getattr(batch, "right_count", None),
+            yaw_deg = getattr(batch, "yaw_deg", None),
+            yaw_span_s = getattr(batch, "yaw_span_s", None),
+        )
 
 
 class SensorHub:

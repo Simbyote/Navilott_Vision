@@ -74,7 +74,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Camera → Phase 2 | `FrameData` | `capture/camera.py` | BGR frame, `frame_id`, `timestamp_ms` (monotonic) |
 | Phase 2 → Phase 3 | `Phase2Output` | `perception/phase2_out.py` | `detections`, `lane_offset_results`, `stop_line_results`, frame stamp |
-| Sensors → Phase 3 | `SensorSample` | `estimation/estimation.py` | `yaw_rate_dps`, `lateral_accel_mps2`, `left/right_wheel_cps` |
+| Sensors → Phase 3 | `SensorSample` | `peripherals/sensing.py` | `yaw_rate_dps`, `lateral_accel_mps2`, `left/right_wheel_cps` |
 | Phase 3 → Navigation | `EstimationPacket` | `estimation/estimation.py` | `lane_offset(_cm)`, `lane_status`, `heading_error`, `drive_state`, stop sign / line flags, `stop_line_distance_px/cm`, `yaw_rate`, wheel cps, `lane_mode` |
 | Navigation → motors | `Command` | `navigation/navigation_contract.py` | `left`, `right` duty in [-1, 1], or `brake` |
 

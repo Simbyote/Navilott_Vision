@@ -17,7 +17,7 @@ import pytest
 import src.intersection_linker as il
 import src.linker_io as lio
 from src.config import GYRO_BIAS_DPS
-from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorSample
 from src.navigation.intersection import (
     ADVANCE_MS, LEFT_TURN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
     TURN_END_TIME,

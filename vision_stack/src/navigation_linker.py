@@ -34,7 +34,7 @@ from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import Display
-from src.diagnostics import battery_run
+from src.peripherals import battery_run
 from src.diagnostics.pressure import StallLog
 from src.estimation.estimation import Phase3Config
 from src.linker_io import OPEN_ERRORS, FrameRecorder, NoRecorder, chain_record, countdown, open_rig
@@ -275,7 +275,7 @@ def run(
         stop_when: Called with each frame's nav.csv row once the motors have
             its command; a non-empty string it returns ends the run, as
             ended_by (intersection_linker ends a sequence this way).
-        battery: diagnostics.battery.Power, or None: monitored from the
+        battery: peripherals.battery.Power, or None: monitored from the
             start, logged per frame, and the run ends once it should_stop().
         record: Save every frame and its record (frames/, records.pkl) for
             the video; False writes neither, and nothing is rendered. The

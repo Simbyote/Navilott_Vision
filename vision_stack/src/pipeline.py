@@ -24,9 +24,7 @@ import numpy as np
 
 from src.capture.camera import FrameData
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
-from src.estimation.estimation import (
-    EstimationPacket, Phase3Config, Phase3Processor, SensorSample, with_lane_roi_width,
-)
+from src.estimation.estimation import EstimationPacket, Phase3Config, Phase3Processor, with_lane_roi_width
 from src.navigation.navigation import Command, Navigation, enforce
 from src.navigation.route import Route
 from src.params import FRAME_H, FRAME_W
@@ -40,6 +38,7 @@ from src.perception.phase2_out import Phase2Output, package_phase2
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import crop_rois
 from src.perception.stop_line_distance import estimate_stop_line_distance
+from src.peripherals.sensing import SensorSample
 from src.utils import Laps, check_frame_size
 
 

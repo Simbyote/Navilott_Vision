@@ -22,7 +22,7 @@ import threading
 import time
 from pathlib import Path
 
-from src.diagnostics.threads import name_os_thread
+from src.os_threads import name_os_thread
 
 THERMAL_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 CPUFREQ_PATH = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")

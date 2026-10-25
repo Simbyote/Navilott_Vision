@@ -49,7 +49,7 @@ The last screen stays up after the program exits (the display isn't blanked).
 - **Tuning:** `MEASURED` and `MEASURED_ESTIMATION` from `src/config.py`, whose gyro bias is `config.GYRO_BIAS_DPS`, the one every linker defaults to, so a production run and a default `navigation_linker --camera` run drive alike.
 - **Route:** `config.ROUTE_PATH` (`vision_stack/route.json`) unless `--route` is given.
 - **Sensors:** IMU and both encoders, on `SensorHub`'s 100 Hz thread, one sample per frame.
-- **Battery:** `diagnostics/battery.py` (`Power`, the ADS1115 on the 4:1 divider, sampled once a second on its own thread, 0.3 smoothing) through `diagnostics/battery_run.py`, which holds the start-of-run rule for here and `navigation_linker`. Thresholds and the CRITICAL latch are `Power`'s and `battery_state.py`'s. The voltage isn't on the display during a run yet; the terminal prints it at the start and the end.
+- **Battery:** `peripherals/battery.py` (`Power`, the ADS1115 on the 4:1 divider, sampled once a second on its own thread, 0.3 smoothing) through `peripherals/battery_run.py`, which holds the start-of-run rule for here and `navigation_linker`. Thresholds and the CRITICAL latch are `Power`'s and `battery_state.py`'s. The voltage isn't on the display during a run yet; the terminal prints it at the start and the end.
 
 ---
 

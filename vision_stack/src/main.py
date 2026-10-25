@@ -26,8 +26,8 @@ from dataclasses import dataclass
 
 from src.capture.camera import CameraSource, CaptureError
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
-from src.diagnostics import battery_run
-from src.diagnostics.battery_run import CODE_BATTERY
+from src.peripherals import battery_run
+from src.peripherals.battery_run import CODE_BATTERY
 from src.navigation.end_of_course import OUTCOME_EARLY
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
@@ -115,7 +115,7 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
         route: For the start screen.
         clock, sleep: Seconds, monotonic; injected by tests.
         max_run_s: Brake and end once this long has passed since GO.
-        battery: diagnostics.battery.Power, or None: monitored from GO, and
+        battery: peripherals.battery.Power, or None: monitored from GO, and
             the run ends once it should_stop() (CRITICAL).
         warmup: Before the start screen, one frame through Phase 2, thrown
             away (Pipeline.warm_up).

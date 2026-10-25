@@ -17,7 +17,7 @@ Flow:
 
 import time
 
-from src.diagnostics.battery import Power
+from src.peripherals.battery import Power
 from src.peripherals.system import System
 
 

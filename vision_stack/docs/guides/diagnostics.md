@@ -10,7 +10,7 @@ The Pi's operating system is part of the robot, and a risk to it:
 
 None of that shows in the pipeline's own logs. `src/diagnostics/` records it for any run (`main.py`, any linker, a test) without changing that run: the recorder is its own process, reads `/proc` and the Pi's sensors, and shares no GIL with the robot.
 
-**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads, cores, thread names), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10), `sched_latency.py` (how late Linux wakes a thread, section 11) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`, `test_sched_latency.py`
+**Code:** `src/diagnostics/monitor.py` (the recorder), `threads.py` (threads and cores), `system_monitor.py` (temperature, clock, throttling, memory), `os_counters.py` (the rest of the Pi, section 8), `capture_anatomy.py` (the camera path, section 7), `frame_meta.py` (every frame's exposure and gains, section 9), `i2c_trace.py` (every I2C transfer, section 10), `sched_latency.py` (how late Linux wakes a thread, section 11) · **Tests:** `src/tests/test_monitor.py`, `test_threads.py`, `test_system_monitor.py`, `test_os_counters.py`, `test_capture_anatomy.py`, `test_frame_meta.py`, `test_i2c_trace.py`, `test_sched_latency.py`
 
 ---
 
@@ -75,7 +75,7 @@ flowchart LR
 | `motor-watchdog` | `peripherals/drive.py`: brakes the motors if the loop stops commanding them (`production_run.md`, "If the loop gets stuck"). Only with real motors | Near zero; 10 wakes a second |
 | `system-monitor` | Soak tests only (`SystemMonitor`) | Near zero |
 
-The names come from `threads.name_os_thread()`. Each thread the code starts names itself in the kernel, and `drive.py` and `system.py` name pigpio's whenever they open a connection. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
+The names come from `os_threads.name_os_thread()` (`src/os_threads.py`). Each thread the code starts names itself in the kernel, and `drive.py` and `system.py` name pigpio's whenever they open a connection. Without that, `top`, `ps` and `/proc` show every Python thread as `python3`. Python's own thread names don't reach the OS before Python 3.14.
 
 ---
 

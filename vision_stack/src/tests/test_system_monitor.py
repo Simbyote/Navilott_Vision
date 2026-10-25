@@ -123,7 +123,7 @@ def test_a_real_sample_reads_on_the_pi():
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 @pytest.mark.software
 def test_the_monitor_thread_carries_its_name_into_the_kernel():
-    from src.tests.test_threads import comm_of
+    from src.tests.test_os_threads import comm_of
     mon = sm.SystemMonitor(interval_s=10, reader=dict).start()
     try:
         assert comm_of(mon._thread) == "system-monitor"

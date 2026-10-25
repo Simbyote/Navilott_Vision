@@ -57,7 +57,7 @@ def apply(args) -> bool:
 
 def _name_thread() -> None:
     try:
-        from src.diagnostics.threads import name_os_thread
+        from src.os_threads import name_os_thread
         name_os_thread(SIDE_THREAD_NAME)
     except Exception:               # naming is for the diagnostics only; never a reason to fail
         pass

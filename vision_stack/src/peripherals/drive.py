@@ -25,7 +25,7 @@ import time
 
 import pigpio
 
-from src.diagnostics.threads import name_os_thread, name_pigpio_threads
+from src.os_threads import name_os_thread, name_pigpio_threads
 from src.params import MOTOR_DAEMON_WATCHDOG, MOTOR_WATCHDOG_S
 
 log = logging.getLogger(__name__)

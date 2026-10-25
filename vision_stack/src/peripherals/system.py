@@ -21,7 +21,7 @@ import logging
 import pigpio
 import tm1637
 
-from src.diagnostics.threads import name_pigpio_threads
+from src.os_threads import name_pigpio_threads
 from src.params import GPIO_DISPLAY_CLK, GPIO_DISPLAY_DIO, GPIO_START_BUTTON
 
 log = logging.getLogger("system")

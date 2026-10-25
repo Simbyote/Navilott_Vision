@@ -1,5 +1,5 @@
 """
-test_battery.py  --  src/diagnostics/battery.py and src/diagnostics/battery_run.py
+test_battery.py  --  src/peripherals/battery.py and src/peripherals/battery_run.py
 
 Power on a fake ADC channel (the pin voltage it reads, scripted): the 4:1
 divider, preflight on a good, low and unreadable pack, the sampling thread
@@ -16,9 +16,9 @@ import time
 
 import pytest
 
-from src.diagnostics import battery_run as br
-from src.diagnostics.battery import Power
-from src.diagnostics.battery_state import BatteryState
+from src.peripherals import battery_run as br
+from src.peripherals.battery import Power
+from src.peripherals.battery_state import BatteryState
 
 pytestmark = pytest.mark.software
 
@@ -220,7 +220,7 @@ def test_the_read_history_keeps_only_the_newest(monkeypatch):
     assert p.read_ms() == [3.0, 4.0, 5.0]
 
 
-from src.diagnostics import battery as bat  # noqa: E402
+from src.peripherals import battery as bat  # noqa: E402
 
 
 class ADS1115Chip:

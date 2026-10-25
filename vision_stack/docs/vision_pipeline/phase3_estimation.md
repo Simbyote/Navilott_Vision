@@ -16,7 +16,7 @@ Phase 2 answers "what's in this frame". Phase 3 answers "what's true across the 
 
 **The order is written in one place.** `Phase3Processor.process()` is the only code that runs the stages in sequence, the same rule `run_chain()` follows for Phase 2.
 
-**It runs without the robot.** `estimation.py` never imports the IMU driver, which loads board libraries at import time. The IMU is passed in as a plain `SensorSample`, so estimation runs and tests on a laptop, from replays, with no sensors at all.
+**It runs without the robot.** `estimation.py` never imports the IMU driver, which loads board libraries at import time. The IMU is passed in as a plain `SensorSample`, defined beside the sensor hub in `peripherals/sensing.py` (whose drivers load only when sensors are opened), so estimation runs and tests on a laptop, from replays, with no sensors at all.
 
 **It never invents a measurement.** When vision drops out, the offset is held and marked as held, then marked stale. Navigation is told how much to trust the number rather than handed a guess that looks like a measurement.
 

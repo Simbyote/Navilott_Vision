@@ -37,11 +37,10 @@ from src.debugger.live_view import (
     CameraFrameSource, VideoFrameSource, DirectoryFrameSource, Display, stage_timing_report,
 )
 from src.estimation.estimation import (
-    LANE_VISION, LANE_HOLD, LANE_STALE,
-    EstimationPacket, Phase3Config, Phase3Processor, SensorSample, with_lane_roi_width,
+    LANE_VISION, LANE_HOLD, LANE_STALE, EstimationPacket, Phase3Config, Phase3Processor, with_lane_roi_width,
 )
 from src.debugger.estimation_debug import TracedPhase3Processor
-from src.peripherals.sensing import Sensors           # re-exported: older imports read it from here
+from src.peripherals.sensing import SensorSample, Sensors   # Sensors re-exported: older imports read it from here
 from src.perception import parallel
 
 # --help text. Kept apart from the module docstring, which documents the code.

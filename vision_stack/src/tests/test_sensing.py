@@ -532,7 +532,7 @@ def test_a_given_hub_is_used_and_started_only_with_sensors():
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 @pytest.mark.software
 def test_the_hub_thread_carries_its_name_into_the_kernel():
-    from src.tests.test_threads import comm_of
+    from src.tests.test_os_threads import comm_of
     h, *_ = hub()
     h.start()
     try:

@@ -198,7 +198,7 @@ class Context:
 
 def read_battery_volts() -> float | None:
     """One resting reading of the pack, or None without the ADC (a laptop, or no I2C)."""
-    from src.diagnostics import battery_run
+    from src.peripherals import battery_run
     power = battery_run.open_battery(say=lambda s: None)
     if power is None:
         return None

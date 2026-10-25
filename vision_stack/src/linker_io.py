@@ -29,7 +29,7 @@ import cv2
 from src.capture.camera import CaptureError
 from src.debugger.debug_maneuver import FRAMES_DIR, RECORDS_FILE, frame_path
 from src.debugger.live_view import CameraFrameSource, DirectoryFrameSource, VideoFrameSource
-from src.diagnostics.threads import name_os_thread
+from src.os_threads import name_os_thread
 from src.params import CAMERA_CONTROLS, FPS, FRAME_H, FRAME_W
 from src.peripherals.sensing import Sensors
 

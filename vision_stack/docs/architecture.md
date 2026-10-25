@@ -63,11 +63,11 @@ The MCU option and its packet format are in `archD1/architecture.md` (Option B).
 | Raspberry Pi Zero 2 W | All computation: capture, Phases 1–3, navigation, motor control | Quad-core Cortex-A53, 512 MB RAM |
 | IMX290 camera, M12 lens | Forward view of the course | CSI-2; 1920×1080 sensor mode scaled to 480×270 (see `vision_pipeline/phase1_capture.md`) |
 | MPU-6050 | Gyro yaw rate for heading while vision is lost; lateral acceleration | I²C, 0x68 (AD0 low), sampled at 100 Hz |
-| ADS1115 | 16-bit ADC: the pack's voltage, on A0 through a 4:1 divider (30 kΩ / 10 kΩ; `diagnostics/battery.py`) | I²C, 0x48 |
+| ADS1115 | 16-bit ADC: the pack's voltage, on A0 through a 4:1 divider (30 kΩ / 10 kΩ; `peripherals/battery.py`) | I²C, 0x48 |
 | TB6612FNG | Dual H-bridge for the two drive motors | PWM on GPIO12 (left) and GPIO13 (right); direction GPIO22/27 (left) and 25/24 (right); standby GPIO23 |
 | N20 gearmotors with encoders (×2) | Differential drive; encoders for wheel speed and distance | Quadrature on GPIO19/16 (left) and GPIO20/21 (right), counted by pigpio callbacks |
 | MP1584EN | Buck converter: battery to the Pi's supply | The pack (9.0–12.6 V) in, 5 V out |
-| 3×18650 pack | Power for everything: 3S, 11.1 V nominal, 12.6 V full | Warning at 10.5 V, critical (the run ends) at 9.9 V; `diagnostics/battery.py` |
+| 3×18650 pack | Power for everything: 3S, 11.1 V nominal, 12.6 V full | Warning at 10.5 V, critical (the run ends) at 9.9 V; `peripherals/battery.py` |
 | TM1637 | 4-digit display: ready, countdown, run time | GPIO5 (CLK), GPIO6 (DIO) |
 | Tact switch | Start button | GPIO17, active high, pull-down |
 
@@ -109,7 +109,7 @@ BCM numbering, following Product Spec GPIO Table 7. The display, button and I²C
 
 The Pi and the motors share a battery but not a regulator. Motor current spikes, at startup or when a wheel stalls, sag the battery; the buck converter keeps the Pi's rail steady through that as long as the battery stays above its minimum input. If the Pi resets when the motors start, check the buck's input headroom first.
 
-**Reading the pack.** A 3S pack has no protection board (DEC-019), so the software watches it: `diagnostics/battery.py` reads the ADS1115 once a second on its own thread, smooths it, and runs it through a state machine (`battery_state.py`) that needs several readings in a row to change state, so a brief sag under motor load doesn't raise an alarm; CRITICAL latches for the rest of the run. With `params.ADS1115_CONTINUOUS` the chip converts on its own and each read is two combined I²C transfers, the config checked and the result fetched; single-shot (off) is the Adafruit library's 11–30 transfers over ~9 ms. The chip has one pointer register naming what the next read returns, shared by everything that talks to it. The library's own continuous mode reads without setting it, so anything else that touches the chip (a second process opening the ADC) moves it and the "voltage" is another register: most likely why that version read 9.44 V for a 12 V pack (2026-10-21, reverted). `ContinuousADC` sets the pointer in every read, in the same transfer, and puts back a config someone else changed.
+**Reading the pack.** A 3S pack has no protection board (DEC-019), so the software watches it: `peripherals/battery.py` reads the ADS1115 once a second on its own thread, smooths it, and runs it through a state machine (`battery_state.py`) that needs several readings in a row to change state, so a brief sag under motor load doesn't raise an alarm; CRITICAL latches for the rest of the run. With `params.ADS1115_CONTINUOUS` the chip converts on its own and each read is two combined I²C transfers, the config checked and the result fetched; single-shot (off) is the Adafruit library's 11–30 transfers over ~9 ms. The chip has one pointer register naming what the next read returns, shared by everything that talks to it. The library's own continuous mode reads without setting it, so anything else that touches the chip (a second process opening the ADC) moves it and the "voltage" is another register: most likely why that version read 9.44 V for a 12 V pack (2026-10-21, reverted). `ContinuousADC` sets the pointer in every read, in the same transfer, and puts back a config someone else changed.
 
 Still to measure: the current draw of the Pi and of each motor at stall. The robot measures voltage only (`make routine-power-profile` records the sag under each load); current needs a sensor such as an INA219 on the I²C bus. **TBD**
 
@@ -134,10 +134,22 @@ python process
 | IMU reader | Vision | `src/peripherals/imu.py` |
 | Sensor collection (IMU + encoders per frame) | Vision | `src/peripherals/sensing.py` |
 | Start button, display | Vision | `src/peripherals/system.py` |
+| Battery: the ADC, its state machine, the run's watch | Vision | `src/peripherals/battery.py`, `battery_state.py`, `battery_run.py` |
 | Navigation: the rules, the route, intersections | Navigation | `src/navigation/` |
 | Motor control and encoders | Navigation | `src/peripherals/drive.py` |
 | The main loop tying them together | Shared | `src/main.py` (the run), `src/pipeline.py` (one frame's stages) |
+| Thread names, real-time priority | Shared | `src/os_threads.py` |
 
+- **Layers, bottom up; imports only point down:**
+  1. `params.py`, `utils.py`, `os_threads.py`: facts and helpers everything shares.
+  2. Drivers: `capture/` (the camera) and `peripherals/` (IMU, encoders, motors, display, battery). The only code that touches hardware.
+  3. Stages: `perception/` (Phase 2), `estimation/` (Phase 3), `navigation/` (Phase 4), each importing only the ones before it. No hardware.
+  4. `config.py`: every stage's tuning, assembled into `MEASURED`.
+  5. `pipeline.py`: one frame through the stages, `step(frame, sensors) -> Command`. It never opens hardware.
+  6. `main.py`: opens the camera, sensors and motors, feeds the pipeline, drives the motors.
+  7. Bench and tools: the linkers (`main.py`'s bench versions, with debug views), `debugger/`, `diagnostics/`, `analysis/`, `routines/`, `scripts/`.
+
+  Each boundary hands over one data type: `FrameData` (camera), `SensorSample` (sensors), `Phase2Output`, `EstimationPacket`, `Command`.
 - **pigpio for all GPIO.** One daemon owns the pins, so the display, button and motor driver can't conflict. Start it with `sudo pigpiod` or the systemd service.
 - **The IMU runs on its own thread** because the frame rate is too slow to sample the gyro well. See `vision_pipeline/phase3_estimation.md`.
 - **The handoff to navigation is the `EstimationPacket`,** documented in `vision_pipeline/phase3_estimation.md`; what Navigation does with it is in `vision_pipeline/navigation_contract.md`.
