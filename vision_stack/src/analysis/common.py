@@ -1,16 +1,13 @@
 """Shared helpers for the analysis interpreters: reading run CSVs, finding runs, statistics, output.
 
 Purpose:
-    Every interpreter reads a CSV a run or a hardware test wrote, reduces it
-    to numbers, prints them and draws figures next to the input. The parts
-    they share live here so each interpreter is only its own arithmetic.
-    No pandas: the Pi's environment has numpy and the standard library only.
+    Each interpreter reads a CSV a run wrote, reduces it to numbers, prints
+    them and draws figures beside the input; this keeps each one to its own
+    arithmetic. No pandas, since the Pi has only numpy and the standard library.
 
 Main package:
-    Table: a CSV as columns; numeric() parses on demand (blank and
-    non-numeric cells become NaN), text() keeps strings. Beside it,
-    find_csv(), stats() and pyplot() (None without matplotlib: every figure
-    is optional, the numbers never are).
+    Table (numeric() gives NaN for blank or non-numeric cells), find_csv(),
+    stats() and pyplot(), None without matplotlib: figures are optional, numbers aren't.
 """
 
 import csv
@@ -27,13 +24,7 @@ BUDGET_MS = 1000.0 / FPS
 
 
 class Table:
-    """
-    One CSV, column-oriented.
-
-    columns:    header names in file order, stripped
-    numeric(c): float64 array, NaN where the cell is blank or not a number
-    text(c):    list of stripped strings
-    """
+    """One CSV, column-oriented: numeric(c) gives float64 with NaN gaps, text(c) stripped strings."""
 
     def __init__(self, path, skip: int = 0):
         self.path = Path(path)
@@ -73,19 +64,13 @@ class Table:
         return self._num[column]
 
     def has_values(self, column: str) -> bool:
-        """True when the column exists and at least one cell is a number."""
         return self.has(column) and not np.all(np.isnan(self.numeric(column)))
 
     def first_with_values(self, *columns):
-        """The first of columns that has numbers, or None."""
         return next((c for c in columns if self.has_values(c)), None)
 
     def subset(self, mask, shift: dict | None = None) -> "Table":
-        """
-        The rows where mask is True, as a new Table (same path and columns).
-        shift {column: value} subtracts value from that column's numbers, to
-        start a time axis at the subset's own beginning.
-        """
+        """Rows where mask is True. shift {column: value} subtracts value, to restart a time axis."""
         out = object.__new__(Table)
         out.path, out.columns, out._num = self.path, list(self.columns), {}
         idx = np.flatnonzero(np.asarray(mask, bool))
@@ -97,10 +82,8 @@ class Table:
 
 def interval_ms(table: Table):
     """
-    Per-frame loop or frame interval in ms, from the best column available:
-    interval_ms (measured loop), dt_ms (capture), dt_s (Phase 3), then
-    successive timestamp_ms, then successive t (seconds since the run's
-    start: nav.csv). None when there's nothing to derive it from.
+    Per-frame interval in ms from the best column: interval_ms, dt_ms, dt_s, then
+    differences of timestamp_ms or t. None with none of them.
     """
     if table.has_values("interval_ms"):
         return table.numeric("interval_ms")
@@ -118,11 +101,7 @@ def interval_ms(table: Table):
 
 def find_csv(arg, names, roots=SEARCH_ROOTS) -> Path:
     """
-    A CSV path.
-
-    arg:   a CSV file, or a folder searched (recursively) for any of names,
-           or None for the newest run under roots that has one
-    names: acceptable file names, in order of preference
+    arg is a CSV, a folder searched recursively for names (in preference order), or None for the newest run.
     """
     names = (names,) if isinstance(names, str) else tuple(names)
     if arg:
@@ -146,9 +125,7 @@ def find_csv(arg, names, roots=SEARCH_ROOTS) -> Path:
 
 def read_manifest(path, key: str) -> list:
     """
-    [(value, run path)] from a two-column CSV, <key>,run: one recorded run
-    per measured condition (a position, a distance). Runs resolve against
-    the manifest's folder.
+    [(value, run path)] from a <key>,run CSV, one run per measured condition; paths resolve against its folder.
     """
     path = Path(path)
     with open(path, newline="") as f:
@@ -160,7 +137,7 @@ def read_manifest(path, key: str) -> list:
 
 
 def stats(values) -> dict:
-    """NaN-aware summary; every field None when there are no values."""
+    """NaN-aware summary; every field None without values."""
     v = np.asarray(values, dtype=np.float64)
     v = v[~np.isnan(v)]
     keys = ("mean", "std", "min", "p50", "p95", "p99", "max")
@@ -175,10 +152,7 @@ def stats(values) -> dict:
 
 
 def runs_of(labels) -> list:
-    """
-    Consecutive runs of equal labels as (label, start_index, length),
-    in order. Works on any sequence of hashable values.
-    """
+    """Consecutive equal labels as (label, start_index, length)."""
     out = []
     for i, lb in enumerate(labels):
         if out and out[-1][0] == lb:
@@ -189,7 +163,7 @@ def runs_of(labels) -> list:
 
 
 def pyplot():
-    """matplotlib.pyplot on the headless backend, or None when not installed."""
+    """matplotlib.pyplot on the headless backend, or None."""
     try:
         import matplotlib
         matplotlib.use("Agg")

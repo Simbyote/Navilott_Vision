@@ -1,22 +1,15 @@
 """Serial against parallel perception over whole runs, alternated.
 
 Purpose:
-    parallel_compare times Phase 2 alone on frames held in memory; a run
-    also shares the four cores and the GIL with the sensor hub, the
-    recorder, Phase 3 and navigation. So this runs whole navigation runs,
-    serial and parallel in turn (S, P, S, P, ...) so heat and the battery
-    affect both alike, and compares them (docs/guides/analysis.md).
+    parallel_compare times Phase 2 alone; a run also shares the cores and the
+    GIL with the sensor hub, recorder, Phase 3 and navigation. This alternates
+    whole navigation runs (S, P, S, P, ...) so heat and battery affect both
+    alike (docs/guides/analysis.md).
 
 Main package:
-    ab.json in --out: per run and mode, the frame rate, time between frames,
-    Phase 2, the share over budget and frame-to-motor latency; the verdict,
-    including whether every parallel run beat every serial one.
-
-Flow:
-    1. --runs navigation runs, each --seconds, alternating modes, each with
-       a --label; dry by default, --motors waits for Enter before each.
-    2. Each run's nav.csv and report.json read; modes compared.
-    (--compare reads runs made before instead.)
+    ab.json in --out: per run and mode, frame rate, frame gaps, Phase 2 time,
+    over-budget share and latency; the verdict, including whether every
+    parallel run beat every serial one.
 
 Usage (from vision_stack/, on the Pi, pigpiod running):
     python3 -m src.analysis.parallel_ab                       # 4 runs of 60 s, dry
@@ -57,11 +50,7 @@ def _pct(values: list[float], q: float) -> float | None:
 
 def run_stats(folder: Path) -> dict:
     """
-    One run's numbers from its nav.csv (frame 0, the start-up, left out)
-    and report.json (its mode and label).
-
-    Raises:
-        FileNotFoundError: No nav.csv in the folder.
+    One run's numbers from nav.csv (frame 0 left out) and report.json. FileNotFoundError without nav.csv.
     """
     folder = Path(folder)
     with open(folder / "nav.csv") as f:
@@ -87,9 +76,7 @@ def run_stats(folder: Path) -> dict:
 
 def compare(stats: list[dict]) -> dict:
     """
-    The modes side by side: each metric's mean over the mode's runs, the
-    change parallel minus serial, and whether the time between frames
-    separates them (every parallel run's p50 under every serial run's).
+    Each metric's mean per mode, parallel minus serial, and whether every parallel p50 gap beat every serial one.
     """
     by = {m: [s for s in stats if s["mode"] == m] for m in (SERIAL, PARALLEL)}
     means = {m: {k: (round(statistics.fmean(v), 2) if (v := [s[k] for s in runs if s[k] is not None]) else None)
@@ -113,7 +100,6 @@ def compare(stats: list[dict]) -> dict:
 
 
 def report_lines(result: dict) -> list[str]:
-    """The printed comparison."""
     head = f"  {'run':<28} {'mode':<9}" + "".join(f"{k:>16}" for k in METRICS)
     out = [head]
     for s in result["runs"]:
@@ -131,12 +117,11 @@ def report_lines(result: dict) -> list[str]:
 
 
 def plan(runs: int) -> list[str]:
-    """The modes in order, alternating from serial: S, P, S, P, ..."""
     return [SERIAL if i % 2 == 0 else PARALLEL for i in range(runs)]
 
 
 def launch_args(mode: str, k: int, out: Path, seconds: float, motors: bool, extra: list[str]) -> list[str]:
-    """navigation_linker's command line for run k (1-based) in this mode."""
+    """navigation_linker's command line for run k (1-based)."""
     return (["--camera", "--no-button", "--no-render", "--no-display", "--max-run-s", f"{seconds:g}",
              f"--{mode}", "--label", f"A/B {mode} {k}", "--out", str(out)]
             + ([] if motors else ["--no-motors"]) + extra)

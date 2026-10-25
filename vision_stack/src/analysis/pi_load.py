@@ -1,22 +1,15 @@
 """Pi load: how a run used the Pi's cores, threads, clock and memory, from a diagnostics recording.
 
 Purpose:
-    src.diagnostics.monitor records a run from outside; its summary.txt
-    gives averages. This reads the recording over time: whether the frame
-    loop is CPU-bound, whether work runs in parallel or in one thread, the
-    sensor hub's cadence, preemption, heat, clock and memory, the rest of the
-    Pi, and what slow frames coincided with. What each finding means:
-    docs/guides/analysis.md, "Pi load".
+    monitor's summary.txt gives averages; this reads the recording over time.
+    Is the frame loop CPU-bound or serial, does the sensor hub keep cadence,
+    and what did slow frames coincide with (docs/guides/analysis.md, "Pi load").
+    With --run, frames are aligned on the monotonic clock and only the run's
+    own time is judged.
 
 Main package:
-    analyze(...) -> dict: threads, process, cores, system, window, aligned,
-    findings. pi_load.json and pi_load.png (the panels are in the guide).
-
-Flow:
-    1. A runs/diag_<time> folder; --run, the run it recorded.
-    2. With --run, the run's frames lined up on the monotonic clock, and
-       only the run's own time judged (not the imports or shutdown).
-    3. analyze(); report_lines() printed; figure, JSON.
+    analyze(...) -> threads, process, cores, system, window, aligned, findings;
+    pi_load.json and pi_load.png.
 """
 
 import argparse
@@ -38,35 +31,30 @@ from src.params import FPS, SENSOR_RATE_HZ
 CSV_NAMES = ("threads.csv",)
 SENSOR_THREAD = "sensor-hub"
 
-# Finding thresholds. Starting values: set them to what normal looks like after a few Pi runs
+# Finding thresholds: starting values, to set once Pi runs show what's normal
 MAIN_BOUND_PCT = 90.0       # main's p95 CPU at or above this: the frame loop is CPU-bound
-SERIAL_SHARE = 0.7          # main's share of the process's CPU above this: the work is mostly serial
+SERIAL_SHARE = 0.7          # main's share of process CPU: mostly serial
 SENSOR_SLIP = 0.8           # sensor-hub waking below this x SENSOR_RATE_HZ: its ticks slip
 INVOL_HIGH_S = 50.0         # involuntary switches per second on main: its core is contended
 MOVES_PER_MIN = 30.0        # main changing core this often a minute
 CORE_SPREAD_PCT = 40.0      # mean busy % between the busiest and idlest core
 TEMP_WARN_C = 75.0          # the Pi's firmware throttles at 80 C
 CLOCK_DROP = 0.9            # a clock below this x its maximum is a drop
-OTHER_PROC_PCT = 15.0       # another process using this % of a core on average: work the robot pays for elsewhere
-DISK_BUSY_PCT = 50.0        # the SD card busy this % of a second: a recording's writes can hold frames up
+OTHER_PROC_PCT = 15.0       # another process's mean % of a core
+DISK_BUSY_PCT = 50.0        # SD card busy %: writes can hold frames up
 PSI_STALL_PCT = 10.0        # some task stalled on CPU, I/O or memory this % of a 10 s window
 LATE = 1.5                  # a frame interval over this x the frame budget is a slow frame
-MIN_WINDOW_SAMPLES = 4      # a run shorter than this many thread samples is judged over the whole recording
+MIN_WINDOW_SAMPLES = 4      # shorter runs are judged over the whole recording
 MIN_LATE_FRAMES = 5         # fewer slow frames than this aren't worth attributing
 BUDGET_MS = 1000.0 / FPS
 
 PALETTE = ("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#7f7f7f")
 
-# Threads that run Python, so take turns on the GIL: the ones our code starts
-# (each names itself, diagnostics.md) and pigpio's callback thread, a Python
-# threading.Thread. Everything else is native code that never needs the GIL:
-# GStreamer (task0), libcamera, and the unnamed "python3" threads, which on
-# this Pi are OpenCV's TBB workers (our own threads are all named)
+# Our named threads and pigpio's callback share the GIL. The rest are native: GStreamer
+# (task0), libcamera, and the unnamed "python3" threads, OpenCV's TBB workers on this Pi
 PYTHON_THREADS = frozenset({MAIN_THREAD, SENSOR_THREAD, "frame-recorder", "motor-watchdog", "system-monitor",
                             "pigpio-cb"})
-# Categorical slots 1-2 and 1-4 of the validated default palette (dataviz
-# skill): cores 0-3 pass the colorblind checks; two are under 3:1 contrast,
-# so the lanes carry a legend
+# Validated palette slots; two cores are under 3:1 contrast, so the lanes carry a legend
 SPLIT_COLORS = {"python": "#2a78d6", "native": "#eb6834"}
 CORE_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
 LANE_IDLE_PCT = 0.5         # a thread under this % of a core in every sample gets no lane
@@ -86,7 +74,7 @@ Run from vision_stack/, venv active:
 
 
 def thread_rows(threads: Table) -> list[dict]:
-    """threads.csv as the dict rows diagnostics.monitor.thread_summary() takes."""
+    """threads.csv as the rows diagnostics.monitor.thread_summary() takes."""
     cols = ("elapsed_s", "tid", "core", "cpu_pct", "vol_ctx_s", "invol_ctx_s")
     num = {c: threads.numeric(c) for c in cols}
     names = threads.text("name")
@@ -97,7 +85,7 @@ def thread_rows(threads: Table) -> list[dict]:
 
 
 def by_sample(rows: list[dict]) -> tuple[np.ndarray, dict]:
-    """(sample times, {name: cpu per sample}); threads sharing a name are summed."""
+    """(sample times, {name: cpu per sample}); same-named threads are summed."""
     times = sorted({r["elapsed_s"] for r in rows})
     index = {t: i for i, t in enumerate(times)}
     cpu = defaultdict(lambda: np.zeros(len(times)))
@@ -107,7 +95,7 @@ def by_sample(rows: list[dict]) -> tuple[np.ndarray, dict]:
 
 
 def process_load(rows: list[dict]) -> dict:
-    """The process's total CPU per sample, main's p95, and how much of the total the busiest thread did."""
+    """Process CPU per sample, main's p95, and the busiest thread's share."""
     times, cpu = by_sample(rows)
     total = sum(cpu.values()) if cpu else np.zeros(0)
     main = cpu.get(MAIN_THREAD, np.zeros(len(times)))
@@ -133,7 +121,7 @@ def core_load(cores: Table | None) -> dict:
 
 
 def since_boot(system: Table | None) -> list[str]:
-    """Throttle flags latched at any time since boot (bits 16-19), as recorded."""
+    """Throttle flags latched since boot (bits 16-19)."""
     if system is None:
         return []
     return [k for k in THROTTLE_BITS if system.has_values(f"{k}_occurred")
@@ -143,12 +131,8 @@ def since_boot(system: Table | None) -> list[str]:
 def align(rows: list[dict], system: Table | None, diag_t0: float, nav: Table, nav_t0: float,
           budget_ms: float = BUDGET_MS) -> dict:
     """
-    The run's frames against the recording, on the monotonic clock.
-
-    Each frame (nav.csv t, from nav_t0) falls in the recording's sample
-    covering it (from diag_t0); slow frames (interval over LATE budgets) are
-    compared with normal ones: main's CPU in their sample, and whether the
-    clock was below its maximum then.
+    Each frame falls in the sample covering it; slow frames (over LATE budgets) are
+    compared with normal ones on main's CPU and whether the clock was below max.
     """
     times, cpu = by_sample(rows)
     main = cpu.get(MAIN_THREAD, np.zeros(len(times)))
@@ -182,9 +166,7 @@ def align(rows: list[dict], system: Table | None, diag_t0: float, nav: Table, na
 
 def run_window(rows: list[dict], diag_t0: float, nav: Table, nav_t0: float) -> dict:
     """
-    The run's own span on the recording's clock: from its t0 to its last
-    frame. A thread sample covers the interval before its time, so it
-    belongs to the run when the middle of that interval does.
+    The run's span on the recording's clock. A sample belongs when the middle of the interval before it does.
     """
     t = nav.numeric("t")
     start = nav_t0 - diag_t0
@@ -204,7 +186,6 @@ def _in_window(elapsed: np.ndarray, w: dict, step: float = 0.0) -> np.ndarray:
 
 
 def table_rows(t: Table | None) -> list[dict]:
-    """A Table as one dict per row, cells as text ("" when blank)."""
     if t is None:
         return []
     cols = {c: t.text(c) for c in t.columns}
@@ -212,7 +193,7 @@ def table_rows(t: Table | None) -> list[dict]:
 
 
 def os_load(system: Table | None, irqs: Table | None, procs: Table | None) -> dict | None:
-    """The rest of the Pi over these rows (os_counters' summaries); None for a recording without the OS counters."""
+    """os_counters' summaries over these rows; None without OS counters."""
     srows = table_rows(system)
     n = osc.intervals(srows)
     if not n:
@@ -226,11 +207,8 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
             nav: Table | None = None, diag_t0: float | None = None, nav_t0: float | None = None,
             irqs: Table | None = None, procs: Table | None = None) -> dict:
     """
-    A diagnostics recording's tables reduced to threads, process, cores,
-    system, window, aligned and findings. With nav and both t0s (the
-    monotonic start each side kept), only the run's own time is judged and
-    its frames are aligned with the samples. ValueError when threads isn't a
-    threads.csv.
+    A recording's tables reduced to its report. With nav and both t0s, only the run's
+    time is judged and frames are aligned. ValueError if threads isn't threads.csv.
     """
     missing = [c for c in ("tid", "name", "core", "cpu_pct") if not threads.has(c)]
     if missing:
@@ -245,11 +223,11 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
         if cores is not None and len(cores):
             judged_cores = cores.subset(_in_window(cores.numeric("elapsed_s"), window, window["step_s"]))
         if system is not None and len(system):
-            # once a second, each a reading at that moment: the rows inside the run, timed from its start
+            # once-a-second rows inside the run
             sub = system.subset(_in_window(system.numeric("elapsed_s"), window),
                                 shift={"elapsed_s": window["start_s"]})
             judged_system = sub if len(sub) >= 2 else system
-            if judged_system is not system:      # the OS rows are once a second too, each for the second before it
+            if judged_system is not system:
                 judged_irqs, judged_procs = (t.subset(_in_window(t.numeric("elapsed_s"), window)) if t is not None
                                              and len(t) else t for t in (irqs, procs))
     res = {"threads": thread_summary(judged_rows), "process": process_load(judged_rows),
@@ -260,7 +238,7 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
     if alignable:
         res["aligned"] = align(rows, system, diag_t0, nav, nav_t0)
     res["findings"] = findings(res)
-    # Caveats, not problems: soak's "too short to judge memory" on any run under ~6 minutes
+    # Caveats, like soak's "too short" on runs under ~6 minutes
     res["notes"] = [f for f in (res["system"] or {}).get("findings", []) if f.startswith("run too short")]
     if window and not window["used"]:
         res["notes"].append(f"the run covers {window['samples']} thread samples (under {MIN_WINDOW_SAMPLES}): "
@@ -273,7 +251,7 @@ def _named(res: dict, name: str) -> list[dict]:
 
 
 def findings(res: dict) -> list[str]:
-    """analyze()'s result in plain words: each threshold passed, one line each."""
+    """analyze()'s result in plain words, one line per threshold passed."""
     out = []
     main = _named(res, MAIN_THREAD)
     duration_min = None
@@ -344,12 +322,10 @@ def findings(res: dict) -> list[str]:
 
 
 def _dash(v, digits: int) -> str:
-    """common.fmt, "--" for a value never read."""
     return common.fmt(v, digits) or "--"
 
 
 def report_lines(res: dict) -> list[str]:
-    """The printed report of analyze()'s result, one line per item."""
     p = res["process"]
     w = res.get("window")
     lines = []
@@ -397,15 +373,10 @@ def is_python_thread(name: str) -> bool:
 
 def python_native(rows: list[dict]) -> dict:
     """
-    CPU per sample split into threads that run Python and native ones.
+    CPU per sample split into Python and native threads, as % of a core.
 
-    Python threads can only add up to more than one core while some of them
-    are inside C code that lets go of the GIL (OpenCV, I/O): the rest of
-    their time they take turns.
-
-    Outputs:
-        {"t": sample times, "python": % of a core, "native": % of a core,
-         "python_threads": names, "native_threads": names}
+    Python threads exceed one core only while some are in C code that drops the
+    GIL (OpenCV, I/O).
     """
     times, cpu = by_sample(rows)
     zero = np.zeros(len(times))
@@ -417,12 +388,9 @@ def python_native(rows: list[dict]) -> dict:
 
 def thread_lanes(rows: list[dict], idle_pct: float = LANE_IDLE_PCT) -> dict:
     """
-    One lane per thread, busiest first: at each sample, the core it was last
-    on and its CPU. Threads under idle_pct in every sample are counted, not
-    drawn. Two threads sharing a name are told apart by their tid.
+    One lane per thread, busiest first: its last core and CPU per sample.
 
-    Outputs:
-        {"step": sample interval, "lanes": [{"label", "python", "t", "core", "cpu"}], "idle": count}
+    Threads under idle_pct throughout are counted, not drawn; same names split by tid.
     """
     times = sorted({r["elapsed_s"] for r in rows})
     step = float(np.median(np.diff(times))) if len(times) > 1 else 0.5
@@ -522,12 +490,12 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
         for ci, ti, bi in zip(c, t, b):
             if not np.isnan(ci):
                 grid[ids.index(int(ci)), ct.index(ti)] = bi
-        # each sample covers the interval before it, as in the lanes; cell edges on the shared time axis
+        # each sample covers the interval before it
         step = float(np.median(np.diff(ct))) if len(ct) > 1 else 0.5
         edges = np.concatenate(([ct[0] - step], ct))
         im = ax.pcolormesh(edges, np.arange(len(ids) + 1) - 0.5, grid, cmap="viridis", vmin=0, vmax=100)
         ax.set_ylim(len(ids) - 0.5, -0.5)
-        # the colorbar outside the plot, like the other panels' legends, so every panel keeps the same width
+        # colorbar outside, so every panel keeps the same width
         cax = ax.inset_axes((1.01, 0.0, 0.012, 1.0))
         fig.colorbar(im, cax=cax, label="busy %")
         ax.set_yticks(range(len(ids)))
@@ -570,7 +538,7 @@ def figure(threads: Table, cores: Table | None, system: Table | None, res: dict,
 
 
 def load(arg, run=None) -> dict:
-    """The recording's tables and meta, and the run's nav.csv and t0 when given."""
+    """The recording's tables and meta, plus the run's nav.csv and t0 when given."""
     threads_path = common.find_csv(arg, CSV_NAMES)
     folder = threads_path.parent
     opt = lambda name: Table(folder / name) if (folder / name).is_file() and \

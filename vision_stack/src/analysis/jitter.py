@@ -1,20 +1,13 @@
 """Frame-interval jitter: the tails and spikes a median hides.
 
 Purpose:
-    Linux isn't a real-time OS, so a steady median can sit on top of late
-    frames that navigation feels as steering hiccups. This reports the tail
-    (p95, p99, max), the frames over budget and their streaks, and whether
-    the spikes are periodic, which points at a timer-driven cause (log
-    flush, recorder write, a background service) rather than scene load.
+    Linux isn't real-time, so a steady median can hide late frames that
+    navigation feels as steering hiccups. This reports the tail, frames over
+    budget and their streaks, and whether spikes are periodic, which points at
+    a timer-driven cause (log flush, recorder write, a service) over scene load.
 
 Main package:
-    analyze(): the numbers, a plain dict. jitter.png draws the interval per
-    frame, with the budget and spike markers, beside a histogram.
-
-Flow:
-    1. Per-frame intervals from any CSV with interval_ms, dt_ms, dt_s or
-       timestamp_ms (common.interval_ms).
-    2. analyze(); print, figure, JSON.
+    analyze() -> dict; jitter.png, the interval per frame beside a histogram.
 """
 
 import argparse
@@ -29,9 +22,7 @@ from src.params import FPS
 
 # nav.csv before p3.csv: in a navigation run folder its t is the loop interval (p3.csv's dt_s is clamped)
 CSV_NAMES = ("frames.csv", "stage_timing.csv", "nav.csv", "p3.csv", "stages.csv")
-# A spike sits this many robust standard deviations (1.4826 x MAD) above the
-# median, and at least SPIKE_MIN_MS above it so a perfectly steady series
-# doesn't call 0.1 ms of noise a spike
+# Robust SDs (1.4826 x MAD); SPIKE_MIN_MS keeps a steady series' 0.1 ms noise from counting
 SPIKE_MADS = 5.0
 SPIKE_MIN_MS = 2.0
 WARMUP_FRAMES = 5
@@ -47,7 +38,7 @@ Run from vision_stack/, venv active:
 
 
 def spike_threshold(values: np.ndarray) -> float:
-    """Median plus SPIKE_MADS robust deviations, and at least SPIKE_MIN_MS above the median."""
+    """Median plus SPIKE_MADS robust deviations, at least SPIKE_MIN_MS above the median."""
     med = float(np.median(values))
     mad = float(np.median(np.abs(values - med)))
     return med + max(SPIKE_MADS * 1.4826 * mad, SPIKE_MIN_MS)
@@ -55,19 +46,9 @@ def spike_threshold(values: np.ndarray) -> float:
 
 def analyze(intervals, budget_ms: float = BUDGET_MS) -> dict:
     """
-    Inputs:
-        intervals: per-frame interval in ms; NaN entries are ignored
-        budget_ms: frame budget
-
-    Outputs:
-        {
-          "interval": stats(),
-          "effective_fps": 1000 / mean interval,
-          "over_budget": {"frames", "share", "longest_streak"},
-          "spikes": {"threshold_ms", "count", "frames" (indices),
-                     "spacing_frames": stats of gaps between spikes,
-                     "periodic": True when the spacing is regular},
-        }
+    NaN intervals are ignored. Returns interval stats, effective_fps, over_budget
+    {frames, share, longest_streak} and spikes {threshold_ms, count, frames,
+    spacing_frames, periodic}.
     """
     iv = np.asarray(intervals, dtype=np.float64)
     valid = ~np.isnan(iv)
@@ -82,8 +63,7 @@ def analyze(intervals, budget_ms: float = BUDGET_MS) -> dict:
     spike_idx = np.flatnonzero(valid & (iv > threshold))
     spacing = np.diff(spike_idx)
     spacing_stats = stats(spacing)
-    # Regular when spikes recur at a near-constant spacing: at least 3 gaps,
-    # spread under a quarter of their median
+    # Periodic: at least 3 gaps, spread under a quarter of their median
     periodic = bool(spacing.size >= 3 and spacing_stats["p50"] > 1
                     and spacing_stats["std"] < 0.25 * spacing_stats["p50"])
 
@@ -121,8 +101,7 @@ def figure(intervals, result: dict, title: str, out_path) -> Path | None:
     ax.spines[["top", "right"]].set_visible(False)
 
     v = iv[~np.isnan(iv)]
-    # Identical intervals (a fixed-rate replay or a fake clock) have no range to split into 40 bins;
-    # rounding leaves them differing by ~1e-14 ms, so anything under a microsecond is one bin
+    # A fixed-rate replay has no range for 40 bins; under a microsecond is one bin
     hx.hist(v, bins=40 if np.ptp(v) > 1e-3 else 1, orientation="horizontal", color="#1f77b4")
     hx.axhline(budget, color="black", linewidth=1.2)
     hx.set_ylim(ax.get_ylim())

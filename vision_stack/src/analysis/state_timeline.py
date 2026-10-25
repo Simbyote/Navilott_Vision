@@ -2,20 +2,13 @@
 
 Purpose:
     Navigation acts on lane_status, drive_state and stop_sign_detected, so
-    how they change over a run matters as much as their per-frame values:
-    how long the lane is held or stale before vision returns, whether a stop
-    latches cleanly or chatters, which Phase 2 mode precedes a hold.
+    how they change matters as much as their values: how long the lane is
+    stale before vision returns, whether a stop latches or chatters, which
+    Phase 2 mode precedes a hold.
 
 Main package:
-    analyze(): per field, each value's share, episodes, dwell and every
-    transition. state_timeline.png draws one colored band per field.
-
-Flow:
-    1. p3.csv (lane_status, drive_state, stop_sign_detected, p2_mode) or
-       nav.csv (rule, stage, lane_status, drive_state; a blank stage is
-       "-"); --fields picks others.
-    2. Durations from the frame intervals, else frames at --fps.
-    3. analyze(); print, figure, JSON.
+    analyze(): per field, value shares, episodes, dwell and transitions;
+    state_timeline.png, one band per field.
 """
 
 import argparse
@@ -29,11 +22,11 @@ from src.analysis import common
 from src.analysis.common import Table, runs_of
 from src.params import FPS
 
-CSV_NAMES = ("nav.csv", "p3.csv")       # nav.csv first: in a navigation run folder it holds p3.csv's states too
+CSV_NAMES = ("nav.csv", "p3.csv")       # nav.csv holds p3.csv's states too
 DEFAULT_FIELDS = ("lane_status", "drive_state", "stop_sign_detected", "p2_mode")
 # nav.csv: which rule decided, the intersection stage, and the lane and light states it acted on
 NAV_DEFAULT_FIELDS = ("rule", "stage", "lane_status", "drive_state")
-NONE = "-"          # a blank cell's label: a frame with no stage is outside an intersection
+NONE = "-"          # blank cell: no stage, outside an intersection
 PALETTE = ("#2ca02c", "#ff7f0e", "#d62728", "#1f77b4", "#9467bd", "#8c564b",
            "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
 
@@ -50,7 +43,7 @@ Run from vision_stack/, venv active:
 
 
 def frame_ms(table: Table, fps: float) -> np.ndarray:
-    """Each frame's duration: its interval to the previous frame, the median for the first."""
+    """Each frame's interval to the previous one; the median for the first."""
     iv = common.interval_ms(table)
     if iv is None or np.all(np.isnan(iv)):
         return np.full(len(table), 1000.0 / fps)
@@ -59,15 +52,7 @@ def frame_ms(table: Table, fps: float) -> np.ndarray:
 
 
 def analyze_field(values, durations_ms) -> dict:
-    """
-    Outputs:
-        {
-          "values": {value: {"frames", "share", "episodes",
-                             "dwell_frames": {"median", "max"},
-                             "dwell_ms": {"median", "max"}}},
-          "transitions": {"count", "pairs": {"a -> b": n}},
-        }
-    """
+    """{values: {value: frames, share, episodes, dwell}, transitions: {count, pairs}}."""
     n = len(values)
     if n == 0:
         raise ValueError("no frames to analyze")
@@ -89,11 +74,7 @@ def analyze_field(values, durations_ms) -> dict:
 
 
 def analyze(table: Table, fields, fps: float = FPS) -> dict:
-    """
-    Per field present in the table: values, episodes, dwell and transitions
-    (analyze_field). Durations from the frame intervals, else 1/fps a frame.
-    ValueError when none of the fields are there.
-    """
+    """analyze_field per field present, timed from frame intervals or 1/fps. ValueError with none present."""
     present = [f for f in fields if table.has(f)]
     if not present:
         raise ValueError(f"{table.path.name}: none of {', '.join(fields)}")
@@ -102,7 +83,6 @@ def analyze(table: Table, fields, fps: float = FPS) -> dict:
 
 
 def labels(table: Table, field: str) -> list:
-    """A field's per-frame values, blanks labeled NONE."""
     return [v or NONE for v in table.text(field)]
 
 

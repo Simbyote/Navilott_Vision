@@ -2,24 +2,14 @@
 """Stage timing figures: where each frame's time goes, against the frame budget.
 
 Purpose:
-    Draws per-frame stage timings against the 1000/FPS budget. Stages
-    timed outside run_chain (capture wait, HUD, recording) are their own
-    segments, and whatever the loop's wall time still doesn't explain is
-    "outside pipeline", so a slow loop shows where to look before every part
-    of it has a timer. Stage columns are found by name (*_ms), so a new
-    timer shows up with no change here.
+    Stages timed outside run_chain (capture wait, HUD, recording) are their
+    own segments, and loop time nothing explains is "outside pipeline", so a
+    slow loop shows where to look before every part has a timer. Any *_ms
+    column is a stage, so a new timer needs no change here.
 
 Main package:
-    breakdown(): median, p95 and share of budget per stage, plus the
-    remainders, as plain numbers. timing_budget.png (one bar across the
-    budget) and timing_per_frame.png (stages stacked per frame).
-
-Flow:
-    1. Any CSV with *_ms stage columns (stages.csv, stage_timing.csv, p3.csv,
-       nav.csv); blank cells ignored, not read as zero.
-    2. breakdown(); whether total_ms already holds the external stages is
-       read from the numbers (p3.csv's does, the others' don't).
-    3. Print and figures.
+    breakdown(): median, p95 and budget share per stage and remainder.
+    timing_budget.png and timing_per_frame.png.
 """
 
 import argparse
@@ -32,10 +22,7 @@ from src.analysis import common
 from src.analysis.common import Table, interval_ms
 from src.params import FPS
 
-# Pipeline order for the stages run_chain times, then anything timed around
-# it. Unknown *_ms columns are appended after these in file order.
-# branch_wait: parallel perception (perception/parallel.py), the main thread
-# waiting for the side thread's color and obstacle, timed in their place
+# Pipeline order; branch_wait is parallel perception's main thread waiting on the side thread
 STAGE_ORDER = ("capture", "preprocess", "roi", "geometry", "color",
                "lane_offset", "stop_line", "obstacle", "branch_wait", "fusion", "package", "phase2", "phase3", "nav", "hud",
                "record")
@@ -43,11 +30,10 @@ STAGE_ORDER = ("capture", "preprocess", "roi", "geometry", "color",
 # Timed outside run_chain, so not part of total_ms
 EXTERNAL_STAGES = frozenset({"capture", "hud", "record"})
 
-# *_ms columns that are not stage durations (nav.csv's latency_ms spans frame arrival to the motor command)
+# *_ms columns that aren't stage durations
 NOT_STAGES = frozenset({"timestamp_ms", "total_ms", "interval_ms", "latency_ms"})
 
-# File names searched for, in order, when given a run folder
-# nav.csv before p3.csv: a navigation run folder has both, and nav.csv adds nav time and the loop interval
+# nav.csv before p3.csv: it adds nav time and the loop interval
 CSV_NAMES = ("stage_timing.csv", "stages.csv", "nav.csv", "p3.csv")
 
 UNACCOUNTED = "unaccounted"
@@ -66,10 +52,7 @@ Options take their value with "=" or a space: --fps=30, --skip 0.
 
 
 def stage_names(columns) -> list:
-    """
-    Stage names from CSV column names: every *_ms column except the
-    non-duration ones, known stages in pipeline order, unknown ones after.
-    """
+    """Every *_ms column but the non-durations: known stages in pipeline order, unknown after."""
     found = [c[:-3] for c in columns if c.endswith("_ms") and c not in NOT_STAGES]
     known = [s for s in STAGE_ORDER if s in found]
     return known + [s for s in found if s not in known]
@@ -77,15 +60,7 @@ def stage_names(columns) -> list:
 
 def read_timing_csv(path, skip: int = WARMUP_FRAMES) -> dict:
     """
-    Read the timing columns of a stage CSV.
-
-    Inputs:
-        path: stages.csv, stage_timing.csv or p3.csv
-        skip: leading frames to drop (warm-up)
-
-    Outputs:
-        {column: float64 array} for frame_id, timestamp_ms, every *_ms column,
-        and interval_ms (see common.interval_ms). Blank cells are NaN.
+    {column: float64} for frame_id, timestamp_ms, every *_ms and interval_ms; blanks NaN, skip leading frames dropped.
     """
     table = Table(path, skip)
     cols = {c: table.numeric(c) for c in table.columns if c == "frame_id" or c.endswith("_ms")}
@@ -106,24 +81,9 @@ def breakdown(cols: dict, budget_ms: float) -> dict:
     """
     Where the median frame's time goes.
 
-    Inputs:
-        cols: read_timing_csv() output
-        budget_ms: frame budget, 1000 / target FPS
-
-    Outputs:
-        {
-          "budget_ms", "frames",
-          "stages":   {name: {"median", "p95", "share"}} in pipeline order,
-          "total":    {"median", "p95"}  of run_chain's own wall time,
-          "interval": {"median", "p95"} or None without loop timing,
-          "unaccounted_ms": inside total_ms but in no recorded stage,
-          "outside_ms":     loop time not explained by total_ms or the
-                            external stages; None without loop timing,
-          "segments": [(name, ms)] for the budget bar, in order,
-          "headroom_ms": budget minus the segments, negative when over,
-        }
-        Segments are per-part medians, so they only approximate the median
-        frame. p95s are reported per part and never added.
+    unaccounted_ms is inside total_ms but in no stage; outside_ms is loop time
+    neither explains (None without loop timing). Segments are per-part medians,
+    so they only approximate the median frame; p95s are never added.
     """
     stages = stage_names(cols)
     internal = [s for s in stages if s not in EXTERNAL_STAGES]
@@ -135,8 +95,7 @@ def breakdown(cols: dict, budget_ms: float) -> dict:
         return np.nansum(np.vstack([cols[f"{n}_ms"] for n in names]), axis=0)
 
     total = cols["total_ms"] if "total_ms" in cols else stack(internal)
-    # p3.csv's total_ms is capture + phase2 + phase3; the others' is the
-    # chain alone. Take whichever reading leaves the smaller remainder
+    # p3.csv's total_ms includes capture, the others' don't; take the smaller remainder
     with_ext = np.nanmedian(np.abs(total - stack(internal) - stack(external))) if external else np.inf
     without = np.nanmedian(np.abs(total - stack(internal)))
     total_includes_external = bool(external) and bool(with_ext < without)
@@ -155,8 +114,7 @@ def breakdown(cols: dict, budget_ms: float) -> dict:
     outside = (np.clip(interval - total - stack(external), 0.0, None)
                if has_interval else None)
 
-    # Bar order follows the loop: capture, the chain and its unaccounted
-    # remainder, the other external stages, then whatever is left
+    # Bar order follows the loop
     def timed(names):
         return [(s, per_stage[s]["median"]) for s in names if per_stage[s]["median"] is not None]
 
@@ -183,7 +141,7 @@ def breakdown(cols: dict, budget_ms: float) -> dict:
     }
 
 
-_pyplot = common.pyplot       # module-level name so tests can patch it
+_pyplot = common.pyplot       # patched by tests
 
 
 def _colors(plt, names) -> dict:
@@ -196,7 +154,7 @@ def _colors(plt, names) -> dict:
 
 
 def budget_figure(bd: dict, title: str, out_path) -> Path | None:
-    """The budget bar plus a median / p95 / share table. None without matplotlib."""
+    """The budget bar and a median / p95 / share table; None without matplotlib."""
     plt = _pyplot()
     if plt is None:
         return None
@@ -276,7 +234,7 @@ def budget_figure(bd: dict, title: str, out_path) -> Path | None:
 
 
 def per_frame_figure(cols: dict, budget_ms: float, title: str, out_path) -> Path | None:
-    """Stages stacked per frame, with loop time and budget. None without matplotlib."""
+    """Stages stacked per frame with loop time and budget; None without matplotlib."""
     plt = _pyplot()
     if plt is None:
         return None
@@ -310,7 +268,7 @@ def per_frame_figure(cols: dict, budget_ms: float, title: str, out_path) -> Path
 
 
 def find_csv(arg, roots=common.SEARCH_ROOTS) -> Path:
-    """A timing CSV from a file, a run folder, or (None) the newest run that has one."""
+    """A timing CSV from a file, a run folder, or the newest run (None)."""
     return common.find_csv(arg, CSV_NAMES, roots)
 
 

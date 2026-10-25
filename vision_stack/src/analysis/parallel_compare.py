@@ -2,22 +2,14 @@
 
 Purpose:
     perception/parallel.py runs Phase 2's color and obstacle branches on a
-    side thread while the main thread runs geometry. Whether that wins on
-    the Pi depends on how much of each branch is inside OpenCV (which
-    releases the GIL), so it's measured rather than assumed
+    side thread beside geometry. The win depends on how much of each branch
+    is inside OpenCV, which releases the GIL, so it's measured
     (docs/guides/analysis.md, "Parallel perception").
 
 Main package:
-    compare.json in --out: per mode, Phase 2 wall ms per frame, the main
-    thread's branch_wait, the side thread's own times, and CPU in cores;
-    the verdict is parallel p50 against serial p50.
-
-Flow:
-    1. Frames loaded into memory (--frames, a video, or --camera), so file
-       reads don't add to the timings.
-    2. Pipeline.perceive() in blocks alternating serial and parallel, at
-       each --opencv-threads count.
-    3. Statistics per mode; print, JSON.
+    compare.json in --out: per mode, Phase 2 wall ms, branch_wait, side-thread
+    times and CPU cores; the verdict is parallel p50 against serial p50.
+    Frames are held in memory so file reads don't add to the timings.
 
 Usage (from vision_stack/, on the Pi, with the robot's pipeline stopped if --camera):
     python3 -m src.analysis.parallel_compare --frames runs/nav_<time>/frames
@@ -44,7 +36,7 @@ WARMUP = 5                     # frames per mode run first and not counted
 
 
 def load_frames(source, count: int) -> list:
-    """Up to count (frame, frame_id, timestamp_ms) from a live_view FrameSource, held in memory."""
+    """Up to count (frame, frame_id, timestamp_ms) from a FrameSource, in memory."""
     frames = []
     while len(frames) < count:
         item = source.read()
@@ -63,14 +55,9 @@ def _pct(values, q):
 def measure(frames: list, modes: list[tuple[str, bool, int]], block: int = BLOCK, config=MEASURED,
             clock=time.perf_counter, cpu=time.process_time) -> dict:
     """
-    Every mode over every frame, in alternating blocks.
+    Every mode over every frame in alternating blocks; modes are (label, parallel, opencv_threads).
 
-    Inputs:
-        frames: (frame, frame_id, timestamp_ms) held in memory.
-        modes: (label, parallel, opencv_threads) each.
-    Outputs:
-        {label: {frames, wall_ms {p50, p95, max}, branch_wait_ms {p50, p95},
-        side_ms {color, obstacle: p50}, cpu_cores}}.
+    Per label: frames, wall_ms, branch_wait_ms, side_ms and cpu_cores.
     """
     pipes = {label: Pipeline(config, timing=True, parallel=par) for label, par, _ in modes}
     walls = {label: [] for label, _, _ in modes}
@@ -114,7 +101,7 @@ def _cell(v, width: int = 8, fmt: str = ".1f") -> str:
 
 
 def report(results: dict) -> list[str]:
-    """The comparison as printed lines, with each parallel mode against the serial one at the same thread count."""
+    """Printed lines, each parallel mode against serial at the same thread count."""
     lines = [f"{'mode':<22}{'p50 ms':>8}{'p95':>8}{'max':>8}{'wait p50':>10}{'color':>8}{'obst':>8}{'cores':>7}"]
     for label, r in results.items():
         w, wait, side = r["wall_ms"], r["branch_wait_ms"] or {}, r["side_ms"] or {}

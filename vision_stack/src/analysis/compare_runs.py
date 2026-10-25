@@ -1,20 +1,13 @@
 """Compare two runs: every number that changed between them, largest change first.
 
 Purpose:
-    After a tuning change or a new commit, the question is what moved. This
-    flattens every numeric value of two runs' JSON summaries to a dotted key
-    (stage_ms.p95, gate_totals.lane.area, ...) and lists those that changed
-    by more than a threshold. It doesn't judge direction: only the reader
-    knows whether lower is better (docs/guides/analysis.md).
+    After a tuning change or a new commit, what moved? Every numeric value in
+    two runs' JSON summaries becomes a dotted key (stage_ms.p95, ...) and those
+    past a threshold are listed. Direction isn't judged; only the reader knows
+    whether lower is better (docs/guides/analysis.md).
 
 Main package:
-    compare(): rows of base, new, delta and percent change per key, written
-    to compare.csv.
-
-Flow:
-    1. Two JSON files, or two folders: every *.json under the first matched
-       to the same path under the second (run_meta.json only for its commits).
-    2. flatten() each side; compare(); print largest change first.
+    compare() -> base, new, delta and percent per key, written to compare.csv.
 """
 
 import argparse
@@ -40,9 +33,9 @@ Run from vision_stack/, venv active:
 
 def flatten(obj, prefix: str = "") -> dict:
     """
-    Numeric leaves of nested dicts and lists as {dotted.key: float}. List
-    items are keyed by index; bools and strings are skipped, as are lists
-    of plain numbers longer than 8 (frame index lists, not summaries).
+    Numeric leaves as {dotted.key: float}, list items by index.
+
+    Skips bools, strings, and number lists longer than 8 (frame indices, not summaries).
     """
     out = {}
     if isinstance(obj, dict):
@@ -60,15 +53,9 @@ def flatten(obj, prefix: str = "") -> dict:
 
 def compare(base: dict, new: dict, threshold_pct: float = THRESHOLD_PCT) -> list:
     """
-    Inputs:
-        base, new: flatten() output
-        threshold_pct: flag changes at least this large
+    Rows {key, base, new, delta, pct, flag} for every key, flagged first, then by size.
 
-    Outputs:
-        [{"key", "base", "new", "delta", "pct", "flag"}] for every key in
-        either side, flagged first, then by size of change. pct is None
-        when base is 0; a key on one side only is flagged with its missing
-        side None.
+    pct is None when base is 0; a one-sided key is flagged with the other side None.
     """
     rows = []
     for key in sorted(set(base) | set(new)):
@@ -80,15 +67,14 @@ def compare(base: dict, new: dict, threshold_pct: float = THRESHOLD_PCT) -> list
         pct = None if b == 0 else 100.0 * delta / abs(b)
         flag = (abs(pct) >= threshold_pct) if pct is not None else delta != 0
         rows.append({"key": key, "base": b, "new": n, "delta": delta, "pct": pct, "flag": flag})
-    # Flagged first; within each group the largest change first, with
-    # changes that have no percentage (one side missing, base 0) on top
+    # Within each group, changes with no percentage go on top
     rows.sort(key=lambda r: (not r["flag"],
                              -(abs(r["pct"]) if r["pct"] is not None else float("inf"))))
     return rows
 
 
 def pairs(a: Path, b: Path) -> list:
-    """[(label, base json, new json)] for two files, or for matching paths under two folders."""
+    """[(label, base json, new json)] for two files, or matching paths under two folders."""
     if a.is_file() and b.is_file():
         return [(a.name, a, b)]
     if a.is_dir() and b.is_dir():

@@ -1,21 +1,14 @@
-"""Offset accuracy against ground truth: does the reported offset match where the robot really is?
+"""Offset accuracy against ground truth: does the reported offset match where the robot is?
 
 Purpose:
-    The other interpreters show offsets are produced and steady; this checks
-    they're right. Given one still run per ruler-measured position, it gives
-    the error at each, the fitted scale and zero, and a verdict against the
-    +/-2 cm spec. true_cm uses lane_offset_cm's sign: a negative slope means
-    the two disagree, which fails on its own.
+    The other interpreters show offsets are steady; this checks they're right.
+    From one still run per ruler-measured position it gives each error, the
+    fitted scale and zero, and a verdict against +/-2 cm. A negative slope
+    means true_cm and lane_offset_cm disagree on sign, which fails on its own.
 
 Main package:
-    analyze(): per-position bias, spread and share within spec; the overall
-    fit, RMS and worst bias, the verdict. offset_accuracy.png draws measured
-    against true, beside the bias at each position.
-
-Flow:
-    1. The runs and positions, from a manifest (true_cm,run) or --at.
-    2. Each run read as stability.py does (--cm-per-unit for a normalized offset).
-    3. analyze(); print, figure, JSON; exit 0 PASS, 2 FAIL.
+    analyze(): per-position bias and spread, the fit and verdict;
+    offset_accuracy.png. Exits 0 on PASS, 2 on FAIL.
 """
 
 import argparse
@@ -46,21 +39,11 @@ can gate on it.
 
 def analyze(points, spec_cm: float = SPEC_CM) -> dict:
     """
-    Inputs:
-        points: [(true_cm, measured_cm array)], one per position; NaNs ignored
-        spec_cm: allowed absolute error
+    points is [(true_cm, measured_cm)], NaNs ignored.
 
-    Outputs:
-        {
-          "spec_cm",
-          "positions": [{"true_cm", "n", "mean", "median", "std", "bias",
-                         "p95_abs_error", "within_spec"}] sorted by true_cm,
-          "fit": {"slope", "intercept"} of mean on true, None under 2 positions,
-          "rms_bias", "worst_bias", "frames_within_spec",
-          "sign_agrees": slope > 0 (None under 2 positions),
-          "verdict": "PASS" when every position's bias is within spec and the
-                     sign agrees, else "FAIL",
-        }
+    Returns positions sorted by true_cm, fit {slope, intercept} (None under 2),
+    rms_bias, worst_bias, sign_agrees, and verdict: PASS when every bias is within
+    spec and the sign agrees.
     """
     rows, all_err = [], []
     for true_cm, values in sorted(points, key=lambda p: p[0]):
@@ -150,7 +133,6 @@ def figure(result: dict, title: str, out_path) -> Path | None:
 
 
 def measured_cm(run, skip: int, cm_per_unit: float | None) -> np.ndarray:
-    """One run's measured offsets in cm, measured frames only."""
     table = Table(common.find_csv(run, stability.CSV_NAMES), skip)
     offset, measured, _, unit = stability.load(table, normalized=cm_per_unit is not None)
     if unit != "cm":

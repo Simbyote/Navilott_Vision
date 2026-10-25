@@ -1,22 +1,15 @@
 """Routine report: one routine run's verdict, criteria and trials, as figures.
 
 Purpose:
-    A routine (src/routines/) writes its verdict and trials as text and
-    tables. This draws them, so a run can be read at a glance and put in a
-    report: how far each criterion sat from its limit, every trial, and the
-    plot the routine's question asks for. Driving routines' attempts each
-    get nav_run's report beside them.
+    Draws what a routine (src/routines/) wrote, for reading at a glance or a
+    report: each criterion's distance from its limit, every trial, and the
+    plot the routine's question asks for. Driving routines' attempts each get
+    nav_run's report beside them.
 
 Main package:
-    analyze(): the verdict, each criterion with its margin (+ = inside the
-    limit), each numeric field's stats, the attempts. routine_report.png
-    draws the criteria as gauges, the routine's own plot (KEY_PLOTS), then
-    every numeric field per trial.
-
-Flow:
-    1. runs/routine_<name>_<time>/results.json (the newest without an argument).
-    2. analyze(); print, figure, JSON.
-    3. nav_run on each attempt_NN/ with a nav.csv.
+    analyze(): verdict, criteria with margins (+ = inside), field stats,
+    attempts. routine_report.png: gauges, the routine's own plot (KEY_PLOTS),
+    then each numeric field per trial.
 """
 
 import argparse
@@ -34,9 +27,9 @@ from src.analysis.common import Table, fmt
 RESULTS = "results.json"
 SKIP_FIELDS = frozenset({"trial", "t_s"})
 MAX_FIELD_PLOTS = 12
-STATE_SPREAD_CM = 0.8
-GAP_IN = 0.65               # inches between the figure's rows: tick labels and the next title
-KEY_GAP_IN = 1.0            # ... below the routine's own plot, which has an axis label too       # detect-range: each state's points this far apart at one gap
+STATE_SPREAD_CM = 0.8       # detect-range: states this far apart at one gap
+GAP_IN = 0.65               # inches between rows, for tick labels and the next title
+KEY_GAP_IN = 1.0            # ... below the routine's own plot, which has an axis label too
 VERDICT_COLORS = {"PASS": "#2ca02c", "FAIL": "#d62728", "INCOMPLETE": "#ff7f0e", "RECORDED": "#1f77b4"}
 PASS_COLOR, FAIL_COLOR, BAND_COLOR = "#2ca02c", "#d62728", "#2ca02c"
 STATE_COLORS = {"red": "#d62728", "yellow": "#e6b400", "green": "#2ca02c", "off": "#7f7f7f",
@@ -54,7 +47,7 @@ Run from vision_stack/, venv active:
 
 
 def find_run(arg, roots=common.SEARCH_ROOTS) -> Path:
-    """A routine folder: the one given (or a results.json in it), else the newest under roots."""
+    """The folder given (or holding a results.json), else the newest under roots."""
     if arg:
         p = Path(arg)
         folder = p.parent if p.is_file() else p
@@ -68,18 +61,16 @@ def find_run(arg, roots=common.SEARCH_ROOTS) -> Path:
 
 
 def load(folder) -> tuple:
-    """(result, rows) from a routine folder's results.json."""
     result = json.loads((Path(folder) / RESULTS).read_text())
     return result, list(result.get("rows", []))
 
 
 def _number(v):
-    """v as a float when it's a number (not a bool), else None."""
     return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
 def numeric_fields(rows: list) -> list:
-    """The fields, in row order, whose filled values are all numbers and at least one is."""
+    """Fields, in row order, whose filled values are all numbers, at least one filled."""
     out = []
     for k in (rows[0] if rows else {}):
         if k in SKIP_FIELDS:
@@ -91,7 +82,7 @@ def numeric_fields(rows: list) -> list:
 
 
 def varying(rows: list, fields: list) -> tuple:
-    """(fields that change across the trials, {field: value} for those that don't)."""
+    """(fields that change across trials, {field: value} for those that don't)."""
     moving, fixed = [], {}
     for k in fields:
         vals = {_number(r.get(k)) for r in rows if _number(r.get(k)) is not None}
@@ -103,7 +94,7 @@ def varying(rows: list, fields: list) -> tuple:
 
 
 def margin(c: dict) -> float | None:
-    """How far a criterion's value sits inside its limit (+) or outside it (-); None without a value."""
+    """How far a value sits inside (+) or outside (-) its limit; None without a value."""
     v = c.get("value")
     if v is None:
         return None
@@ -117,13 +108,7 @@ def margin(c: dict) -> float | None:
 
 def analyze(result: dict, rows: list, folder=None) -> dict:
     """
-    Outputs:
-        {
-          "routine", "verdict", "requirement", "trials_kept", "trials_planned",
-          "criteria": [{"name", "value", "op", "limit", "unit", "passed", "margin"}],
-          "fields": {field: common.stats() over the trials},
-          "attempts": [attempt folder names with a nav.csv],
-        }
+    routine, verdict, requirement, trial counts, criteria with margins, field stats, attempts with a nav.csv.
     """
     criteria = [{k: c.get(k) for k in ("name", "value", "op", "limit", "unit", "passed")}
                 | {"margin": None if margin(c) is None else round(margin(c), 4)}
@@ -364,7 +349,7 @@ def _plot_stop_sign(ax, rows, result, folder):
     ax.legend(fontsize=8, frameon=False)
 
 
-# Routine name -> its own plot: the one its question asks for
+# Routine name -> the plot its question asks for
 KEY_PLOTS = {
     "tape-check": _plot_tape_check,
     "stop-distance": _plot_stop_distance,
@@ -380,7 +365,7 @@ KEY_PLOTS = {
 
 
 def _gauge(ax, c: dict) -> None:
-    """One criterion: its pass region shaded, the limit(s) drawn, the value marked."""
+    """One criterion: pass region shaded, limits drawn, value marked."""
     v, op, lim = c.get("value"), c["op"], c["limit"]
     edges = list(lim) if op == "within" else [lim]
     pts = edges + ([v] if v is not None else [])
@@ -422,8 +407,7 @@ def figure(result: dict, rows: list, res: dict, folder, out_path) -> Path | None
     fields = fields[:MAX_FIELD_PLOTS]
     cols = 3
     field_rows = -(-len(fields) // cols)
-    # Each block's height in inches; a spacer row of GAP_IN after each holds its
-    # tick labels and the next one's title (an even hspace would shrink beside the big plot)
+    # Block heights in inches, each followed by a GAP_IN spacer (an even hspace shrinks beside the big plot)
     blocks = ([(0.8, GAP_IN)] + [(0.7, GAP_IN)] * len(criteria) + ([(4.0, KEY_GAP_IN)] if key and rows else [])
               + [(1.9, GAP_IN)] * field_rows)
     heights = [h for pair in blocks for h in pair]
@@ -476,7 +460,7 @@ def figure(result: dict, rows: list, res: dict, folder, out_path) -> Path | None
 
 
 def attempt_reports(folder) -> list:
-    """nav_run's json and figure in each attempt_NN/ with a nav.csv; [(attempt, png or None, error or None)]."""
+    """nav_run on each attempt_NN/ with a nav.csv: [(attempt, png or None, error or None)]."""
     out = []
     for nav in sorted(Path(folder).glob("attempt_*/nav.csv")):
         try:

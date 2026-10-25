@@ -1,21 +1,13 @@
 """Still-scene stability: offset noise and lane-mode flicker with nothing moving.
 
 Purpose:
-    With the robot parked centered in the lane, anything that changes is the
-    pipeline, not the world: the offset's spread is the noise floor
-    navigation steers through, and every lane-mode change is a flicker that
-    would jolt a controller. Run it again after tuning to see whether the
-    floor dropped.
+    Parked centered, anything that changes is the pipeline: the offset's
+    spread is the noise floor navigation steers through, and each lane-mode
+    change is a flicker that would jolt a controller. Rerun after tuning to
+    see whether the floor dropped.
 
 Main package:
-    analyze(): the numbers, a plain dict. stability.png draws the offset per
-    frame over a lane-mode strip, beside its histogram.
-
-Flow:
-    1. load(): p3.csv's lane_offset_cm on vision frames only (a held value
-       repeated would understate the spread), else lane_offset_timing.csv or
-       stages.csv in normalized units (--normalized forces those).
-    2. analyze(); print, figure, JSON.
+    analyze() -> dict; stability.png, the offset over a lane-mode strip beside its histogram.
 """
 
 import argparse
@@ -47,8 +39,9 @@ Run from vision_stack/, venv active:
 
 def load(table: Table, normalized: bool = False) -> tuple:
     """
-    (offset array, measured mask, modes list, unit) from whichever columns
-    the table has; see the module docstring for the order.
+    (offset, measured mask, modes, unit). p3.csv's lane_offset_cm on vision frames
+    (a held value would understate the spread), else normalized from
+    lane_offset_timing.csv or stages.csv.
     """
     modes = table.text("p2_mode") if table.has("p2_mode") else (
         table.text("mode") if table.has("mode") else None)
@@ -73,22 +66,9 @@ def load(table: Table, normalized: bool = False) -> tuple:
 
 def analyze(offset, measured, modes, unit: str = "normalized") -> dict:
     """
-    Inputs:
-        offset: per-frame offset; only frames where measured is True count
-        measured: per-frame bool
-        modes: per-frame lane mode strings
-        unit: "cm" or "normalized", carried into the result
-
-    Outputs:
-        {
-          "frames", "unit",
-          "measured": {"frames", "share"},
-          "offset": stats() over measured frames, plus "p5_p95_span",
-          "modes": {mode: {"frames", "share"}},
-          "transitions": {"count", "per_100_frames"},
-          "flickers": runs of FLICKER_FRAMES or fewer between two other runs,
-          "longest_unmeasured_run": frames,
-        }
+    Only measured frames count. Returns offset stats with p5_p95_span, mode shares,
+    transitions, flickers (runs of FLICKER_FRAMES or fewer between two others) and
+    the longest unmeasured run.
     """
     offset = np.asarray(offset, dtype=np.float64)
     measured = np.asarray(measured, dtype=bool)

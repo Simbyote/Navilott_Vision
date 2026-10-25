@@ -1,21 +1,13 @@
 """Navigation runs: what decided each frame, how well the lane was kept, and what each intersection did.
 
 Purpose:
-    navigation_linker and intersection_linker write nav.csv, one row per
-    frame. Reading it by hand answers one question at a time; this reduces a
-    run to whether the robot drove well and where it didn't, with findings
-    in plain words against starting thresholds. What each part measures:
-    docs/guides/analysis.md, "Navigation runs".
+    Reading nav.csv by hand answers one question at a time. This reduces a
+    run to whether the robot drove well and where it didn't, with findings in
+    plain words (docs/guides/analysis.md, "Navigation runs").
 
 Main package:
-    analyze(table) -> dict: run, rules, braking, lane_keeping,
-    intersections, wheel_balance, latency, findings. nav_run.json and
-    nav_run.png (rule / stage / lane strips over offset, steering, yaw and
-    commands on one time axis).
-
-Flow:
-    1. nav.csv (for an intersection_linker run, one maneuver's folder).
-    2. analyze(); report_lines() printed; figure, JSON.
+    analyze(table) -> run, rules, braking, lane_keeping, intersections,
+    wheel_balance, latency, findings; nav_run.json and nav_run.png.
 """
 
 import argparse
@@ -36,20 +28,19 @@ from src.params import FPS, MODE_TWO_BOUNDARY
 
 CSV_NAMES = ("nav.csv",)
 LANE_VISION, LANE_STALE = "vision", "stale"
-# Rules that act at an intersection: one unbroken run of them is one intersection
+# One unbroken run of these is one intersection
 CROSSING_RULES = (RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT)
 HELD_RULES = (RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT)
 
-# Window after a crossing ends in which the robot has been seen to veer (2026-10-01 runs)
+# Veers seen in this window after a crossing (2026-10-01 runs)
 AFTER_S = 2.0
-# Steering smaller than this isn't counted as a direction: sensor noise flips its sign
+# Noise flips the sign below this
 STEER_DEADBAND = 0.02
 # Wheel balance: frames with equal commanded duty (within this) and both wheels turning
 EQUAL_DUTY = 0.02
 MIN_CPS = 100.0
 
-# Finding thresholds. Starting values, not measured limits: adjust once a few
-# good runs show what normal looks like
+# Finding thresholds: starting values, to adjust once good runs show what's normal
 WEAVE_PER_S = 1.5           # steering sign changes per second of lane keeping
 BIAS_CM, BIAS_NORM = 1.0, 0.07   # a mean offset this far off center is a bias (cm, or normalized)
 STALE_SHARE = 0.05          # share of lane keeping on a stale lane
@@ -76,7 +67,7 @@ Run from vision_stack/, venv active:
 
 
 def frame_s(table: Table) -> np.ndarray:
-    """Each frame's duration in seconds: its interval from the previous frame's t, the median for the first."""
+    """Each frame's seconds since the previous t; the median for the first."""
     t = table.numeric("t") if table.has_values("t") else np.arange(len(table)) / FPS
     d = np.diff(t)
     first = float(np.nanmedian(d)) if d.size else 1.0 / FPS
@@ -108,14 +99,14 @@ def braking(table: Table, dt: np.ndarray) -> dict:
 
 
 def offset_column(table: Table, mask: np.ndarray) -> tuple[np.ndarray, str]:
-    """The lane offset on the masked frames, in cm when the run has a cm scale, else normalized."""
+    """The masked offsets, in cm when the run has a scale, else normalized."""
     if table.has_values("lane_offset_cm") and not np.all(np.isnan(table.numeric("lane_offset_cm")[mask])):
         return table.numeric("lane_offset_cm"), "cm"
     return table.numeric("lane_offset"), "norm"
 
 
 def weave_per_s(steer: np.ndarray, mask: np.ndarray, dt: np.ndarray) -> float:
-    """Steering sign changes per second over the masked frames, counted only inside unbroken stretches of them."""
+    """Steering sign changes per second, counted only inside unbroken masked stretches."""
     changes, seconds = 0, float(dt[mask].sum())
     for on, start, length in runs_of(list(mask)):
         if not on:
@@ -127,7 +118,6 @@ def weave_per_s(steer: np.ndarray, mask: np.ndarray, dt: np.ndarray) -> float:
 
 
 def lane_keeping(table: Table, dt: np.ndarray) -> dict:
-    """Lane keeping's frames: lane state, offset (vision frames), steering and weaving."""
     lk = np.array([r == RULE_LANE_KEEPING for r in table.text("rule")])
     if not lk.any():
         return {"seconds": 0.0}
@@ -147,7 +137,7 @@ def lane_keeping(table: Table, dt: np.ndarray) -> dict:
 
 
 def after_crossings(table: Table, dt: np.ndarray, after_s: float = AFTER_S) -> np.ndarray:
-    """Frames within after_s seconds after any intersection ends: where a veer would be."""
+    """Frames within after_s after an intersection ends, where a veer would be."""
     t = table.numeric("t") if table.has_values("t") else np.cumsum(dt)
     mask = np.zeros(len(t), bool)
     for on, start, length in runs_of([r in CROSSING_RULES for r in table.text("rule")]):
@@ -158,10 +148,7 @@ def after_crossings(table: Table, dt: np.ndarray, after_s: float = AFTER_S) -> n
 
 
 def baseline_p95(table: Table, after_s: float = AFTER_S) -> float | None:
-    """
-    p95 of |offset| on vision lane-keeping frames outside the windows after
-    crossings: what normal lane keeping looks like, for judging a veer.
-    """
+    """p95 |offset| on vision lane-keeping frames away from crossings: normal lane keeping."""
     dt = frame_s(table)
     mask = (np.array([r == RULE_LANE_KEEPING for r in table.text("rule")])
             & np.array([s == LANE_VISION for s in table.text("lane_status")])
@@ -173,16 +160,11 @@ def baseline_p95(table: Table, after_s: float = AFTER_S) -> float | None:
 def intersections(table: Table, dt: np.ndarray, after_s: float = AFTER_S,
                   gyro_bias_dps: float = GYRO_BIAS_DPS, baseline_p95: float | None = None) -> list[dict]:
     """
-    One entry per intersection: each unbroken run of intersection, stop-sign
-    or traffic-light frames.
+    One entry per unbroken run of intersection, stop-sign or traffic-light frames.
 
-    Each: step, maneuver, start_s, stage_s {to_line, turn, exit}, held_s,
-    turn_end, turn_deg (the rule's heading when the turn ended), turned_deg
-    (the gyro, net of gyro_bias_dps, over the whole crossing), and "after":
-    the after_s seconds once it ends: lane-keeping share, offset on vision
-    frames (mean, max |offset|), weaving, lane_back_s (until both lane lines
-    on vision), and veer (max |offset| over VEER_RATIO x baseline_p95, the
-    run's normal lane keeping: see baseline_p95()).
+    turn_deg is the rule's heading at turn end; turned_deg is the gyro net of bias
+    over the whole crossing. "after" covers the next after_s: lane-keeping share,
+    offset, weaving, lane_back_s, and veer (over VEER_RATIO x baseline_p95).
     """
     rules = table.text("rule")
     crossing = [r in CROSSING_RULES for r in rules]
@@ -228,11 +210,7 @@ def intersections(table: Table, dt: np.ndarray, after_s: float = AFTER_S,
 
 
 def wheel_balance(table: Table) -> dict:
-    """
-    How alike the wheels turn at equal commanded duty, driving forward:
-    imbalance_pct = mean of (left - right) / mean(left, right) x 100.
-    + = the left wheel faster, which turns the robot right.
-    """
+    """imbalance_pct = mean (left - right) / mean(left, right) x 100 at equal forward duty; + turns right."""
     left, right = table.numeric("left_cps"), table.numeric("right_cps")
     cl, cr = table.numeric("cmd_left"), table.numeric("cmd_right")
     ok = ((table.numeric("brake") != 1) & (np.abs(cl - cr) < EQUAL_DUTY) & (cl > 0)
@@ -256,12 +234,7 @@ def latency(table: Table, dt: np.ndarray) -> dict:
 
 
 def analyze(table: Table, after_s: float = AFTER_S, gyro_bias_dps: float = GYRO_BIAS_DPS) -> dict:
-    """
-    A nav.csv reduced to its report: run, rules, braking, lane_keeping,
-    intersections (each with its after_s window), wheel_balance, latency and
-    findings. gyro_bias_dps nets the bias out of the gyro's turn angle.
-    ValueError when the table isn't a nav.csv.
-    """
+    """A nav.csv reduced to its report; gyro_bias_dps nets the turn angle. ValueError for another CSV."""
     missing = [c for c in ("rule", "lane_status", "steer", "brake") if not table.has(c)]
     if missing:
         raise ValueError(f"{table.path.name}: not a nav.csv (no {', '.join(missing)})")
@@ -324,7 +297,6 @@ def findings(res: dict) -> list[str]:
 
 
 def report_lines(res: dict) -> list[str]:
-    """The printed report of analyze()'s result, one line per item."""
     r, lk, wb = res["run"], res["lane_keeping"], res["wheel_balance"]
     lines = [f"run           {r['frames']} frames, {r['seconds']} s, {r['fps']} FPS",
              "rules         " + ", ".join(f"{k} {100 * v['share']:.0f}% ({v['episodes']}x)"
@@ -375,7 +347,7 @@ def figure(table: Table, res: dict, title: str, out_path) -> Path | None:
                 ax.axvspan(t[start], t[min(start + length, len(t) - 1)], color=colors[v], linewidth=0)
         ax.set_yticks([])
         ax.set_ylabel(col, rotation=0, ha="right", va="center", fontsize=8)
-        if colors:                      # a column blank all run (no intersection: no stage) has no legend
+        if colors:                      # blank all run: no legend
             ax.legend([plt.Rectangle((0, 0), 1, 1, color=c) for c in colors.values()], list(colors), fontsize=7,
                       frameon=False, ncol=min(len(colors), 6), loc="center left", bbox_to_anchor=(1.01, 0.5))
     for ax, (col, label) in zip(axes[len(strips):], lines):
