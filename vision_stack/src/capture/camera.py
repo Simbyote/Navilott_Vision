@@ -1,21 +1,12 @@
 """Camera acquisition and per-frame identity for Phase 1.
 
 Purpose:
-    Owns the libcamera/GStreamer camera pipeline and is the single origin of
-    per-frame identity: no downstream stage mints a frame id or timestamp.
-    The ISP hands over BGR at the output size; the frame is turned upright
-    here (orient()) rather than in the pipeline
-    (docs/vision_pipeline/phase1_capture.md).
+    Owns the libcamera / GStreamer pipeline and is the one place frame ids
+    and timestamps are minted. The ISP hands over BGR; the frame is turned
+    upright here rather than in the pipeline (phase1_capture.md).
 
 Main package:
-    FrameData: one upright BGR frame plus its sequence number and monotonic
-    arrival time. Ids are unique and gap-free for the life of a
-    CameraSource, even across reopens.
-
-Flow:
-    1. Build the libcamera -> GStreamer -> OpenCV pipeline string.
-    2. Open the capture and pull frames, stamping each with id and time.
-    3. Absorb isolated read failures; raise once the failure budget is spent.
+    FrameData: one upright BGR frame, its id and its monotonic arrival time.
 """
 import time
 import warnings
@@ -25,9 +16,8 @@ from dataclasses import dataclass
 
 from src.params import CAMERA_CONTROLS, CAMERA_ROTATE_180, FPS, FRAME_H, FRAME_W, MAX_FPS, MIN_FPS, SENSOR_CONFIG
 
-# The libcamerasrc controls this camera takes (gst-inspect-1.0 libcamerasrc on
-# the robot, 2026-10-04: libcamera v0.7.2, IMX290). A name outside these
-# fails here, by name, rather than as GStreamer's "unable to start pipeline"
+# From gst-inspect-1.0 libcamerasrc on the robot (2026-10-04, libcamera v0.7.2).
+# A typo fails here by name, not as GStreamer's "unable to start pipeline"
 CAMERA_CONTROL_NAMES = frozenset({
     "ae-constraint-mode", "ae-enable", "ae-exposure-mode", "ae-flicker-period", "analogue-gain",
     "analogue-gain-mode", "awb-enable", "awb-mode", "digital-gain", "exposure-time", "exposure-time-mode",
@@ -37,44 +27,30 @@ CAMERA_CONTROL_NAMES = frozenset({
 
 def orient(frame: np.ndarray) -> np.ndarray:
     """
-    The appsink's frame turned upright: rotated 180 degrees when the camera is
-    mounted upside down (CAMERA_ROTATE_180), else the same array.
-
-    Purpose:
-        The turn was a videoflip in the pipeline. With the ISP handing over
-        BGR (no videoconvert since 2026-10-16), videoflip read the ISP's
-        buffer itself, back to front a pixel at a time, out of memory the ARM
-        doesn't cache: GStreamer's thread (task0) went from 25-35% of a core
-        to 100% (pi-load, 2026-10-20). Here it's one pass over the frame the
-        appsink already copied into ordinary memory.
+    Rotated 180 degrees when CAMERA_ROTATE_180, else the same array. A videoflip in the
+    pipeline read the ISP's uncached buffer pixel by pixel and took a whole core (2026-10-20).
     """
     return cv2.rotate(frame, cv2.ROTATE_180) if CAMERA_ROTATE_180 else frame
 
 
 def _now_ms() -> int:
-    """Monotonic ms timestamp. Immune to NTP wall-clock steps; origin is arbitrary."""
+    """Monotonic, so NTP steps don't move it; only differences mean anything."""
     return time.monotonic_ns() // 1_000_000
 
 
 @dataclass(frozen=True)
 class FrameData:
-    """Captured frame and its identity. Created only by CameraSource.read()."""
     frame: np.ndarray    # (H, W, 3) uint8 BGR, as delivered by the appsink
-    frame_id: int        # 0-based count of delivered frames; failed reads don't consume one
-    timestamp_ms: int    # monotonic ms at appsink pull; meaningful only as a difference within one run
+    frame_id: int        # failed reads don't use one
+    timestamp_ms: int    # monotonic, at the appsink pull
 
 
 class CaptureError(RuntimeError):
-    """Raised on any capture or recording failure: open, dead camera, or frame-size mismatch."""
+    pass
 
 
 class CameraSource:
-    """
-    Owns the camera handle and assigns frame identity.
-
-    frame_id never repeats or skips for the life of the instance, including
-    across release() and open().
-    """
+    """frame_id never repeats or skips for the life of the instance, across reopens too."""
     def __init__(
             self,
             width: int,
@@ -84,19 +60,8 @@ class CameraSource:
             controls: dict | None = None,
         ) -> None:
         """
-        Configure the source. The camera is not touched until open().
-
-        Inputs:
-            width, height: Output frame size in px.
-            fps: Requested frame rate. Also sets the default failure budget.
-                Values outside [MIN_FPS, MAX_FPS] are accepted but warn.
-            max_consecutive_failures: Consecutive failed reads tolerated
-                before read() raises. Defaults to fps (~1 s of dead camera).
-                Lower it to fail fast; raise it to ride out longer stalls.
-            controls: libcamerasrc controls; None is params.CAMERA_CONTROLS.
-
-        Raises:
-            ValueError: For an unknown control name, here rather than at open().
+        Doesn't touch the camera until open(). max_consecutive_failures defaults to fps
+        (~1 s of dead camera). ValueError for an unknown control name.
         """
         if fps < MIN_FPS:
             warnings.warn(
@@ -118,23 +83,11 @@ class CameraSource:
         )
         self._cap = None
         self._consecutive_failures = 0
-        # Deliberately not reset by open(): a reopen after a recovery must
-        # not reissue ids that already appeared in the logs.
+        # Not reset by open(), so a reopen never reissues ids already logged
         self._frame_id = 0
 
     def open(self) -> "CameraSource":
-        """
-        Start the camera pipeline.
-
-        Outputs:
-            self, so construction and open() can be chained.
-
-        Side effects:
-            Claims the camera through libcamera.
-
-        Raises:
-            CaptureError: If GStreamer cannot open the pipeline.
-        """
+        """CaptureError if GStreamer can't open the pipeline."""
         pipeline = build_gst_pipeline(self.width, self.height, self.fps, controls=self.controls)
         self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not self._cap.isOpened():
@@ -143,25 +96,14 @@ class CameraSource:
 
     def read(self) -> FrameData | None:
         """
-        Pull one frame from the camera and stamp it with its identity.
-
-        Outputs:
-            FrameData on success. None when a single read failed but the
-            failure budget isn't exhausted. A None consumes no frame_id, so
-            the caller can `continue` without creating a gap or a duplicate.
-
-        Side effects:
-            Advances frame_id on success; updates the consecutive-failure count.
-
-        Raises:
-            CaptureError: If called before open(), or once the failure
-                budget is exhausted.
+        One stamped frame, or None for a failed read within the budget; None uses no
+        frame_id. CaptureError before open() or once the budget is spent.
         """
         if self._cap is None:
             raise CaptureError("read() called before open()")
 
         ok, frame = self._cap.read()
-        timestamp_ms = _now_ms()   # before the branch so it marks arrival, not packaging
+        timestamp_ms = _now_ms()   # arrival, not packaging
 
         if not ok or frame is None:
             self._consecutive_failures += 1
@@ -182,14 +124,14 @@ class CameraSource:
         return data
 
     def release(self) -> None:
-        """Release the camera. Safe to call repeatedly or before open()."""
+        """Safe to call repeatedly."""
         if self._cap is not None:
             self._cap.release()
             self._cap = None
 
 
 class VideoSink:
-    """Writes BGR frames to a video file. Every frame must match the configured size."""
+    """Every frame must match the configured size."""
     def __init__(
             self,
             filename: str,
@@ -198,35 +140,14 @@ class VideoSink:
             height: int,
             fourcc: str = "XVID"
         ) -> None:
-        """
-        Configure the sink. No file is created until open().
-
-        Inputs:
-            filename: Output path. The extension must suit the codec
-                (XVID -> .avi).
-            fps: Playback rate recorded in the file. It does not throttle writes.
-            width, height: Expected frame size in px; write() rejects anything else.
-            fourcc: Four-character codec code.
-        """
+        """No file until open(). fps is the playback rate written, not a throttle."""
         self.filename, self.fps = filename, fps
         self.size = (width, height)
         self.fourcc = fourcc
         self._out = None
 
     def open(self) -> "VideoSink":
-        """
-        Create the output file and start the encoder.
-
-        Outputs:
-            self, so construction and open() can be chained.
-
-        Side effects:
-            Creates or overwrites the file at filename.
-
-        Raises:
-            CaptureError: If the writer cannot be opened (bad path or
-                unsupported codec).
-        """
+        """Creates or overwrites the file. CaptureError for a bad path or codec."""
         cc = cv2.VideoWriter_fourcc(*self.fourcc)
         self._out = cv2.VideoWriter(self.filename, cc, self.fps, self.size)
         if not self._out.isOpened():
@@ -234,19 +155,7 @@ class VideoSink:
         return self
 
     def write(self, frame: np.ndarray) -> None:
-        """
-        Append one frame to the file.
-
-        Inputs:
-            frame: BGR image matching the configured (width, height).
-
-        Side effects:
-            File I/O.
-
-        Raises:
-            CaptureError: If called before open(), or the frame size doesn't
-                match the configured size.
-        """
+        """CaptureError before open() or for a frame of another size."""
         if self._out is None:
             raise CaptureError("write() called before open()")
         if frame.shape[:2][::-1] != self.size:   # shape is (H, W); size is (W, H)
@@ -256,20 +165,14 @@ class VideoSink:
         self._out.write(frame)
 
     def release(self) -> None:
-        """Finalize and close the file. Safe to call repeatedly or before open()."""
+        """Safe to call repeatedly."""
         if self._out is not None:
             self._out.release()
             self._out = None
 
 
 def format_controls(controls: dict) -> str:
-    """
-    libcamerasrc properties for the pipeline string: name=value, booleans as
-    true / false, in the dict's order.
-
-    Raises:
-        ValueError: For a name not in CAMERA_CONTROL_NAMES, naming it.
-    """
+    """name=value pairs for the pipeline string. ValueError names an unknown control."""
     unknown = sorted(set(controls) - CAMERA_CONTROL_NAMES)
     if unknown:
         raise ValueError(f"unknown camera control(s) {', '.join(unknown)}; "
@@ -279,14 +182,7 @@ def format_controls(controls: dict) -> str:
 
 
 def parse_controls(pairs: list[str] | None) -> dict:
-    """
-    KEY=VALUE strings (a linker's --camera-control) as a controls dict:
-    true / false become booleans, numbers numbers, anything else stays a
-    string (an enum name such as highlight). Checked like format_controls.
-
-    Raises:
-        ValueError: For a pair without "=", or an unknown name.
-    """
+    """--camera-control KEY=VALUE strings as a dict: booleans and numbers parsed, enums kept as text."""
     out = {}
     for pair in pairs or []:
         key, sep, raw = pair.partition("=")
@@ -315,27 +211,11 @@ def build_gst_pipeline(
         color_space: str = "BGR",
         controls: dict | None = None,
     ) -> str:
-    """
-    Build the libcamera -> GStreamer -> OpenCV capture pipeline string.
-
-    Inputs:
-        width, height: Output frame size in px, scaled from the fixed
-            SENSOR_CONFIG mode.
-        fps: Requested frame rate.
-        color_space: Raw format handed to OpenCV. Downstream stages assume "BGR".
-        controls: libcamerasrc controls (exposure, white balance); None is
-            params.CAMERA_CONTROLS.
-
-    Outputs:
-        Pipeline string for cv2.VideoCapture(..., cv2.CAP_GSTREAMER).
-
-    Raises:
-        ValueError: For an unknown control name.
-    """
+    """The capture pipeline string for cv2.VideoCapture. ValueError for an unknown control."""
     # format:        BGR straight from the ISP, so no videoconvert
     # sensor-config: pinned mode so field of view doesn't change with output size
-    # no videoflip:  the frames come out upside down; orient() turns them (see there for why)
-    # appsink:       hold only the newest frame so a slow consumer never reads a stale backlog
+    # no videoflip:  orient() turns the frames
+    # appsink:       newest frame only, so a slow consumer never reads a backlog
     ctl = format_controls(CAMERA_CONTROLS if controls is None else controls)
     return (
         f'libcamerasrc sensor-config="{SENSOR_CONFIG}"{" " + ctl if ctl else ""} ! '

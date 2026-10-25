@@ -1,22 +1,17 @@
 """Phase 3 estimation: per-frame perception plus sensors into a navigation packet.
 
 Purpose:
-    Phase 2 answers "what is in this frame"; Phase 3 answers "what is true
-    across the last few frames, given the sensors". A stage belongs here only
-    if it uses history (smoothing, voting, holding) or sensor data. Each stage
-    owns only its own state, so stages test alone, and no driver is imported,
-    so it runs off the Pi (docs/vision_pipeline/phase3_estimation.md).
+    Phase 2 says what is in this frame; Phase 3 says what is true across the
+    last few frames, given the sensors. A stage belongs here only if it uses
+    history or sensor data, and no driver is imported, so it runs off the Pi.
 
 Main package:
-    EstimationPacket: the smoothed lane offset and its status, the heading
-    turned since vision was lost, the voted light, sign, stop line and
-    obstacle, the sensor pass-throughs and odometry, and the frame identity.
+    EstimationPacket (field by field: phase3_estimation.md, "Contract").
 
 Flow (Phase3Processor.process() is the only place the order is written):
-    1. LaneFilter, then HeadingTracker: the lane, and the heading while it's lost.
+    1. The lane filter, then the heading while the lane is lost.
     2. The votes: traffic light, stop sign, stop line, obstacle.
-    3. Odometer: distance driven.
-    4. Assemble the EstimationPacket.
+    3. Odometry, then the packet.
 """
 from collections import Counter, deque
 from dataclasses import dataclass, replace
@@ -35,55 +30,41 @@ from src.perception.roi_crop import ROIConfig, resolve
 from src.perception.stop_line_distance import StopLineResult
 from src.peripherals.sensing import SensorSample
 
-# LaneOffsetResult modes that carry a measurement. "none" and
-# "single_uncalibrated" report offset 0.0 with no information behind it
+# The modes that carry a measurement
 USABLE_LANE_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 
-# Lane status reported to Navigation
 LANE_VISION = "vision"   # this frame's offset is a fresh measurement
 LANE_HOLD = "hold"       # vision dropped; repeating the last good offset
-LANE_STALE = "stale"     # held too long; Navigation must not steer by it
+LANE_STALE = "stale"     # held too long to steer by
 
-# Drive states
 GO, CAUTION, STOP = "go", "caution", "stop"
 _DRIVE_FOR_COLOR = {RED: STOP, YELLOW: CAUTION, GREEN: GO}
 
 
 @dataclass(frozen=True)
 class Phase3Config:
-    """Tuning for Phase 3."""
-    ema_alpha: float = 0.35                 # lane smoothing; higher follows faster and smooths less
-    max_offset_jump: float | None = 0.5     # largest believable normalized change between frames; a bigger one is a dropout. None disables
-    hold_max_frames: int = 7                # frames to repeat the last good offset before it goes stale; at 20 FPS, about 350 ms
-    lane_roi_width_px: int | None = None    # undoes the offset normalization; None leaves lane_offset_cm unset
-    cm_per_px: float | None = None          # ground scale at the bottom of the lane ROI, hand-measured until calibration exists; None leaves lane_offset_cm unset
+    ema_alpha: float = 0.35                 # higher follows faster, smooths less
+    max_offset_jump: float | None = 0.5     # a bigger change between frames is a dropout
+    hold_max_frames: int = 7                # ~350 ms before the lane goes stale
+    lane_roi_width_px: int | None = None    # None leaves lane_offset_cm unset
+    cm_per_px: float | None = None          # at the lane ROI's bottom; None leaves lane_offset_cm unset
 
-    # Frames in the traffic-light and stop-sign votes. A state changes only on
-    # a strict majority of the full window, so 3 means 2 of the last 3 frames.
+    # 3: two of the last three frames
     vote_window: int = 3
-    min_confidence_traffic: float = 0.40    # gate on the fused traffic light confidence
-    min_confidence_sign: float = 0.45       # gate on the fused stop sign confidence
+    min_confidence_traffic: float = 0.40
+    min_confidence_sign: float = 0.45
 
-    gyro_bias_dps: float = 0.0              # gyro Z at standstill, subtracted before integrating
-    heading_limit_deg: float = 90.0         # clamp on the integrated heading
-    max_dt_s: float = 0.5                   # longer frame gaps are clamped so a stall can't integrate a large heading step
+    gyro_bias_dps: float = 0.0              # gyro Z at rest
+    heading_limit_deg: float = 90.0
+    max_dt_s: float = 0.5                   # so a stall can't integrate a large heading step
 
-    cm_per_count: float | None = None       # floor cm per encoder count (calibration/odometry.json); None leaves every distance unset
+    cm_per_count: float | None = None       # None leaves every distance unset
 
 
 def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
                         frame_size: tuple[int, int]) -> Phase3Config:
     """
-    Fill in lane_roi_width_px for the cm scale.
-
-    Inputs:
-        estimation: The Phase 3 tuning.
-        roi: Phase 2's ROI tuning; the lane ROI's width is read from it.
-        frame_size: (height, width) of the frames Phase 2 will crop.
-    Outputs:
-        estimation with lane_roi_width_px set to the lane ROI's width at
-        frame_size when it sets cm_per_px and leaves the width unset;
-        estimation itself (the same object) otherwise.
+    Sets lane_roi_width_px from the ROI when cm_per_px is set and the width isn't; else returns estimation itself.
     """
     if estimation.cm_per_px is None or estimation.lane_roi_width_px is not None:
         return estimation
@@ -92,78 +73,57 @@ def with_lane_roi_width(estimation: Phase3Config, roi: ROIConfig,
 
 @dataclass(frozen=True)
 class LaneEstimate:
-    """Output of the lane filter for one frame."""
-    offset: float               # smoothed, normalized; the last good value while holding or stale, 0.0 before any measurement
-    offset_cm: float | None     # None unless Phase3Config sets the scale
-    status: str                 # LANE_VISION | LANE_HOLD | LANE_STALE
+    offset: float               # the last good value while holding or stale
+    offset_cm: float | None
+    status: str
 
 
 @dataclass(frozen=True)
 class EstimationPacket:
-    """Phase 3 -> Navigation handoff for one frame. frame_id and timestamp_ms are carried from Phase2Output, never re-derived."""
-    # [-1, 1] of half the lane ROI width, + = robot right of lane center.
-    # Already a usable steering error. Steer only when lane_status is "vision" or "hold".
+    # [-1, 1] of half the lane ROI width, + = robot right of center; steer only on vision or hold
     lane_offset: float
-    lane_offset_cm: float | None    # same in cm; None until a scale is configured
-    lane_status: str                # "vision" | "hold" | "stale"
-    heading_error: float            # deg turned since the last frame on vision, from the IMU; 0.0 on vision; + = turned right
-    drive_state: str                # "go" | "caution" | "stop", from the traffic light vote
-    stop_sign_detected: bool        # from the stop sign vote
-    stop_line_detected: bool        # from the stop line vote
-    # Lane-ROI rows from the nearest stop line to the ROI bottom (0 = on it);
-    # None unless stop_line_detected. Held from the last frame that saw it
+    lane_offset_cm: float | None
+    lane_status: str
+    heading_error: float            # deg turned since the last vision frame, + = right
+    drive_state: str
+    stop_sign_detected: bool
+    stop_line_detected: bool
+    # Held through a missed frame; None unless stop_line_detected
     stop_line_distance_px: float | None
-    # Floor cm forward to where the line crosses the robot's centerline, held
-    # like the px value; None also when there is no ground homography
     stop_line_distance_cm: float | None
-    yaw_rate: float                 # pass-through, deg/s; 0.0 if unavailable
-    lateral_accel: float            # pass-through, m/s^2; 0.0 if unavailable
+    yaw_rate: float                 # raw, deg/s; 0.0 if unavailable
+    lateral_accel: float            # m/s^2; 0.0 if unavailable
     frame_id: int
     timestamp_ms: int
-    # Encoder counts per second over the frame window, + = forward; 0.0 when
-    # stopped or with no encoders (detecting the encoders is the drivers' job)
+    # Counts/s over the frame window; 0.0 when stopped or without encoders
     left_wheel_cps: float
     right_wheel_cps: float
-    # Pass-through: this frame's Phase 2 lane offset mode (params MODE_*), before
-    # any filtering; MODE_TWO_BOUNDARY means both lane boundaries were seen.
-    # Navigation's intersection crossing ends on it
+    # This frame's raw Phase 2 mode; the intersection crossing ends on it
     lane_mode: str = MODE_NONE
-    # From the obstacle vote (perception/obstacle.py): something solid in the
-    # robot's path. Its distances are held like the stop line's: rows from its
-    # base to the lane ROI bottom, and floor cm (None without a ground
-    # homography or stop-line table); clipped: its base is at or past the
-    # view bottom, so it is as near as the view shows or nearer. All four
-    # are False / None whenever the vote says there's none
+    # Held like the stop line's; clipped: its base is at the view bottom or nearer
     obstacle_detected: bool = False
     obstacle_distance_px: float | None = None
     obstacle_distance_cm: float | None = None
     obstacle_clipped: bool = False
-    # Odometry (odometry.py): floor cm driven since the run's first encoder
-    # reading, + = forward; the axle's midpoint, and each wheel. None
-    # without encoders or without Phase3Config.cm_per_count
+    # Since the run's first encoder reading; None without encoders or a scale
     distance_cm: float | None = None
     left_distance_cm: float | None = None
     right_distance_cm: float | None = None
-    # The voted stop line's tilt in the image, this frame's measurement only
-    # (never held), deg from horizontal, + = its right end nearer the robot.
-    # None unless stop_line_detected and seen this frame. The intersection
-    # rule reads the approach angle from it
+    # This frame's only, never held; + = right end nearer the robot
     stop_line_tilt_deg: float | None = None
-    # Pass-through: degrees turned over this frame's sensor window, integrated
-    # reading by reading, raw (the gyro bias is the reader's, over yaw_span_s).
-    # None without it; readers then fall back to yaw_rate x the frame step
+    # Raw degrees over the sensor window; None falls back to yaw_rate x the frame step
     yaw_deg: float | None = None
     yaw_span_s: float | None = None
 
 
 def lane_mode_of(phase2: Phase2Output) -> str:
-    """The frame's raw Phase 2 lane mode; MODE_NONE when Phase 2 gave no lane offset result."""
+    """MODE_NONE when Phase 2 gave no lane result."""
     results = phase2.lane_offset_results
     return results[0].mode if results else MODE_NONE
 
 
 class _EMA:
-    """Exponential moving average of one scalar. value is None until seeded"""
+    """value is None until seeded."""
     def __init__(self) -> None:
         self.value: float | None = None
 
@@ -180,12 +140,8 @@ class _EMA:
 
 class _Vote:
     """
-    Majority vote with hold.
-
-    The state changes only when one value holds a strict majority of the full
-    window; otherwise the previous state stands. Measuring against the window
-    rather than the samples seen so far means one frame at startup can't flip
-    the state, and a three-way split doesn't pick a winner at random.
+    Changes state only on a strict majority of the full window, so one frame at startup
+    can't flip it and a three-way split picks nothing.
     """
     def __init__(self, window: int, initial) -> None:
         self._window = max(1, window)
@@ -194,7 +150,7 @@ class _Vote:
 
     @property
     def buffer(self) -> tuple:
-        """The samples in the window, oldest first. Read-only; for the debug twin."""
+        """Oldest first; for the debug twin."""
         return tuple(self._buf)
 
     @property
@@ -211,12 +167,9 @@ class _Vote:
 
 class LaneFilter:
     """
-    Smooths lane offset and bridges short vision dropouts.
-
-    A frame counts as a measurement only if its mode is usable and its offset
-    is within max_offset_jump of the current estimate; anything else is a
-    dropout. When the hold runs out the EMA is cleared, so the next usable
-    frame re-seeds the estimate instead of being rejected by the jump gate forever.
+    A frame is a measurement only if its mode is usable and its offset within
+    max_offset_jump of the estimate. When the hold runs out the EMA clears, so the next
+    usable frame re-seeds it instead of being refused by the jump gate forever.
     """
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
@@ -225,14 +178,13 @@ class LaneFilter:
         self._missed = cfg.hold_max_frames + 1   # stale until first measurement
 
     def _to_cm(self, offset: float) -> float | None:
-        """Undo the half-width normalization and scale to cm; None without a scale."""
         cfg = self._cfg
         if cfg.lane_roi_width_px is None or cfg.cm_per_px is None:
             return None
         return round(offset * (cfg.lane_roi_width_px / 2.0) * cfg.cm_per_px, 2)
 
     def _jumps(self, offset: float) -> bool:
-        """True if offset is further than max_offset_jump from the estimate (never while it's unseeded)."""
+        """Never while unseeded."""
         cfg = self._cfg
         return (cfg.max_offset_jump is not None and self._ema.value is not None
                 and abs(offset - self._ema.value) > cfg.max_offset_jump)
@@ -242,18 +194,7 @@ class LaneFilter:
             results: list[LaneOffsetResult],
             log: list[str],
         ) -> LaneEstimate:
-        """
-        Fold this frame's lane offset result into the estimate.
-
-        Inputs:
-            results: Phase2Output.lane_offset_results (zero or one entry).
-
-        Outputs:
-            LaneEstimate for this frame.
-
-        Side effects:
-            Appends the reason to log when the frame is a dropout.
-        """
+        """Logs the reason for a dropout."""
         cfg = self._cfg
         result = results[0] if results else None
         accepted = False
@@ -264,9 +205,7 @@ class LaneFilter:
         elif result.mode not in USABLE_LANE_MODES:
             log.append(f"[LANE] mode {result.mode} carries no measurement")
         elif self._jumps(offset):
-            # One boundary's side is a guess from where it sits in the ROI;
-            # past the lane's edge, its right line is left of center. The other
-            # side, if it fits the estimate, is the line it is.
+            # One boundary's side is a guess; if the other side fits the estimate, it's that one
             other = getattr(result, "other_side_offset", None)
             if other is not None and not self._jumps(other):
                 log.append(f"[LANE] {result.mode} {offset:+.3f} breaks continuity; "
@@ -295,15 +234,7 @@ class LaneFilter:
 
 
 class HeadingTracker:
-    """
-    Integrates gyro yaw while vision is lost.
-
-    While the lane filter is on vision, the offset already carries the
-    correction, so the heading reference resets to zero. Once vision drops,
-    integrating yaw rate says how far the robot has turned since the last
-    good frame, which is what a recovery maneuver needs. This is a change in
-    heading, not an absolute heading relative to the lane.
-    """
+    """Degrees turned since vision was lost: a change in heading, reset to 0 on every vision frame."""
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._heading = 0.0
@@ -318,18 +249,8 @@ class HeadingTracker:
             yaw_span_s: float | None = None,
         ) -> float:
         """
-        Degrees turned since vision was lost, clamped to +/- heading_limit_deg.
-
-        Inputs:
-            lane_status: LANE_VISION resets the heading to 0.
-            yaw_rate_dps: None (and no yaw_deg) holds the heading and logs it.
-            dt: Seconds since the previous frame, already clamped to
-                max_dt_s; 0 integrates nothing. Used only without yaw_deg.
-            yaw_deg, yaw_span_s: The window's turn, integrated reading by
-                reading, and the seconds it covers. When given, the heading
-                steps by exactly that (less the bias over the span), however
-                long the frame gap was: a stall loses only readings the hub
-                couldn't keep.
+        Clamped to heading_limit_deg. With yaw_deg it steps by exactly the window's turn,
+        however long the frame gap; otherwise yaw_rate_dps x dt. No yaw at all holds and logs.
         """
         cfg = self._cfg
         if lane_status == LANE_VISION:
@@ -349,13 +270,7 @@ class HeadingTracker:
 
 
 class TrafficClassifier:
-    """
-    Traffic light detection -> voted drive state.
-
-    Fusion already keeps at most one traffic light per frame, so there is no
-    candidate selection here. A frame with no gated light, or an unknown
-    color, votes "go".
-    """
+    """No gated light, or an unknown color, votes go."""
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, GO)
@@ -365,7 +280,7 @@ class TrafficClassifier:
             detections: list[DetectionObject],
             log: list[str],
         ) -> str:
-        """Voted drive state after this frame. Logs lights below the confidence gate."""
+        """Logs lights under the confidence gate."""
         raw = GO
         for d in detections:
             if d.type != TRAFFIC_LIGHT:
@@ -379,7 +294,6 @@ class TrafficClassifier:
 
 
 class StopSignClassifier:
-    """Stop sign detection -> voted bool."""
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, False)
@@ -389,7 +303,7 @@ class StopSignClassifier:
             detections: list[DetectionObject],
             log: list[str],
         ) -> bool:
-        """Voted stop-sign flag after this frame. Logs signs below the confidence gate."""
+        """Logs signs under the confidence gate."""
         raw = False
         for d in detections:
             if d.type != STOP_SIGN:
@@ -404,14 +318,8 @@ class StopSignClassifier:
 
 class StopLineClassifier:
     """
-    Stop-line results -> voted bool and the distances to report.
-
-    The confidence gate is Phase 2's (StopLineDistanceConfig), since the
-    measurement already refuses weak candidates. While the vote says a line
-    is there, a frame that misses it repeats the last measured distances (px
-    and cm together, from the same frame); both are None whenever the vote
-    says there isn't one. tilt is this frame's measured tilt only: never
-    held, None on a missed frame or while the vote says there's no line.
+    While the vote says a line is there, a missed frame repeats the last distances (px and
+    cm from one frame); both are None when it says there isn't. tilt is never held.
     """
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
@@ -424,7 +332,7 @@ class StopLineClassifier:
             results: list[StopLineResult],
             log: list[str],
         ) -> tuple[bool, float | None, float | None]:
-        """(voted flag, distance_px, distance_cm) after this frame. Logs a held distance."""
+        """(voted, distance_px, distance_cm). Logs a held distance."""
         seen = next((r for r in results if r.detected), None)
         if seen is not None:
             self._last = (seen.distance_px, seen.distance_cm)
@@ -438,14 +346,7 @@ class StopLineClassifier:
 
 
 class ObstacleClassifier:
-    """
-    Obstacle results -> voted bool and the measurement to report.
-
-    As StopLineClassifier: Phase 2's gates decide what counts, the vote
-    decides whether it's there, and while it is, a frame that misses it
-    repeats the last measurement (px, cm and clipped, from one frame). All
-    are None / False whenever the vote says there's none.
-    """
+    """Held and voted as StopLineClassifier; None / False when the vote says there's none."""
     def __init__(self, cfg: Phase3Config) -> None:
         self._cfg = cfg
         self._vote = _Vote(cfg.vote_window, False)
@@ -456,7 +357,7 @@ class ObstacleClassifier:
             results: list[ObstacleResult],
             log: list[str],
         ) -> tuple[bool, float | None, float | None, bool]:
-        """(voted flag, distance_px, distance_cm, clipped) after this frame. Logs a held measurement."""
+        """(voted, distance_px, distance_cm, clipped). Logs a held measurement."""
         seen = next((r for r in results if r.detected), None)
         if seen is not None:
             self._last = (seen.distance_px, seen.distance_cm, seen.clipped)
@@ -468,10 +369,7 @@ class ObstacleClassifier:
 
 
 class Phase3Processor:
-    """
-    Runs every Phase 3 stage for one frame. Create once; call process() on
-    every frame in order.
-    """
+    """Create once; call process() on every frame in order."""
     def __init__(self, config: Phase3Config | None = None) -> None:
         self._cfg = config or Phase3Config()
         self.lane = LaneFilter(self._cfg)
@@ -484,7 +382,7 @@ class Phase3Processor:
         self._last_ts: int | None = None
 
     def _dt(self, timestamp_ms: int, log: list[str]) -> float:
-        """Seconds since the previous frame, clamped to [0, max_dt_s]"""
+        """Clamped to [0, max_dt_s]."""
         prev, self._last_ts = self._last_ts, timestamp_ms
         if prev is None:
             return 0.0
@@ -498,20 +396,7 @@ class Phase3Processor:
             phase2: Phase2Output,
             sensors: SensorSample | None = None,
         ) -> tuple[EstimationPacket, dict]:
-        """
-        Run one Phase 3 cycle.
-
-        Inputs:
-            phase2: This frame's Phase2Output.
-            sensors: Readings for the same frame window; None means no sensors.
-
-        Outputs:
-            (packet, debug_summary). debug_summary holds frame_id,
-            timestamp_ms, dt and log.
-
-        Raises:
-            ValueError: If phase2 is None.
-        """
+        """(packet, debug summary). sensors=None means no sensors. ValueError if phase2 is None."""
         if phase2 is None:
             raise ValueError("Phase3Processor.process: phase2 output is None")
         sensors = sensors or SensorSample()

@@ -1,17 +1,12 @@
 """Battery state machine: OK / WARNING / CRITICAL from a stream of voltages, debounced.
 
 Purpose:
-    Motor load sags the pack for a moment; a raw threshold would raise false
-    alarms and flicker. Pure logic, kept apart from battery.py so it tests
-    off the Pi.
+    Motor load sags the pack for a moment, so a raw threshold would flicker.
+    State changes need `confirm` readings in a row; WARNING clears with
+    hysteresis; CRITICAL latches for the run. Pure logic, so it tests off the Pi.
 
 Main package:
-    BatteryState: OK, WARNING or CRITICAL, from BatteryStateMachine.update().
-
-Flow, per reading:
-    1. Escalate after `confirm` readings in a row at or below a threshold.
-    2. WARNING clears after `confirm` readings at or above warning + hysteresis.
-    3. CRITICAL latches for the rest of the run.
+    BatteryStateMachine.update(volts) -> the new state, or None.
 """
 
 from enum import IntEnum
@@ -43,7 +38,6 @@ class BatteryStateMachine:
         self._above_clear = 0
 
     def update(self, volts: float) -> Optional[BatteryState]:
-        """Feed one reading. Returns the new state if it changed, else None."""
         if self.state == BatteryState.CRITICAL:
             return None  # latched
 

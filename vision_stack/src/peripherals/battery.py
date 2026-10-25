@@ -1,22 +1,13 @@
-"""Battery monitor: pack voltage through the V-Sense divider and the ADS1115, with a latched warning.
+"""Battery monitor: pack voltage through the divider and the ADS1115, with a latched warning.
 
 Purpose:
-    A 3S pack has no protection board (DEC-019), so the software has to
-    notice a flat battery. The voltage is sampled on a daemon thread,
-    smoothed, and debounced by BatteryStateMachine, so a brief sag under
-    motor load doesn't raise a false alarm; callbacks fire once per
-    transition. How the ADS1115 is read, and why: docs/architecture.md, "Power".
+    A 3S pack has no protection board (DEC-019), so the software watches it:
+    sampled on a thread, smoothed and debounced, so a sag under motor load
+    raises no alarm. How the ADS1115 is read: architecture.md, "Power".
 
 Main package:
-    Power: the monitor. preflight() judges the pack at rest before a run;
-    during it, state(), should_stop() (CRITICAL, latched) and the
-    on_warning / on_critical / on_fault callbacks.
-
-Flow:
-    1. Power() opens the ADS1115 (ContinuousADC, or the library's single shots).
-    2. preflight(), motors idle; then start_monitoring().
-    3. Once a second: read, smooth, the state machine, any callbacks.
-    4. cleanup() stops the thread and releases the bus.
+    Power: preflight() before a run, should_stop() (CRITICAL, latched) and
+    the transition callbacks during it.
 """
 
 import logging
@@ -43,16 +34,8 @@ DATA_RATE_SPS = 128
 
 class ContinuousADC:
     """
-    The ADS1115 converting A0 on its own; .voltage is the pin's volts from
-    the latest conversion. Same interface as the Adafruit AnalogIn.
-
-    Inputs:
-        i2c: A busio.I2C (or anything with try_lock / unlock / writeto /
-            writeto_then_readfrom).
-        address: The ADS1115's.
-        sleep: For the wait after (re)configuring, swapped in tests.
-
-    reconfigured: Times a read found the config changed and rewrote it.
+    The ADS1115 converting A0 on its own, with the Adafruit AnalogIn's .voltage.
+    reconfigured counts reads that found the config changed and rewrote it.
     """
     def __init__(self, i2c, address: int = ADS1115_I2C_ADDRESS, sleep=time.sleep) -> None:
         self._i2c, self._addr, self._sleep = i2c, address, sleep
@@ -69,12 +52,12 @@ class ContinuousADC:
             self._i2c.unlock()
 
     def _register(self, reg: int) -> int:
-        """One register, the pointer set in the same transfer as the read."""
+        """Pointer set in the same transfer as the read."""
         self._locked(lambda: self._i2c.writeto_then_readfrom(self._addr, bytes([reg]), self._buf))
         return self._buf[0] << 8 | self._buf[1]
 
     def _configure(self) -> None:
-        """Write the config, then wait two conversions so the result is this config's."""
+        """Waits two conversions, so the next result is this config's."""
         out = bytes([REG_CONFIG, ADC_CONFIG >> 8, ADC_CONFIG & 0xFF])
         self._locked(lambda: self._i2c.writeto(self._addr, out))
         self._sleep(2.0 / DATA_RATE_SPS)
@@ -92,14 +75,7 @@ class ContinuousADC:
 
 
 class Power:
-    """Battery health monitor.
-
-    Reads battery voltage through a 4:1 voltage divider and ADS1115 ADC
-    on the shared I2C bus. Runs a background thread that samples
-    periodically and maintains a smoothed voltage estimate.
-    """
-
-    # Voltage divider: 30kΩ + 10kΩ → ratio = (30k + 10k) / 10k = 4.0
+    # 30 kΩ over 10 kΩ
     DIVIDER_RATIO = 4.0
 
     # 3S 18650 thresholds (DEC-002)
@@ -109,21 +85,17 @@ class Power:
     VOLTAGE_CRITICAL = 9.9
     VOLTAGE_EMPTY = 9.0
 
-    # Exponential moving average weight (0–1, higher = more responsive)
     _EMA_ALPHA = 0.3
 
-    # Debounce / hysteresis (see battery_state.py)
     HYSTERESIS_V = 0.3     # WARNING clears at VOLTAGE_WARNING + this
-    CONFIRM_SAMPLES = 3    # consecutive samples needed to change state
-    FAULT_AFTER = 3        # consecutive failed ADC reads before sensor fault
-    READ_HISTORY = 3600    # monitoring read times kept: an hour at 1 Hz
+    CONFIRM_SAMPLES = 3    # readings in a row to change state
+    FAULT_AFTER = 3        # failed reads in a row
+    READ_HISTORY = 3600    # an hour at 1 Hz
 
     def __init__(self, channel=None, timer=time.perf_counter):
         """
-        channel: anything with .voltage (volts at the ADC pin), to test
-        without hardware; None opens the ADS1115 (the Pi's I2C libraries are
-        imported only then, so this module imports anywhere).
-        timer: seconds, for timing each monitoring read.
+        channel: anything with .voltage, for tests; None opens the ADS1115, importing the
+        Pi's I2C libraries only then.
         """
         self._timer = timer
         self._read_ms = deque(maxlen=self.READ_HISTORY)
@@ -157,22 +129,19 @@ class Power:
         self._sensor_ok = True
         self._callbacks = {"warning": [], "critical": [], "recovered": [], "fault": []}
 
-    # ── Callbacks (run on the sampling thread; keep them short) ───────
 
     def on_warning(self, cb: Callable[[], None]) -> None:
-        """Called once when the battery enters WARNING."""
+        """Callbacks run on the sampling thread, so keep them short."""
         self._callbacks["warning"].append(cb)
 
     def on_critical(self, cb: Callable[[], None]) -> None:
-        """Called once when the battery enters CRITICAL (latched)."""
         self._callbacks["critical"].append(cb)
 
     def on_recovered(self, cb: Callable[[], None]) -> None:
-        """Called when WARNING clears back to OK."""
         self._callbacks["recovered"].append(cb)
 
     def on_fault(self, cb: Callable[[], None]) -> None:
-        """Called once when the ADC can't be read FAULT_AFTER times in a row."""
+        """After FAULT_AFTER failed reads in a row."""
         self._callbacks["fault"].append(cb)
 
     def state(self) -> BatteryState:
@@ -180,15 +149,13 @@ class Power:
             return self._sm.state
 
     def sensor_ok(self) -> bool:
-        """False if the ADC has been unreadable (voltage() is stale)."""
+        """False once the ADC has been unreadable; voltage() is then stale."""
         with self._lock:
             return self._sensor_ok
 
     def preflight(self, samples: int = 5, delay_s: float = 0.2) -> Tuple[bool, float]:
-        """Resting-voltage check before a run. Returns (ok, volts).
-
-        Averages a few raw reads; ok is False below the warning threshold
-        or if the ADC can't be read. Call with motors idle.
+        """
+        (ok, volts) from a few raw reads at rest, motors idle. ok is False under WARNING or without a reading.
         """
         readings = []
         for _ in range(samples):
@@ -203,10 +170,8 @@ class Power:
         return v > self.VOLTAGE_WARNING, v
 
     def start_monitoring(self, interval_s: float = 1.0) -> None:
-        """Start background voltage sampling."""
         if self._running:
             return
-        # Seed the EMA with a real reading
         self._voltage_ema = self._read_battery_voltage()
         self._running = True
         self._thread = threading.Thread(
@@ -215,28 +180,26 @@ class Power:
         self._thread.start()
 
     def stop_monitoring(self) -> None:
-        """Stop the background sampling thread."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
             self._thread = None
 
     def voltage(self) -> float:
-        """Current smoothed battery voltage in volts."""
+        """Smoothed."""
         with self._lock:
             return self._voltage_ema
 
     def read_ms(self) -> list[float]:
-        """How long each monitoring read took, ms, oldest first (failed ones too)."""
+        """Each monitoring read's ms, oldest first, failed ones included."""
         with self._lock:
             return list(self._read_ms)
 
     def voltage_raw(self) -> float:
-        """Single un-smoothed ADC reading (for characterization)."""
+        """One unsmoothed read."""
         return self._read_battery_voltage()
 
     def percentage(self) -> float:
-        """Estimated remaining charge as 0–100%."""
         v = self.voltage()
         if v <= self.VOLTAGE_EMPTY:
             return 0.0
@@ -245,29 +208,25 @@ class Power:
         return (v - self.VOLTAGE_EMPTY) / (self.VOLTAGE_FULL - self.VOLTAGE_EMPTY) * 100.0
 
     def is_warning(self) -> bool:
-        """True in WARNING or CRITICAL, or if the sensor has faulted."""
+        """WARNING, CRITICAL, or a faulted sensor."""
         with self._lock:
             return self._sm.state >= BatteryState.WARNING or not self._sensor_ok
 
     def should_stop(self) -> bool:
-        """True once CRITICAL has latched. A sensor fault alone does not stop the bot."""
+        """CRITICAL has latched. A sensor fault alone doesn't stop the robot."""
         with self._lock:
             return self._sm.state == BatteryState.CRITICAL
 
     def is_healthy(self) -> bool:
-        """True if OK and the sensor is readable."""
         return not self.is_warning()
 
     def cleanup(self) -> None:
-        """Stop monitoring thread, release I2C."""
         self.stop_monitoring()
         if self._i2c is not None:
             self._i2c.deinit()
 
-    # ── Internal ───────────────────────────────────────────────────────
 
     def _read_battery_voltage(self) -> float:
-        """Read ADC and convert to battery voltage."""
         return self._chan.voltage * self.DIVIDER_RATIO
 
     def _fire(self, name: str) -> None:
