@@ -27,7 +27,7 @@ from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 TWO_BOUNDARY_FRAMES = 10
 # ...or at least one for this many (~2 s): past some intersections only one
 # line shows, and the crossing never ended (2026-10-01; tuned 2026-10-19)
-ONE_BOUNDARY_FRAMES = 40
+ONE_BOUNDARY_FRAMES = 20
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # ...or this much exit driving (tuned on the mat, 2026-10-19)
 MAX_CROSS_MS = 5500
