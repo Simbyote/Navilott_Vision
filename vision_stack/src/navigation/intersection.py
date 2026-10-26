@@ -43,7 +43,7 @@ ADVANCE_MS = 2500
 ADVANCE_CM: float | None = 22.3
 # Tuned on the mat at ~11.7 V (2026-10-19). With encoders, WheelSpeed holds
 # these duties' wheel speeds at any voltage
-LEFT_TURN = Command(0.52, 0.73)
+LEFT_TURN = Command(0.50, 0.73)
 RIGHT_TURN = Command(0.78, 0.25)
 # 90 less the coast after the turn stops
 TURN_TARGET_DEG = 85.0
