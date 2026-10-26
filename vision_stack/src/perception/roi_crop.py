@@ -41,7 +41,7 @@ LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
 # Around the course's light from its stop line (2026-10-06). Narrow, to keep
 # out a second light to the right and a red box below; up to the frame's top,
 # since the light rises in view when the robot stops further forward
-TRAFFIC = ROIBounds(x0=0.23, y0=0.00, x1=0.53, y1=0.23)
+TRAFFIC = ROIBounds(x0=0.23, y0=0.10, x1=0.53, y1=0.33)
 # Signs are posted right of the lane. Up to the frame's top: a top edge at
 # 0.20 cut a near sign into 5-7 vertices (sign_check, 2026-10-20)
 SIGN = ROIBounds(x0=0.55, y0=0.00, x1=1.00, y1=0.85)
