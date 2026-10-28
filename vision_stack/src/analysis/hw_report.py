@@ -14,7 +14,7 @@ import io
 import sys
 from pathlib import Path
 
-from src.analysis import camera_meta, common, gate_rejections, jitter, soak, stability, stage_timing
+from src.analysis import camera_meta, capture_report, common, gate_rejections, jitter, soak, stability, stage_timing
 
 # nav.csv and p3.csv are left out: a hardware run has none
 TOOLS = {
@@ -24,6 +24,7 @@ TOOLS = {
     "gate_rejections": (gate_rejections, gate_rejections.CSV_NAMES),
     "soak": (soak, ("system.csv",)),
     "camera_meta": (camera_meta, (camera_meta.CSV_NAME,)),
+    "capture_report": (capture_report, (capture_report.CSV_NAME,)),
 }
 OUTPUT_SUFFIXES = (".png", ".json")
 REPORT = "hw_report.txt"
@@ -52,6 +53,8 @@ def _fits(name: str, csv: Path) -> bool:
     """
     if name == "camera_meta":
         return camera_meta.is_frame_meta(csv)
+    if name == "capture_report":
+        return capture_report.is_latency(csv)
     if name != "jitter":
         return True
     try:

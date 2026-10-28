@@ -54,7 +54,7 @@ Everything runs from `~/Navilott_Vision/vision_stack`, where `src` can be import
 | Camera | `make camera-controls`, `make sweep-camera` | What the camera's controls are, and each candidate setting scored live on the sign, light and lane; `CAM="..."` sets controls for one run of the linkers and camera diagnostics |
 | Routines | `make routines`, `make routine-<name>` | Prompted hardware tests judged PASS / FAIL against a requirement (`src/routines/`) |
 | Diagnostics | `make diag-nav`, `diag-run`, `capture-anatomy`, `i2c-trace`, `sched-latency` | How a run uses the Pi: threads, cores, heat, the camera path, the I²C bus, wake-up latency |
-| Analysis | `make nav-report`, `pi-load`, `timing`, `timeline`, `jitter`, `camera-meta`, `sign-check`, `compare`... | Findings and figures from a run's recordings; `RUN=` picks the run, default the newest |
+| Analysis | `make nav-report`, `loop-budget`, `light-report`, `timing`, `timeline`, `jitter`, `pi-load`, `load-compare`, `camera-meta`, `capture-report`, `sched-report`, `fig8-report`, `obstacle-map`, `sign-check`, `compare`... | Findings and figures from a run's recordings; `RUN=` picks the run, default the newest; `BASE=` sets an earlier run beside it where a tool compares |
 | Tests | `make test`, `make test-hw`, `make soak`, `make lint` | Software tests on any machine; hardware characterization and the soak on the Pi |
 | Calibration | `make calib-camera`, `calib-stopline`, `calib-odometry`, `calib-ground`, `calib-lamps`, `sweep-lamps` | The lens, stop-line cm, encoder cm per count, the floor homography, the traffic-light bands; each writes to `calibration/` |
 

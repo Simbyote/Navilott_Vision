@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter camera-meta gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report obstacle-map gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -193,6 +193,28 @@ jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 
 camera-meta: ## what auto exposure and white balance chose per frame: exposure, gain, colour, lux (RUN=runs/meta_...)
 	$(PY) -m src.analysis.camera_meta $(strip $(RUN)) $(ARGS)
+
+capture-report: ## a capture-anatomy run as graphs: frame age at the sink, ARM time, each step per frame (RUN=...)
+	$(PY) -m src.analysis.capture_report $(strip $(RUN)) $(ARGS)
+
+sched-report: ## a sched-latency run as graphs: spread, deadlines, worst vs another run (RUN=... BASE=<idle run>)
+	$(PY) -m src.analysis.sched_report $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+loop-budget: ## where a navigation run's frame goes: capture, phases, outside the timers, by lane mode
+	$(PY) -m src.analysis.loop_budget $(strip $(RUN)) $(ARGS)
+
+light-report: ## the traffic light frame by frame: each reading, the vote, when it braked (render the run first)
+	$(PY) -m src.analysis.light_report $(strip $(RUN)) $(ARGS)
+
+load-compare: ## two diag_ recordings before and after a change: threads, cores, system (BASE=before NEW=after)
+	@test -n "$(strip $(BASE))" -a -n "$(strip $(NEW))" || (echo "usage: make load-compare BASE=<diag before> NEW=<diag after>"; exit 2)
+	$(PY) -m src.analysis.load_compare $(strip $(BASE)) $(strip $(NEW)) $(ARGS)
+
+fig8-report: ## a figure-eight run's turns and laps as graphs (RUN=runs/routine_figure-eight_..., BASE= an earlier one)
+	$(PY) -m src.analysis.fig8_report $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+obstacle-map: ## several obstacle-check runs as one object-by-gap grid, misses with their gate (RUN=<folder of runs>)
+	$(PY) -m src.analysis.obstacle_map $(strip $(RUN)) $(ARGS)
 
 gates: ## which detector gate refuses the most candidates
 	$(PY) -m src.analysis.gate_rejections $(strip $(RUN)) $(ARGS)

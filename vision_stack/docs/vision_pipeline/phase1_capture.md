@@ -152,5 +152,5 @@ The M12 lens has noticeable barrel distortion toward the edges. Calibration belo
 ## Open items
 
 - **Camera choice.** The IMX290 is the robot's camera. Changing it again means updating `SENSOR_CONFIG`, `FRAME_W`/`FRAME_H`, possibly `CAMERA_ROTATE_180`, and recalibrating.
-- **Capture timing.** Re-measure with `pytest --hardware -k capture` on the current camera, or see the whole capture path with `make capture-anatomy`. Numbers from the IMX219 at 480×360 no longer apply.
+- **Capture timing.** Re-measure with `pytest --hardware -k capture` on the current camera, or see the whole capture path with `make capture-anatomy` and graph it with `make capture-report` (each step's cost per frame, and how old a frame is when Python gets it). Numbers from the IMX219 at 480×360 no longer apply.
 - **Exposure.** `params.CAMERA_CONTROLS` is empty, so libcamera runs its own auto exposure and white balance; `make sweep-camera` compares settings where a detection fails. In a dim room the auto exposure blew the lamps out to white (2026-10-04). Locking exposure and white balance at the venue is the main lighting fix (`concepts.md`, "Lighting"); if motion blur shows up at driving speed, a fixed shorter shutter is the first thing to try.

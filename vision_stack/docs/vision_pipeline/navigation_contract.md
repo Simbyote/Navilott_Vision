@@ -202,9 +202,10 @@ The values in `intersection.py` come from that routine on 2026-10-20: `target=li
 | The summary's `contract  N commands rejected and braked` | A navigator bug; `nav.csv`'s `rule` and `event` columns say which rule |
 | Stops short of or past the line | `REACH_CM` (or `STOP_DELAY_MS` without odometry); `line_left_cm` shows where each stop landed |
 | Turns cut the corner or overshoot | `ADVANCE_CM` (`ADVANCE_MS`), then `TURN_TARGET_DEG`; `stage_cm` shows where each advance ended |
+| Stopped at a green or drove through a red | `make render`, then `make light-report`: each frame's reading, the vote and the braking on one axis |
 | A maneuver at the wrong intersection | A missed or false stop line shifted the route; check `step` in `nav.csv` |
 | Run ends on a straight | The lane was lost for ~1.35 s (Phase 3's hold, then `END_STALE_MS` creeping): glare or a sharp curve; check `lane_stale_slow` |
-| FPS well under 20 | `phase2_ms` in `nav.csv`; run with `--no-display` |
+| FPS well under 20 | `make loop-budget`: each phase against the 50 ms, and the time outside the timers; run with `--no-display` |
 | Robot never moves | `motors OFF (dry run)` in the summary (a replay or `--no-motors`), or it braked from the first frame: check `reason` |
 
 ---
