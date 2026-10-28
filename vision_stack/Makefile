@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -190,6 +190,9 @@ ab-parallel: $(HW) ## serial vs parallel over whole dry runs, alternated (RUNS=4
 
 jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 	$(PY) -m src.analysis.jitter $(strip $(RUN)) $(ARGS)
+
+camera-meta: ## what auto exposure and white balance chose per frame: exposure, gain, colour, lux (RUN=runs/meta_...)
+	$(PY) -m src.analysis.camera_meta $(strip $(RUN)) $(ARGS)
 
 gates: ## which detector gate refuses the most candidates
 	$(PY) -m src.analysis.gate_rejections $(strip $(RUN)) $(ARGS)
