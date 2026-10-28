@@ -83,6 +83,21 @@ sample_img/
 verification/
 /verification
 
+/calib_frames/
+**/calib_frames/
+calib_frames/
+/calib_frames
+
+/calib_frames_prev/
+**/calib_frames_prev/
+calib_frames_prev/
+/calib_frames_prev
+
+/calib_verify/
+**/calib_verify/
+calib_verify/
+/calib_verify
+
 /video/
 **/video/
 video/
