@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Pinned, so the field of view doesn't change with output size; a lens calibration holds only for this mode
 SENSOR_CONFIG = "sensor/config,width=1920,height=1080,depth=10"
-CAMERA_ROTATE_180 = True        # mounted upside down
+CAMERA_ROTATE_180 = False        # if camera is mounted upside down
 FRAME_W, FRAME_H = 480, 270     # 16:9, as the sensor
 FPS = 20
 # libcamerasrc controls, e.g. {"awb-mode": "daylight", "exposure-value": 1.0}; empty is the

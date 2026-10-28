@@ -44,7 +44,7 @@ ADVANCE_CM: float | None = 22.3
 # Tuned on the mat at ~11.7 V (2026-10-19; left 0.48 -> 0.50, 2026-10-26). With encoders, WheelSpeed holds
 # these duties' wheel speeds at any voltage
 LEFT_TURN = Command(0.50, 0.73)
-RIGHT_TURN = Command(0.78, 0.25)
+RIGHT_TURN = Command(0.78, 0.27)
 # 90 less the coast after the turn stops
 TURN_TARGET_DEG = 85.0
 # Heading deg per deg of stop-line tilt, measured with detect-range at
