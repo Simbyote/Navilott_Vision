@@ -149,7 +149,7 @@ An error in the bias integrates too: 0.2 °/s off is 12° a minute of drift. Tha
 
 ### PWM and duty cycle
 
-A motor's speed is set by switching its supply fully on and off very fast, **pulse-width modulation**. The **duty cycle** is the fraction of each cycle that's on: 0.4 is on 40% of the time, and the motor turns as if it had 40% of the voltage. Navilott's PWM is hardware PWM on GPIO12 and GPIO13 at 1 kHz, through pigpio, so the waveform stays steady even when Python is late.
+A motor's speed is set by switching its supply fully on and off very fast, **pulse-width modulation**. The **duty cycle** is the fraction of each cycle that's on: 0.4 is on 40% of the time, and the motor turns as if it had 40% of the voltage. Navilott's PWM is hardware PWM on GPIO12 and GPIO13 at 20 kHz (`params.MOTOR_PWM_HZ`), through pigpio, so the waveform stays steady even when Python is late. The frequency matters to the motor: a winding's current takes a few tens of microseconds to rise, so at 1 kHz (until 2026-10-28) it came in pulses, heating the motor more for the same speed and whining; at 20 kHz it's nearly smooth and above hearing.
 
 ### H-bridge, short brake, coast and standby
 

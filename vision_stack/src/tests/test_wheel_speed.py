@@ -16,7 +16,7 @@ import pytest
 from src.navigation.navigation_contract import STALL_DUTY, Command, command_problems
 from src.navigation.wheel_speed import (
     CPS_PER_DUTY, GAIN_LIMITS, INTEGRAL_LIMIT, INTEGRATE_BAND, KI, KP, LEARN_ALPHA, LEARN_MIN_DUTY,
-    LEARN_STEADY, WheelSpeed,
+    LEARN_STEADY, MAX_DUTY, WheelSpeed,
 )
 from src.tests.navigation_checks import packet
 
@@ -107,20 +107,20 @@ def test_the_gain_stays_within_its_limits():
 def test_the_pi_puts_a_weak_or_strong_motor_on_target(factor):
     ws = WheelSpeed()
     ws.encoders = True                                    # learning off: the PI alone does it
-    target = (0.50 * CPS_PER_DUTY, 0.73 * CPS_PER_DUTY)
+    target = (0.40 * CPS_PER_DUTY, 0.584 * CPS_PER_DUTY)          # the eased left turn
     motor = (factor * CPS_PER_DUTY, factor * CPS_PER_DUTY)
     cmds, speeds = run(ws, target, motor, 40, observe=False)
     assert speeds[-1] == pytest.approx(target, rel=0.03)  # 2 s at 20 FPS
     assert speeds[20] == pytest.approx(target, rel=0.06)  # most of it inside 1 s
     duty = cmds[-1].left
-    assert duty == pytest.approx(0.50 / factor, rel=0.03)
+    assert duty == pytest.approx(0.40 / factor, rel=0.03)
     assert all(command_problems(c) == [] for c in cmds)
 
 
 @pytest.mark.software
 def test_learning_and_the_pi_together_hold_the_speed_as_the_pack_drains():
     ws = WheelSpeed()
-    target = (1500.0, 2190.0)
+    target = (1200.0, 1752.0)
     fresh, _ = run(ws, target, (3300, 3300), 60)
     tired, speeds = run(ws, target, (2300, 2300), 60)
     assert speeds[-1] == pytest.approx(target, rel=0.03)
@@ -150,7 +150,17 @@ def test_a_driven_wheel_gets_the_stall_duty_and_a_zero_target_nothing():
     cmd = ws.drive(100.0, 0.0, p(0))
     assert cmd == Command(STALL_DUTY, 0.0)
     cmd = ws.drive(-100.0, 5000.0, p(1))
-    assert cmd == Command(-STALL_DUTY, 1.0)               # and never past full duty
+    assert cmd == Command(-STALL_DUTY, MAX_DUTY)          # and never past MAX_DUTY
+
+
+@pytest.mark.software
+def test_a_motor_too_weak_for_its_target_is_held_at_max_duty_not_full():
+    # 2026-10-28: the dying right N20 read slow, and the PI pushed it to 1.0
+    ws = WheelSpeed()
+    ws.encoders = True
+    # as on the day: the learned gain falls with the motor, and the feedforward asks 0.97
+    cmds, speeds = run(ws, (1200.0, 1752.0), (CPS_PER_DUTY, 0.6 * CPS_PER_DUTY), 120)
+    assert MAX_DUTY == 0.9 and max(c.right for c in cmds) == MAX_DUTY and speeds[-1][1] < 1752.0
 
 
 @pytest.mark.software

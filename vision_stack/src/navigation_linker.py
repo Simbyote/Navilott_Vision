@@ -21,6 +21,8 @@ from dataclasses import replace
 
 import numpy as np
 
+from src.analysis import motor_health
+from src.analysis.common import Table
 from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
@@ -154,6 +156,16 @@ class NavStats:
                                "p95": round(float(np.percentile(lat, 95)), 2),
                                "max": round(float(lat.max()), 2)},
                 "rejected": self.rejected}
+
+
+def motor_lines(out_dir: str, report: dict) -> list[str]:
+    """A weakening or stalled motor, from this run's nav.csv, at the top of the summary; report["motor_health"] keeps them."""
+    try:
+        found = motor_health.analyze(Table(os.path.join(out_dir, "nav.csv")))["findings"]
+    except (OSError, ValueError):
+        return []
+    report["motor_health"] = found
+    return [f" MOTORS                {f}" for f in found]
 
 
 def summary_lines(report: dict) -> list[str]:
@@ -422,7 +434,7 @@ def run(
                       "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
                       # nav.csv's t counts from here, so pi_load --run can line a recording up
                       "t0_monotonic": None if t0 is None else round(t0, 4)}}
-    lines = summary_lines(report) + [""] + stats.report()
+    lines = summary_lines(report) + motor_lines(out_dir, report) + [""] + stats.report()
 
     if render and recorder.written:
         window = Display(display, out_dir, ["navigation"])

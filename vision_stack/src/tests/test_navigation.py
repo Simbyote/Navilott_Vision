@@ -195,7 +195,7 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
 
 @pytest.mark.software
 def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
-    from src.navigation.intersection import LEFT_TURN, STAGE_ADVANCE, STAGE_TURN
+    from src.navigation.intersection import LEFT_TURN_DRIVEN, STAGE_ADVANCE, STAGE_TURN
     from src.navigation.route import Route
     wait_ms = STOP_DELAY_MS + 1000
     case = intersection({"drive_state": "caution"}, after_frames=0)
@@ -208,7 +208,7 @@ def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
     assert out[after_wait][2]["stage"] == (STAGE_ADVANCE if ADVANCE_MS else STAGE_TURN)
     assert out[after_wait][2]["maneuver"] == "left"
     turning = [(cmd, rec) for _, cmd, rec in out[after_wait:] if rec.get("stage") == STAGE_TURN]
-    assert turning and turning[0][0] == LEFT_TURN           # the advance used none of its time while held
+    assert turning and turning[0][0] == LEFT_TURN_DRIVEN    # the advance used none of its time while held
 
 
 @pytest.mark.software

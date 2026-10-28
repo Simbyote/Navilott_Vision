@@ -32,6 +32,9 @@ LEARN_STEADY = 0.02
 LEARN_ALPHA = 0.05
 GAIN_LIMITS = (0.6, 1.4)
 MAX_DT_MS = 500
+# The PI never asks more: a weakening motor read as slow got pushed to full duty
+# (2026-10-28). The turns need ~0.6-0.8 at 11.7 V, ~0.9 near the 9.9 V cutoff
+MAX_DUTY = 0.9
 
 
 @dataclass
@@ -79,7 +82,7 @@ class WheelSpeed:
         self._last_ms = None
 
     def drive(self, left_cps: float, right_cps: float, packet: EstimationPacket) -> Command:
-        """Duties for the target counts/s. A nonzero target gets at least STALL_DUTY; zero drives nothing."""
+        """Duties for the target counts/s, within MAX_DUTY. A nonzero target gets at least STALL_DUTY; zero drives nothing."""
         now = packet.timestamp_ms
         dt_s = 0.0 if self._last_ms is None else min(max(now - self._last_ms, 0), MAX_DT_MS) / 1000.0
         self._last_ms = now
@@ -96,7 +99,7 @@ class WheelSpeed:
                 if abs(err) < INTEGRATE_BAND * abs(target):
                     wheel.integral = clamp(wheel.integral + self.ki * err * dt_s, -INTEGRAL_LIMIT, INTEGRAL_LIMIT)
                 duty += self.kp * err + wheel.integral
-            duty = clamp(duty, -1.0, 1.0)
+            duty = clamp(duty, -MAX_DUTY, MAX_DUTY)
             if abs(duty) < STALL_DUTY:
                 duty = STALL_DUTY if target > 0 else -STALL_DUTY
             duties.append(round(duty, 4))

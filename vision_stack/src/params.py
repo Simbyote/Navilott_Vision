@@ -74,6 +74,13 @@ MOTOR_WATCHDOG_S = 0.5
 # A copy inside pigpiod brakes even when Python stalls: a 1,558 ms frame on
 # 2026-10-20 kept the turn's command on the wheels
 MOTOR_DAEMON_WATCHDOG = True
+# The TB6612's PWM, on the Pi's hardware PWM. At 1 kHz (until 2026-10-28) each
+# period outlasted the motor's current rise many times over, so the current came
+# in pulses: more heat for the same speed, and a whine. Small brushed motors are
+# usually driven at 10-25 kHz; the TB6612 takes up to 100 kHz. Pulled after the
+# right N20 died on 2026-10-28; the duty-to-speed gain and the stall duty were
+# measured at 1 kHz, so measure them again
+MOTOR_PWM_HZ = 20000
 
 # The nominal scale until calibrate_odometry runs: a 7-pulse encoder behind a
 # 200:1 gearbox. Measured beats it: tyres squash

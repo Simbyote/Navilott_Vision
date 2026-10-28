@@ -18,7 +18,7 @@ import time
 import pigpio
 
 from src.os_threads import name_os_thread, name_pigpio_threads
-from src.params import MOTOR_DAEMON_WATCHDOG, MOTOR_WATCHDOG_S
+from src.params import MOTOR_DAEMON_WATCHDOG, MOTOR_PWM_HZ, MOTOR_WATCHDOG_S
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ class MotorController:
         bin1: int = 25,   # right motor: high = forward
         bin2: int = 24,   # right motor: high = reverse
         stby: int = 23,
-        pwm_freq: int = 1000,
+        pwm_freq: int = MOTOR_PWM_HZ,
         watchdog_s: float | None = MOTOR_WATCHDOG_S,
         clock=time.monotonic,
         daemon_watchdog: bool = MOTOR_DAEMON_WATCHDOG,

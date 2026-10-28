@@ -19,7 +19,7 @@ import src.linker_io as lio
 from src.config import GYRO_BIAS_DPS
 from src.peripherals.sensing import SensorSample
 from src.navigation.intersection import (
-    ADVANCE_MS, LEFT_TURN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
+    ADVANCE_MS, LEFT_TURN_DRIVEN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
     TURN_END_TIME,
 )
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
@@ -104,7 +104,7 @@ def go(tmp_path, maneuver):
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, duties", [(LEFT, LEFT_TURN), (RIGHT, RIGHT_TURN), (STRAIGHT, None)])
+@pytest.mark.parametrize("maneuver, duties", [(LEFT, LEFT_TURN_DRIVEN), (RIGHT, RIGHT_TURN), (STRAIGHT, None)])
 def test_each_sequence_turns_its_way_holds_the_lane_after_and_passes(tmp_path, maneuver, duties):
     findings, motor, source = go(tmp_path, maneuver)
     assert findings["ended_by"] == il.SEQUENCE_DONE and findings["intersections"] == 1
@@ -138,6 +138,7 @@ def test_the_sequence_folder_holds_the_run_and_its_findings(tmp_path):
 def test_a_turn_the_gyro_never_sees_is_a_check(tmp_path):
     clock = FakeClock()
     frames = [(f, 0.0) for f, _ in sequence(LEFT)]                     # the robot "turns" but the gyro reads nothing
+    frames += [(scene(), 0.0)] * 100                                  # past the left turn's 7.3 s limit
     source = Source(clock, frames)
     findings = il.run_sequence(LEFT, source, Sensors(source), Motor(), SCENE_CONFIG,
                                out_dir=str(tmp_path / "left"), clock=clock, render=False)

@@ -78,3 +78,12 @@ def test_nav_report_and_fig8_report_carry_it(tmp_path):
     assert any("the right wheel weakened" in f for f in res["findings"])
     if f8.common.pyplot() is not None:
         assert f8.figure(a, res, None, "t", tmp_path / "f.png").is_file()
+
+
+def test_every_navigation_run_s_summary_names_a_failing_motor(tmp_path):
+    import src.navigation_linker as nl
+    rf.dying_motor(tmp_path)
+    report = {}
+    lines = nl.motor_lines(str(tmp_path), report)
+    assert any("MOTORS" in x and "the right wheel weakened" in x for x in lines)
+    assert report["motor_health"] and nl.motor_lines(str(tmp_path / "none"), {}) == []

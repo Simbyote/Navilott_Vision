@@ -24,7 +24,7 @@ import math
 import pytest
 
 from src.navigation.intersection import (
-    ADVANCE_CM, MAX_APPROACH_DEG, ADVANCE_MS, MAX_CROSS_CM, TILT_TO_HEADING, TILT_ZERO_DEG, LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
+    ADVANCE_CM, MAX_APPROACH_DEG, ADVANCE_MS, MAX_CROSS_CM, TILT_TO_HEADING, TILT_ZERO_DEG, LEFT_TURN, LEFT_TURN_DRIVEN, LEFT_TURN_MAX_MS, LEFT_TURN_SPEED, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
     REASON_TURNING, RIGHT_TURN, RIGHT_TURN_MAX_MS, SOURCE_HEADING_HOLD, SOURCE_TURN, STAGE_ADVANCE, STAGE_EXIT,
     STAGE_TO_LINE, STAGE_TURN, TURN_TARGET_DEG, TWO_BOUNDARY_FRAMES, IntersectionRule,
 )
@@ -259,12 +259,15 @@ def stages(out):
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
     assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.78, 0.27))     # 2026-10-28
+    # the left turn eased, both wheels alike: the same arc, slower on the right motor
+    assert LEFT_TURN_SPEED == 0.8 and LEFT_TURN_DRIVEN == Command(0.40, 0.584)
+    assert LEFT_TURN_DRIVEN.right / LEFT_TURN_DRIVEN.left == pytest.approx(LEFT_TURN.right / LEFT_TURN.left)
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
-    assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
+    assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 7300, 2400)     # left eased 2026-10-28
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN), (RIGHT, YAW_DPS, RIGHT_TURN)])
+@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN_DRIVEN), (RIGHT, YAW_DPS, RIGHT_TURN)])
 def test_a_turn_starts_at_the_line_and_ends_on_the_gyro_target(maneuver, yaw, duties):
     _, out = drive(turn_case(yaw), maneuver=maneuver)
     st = stages(out)
@@ -289,7 +292,7 @@ def test_a_turn_the_gyro_never_sees_ends_at_its_time_limit(maneuver, max_ms):
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN), (RIGHT, YAW_DPS, RIGHT_TURN)])
+@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN_DRIVEN), (RIGHT, YAW_DPS, RIGHT_TURN)])
 def test_with_wheel_speed_a_turn_runs_its_duties_without_encoders_and_more_on_slow_wheels(maneuver, yaw, duties):
     _, out = drive(turn_case(yaw), maneuver=maneuver, wheels=WheelSpeed())
     turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]

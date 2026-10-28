@@ -45,6 +45,12 @@ ADVANCE_CM: float | None = 22.3
 # these duties' wheel speeds at any voltage
 LEFT_TURN = Command(0.50, 0.73)
 RIGHT_TURN = Command(0.78, 0.27)
+# The left turn's speed, as a share of the tuned one. Its outer (right) wheel ran
+# 4 s at ~2190 counts/s, the robot's fastest, twice the high-duty time the left
+# motor got, and the right N20 failed there (2026-10-28: weakest at speed, 20%
+# down in left turns against 4% in lane keeping). Both wheels slow alike, so the
+# ratio and the arc stay; the turn takes ~1/0.8 as long
+LEFT_TURN_SPEED = 0.8
 # 90 less the coast after the turn stops
 TURN_TARGET_DEG = 85.0
 # Heading deg per deg of stop-line tilt, measured with detect-range at
@@ -55,10 +61,13 @@ TILT_TO_HEADING: float | None = -4.3
 TILT_ZERO_DEG = 0.19
 # Caps a wrong scale; the stop-line tilt gate refuses steeper lines anyway
 MAX_APPROACH_DEG = 10.0
-# Turn time limits when the gyro never gets there: open-loop times plus half
-LEFT_TURN_MAX_MS = 4100
+# Turn time limits when the gyro never gets there: the turn's time plus half. The
+# left turn took ~3.9 s on 2026-10-28 (4 of 38 met the old 4.1 s limit); eased, ~4.9 s
+LEFT_TURN_MAX_MS = 7300
 RIGHT_TURN_MAX_MS = 2400
-TURNS = {LEFT: (LEFT_TURN, -1, LEFT_TURN_MAX_MS),        # (duties, heading sign, time limit); + heading = right
+# What the left turn drives: (0.40, 0.584), ~1200 and ~1750 counts/s
+LEFT_TURN_DRIVEN = Command(round(LEFT_TURN.left * LEFT_TURN_SPEED, 4), round(LEFT_TURN.right * LEFT_TURN_SPEED, 4))
+TURNS = {LEFT: (LEFT_TURN_DRIVEN, -1, LEFT_TURN_MAX_MS),        # (duties, heading sign, time limit); + heading = right
          RIGHT: (RIGHT_TURN, +1, RIGHT_TURN_MAX_MS)}
 
 STAGE_TO_LINE, STAGE_ADVANCE, STAGE_TURN, STAGE_EXIT = "to_line", "advance", "turn", "exit"
