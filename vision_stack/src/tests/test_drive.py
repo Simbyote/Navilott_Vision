@@ -478,10 +478,11 @@ def test_drive_characterization(artifacts):
     # A crossed pairing puts the driven motor's counts on the OTHER encoder, so
     # compare the two sides rather than demand zero: driving one wheel pivots
     # the chassis and nudges the idle one (2026-10-12: 24 counts against 1770)
-    assert left_only["left"] > 20 and abs(left_only["right"]) <= CROSSTALK * left_only["left"], \
-        "left motor moved the right encoder: pairing crossed"
-    assert right_only["right"] > 20 and abs(right_only["left"]) <= CROSSTALK * right_only["right"], \
-        "right motor moved the left encoder: pairing crossed"
+    # A dead side says so first: with no counts of its own, any nudge on the other reads as "crossed"
+    for side, other, leg_ in (("left", "right", left_only), ("right", "left", right_only)):
+        assert leg_[side] > 20, (f"{side} motor alone: {leg_[side]} {side} counts, {leg_[other]} {other} "
+                                 f"(motor, its driver channel or its encoder isn't working)")
+        assert abs(leg_[other]) <= CROSSTALK * leg_[side], f"{side} motor moved the {other} encoder: pairing crossed"
     assert forward["left"] > 20 and forward["right"] > 20, "forward: a wheel has no counts or counts backward"
     assert reverse["left"] < -20 and reverse["right"] < -20, "reverse: a wheel has no counts or counts forward"
     assert spin["left"] > 20 and spin["right"] < -20, "spin: sides don't turn opposite ways"
