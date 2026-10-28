@@ -177,7 +177,8 @@ def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_pat
     ground.write_text(json.dumps({
         "H": [list(r) for r in SYNTHETIC_GROUND.H], "image_size": [FRAME_W, FRAME_H],
         "undistort_alpha": MEASURED.preprocess.undistort_alpha,
-        "lens_calibration": {"sha256": lens_id(MEASURED.preprocess.calibration_path)}}))
+        "lens_calibration": {"sha256": lens_id(MEASURED.preprocess.calibration_path)},
+        "marks": [{"rows": 120}]}))
     probe = ("import src.params as p, pathlib; "
              f"p.GROUND_HOMOGRAPHY_PATH = pathlib.Path({str(ground)!r}); "
              "import src.config as c, src.tests.scenes as s; "
@@ -194,11 +195,19 @@ def test_measured_loads_the_ground_homography_against_its_own_preprocess(tmp_pat
     (False, False, True),           # neither: the stop line has no cm this run
 ])
 def test_only_a_stop_line_without_any_cm_source_warns(tmp_path, ground, table, warns):
-    gone = tmp_path / "nothing_here.json"
+    # A table fit against today's lens, not the repo's: that one is refused whenever the lens is recalibrated
+    import json
+    from src.perception.ground import lens_id
+    gone, fit = tmp_path / "nothing_here.json", tmp_path / "stop_line_table.json"
+    fit.write_text(json.dumps({
+        "curve": [800.0, 160.0, -2.0], "image_size": [FRAME_W, FRAME_H],
+        "undistort_alpha": MEASURED.preprocess.undistort_alpha,
+        "lens_calibration": {"sha256": lens_id(MEASURED.preprocess.calibration_path)},
+        "marks": [{"rows": 120}]}))
     probe = ("import warnings; warnings.simplefilter('always'); "
              "import src.params as p, pathlib; "
              f"p.GROUND_HOMOGRAPHY_PATH = pathlib.Path({str(gone)!r}); "
-             + ("" if table else f"p.STOP_LINE_TABLE_PATH = pathlib.Path({str(gone)!r}); ")
+             + f"p.STOP_LINE_TABLE_PATH = pathlib.Path({str(fit if table else gone)!r}); "
              + "import src.config as c; print(c.MEASURED.ground is None, c.MEASURED.stop_line_table is None)")
     r = subprocess.run([sys.executable, "-c", probe], cwd=PIPELINE_ROOT, capture_output=True, text=True, check=True)
     assert r.stdout.split() == ["True", str(not table)]

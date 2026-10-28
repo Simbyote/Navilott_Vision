@@ -22,9 +22,9 @@ from src.tests.sim_robot import FakeBattery
 pytestmark = pytest.mark.software
 
 
-def test_the_camera_runs_at_20_fps_480x270_upside_down():
+def test_the_camera_runs_at_20_fps_480x270_upright():
     assert (params.FPS, params.FRAME_W, params.FRAME_H) == (20, 480, 270)
-    assert params.CAMERA_ROTATE_180 and params.MIN_FPS <= params.FPS <= params.MAX_FPS
+    assert not params.CAMERA_ROTATE_180 and params.MIN_FPS <= params.FPS <= params.MAX_FPS
     assert params.SENSOR_CONFIG == "sensor/config,width=1920,height=1080,depth=10"
 
 

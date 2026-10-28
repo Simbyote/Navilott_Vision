@@ -113,7 +113,9 @@ class UpsideDownCamera:
 
 
 @pytest.mark.software
-def test_camera_frames_are_turned_upright_before_measuring():
+def test_camera_frames_are_turned_upright_before_measuring(monkeypatch):
+    import src.capture.camera as camera
+    monkeypatch.setattr(camera, "CAMERA_ROTATE_180", True)      # an upside-down mount, as before 2026-10-28
     # Since the pipeline stopped flipping (ac99b10), a frame used as read puts
     # the tape at the top of the view, outside the lane ROI: 0 of 15 frames
     cam = UpsideDownCamera(tape(30))
@@ -125,7 +127,9 @@ def test_camera_frames_are_turned_upright_before_measuring():
 
 @pytest.mark.software
 def test_main_grabs_upright_frames_from_the_camera(monkeypatch):
+    import src.capture.camera as camera
     import src.scripts.calibrate_camera as cc
+    monkeypatch.setattr(camera, "CAMERA_ROTATE_180", True)
     cam = UpsideDownCamera(tape(30))
     monkeypatch.setattr(cc, "open_camera", lambda w, h: cam)
     grabbed = {}

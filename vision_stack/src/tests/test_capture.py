@@ -169,10 +169,10 @@ def test_the_robots_pipeline_takes_bgr_from_the_isp_and_converts_nothing_on_the_
 
 
 @pytest.mark.software
-def test_the_upside_down_camera_is_turned_in_opencv(monkeypatch):
+def test_an_upside_down_camera_is_turned_in_opencv(monkeypatch):
+    monkeypatch.setattr(camera, "CAMERA_ROTATE_180", True)
     raw = np.arange(H * W * 3, dtype=np.uint8).reshape(H, W, 3)
     src, _ = opened_source(monkeypatch, [(True, raw.copy())])
-    assert camera.CAMERA_ROTATE_180
     np.testing.assert_array_equal(src.read().frame, raw[::-1, ::-1])     # 180 degrees: both axes reversed
 
 

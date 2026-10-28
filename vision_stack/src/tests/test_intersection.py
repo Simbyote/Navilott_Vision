@@ -258,7 +258,7 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.78, 0.25))     # 2026-10-26
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.78, 0.27))     # 2026-10-28
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
 
