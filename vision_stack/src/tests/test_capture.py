@@ -348,3 +348,35 @@ def test_capture_characterization(request, artifacts):
     # Soft flag only: data collection, not a gate.
     if effective_fps < 0.95 * CAMERA["fps"]:
         warnings.warn(f"effective fps {effective_fps:.1f} below target {CAMERA['fps']}")
+
+@pytest.mark.software
+def test_a_bad_control_value_fails_by_name_before_the_camera_opens():
+    for controls, says in (({"awb-mode": "sunny"}, "awb-mode takes one of auto"),
+                           ({"saturation": 40}, "saturation takes 0.0 to 32.0"),
+                           ({"exposure-time": 1.5}, "exposure-time takes a whole number"),
+                           ({"ae-enable": 1}, "ae-enable takes true or false"),
+                           ({"exposure-value": "bright"}, "exposure-value takes a number")):
+        with pytest.raises(ValueError, match=says):
+            format_controls(controls)
+        with pytest.raises(ValueError, match=says):
+            CameraSource(480, 270, 20, controls=controls)
+    assert format_controls({"awb-mode": "Daylight", "ae-exposure-mode": 1, "exposure-value": -8}) == \
+        "awb-mode=Daylight ae-exposure-mode=1 exposure-value=-8", "names ignore case; an enum takes its index"
+
+
+@pytest.mark.software
+def test_every_control_is_described_with_what_params_sets():
+    lines = camera.describe_controls({"awb-mode": "daylight"})
+    names = [ln.split()[0] for ln in lines[::2]]
+    assert names == list(camera.CAMERA_CONTROLS_SPEC) and set(names) == camera.CAMERA_CONTROL_NAMES
+    assert any(ln.startswith("awb-mode") and ln.endswith("[set: daylight]") for ln in lines)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("module", ["src.phase2_linker", "src.phase3_linker"])
+def test_the_watching_linkers_take_camera_controls_and_refuse_bad_ones(module, capsys):
+    import importlib
+    mod = importlib.import_module(module)
+    cli = mod.cli if module == "src.phase3_linker" else (lambda argv: mod.live_view.cli(mod.run_live_view, argv))
+    assert cli(["--camera", "--camera-control", "awb-mode=sunny"]) == 2
+    assert "camera control error: bad camera control value: awb-mode" in capsys.readouterr().out

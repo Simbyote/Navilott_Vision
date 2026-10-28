@@ -12,8 +12,8 @@ SENSOR_CONFIG = "sensor/config,width=1920,height=1080,depth=10"
 CAMERA_ROTATE_180 = True        # mounted upside down
 FRAME_W, FRAME_H = 480, 270     # 16:9, as the sensor
 FPS = 20
-# libcamerasrc controls, e.g. {"exposure-value": -1.0}; empty is the camera's auto.
-# Try values first with a linker's --camera-control. Exposure changes the lanes too
+# libcamerasrc controls, e.g. {"awb-mode": "daylight", "exposure-value": 1.0}; empty is the
+# camera's auto. make camera-controls lists them; make sweep-camera tries them. They move the lanes too
 CAMERA_CONTROLS: dict = {}
 # Outside this band CameraSource warns: too sparse to steer, or too fast for the Pi
 MIN_FPS = 5

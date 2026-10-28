@@ -21,8 +21,8 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-from src.capture.camera import CameraSource, CaptureError
-from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR
+from src.capture.camera import CameraSource, CaptureError, parse_controls
+from src.params import CAMERA_CONTROLS, FPS, FRAME_H, FRAME_W, RUNS_DIR
 import src.debugger.debug_video as dv
 import src.debugger.debug_lane as debug_lane
 import src.debugger.debug_lanegeo as debug_lanegeo
@@ -476,6 +476,9 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
                     help="HSV ranges JSON to use instead of the config's "
                          "(MEASURED loads calibration/hsv_ranges.json)")
     ap.add_argument("--no-display", action="store_true", help="force headless")
+    ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
+                    help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, "
+                         "e.g. --camera-control awb-mode=daylight (make camera-controls lists them)")
     ap.add_argument("--out", default=None, metavar="DIR")
 
     argv = sys.argv[1:] if argv is None else argv
@@ -495,9 +498,14 @@ def cli(runner: Callable, argv: list[str] | None = None) -> int:
     views = [VIEWS[n](conf_threshold=thresholds.get(n)) for n in names]
 
     try:
+        controls = parse_controls(args.camera_control)
+    except ValueError as exc:
+        print(f"camera control error: {exc}")
+        return 2
+    try:
         if args.camera:
             source = CameraFrameSource(args.width, args.height,
-                                       args.fps or FPS)
+                                       args.fps or FPS, {**CAMERA_CONTROLS, **controls})
         elif args.video:
             source = VideoFrameSource(args.video, args.fps)
         else:

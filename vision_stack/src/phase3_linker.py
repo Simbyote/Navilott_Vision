@@ -18,9 +18,9 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
-from src.capture.camera import CaptureError
+from src.capture.camera import CaptureError, parse_controls
 from src.perception.color_branch import load_hsv_ranges
-from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
+from src.params import CAMERA_CONTROLS, FPS, FRAME_H, FRAME_W, RUNS_DIR, STOP_SIGN, TRAFFIC_LIGHT
 from src.config import MEASURED, MEASURED_ESTIMATION, PipelineConfig
 from src.phase2_linker import ChainResult, run_chain
 import src.debugger.debug_video as dv
@@ -454,6 +454,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-video", action="store_true",
                     help="don't record p3_debug.avi / .csv")
     ap.add_argument("--no-display", action="store_true", help="force headless")
+    ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
+                    help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, "
+                         "e.g. --camera-control awb-mode=daylight (make camera-controls lists them)")
     ap.add_argument("--scale", type=int, default=1, help="magnify the video and window")
     ap.add_argument("--out", default=None, metavar="DIR")
 
@@ -466,8 +469,13 @@ def cli(argv: list[str] | None = None) -> int:
     parallel.apply(args)
 
     try:
+        controls = parse_controls(args.camera_control)
+    except ValueError as exc:
+        print(f"camera control error: {exc}")
+        return 2
+    try:
         if args.camera:
-            source = CameraFrameSource(args.width, args.height, args.fps or FPS)
+            source = CameraFrameSource(args.width, args.height, args.fps or FPS, {**CAMERA_CONTROLS, **controls})
         elif args.video:
             source = VideoFrameSource(args.video, args.fps)
         else:

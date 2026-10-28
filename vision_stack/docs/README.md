@@ -51,6 +51,7 @@ Everything runs from `~/Navilott_Vision/vision_stack`, where `src` can be import
 | Start here | `make session TIME="YYYY-MM-DD HH:MM"`, `make pigpiod` | Every boot on the Pi: the clock (NTP is blocked), the GPIO daemon, the venv |
 | Race day | `make run` | The course: route, start button, countdown, time on the display; nothing recorded (`src/main.py`) |
 | Linkers | `make phase2`, `phase3`, `maneuver`, `navigate`, `nav-dry`, `intersection`, `render` | The chain up to one point, recorded with debug video: Phase 2 views, Phase 3 packets, a drive trial, the whole chain driving, one intersection judged |
+| Camera | `make camera-controls`, `make sweep-camera` | What the camera's controls are, and each candidate setting scored live on the sign, light and lane; `CAM="..."` sets controls for one run of the linkers and camera diagnostics |
 | Routines | `make routines`, `make routine-<name>` | Prompted hardware tests judged PASS / FAIL against a requirement (`src/routines/`) |
 | Diagnostics | `make diag-nav`, `diag-run`, `capture-anatomy`, `i2c-trace`, `sched-latency` | How a run uses the Pi: threads, cores, heat, the camera path, the I²C bus, wake-up latency |
 | Analysis | `make nav-report`, `pi-load`, `timing`, `timeline`, `jitter`, `sign-check`, `compare`... | Findings and figures from a run's recordings; `RUN=` picks the run, default the newest |

@@ -35,7 +35,7 @@ Every vision rule is a comparison against light: how bright, which color. Change
 
 What helps, cheapest first:
 
-1. **Control the camera.** `params.CAMERA_CONTROLS` is empty, so libcamera's auto exposure and auto white balance chase the room. In a dim room the auto exposure blew the lamps out to white (2026-10-04). Locking both at the venue makes "the lighting" a constant the thresholds were tuned for.
+1. **Control the camera.** `params.CAMERA_CONTROLS` is empty, so libcamera's auto exposure and auto white balance chase the room. In a dim room the auto exposure blew the lamps out to white (2026-10-04); backlit by windows, a stop sign turned dark purple (2026-10-26). `make sweep-camera` compares settings on the spot (`vision_pipeline/phase1_capture.md`, "Camera controls"). Locking both at the venue makes "the lighting" a constant the thresholds were tuned for.
 2. **Compare instead of measuring absolutes.** A fixed "brighter than 200" breaks when the room dims; "redder than the other two channels" ([Otsu](#thresholding-and-otsus-method) on redness, for the stop sign) or "clipped to white" (glow mode, for the lamps) holds up better.
 3. **Calibrate against a known reference.** The white tape is on every frame; measuring it at the start would set the thresholds per run. Not built yet.
 4. **Shade the camera.** A small hood cuts overhead glare off the mat.
