@@ -56,7 +56,7 @@ Everything runs from `~/Navilott_Vision/vision_stack`, where `src` can be import
 | Diagnostics | `make diag-nav`, `diag-run`, `capture-anatomy`, `i2c-trace`, `sched-latency` | How a run uses the Pi: threads, cores, heat, the camera path, the I²C bus, wake-up latency |
 | Analysis | `make nav-report`, `loop-budget`, `light-report`, `timing`, `timeline`, `jitter`, `pi-load`, `load-compare`, `camera-meta`, `capture-report`, `sched-report`, `fig8-report`, `obstacle-map`, `sign-check`, `compare`... | Findings and figures from a run's recordings; `RUN=` picks the run, default the newest; `BASE=` sets an earlier run beside it where a tool compares |
 | Tests | `make test`, `make test-hw`, `make soak`, `make lint` | Software tests on any machine; hardware characterization and the soak on the Pi |
-| Calibration | `make calib-camera`, `calib-stopline`, `calib-odometry`, `calib-ground`, `calib-lamps`, `sweep-lamps` | The lens, stop-line cm, encoder cm per count, the floor homography, the traffic-light bands; each writes to `calibration/` |
+| Calibration | `make calib-camera`, `calib-lane`, `calib-stopline`, `calib-odometry`, `calib-ground`, `calib-lamps`, `sweep-lamps` | The lens, where a centered robot sees its lane and its width in px (for `config.py`), stop-line cm, encoder cm per count, the floor homography, the traffic-light bands; the others write to `calibration/` |
 
 Options are make variables: `VIDEO=` or `FRAMES=` replays instead of the camera, `RUN=` picks a run folder, `ARGS="..."` passes anything else through. Run folders land in `runs/`, hardware-test output in `artifacts/`.
 

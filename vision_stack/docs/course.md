@@ -56,7 +56,7 @@ A map of the practice arena, with each segment labeled, would make course record
 | Lateral position | centered on the robot | The robot is assumed to sit at the horizontal center of the image |
 | Orientation | Upside down, corrected in capture | Capture flip setting |
 
-**The camera must sit on the robot's centerline.** Lane offset treats the image center as the robot's position.
+**The camera should sit on the robot's centerline, pointing straight ahead.** Lane offset reads the robot as sitting at `robot_x_px` of the lane ROI, its middle when unset. A camera shifted or turned off the centerline makes lane keeping hold the robot to one side of its lane, and raising `expected_half_lane_px` can't fix that (it only moves one-line frames). After moving the mount, park the robot centered in a straight lane and run `make calib-lane`: it measures where the lane's middle falls (`robot_x_px`) and the lane's width in px (`expected_half_lane_px`, `min_lane_width_px`).
 
 Moving the mount changes the height, tilt or position, which invalidates the lens calibration and the ground scale, and shifts where the lane appears in the frame. Re-measure the ground scale after any mount change (`requirements.md`, P3 procedure, step 1).
 

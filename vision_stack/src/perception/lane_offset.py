@@ -35,6 +35,9 @@ class LaneOffsetConfig:
     # Lane-ROI px from a boundary to the lane center; None disables one-boundary
     # mode. MEASURED sets the course's 178 (config.py)
     expected_half_lane_px: float | None = 228
+    # Lane-ROI px of the robot's centerline: where a centered robot sees its lane's middle.
+    # None is the ROI's middle, right for a camera square on the centerline
+    robot_x_px: float | None = None
     foot_band_px: int = FOOT_BAND_PX    # only when geometry didn't store a foot_x
     # Candidates this much within a stop line are it, or the pocket it encloses: skipped. None disables
     stop_line_overlap: float | None = 0.5
@@ -179,6 +182,7 @@ def _single_sided(
         anchor: BoundaryAnchor,
         side: str,
         center_x: float,
+        scale: float,
         config: LaneOffsetConfig,
         frame_id: int,
         timestamp_ms: int,
@@ -210,11 +214,11 @@ def _single_sided(
         implied_center = anchor.foot_x - half
         mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
 
-    offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    offset = clamp((center_x - implied_center) / scale, -1.0, 1.0)
     # The side is a guess from the ROI half; past a boundary it's wrong, and
     # Phase 3 takes this instead when the guess breaks continuity
     mirrored = implied_center + (2 * half if side == "right" else -2 * half)
-    other_side = clamp((center_x - mirrored) / center_x, -1.0, 1.0)
+    other_side = clamp((center_x - mirrored) / scale, -1.0, 1.0)
     return LaneOffsetResult(
         offset = round(offset, 4),
         left_x = left_x,
@@ -233,6 +237,7 @@ def _project_single(
         anchor: BoundaryAnchor,
         side: str,
         center_x: float,
+        scale: float,
         config: LaneOffsetConfig,
         frame_id: int,
         timestamp_ms: int,
@@ -255,9 +260,9 @@ def _project_single(
         implied_center = anchor.foot_x - half
         mode, left_x, right_x = MODE_RIGHT_ONLY, None, anchor.foot_x
 
-    offset = clamp((center_x - implied_center) / center_x, -1.0, 1.0)
+    offset = clamp((center_x - implied_center) / scale, -1.0, 1.0)
     mirrored = implied_center + (2 * half if side == "right" else -2 * half)
-    other_side = clamp((center_x - mirrored) / center_x, -1.0, 1.0)
+    other_side = clamp((center_x - mirrored) / scale, -1.0, 1.0)
     return LaneOffsetResult(
         offset = round(offset, 4),
         left_x = left_x,
@@ -310,7 +315,8 @@ def compute_lane_offset(
     timestamp_ms = geometry.timestamp_ms
 
     roi_width = roi.lane_rect[2]
-    center_x = roi_width / 2.0
+    scale = roi_width / 2.0                 # [-1, 1] spans half the ROI, wherever the robot sits in it
+    center_x = scale if config.robot_x_px is None else float(config.robot_x_px)
 
     raw = list(geometry.lane_candidates)
     usable = []
@@ -357,7 +363,7 @@ def compute_lane_offset(
             )
             best = max(anchors, key=lambda a: a.weight)
             side = "left" if best.foot_x < center_x else "right"
-            return _summary(_single_sided(best, side, center_x, config,
+            return _summary(_single_sided(best, side, center_x, scale, config,
                                           frame_id, timestamp_ms,
                                           boundary_count, log))
 
@@ -368,12 +374,12 @@ def compute_lane_offset(
             )
             best = max(anchors, key=lambda a: a.weight)
             side = "left" if best.foot_x < center_x else "right"
-            return _summary(_single_sided(best, side, center_x, config,
+            return _summary(_single_sided(best, side, center_x, scale, config,
                                           frame_id, timestamp_ms,
                                           boundary_count, log))
 
         lane_center = (left.foot_x + right.foot_x) / 2.0
-        offset = clamp((center_x - lane_center) / center_x, -1.0, 1.0)
+        offset = clamp((center_x - lane_center) / scale, -1.0, 1.0)
         total_weight = left.weight + right.weight
         mean_weight = total_weight / 2.0 if total_weight > 0 else 0.0
 
@@ -392,7 +398,7 @@ def compute_lane_offset(
     anchor = left if left is not None else right
     side = "left" if left is not None else "right"
     log.append(f"[ONE-SIDED] only a {side} boundary is usable this frame")
-    return _summary(_single_sided(anchor, side, center_x, config,
+    return _summary(_single_sided(anchor, side, center_x, scale, config,
                                   frame_id, timestamp_ms, boundary_count, log))
 
 
@@ -408,7 +414,8 @@ def estimate_lane_offset(
     timestamp_ms = geometry.timestamp_ms
 
     roi_width = roi.lane_rect[2]
-    center_x = roi_width / 2.0
+    scale = roi_width / 2.0                 # [-1, 1] spans half the ROI, wherever the robot sits in it
+    center_x = scale if config.robot_x_px is None else float(config.robot_x_px)
 
     usable = [c for c in geometry.lane_candidates
               if _on_stop_line(c, geometry.stop_line_candidates, config.stop_line_overlap) is None
@@ -433,11 +440,11 @@ def estimate_lane_offset(
                 or lane_width_px > config.max_lane_width_px):
             best = max(anchors, key=lambda a: a.weight)
             side = "left" if best.foot_x < center_x else "right"
-            return _project_single(best, side, center_x, config,
+            return _project_single(best, side, center_x, scale, config,
                                    frame_id, timestamp_ms, boundary_count)
 
         lane_center = (left.foot_x + right.foot_x) / 2.0
-        offset = clamp((center_x - lane_center) / center_x, -1.0, 1.0)
+        offset = clamp((center_x - lane_center) / scale, -1.0, 1.0)
         total_weight = left.weight + right.weight
         mean_weight = total_weight / 2.0 if total_weight > 0 else 0.0
 
@@ -455,5 +462,5 @@ def estimate_lane_offset(
 
     anchor = left if left is not None else right
     side = "left" if left is not None else "right"
-    return _project_single(anchor, side, center_x, config,
+    return _project_single(anchor, side, center_x, scale, config,
                            frame_id, timestamp_ms, boundary_count)

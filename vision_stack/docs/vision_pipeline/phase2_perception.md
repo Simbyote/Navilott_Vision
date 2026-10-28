@@ -261,7 +261,7 @@ Geometry decides "is this a lane marking". Lane offset decides "is it trustworth
 
 Each usable candidate becomes an anchor at its `foot_x`, weighted by confidence × (0.5 + 0.5 × proximity). A strong marking far up the ROI is real, but it says less about where the robot is right now.
 
-The robot sits at the center of the lane ROI. Its lane is bounded by the **nearest** anchor on each side, not the outermost pair. On a two-lane street, the outermost pair would center the robot on the whole street.
+The robot sits at `robot_x_px` of the lane ROI: its middle unless the camera is off the robot's centerline (`make calib-lane` measures it). Its lane is bounded by the **nearest** anchor on each side, not the outermost pair. On a two-lane street, the outermost pair would center the robot on the whole street.
 
 1. Anchors on both sides of center: take the nearest on each side.
 2. All anchors on one side (the robot has drifted out): take the two nearest center. They still describe the nearest lane, and the offset steers back.
@@ -273,7 +273,7 @@ Then the pair's spacing is checked. Closer than `min_lane_width_px` means one ma
 
 ```
 lane_center = (left_x + right_x) / 2
-offset      = clamp((roi_center − lane_center) / roi_center, −1, +1)
+offset      = clamp((robot_x − lane_center) / (ROI width / 2), −1, +1)     robot_x: robot_x_px, or the ROI's middle
 ```
 
 **Sign: + means the robot is right of lane center, so steer left.** The lane center appears left of the image center when the robot has drifted right. Older docs said the opposite; the code and this doc are what count.

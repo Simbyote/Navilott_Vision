@@ -332,6 +332,24 @@ def test_one_boundary_carries_its_offset_were_it_the_lanes_other_side(x):
 
 
 @pytest.mark.software
+def test_robot_x_moves_where_the_robot_sits_but_not_the_scale():
+    # A camera off the centerline sees a centered robot's lane middle at 170, not 150
+    off = replace(TEST_CFG, robot_x_px=170.0)
+    res, _ = run([cand(70), cand(270)], cfg=off)
+    assert res.mode == "two_boundary" and res.offset == 0.0, "lane middle at robot_x: centered"
+    plain, _ = run([cand(70), cand(270)])
+    assert plain.offset == pytest.approx(-20 / CENTER_X, abs=1e-4), "unset: read against the ROI's middle"
+    res, _ = run([cand(50), cand(250)], cfg=off)
+    assert res.offset == pytest.approx(20 / CENTER_X, abs=1e-4), "still [-1, 1] of half the ROI"
+    res, _ = run([cand(160)], cfg=off)
+    assert res.mode == "left_only", "sides split at robot_x: 160 is left of 170"
+    roi = make_roi()
+    for cands in ([cand(70), cand(270)], [cand(160)], [cand(200)], [cand(30), cand(60)]):
+        debug, _ = compute_lane_offset(geo(cands), roi, off)
+        assert debug == estimate_lane_offset(geo(cands), roi, off)
+
+
+@pytest.mark.software
 def test_two_boundaries_have_no_other_side():
     res, _ = run([cand(40), cand(260)], cfg=TEST_CFG)
     assert res.mode == "two_boundary" and res.other_side_offset is None

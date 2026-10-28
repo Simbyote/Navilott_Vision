@@ -270,7 +270,8 @@ def test_single_sided_twins_fuzz():
     for i in range(FUZZ_N):
         cfg = lo.LaneOffsetConfig(expected_half_lane_px=None if rng.random() < 0.2 else float(rng.integers(50, 300)))
         anchor = lo.BoundaryAnchor(foot_x=float(rng.integers(0, 432)), weight=float(rng.random()), candidate=None)
-        args = (anchor, str(rng.choice(["left", "right"])), 216.0, cfg, 1, 2, int(rng.integers(1, 4)))
+        center = 216.0 if rng.random() < 0.5 else float(rng.integers(150, 280))      # robot_x_px set or not
+        args = (anchor, str(rng.choice(["left", "right"])), center, 216.0, cfg, 1, 2, int(rng.integers(1, 4)))
         _same(lo._single_sided(*args, []), lo._project_single(*args), f"case {i}")
 
 

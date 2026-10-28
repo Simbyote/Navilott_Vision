@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report obstacle-map gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report obstacle-map gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -258,6 +258,9 @@ calib-camera: ## lens: capture checkerboard frames, solve, verify
 
 calib-stopline: ## stop-line distance in cm from tape marks, one at a time
 	$(PY) -m src.scripts.calibrate_stop_line $(ARGS)
+
+calib-lane: ## where a centered robot sees its lane, and its width in px: robot_x_px and the lane widths for config.py
+	$(PY) -m src.scripts.calibrate_lane $(CAMFLAGS) $(ARGS)
 
 calib-odometry: ## encoder cm per count: push a measured distance (ARGS="--cm 150" or "--drive 3")
 	$(PY) -m src.scripts.calibrate_odometry $(ARGS)
