@@ -79,7 +79,7 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 40, 5500, 500)   # 2026-10-19
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 5500, 500)   # 2026-10-26
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
     # By odometry since 2026-10-20 (None keeps the timed advance and exit);
@@ -258,7 +258,7 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.48, 0.73), Command(0.78, 0.25))     # 2026-10-19
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.78, 0.25))     # 2026-10-26
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
 

@@ -25,8 +25,8 @@ from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 # Two boundaries this many frames (~0.5 s) ends the crossing. 3 ended it as
 # soon as the far side's lines showed (2026-10-05)
 TWO_BOUNDARY_FRAMES = 10
-# ...or at least one for this many (~2 s): past some intersections only one
-# line shows, and the crossing never ended (2026-10-01; tuned 2026-10-19)
+# ...or at least one for this many (~1 s): past some intersections only one
+# line shows, and the crossing never ended (2026-10-01; 40 until 2026-10-26)
 ONE_BOUNDARY_FRAMES = 20
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # ...or this much exit driving (tuned on the mat, 2026-10-19)
@@ -41,7 +41,7 @@ ADVANCE_MS = 2500
 # The same by odometry, which doesn't drift with the battery; from stage_cm
 # where timed advances ended (2026-10-20)
 ADVANCE_CM: float | None = 22.3
-# Tuned on the mat at ~11.7 V (2026-10-19). With encoders, WheelSpeed holds
+# Tuned on the mat at ~11.7 V (2026-10-19; left 0.48 -> 0.50, 2026-10-26). With encoders, WheelSpeed holds
 # these duties' wheel speeds at any voltage
 LEFT_TURN = Command(0.50, 0.73)
 RIGHT_TURN = Command(0.78, 0.25)
