@@ -5,7 +5,7 @@ Each writes what the real tool writes, with the real field lists: a navigation
 run (nav.csv, nav_video.csv, summary.txt), a diagnostics recording (threads,
 cores, system), a figure-eight attempt (through the routine's own EightWatch),
 an obstacle-check run (trials.csv, results.json, saved looks), a capture-
-anatomy latency.csv and a sched-latency folder. Numbers are chosen so each
+anatomy latency.csv, a sched-latency folder and a run whose right motor dies. Numbers are chosen so each
 tool's findings have something to find.
 """
 import csv
@@ -196,3 +196,26 @@ def sched(folder, label="", worst=(5332, 3999, 139), seed=2) -> Path:
                  "p999": int(np.percentile(v, 99.9)), "max": int(v.max())} for c, v in data.items()}
     (folder / "sched_latency.json").write_text(json.dumps({"label": label, "seconds": 3, "cases": cases, "skipped": {}}))
     return folder
+
+
+def dying_motor(folder, weak_at=60.0, dead_at=100.0, n=2400, seed=4) -> Path:
+    """
+    A 120 s run at 20 FPS, both wheels at 3300 counts/s per duty, braked for 1 s every 20 s and reading 0 on the
+    frame after (a start from rest); from weak_at the right wheel turns 25% slower and from dead_at not at all,
+    its duty pushed to 1.0 as the PI would. Each frame's speed answers the previous frame's command.
+    """
+    rng = np.random.default_rng(seed)
+    rows, before = [], (0.0, 0.0, 1)
+    for i in range(n):
+        t = 0.05 * i
+        brake = int(t % 20 < 1.0)
+        duty = 0.0 if brake else 0.4 + 0.25 * (t % 10 > 6)
+        right = 1.0 if t >= dead_at and not brake else duty
+        share = 0.0 if t >= dead_at else 0.75 if t >= weak_at else 1.0
+        rest = before[2] or (rows and rows[-1]["brake"])        # the first frame after a brake
+        cps = (0.0, 0.0) if rest else (3300 * before[0] + float(rng.normal(0, 20)), share * 3300 * before[1])
+        rows.append({"frame_id": i, "t": round(t, 3), "rule": "intersection" if brake else "lane_keeping",
+                     "brake": brake, "cmd_left": duty, "cmd_right": right,
+                     "left_cps": round(cps[0], 1), "right_cps": round(cps[1], 1)})
+        before = (duty, right, brake)
+    return _write(Path(folder) / "nav.csv", NAV_FIELDS, rows)

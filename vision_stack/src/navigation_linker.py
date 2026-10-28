@@ -30,6 +30,7 @@ from src.diagnostics.pressure import StallLog
 from src.estimation.estimation import Phase3Config
 from src.linker_io import OPEN_ERRORS, FrameRecorder, NoRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
+from src.navigation.wheel_stall import OUTCOME_STALLED
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
@@ -47,6 +48,7 @@ END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
 END_COURSE = "end of course"                    # the navigator finished the route
 END_EARLY = "ended early (lane lost before the route was done)"
 END_BATTERY = "battery critical"
+END_STALLED = "wheel stalled"                   # a wheel driven hard didn't turn: motor, gearbox or a jam
 REASON_CONTRACT = "contract"        # the navigator's command broke the contract
 # Named in nav.csv with its slowest stage; 0.6-1.6 s frames braked the robot on 2026-10-12
 SLOW_FRAME_MS = 250.0
@@ -370,7 +372,8 @@ def run(
                 ended_by = why
                 break
             if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
-                ended_by = END_EARLY if getattr(navigator, "outcome", None) == OUTCOME_EARLY else END_COURSE
+                ended_by = {OUTCOME_EARLY: END_EARLY, OUTCOME_STALLED: END_STALLED}.get(
+                    getattr(navigator, "outcome", None), END_COURSE)
                 break
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT

@@ -12,6 +12,8 @@ Flow, every frame:
     1. The stop-line tracker updates.
     2. Obstacle, stop sign, traffic light, intersection, end of course: the first Command wins.
     3. Lane keeping when none spoke; BRAKE on every frame once finished.
+    Before all of it, the wheel stall guard: a wheel driven hard that doesn't
+    turn brakes the robot and ends the run.
 """
 from src.estimation.estimation import EstimationPacket
 from src.navigation.end_of_course import EndOfCourseRule
@@ -24,15 +26,17 @@ from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import StopSignRule
 from src.navigation.traffic_light import TrafficLightRule
 from src.navigation.wheel_speed import WheelSpeed
+from src.navigation.wheel_stall import OUTCOME_STALLED, WheelStallGuard
 
 # Re-exported: the rules import the contract directly, everyone else from here
 __all__ = ["BRAKE", "STALL_DUTY", "Command", "Navigator", "command_problems", "enforce", "Navigation",
            "RULE_OBSTACLE", "RULE_STOP_SIGN", "RULE_TRAFFIC_LIGHT", "RULE_INTERSECTION", "RULE_END_OF_COURSE",
-           "RULE_LANE_KEEPING"]
+           "RULE_LANE_KEEPING", "RULE_WHEEL_STALL"]
 
 RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT, RULE_INTERSECTION, RULE_END_OF_COURSE, RULE_LANE_KEEPING = (
     "stop_sign", "traffic_light", "intersection", "end_of_course", "lane_keeping")
 RULE_OBSTACLE = "obstacle"
+RULE_WHEEL_STALL = "wheel_stall"
 
 
 class Navigation:
@@ -49,6 +53,7 @@ class Navigation:
         self.tracker = tracker or StopLineTracker()
         self.progress = RouteProgress(route)
         self.wheels = WheelSpeed()
+        self.stall = WheelStallGuard()
         self._last_cmd: Command | None = None
         self.rules = [
             (RULE_OBSTACLE, obstacle or ObstacleRule()),
@@ -66,6 +71,7 @@ class Navigation:
         self.tracker.reset()
         self.progress.reset()
         self.wheels.reset()
+        self.stall.reset()
         self._last_cmd = None
         for _, rule in self.rules:
             rule.reset()
@@ -74,19 +80,24 @@ class Navigation:
 
     @property
     def finished(self) -> bool:
-        return self._end.finished
+        return self._end.finished or self.stall.tripped
 
     @property
     def outcome(self) -> str | None:
-        return self._end.outcome
+        return self._end.outcome or (OUTCOME_STALLED if self.stall.tripped else None)
 
     @property
     def end_step(self) -> int | None:
-        return self._end.end_step
+        return self.progress.step if self.stall.tripped and self._end.end_step is None else self._end.end_step
 
     def update(self, packet: EstimationPacket) -> Command:
         # This packet's wheel speeds answer the last command
         self.wheels.observe(self._last_cmd, packet)
+        if self.stall.observe(self._last_cmd, packet, self.wheels):
+            self.record = {"rule": RULE_WHEEL_STALL, "phase": self.tracker.phase, "line_left_cm": self.tracker.left_cm,
+                           "step": self.progress.label(), **self.stall.record}
+            self._last_cmd = BRAKE
+            return BRAKE
         if self.finished:
             self.record = {"rule": RULE_END_OF_COURSE, "phase": self.tracker.phase, "line_left_cm": self.tracker.left_cm, **self._end.record}
             self._last_cmd = BRAKE

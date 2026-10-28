@@ -6,6 +6,8 @@ Purpose:
     far each landed from its 90 degrees, what braked the robot in each lap,
     and the spots where the gyro and the wheels disagreed. With --base (an
     earlier run), its turn errors sit beside this run's, by turn position.
+    Below, each motor's health over the run (analysis.motor_health): a motor
+    failing shows there turns before it stops.
 
 Main package:
     analyze(attempt, base) -> dict; fig8_report.png and fig8_report.json in
@@ -17,7 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.analysis import common
+from src.analysis import common, motor_health
 from src.analysis.common import Table
 from src.navigation.intersection import LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS, TURN_END_GYRO, TURN_END_TIME
 
@@ -108,6 +110,11 @@ def analyze(folder: Path, base: Path | None = None) -> dict:
            "laps": [] if laps is None else [{"lap": int(a), "seconds": float(b)} for a, b in
                                              zip(laps.numeric("lap"), laps.numeric("seconds"))],
            "slips": 0 if slips is None else len(slips), "touches": 0 if touches is None else len(touches)}
+    nav = _opt(folder / "nav.csv")
+    try:
+        res["motor_health"] = None if nav is None else motor_health.analyze(nav)
+    except ValueError:
+        res["motor_health"] = None
     if slips is not None and len(slips):
         spots = {}
         for st, stg in zip(slips.numeric("step"), slips.text("stage")):
@@ -138,6 +145,8 @@ def findings(res: dict) -> list[str]:
         secs = [x["seconds"] for x in res["laps"]]
         if max(secs) > 1.25 * min(secs):
             out.append(f"laps took {min(secs):.0f}-{max(secs):.0f} s: the slow ones held at a light or sign, or stalled")
+    if res.get("motor_health"):
+        out += res["motor_health"]["findings"]
     b = res.get("base")
     if b and b["turns"]:
         out.append(f"against the base run: time-limit turns {len(b['time_limit_steps'])} -> {len(res['time_limit_steps'])}, "
@@ -230,8 +239,10 @@ def figure(folder: Path, res: dict, base: Path | None, title: str, out_path):
         return None
     nav = _opt(folder / "nav.csv")
     inter = Table(folder / "intersections.csv")
-    fig = plt.figure(figsize=(12, 8.5))
-    gs = fig.add_gridspec(2, 2, height_ratios=[1, 1.15], hspace=0.4, wspace=0.25)
+    health = res.get("motor_health") if motor_health.drawable(res.get("motor_health")) else None
+    fig = plt.figure(figsize=(12, 11.3 if health else 8.5))
+    gs = fig.add_gridspec(3 if health else 2, 2, height_ratios=[1, 1.15, 0.8][:3 if health else 2], hspace=0.4,
+                          wspace=0.25)
     ax = fig.add_subplot(gs[0, 0])
     if nav is not None:
         _turn_curves(ax, nav, set(res["time_limit_steps"]))
@@ -240,6 +251,11 @@ def figure(folder: Path, res: dict, base: Path | None, title: str, out_path):
     ax = fig.add_subplot(gs[1, :])
     if nav is not None:
         _lap_strip(ax, nav, inter, _opt(folder / "slips.csv"), _opt(folder / "touches.csv"))
+    if health:
+        ax = fig.add_subplot(gs[2, :])
+        motor_health.draw(ax, health)
+        ax.set_xlabel("run time, s (each wheel's counts/s per unit duty; dotted: as it started, dashed: first "
+                      f"window {100 * motor_health.WEAK_SHARE:.0f}% under it)", fontsize=7.5)
     for a in fig.axes:
         a.tick_params(labelsize=7)
         a.grid(alpha=0.25)
@@ -253,9 +269,11 @@ def figure(folder: Path, res: dict, base: Path | None, title: str, out_path):
 
 def report_lines(res: dict) -> list[str]:
     lines = [f"{res['turns']} turns, {res['on_gyro']} on the gyro; worst end {res['worst_off_deg'] or 0:.1f} deg off; "
-             f"{len(res['laps'])} laps; {res['touches']} touches; {res['slips']} slips",
-             "median off its 90 deg by position in the lap: "
-             + ", ".join(f"{k}: {v['median']:+.1f}" for k, v in res["off_by_position"].items())]
+             f"{len(res['laps'])} laps; {res['touches']} touches; {res['slips']} slips"]
+    if res.get("motor_health"):
+        lines += motor_health.report_lines(res["motor_health"])
+    lines += ["median off its 90 deg by position in the lap: "
+              + ", ".join(f"{k}: {v['median']:+.1f}" for k, v in res["off_by_position"].items())]
     return lines + ["findings"] + [f"  - {x}" for x in res["findings"] or ["nothing stood out"]]
 
 

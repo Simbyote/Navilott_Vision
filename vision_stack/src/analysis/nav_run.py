@@ -7,7 +7,7 @@ Purpose:
 
 Main package:
     analyze(table) -> run, rules, braking, lane_keeping, intersections,
-    wheel_balance, latency, findings; nav_run.json and nav_run.png.
+    wheel_balance, motor_health, latency, findings; nav_run.json and nav_run.png.
 """
 
 import argparse
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
-from src.analysis import common
+from src.analysis import common, motor_health
 from src.analysis.common import Table, runs_of, stats
 from src.config import GYRO_BIAS_DPS
 from src.navigation.lane_keeping import MAX_STEERING_ADJ
@@ -247,6 +247,10 @@ def analyze(table: Table, after_s: float = AFTER_S, gyro_bias_dps: float = GYRO_
            "rules": rule_summary(table, dt), "braking": braking(table, dt), "lane_keeping": lk,
            "intersections": intersections(table, dt, after_s, gyro_bias_dps, p95),
            "wheel_balance": wheel_balance(table), "latency": latency(table, dt)}
+    try:
+        res["motor_health"] = motor_health.analyze(table)
+    except ValueError:                  # a nav.csv from before the wheel columns
+        res["motor_health"] = None
     res["findings"] = findings(res)
     return res
 
@@ -288,6 +292,8 @@ def findings(res: dict) -> list[str]:
         side = "left" if wb["imbalance_pct"] > 0 else "right"
         out.append(f"the {side} wheel turns {abs(wb['imbalance_pct']):.0f}% faster at equal duty: "
                    f"the robot drifts {'right' if side == 'left' else 'left'} unless steering corrects it")
+    if res.get("motor_health"):
+        out += res["motor_health"]["findings"]
     lat = res["latency"].get("latency_ms")
     if lat and lat["p95"] is not None and lat["p95"] > LATENCY_BUDGET_MS:
         out.append(f"frame-to-motor latency p95 {lat['p95']:.0f} ms is over the {LATENCY_BUDGET_MS:.0f} ms frame budget")
@@ -321,6 +327,8 @@ def report_lines(res: dict) -> list[str]:
     lines.append(f"wheels        {wb['frames']} equal-duty frames" + (
         f": left {wb['left_cps_mean']} / right {wb['right_cps_mean']} cps, imbalance {wb['imbalance_pct']:+.1f}%"
         if wb["imbalance_pct"] is not None else " (none to compare)"))
+    if res.get("motor_health"):
+        lines += [f"motor health  {x}" for x in motor_health.report_lines(res["motor_health"])]
     lat = res["latency"]
     if "latency_ms" in lat:
         lines.append(f"latency       frame to motor p50 {lat['latency_ms']['p50']} / p95 {lat['latency_ms']['p95']} /"
@@ -337,8 +345,10 @@ def figure(table: Table, res: dict, title: str, out_path) -> Path | None:
     strips = [c for c in ("rule", "stage", "lane_status") if table.has(c)]
     lines = [("lane_offset_cm" if res["lane_keeping"].get("offset_unit") == "cm" else "lane_offset", "offset"),
              ("steer", "steering"), ("yaw_rate", "yaw deg/s")]
-    fig, axes = plt.subplots(len(strips) + len(lines) + 1, 1, figsize=(13, 1.2 + 0.5 * len(strips) + 1.4 * (len(lines) + 1)),
-                             sharex=True, gridspec_kw={"height_ratios": [0.5] * len(strips) + [1.4] * (len(lines) + 1)})
+    health = res.get("motor_health") if motor_health.drawable(res.get("motor_health")) else None
+    n = len(lines) + 1 + bool(health)
+    fig, axes = plt.subplots(len(strips) + n, 1, figsize=(13, 1.2 + 0.5 * len(strips) + 1.4 * n),
+                             sharex=True, gridspec_kw={"height_ratios": [0.5] * len(strips) + [1.4] * n})
     for ax, col in zip(axes, strips):
         labels = table.text(col)
         colors = {v: PALETTE[i % len(PALETTE)] for i, v in enumerate(dict.fromkeys(labels)) if v}
@@ -355,7 +365,9 @@ def figure(table: Table, res: dict, title: str, out_path) -> Path | None:
             ax.plot(t, table.numeric(col), lw=0.8)
         ax.axhline(0, color="grey", lw=0.5)
         ax.set_ylabel(label, fontsize=8)
-    ax = axes[-1]
+    if health:
+        motor_health.draw(axes[-1], health)
+    ax = axes[-2] if health else axes[-1]
     for col, c in (("cmd_left", "#1f77b4"), ("cmd_right", "#d62728")):
         if table.has(col):
             ax.plot(t, table.numeric(col), lw=0.8, color=c, label=col)

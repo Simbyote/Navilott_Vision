@@ -26,6 +26,7 @@ from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH
 from src.peripherals import battery_run
 from src.peripherals.battery_run import CODE_BATTERY
 from src.navigation.end_of_course import OUTCOME_EARLY
+from src.navigation.wheel_stall import OUTCOME_STALLED
 from src.navigation.route import Route, RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
 from src.pipeline import Pipeline
@@ -41,6 +42,8 @@ ALTERNATE_S = 2.0
 END_FINISHED, END_EARLY, END_CAP, END_INTERRUPT, END_ERROR = (
     "finished", "ended early", "run time cap", "interrupted (Ctrl-C)", "error")
 END_BATTERY = "battery critical"
+END_STALLED = "wheel stalled"
+CODE_STALLED = "StAL"
 CODE_CAP, CODE_ERROR = "E  t", "Err "
 
 
@@ -113,7 +116,8 @@ def run(camera, sensors, motor, pipeline: Pipeline, system, route: Route,
             gc_watch.tick(cmd.brake)
             system.update_display(clock() - t0)
             if pipeline.finished:
-                ended_by = END_EARLY if pipeline.navigation.outcome == OUTCOME_EARLY else END_FINISHED
+                ended_by = {OUTCOME_EARLY: END_EARLY, OUTCOME_STALLED: END_STALLED}.get(
+                    pipeline.navigation.outcome, END_FINISHED)
                 break
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT
@@ -143,6 +147,8 @@ def end_screen(result: RunResult) -> list:
         return [CODE_CAP, result.elapsed_s]
     if result.ended_by == END_BATTERY:
         return [CODE_BATTERY, result.elapsed_s]
+    if result.ended_by == END_STALLED:
+        return [CODE_STALLED, result.elapsed_s]
     return [result.elapsed_s]                           # finished, Ctrl-C
 
 

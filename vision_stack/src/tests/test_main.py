@@ -286,7 +286,8 @@ def test_early_code(step, code):
 @pytest.mark.software
 @pytest.mark.parametrize("ended_by, screens", [
     (main.END_FINISHED, [42.5]), (main.END_INTERRUPT, [42.5]), (main.END_ERROR, ["Err "]),
-    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5]), (main.END_BATTERY, ["Lo-b", 42.5])])
+    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5]), (main.END_BATTERY, ["Lo-b", 42.5]),
+    (main.END_STALLED, ["StAL", 42.5])])
 def test_end_screen(ended_by, screens):
     assert main.end_screen(main.RunResult(ended_by, 42.5, 100, 2)) == screens
 
