@@ -35,6 +35,8 @@ On P2: the pipeline stamps a frame when it reaches the application, after exposu
 
 D5 was first planned as a scene state machine, a separate detector for "the robot is in an intersection". It was built a simpler way instead: every intersection on the course has a stop line at the robot's entry, so the stop line (D4) marks it, and the route says which way to go. An intersection with no stop line wouldn't be seen; on this course there isn't one.
 
+**Scoring the detectors on recorded frames (labelled replay).** The routines above judge one condition live. To measure a detector across many conditions, and again after every tuning change on the same frames, record a run with frames (any linker), label what was really in view (`make label RUN=...` writes `labels.csv`: ranges of frames with the sign, the light, the stop line's and an obstacle's tape distance, the lane offset, the range to the sign or light, and a condition tag), then `make eval RUN=...`. It replays every frame through the robot's own `Pipeline` and scores each detector frame by frame and as voted: recall and precision with 95% intervals (Wilson), false alarms, the light's confusion matrix, distance errors against the tape, all broken down by range and condition, in `eval.json` and `eval.png`. `BASE=` an earlier `eval.json` prints the change. A detect-range, obstacle-check or lane-offset routine folder labels itself from its saved looks' names.
+
 ---
 
 ## Robustness

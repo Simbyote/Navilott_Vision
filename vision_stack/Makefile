@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health obstacle-map gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -215,6 +215,12 @@ fig8-report: ## a figure-eight run's turns and laps as graphs (RUN=runs/routine_
 
 motor-health: ## each wheel's speed per unit duty across a run: a motor failing, a wheel driven but not turning
 	$(PY) -m src.analysis.motor_health $(strip $(RUN)) $(ARGS)
+
+eval: ## score each detector against labels.csv on a run's frames (RUN=, BASE= an earlier eval.json; a detect-range/obstacle-check/lane-offset routine labels itself)
+	$(PY) -m src.analysis.evaluate $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+label: ## step through a run's frames and write labels.csv for make eval (RUN=; ARGS="--conditions glare,dim" or "--template")
+	$(PY) -m src.scripts.label_frames $(strip $(RUN)) $(ARGS)
 
 obstacle-map: ## several obstacle-check runs as one object-by-gap grid, misses with their gate (RUN=<folder of runs>)
 	$(PY) -m src.analysis.obstacle_map $(strip $(RUN)) $(ARGS)
