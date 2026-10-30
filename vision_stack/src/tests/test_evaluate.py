@@ -285,3 +285,14 @@ def test_n_finds_the_next_unchecked_frame():
     assert lab.fid == 2
     lab.key("k")
     assert lab.labels[2] == {"sign": "no"} and lab.fid == 3
+
+
+def test_an_obstacle_labelled_yes_is_scored_for_presence_without_a_distance(tmp_path):
+    run = tmp_path / "run"
+    write_frames(run / "frames", [scene()] * 4 + [with_obstacle(scene(), 200, 280, 150, 250)] * 4)
+    labels(run / "labels.csv", "first,last,obstacle_cm\n0,3,none\n4,7,yes\n")
+    o = ev.run_eval(run, config=SCENE_CONFIG, estimation=EST)[0]["obstacle"]["frame"]
+    assert (o["tp"], o["fp"], o["no_cm"]) == (4, 0, 0) and o["error_cm"] == {"n": 0}
+    labels(run / "labels.csv", "first,last,offset_cm\n0,3,yes\n")
+    with pytest.raises(ValueError, match="offset_cm 'yes' is not a number or 'none'"):
+        ev.read_labels(run / "labels.csv")

@@ -17,7 +17,7 @@ Labels (labels.csv beside the frames, or --labels): ranges of frame ids,
         141,220,yes,red,18,none,,60,glare
     sign: yes / no. light: red / yellow / green / off (nothing lit in view).
     line_cm, obstacle_cm: distance from the robot's front edge, the stop-line
-    table's reference, or none. offset_cm: + = robot right of the lane's
+    table's reference; yes (there, distance not measured: presence only); or none. offset_cm: + = robot right of the lane's
     center. range_cm: how far the sign or light is, for range curves.
     condition: any tag (glare, dim, angled) to break the scores down by;
     "unchecked" (a draft of what the robot read) is never scored.
@@ -50,6 +50,8 @@ LIGHTS = ("red", "yellow", "green", "off")
 NONE = "none"
 # label_frames --draft tags what the robot read with this; it's never scored until a person accepts it
 UNCHECKED = "unchecked"
+# A stop line or obstacle that's there, its distance not measured: scored for presence, not error
+PRESENT = "yes"
 FRAME_MS = 50
 # A detector's distance is within this of the tape: lane offset P3's 2 cm, the routines' 3 cm for the rest
 TOLERANCE_CM = {"line": 3.0, "obstacle": 3.0, "offset": 2.0}
@@ -83,10 +85,13 @@ def _num_or_none(v: str, field: str, where: str):
         return None
     if v == NONE:
         return NONE
+    if v == PRESENT and field in ("line_cm", "obstacle_cm"):
+        return PRESENT
     try:
         return float(v)
     except ValueError:
-        raise ValueError(f"{where}: {field} {v!r} is not a number or 'none'") from None
+        what = "a number, 'yes' or 'none'" if field in ("line_cm", "obstacle_cm") else "a number or 'none'"
+        raise ValueError(f"{where}: {field} {v!r} is not {what}") from None
 
 
 def parse_label(row: dict, where: str) -> dict:
@@ -349,15 +354,15 @@ def score_distance(pairs: list[tuple[object, bool, float | None, dict]], tol: fl
     out = score_presence(pres)
     err, by = [], {}
     for t, s, cm, lb in pairs:
-        if t is NONE or not s or cm is None:
+        if t is NONE or t is PRESENT or not s or cm is None:
             continue
         e = cm - float(t)
         err.append(e)
         by.setdefault(_bin(float(t), DIST_BINS_CM), []).append(e)
     out["error_cm"] = _err(err, tol)
     out["error_by_distance"] = {k: _err(v, tol) for k, v in sorted(by.items(), key=lambda kv: float(kv[0].split("-")[0].rstrip("+")))}
-    out["points"] = [(float(t), cm) for t, s, cm, _ in pairs if t is not NONE and s and cm is not None]
-    out["no_cm"] = sum(1 for t, s, cm, _ in pairs if t is not NONE and s and cm is None)
+    out["points"] = [(float(t), cm) for t, s, cm, _ in pairs if t not in (NONE, PRESENT) and s and cm is not None]
+    out["no_cm"] = sum(1 for t, s, cm, _ in pairs if t not in (NONE, PRESENT) and s and cm is None)
     return out
 
 
