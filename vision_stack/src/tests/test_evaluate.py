@@ -236,3 +236,13 @@ def test_the_labeller_jumps_to_a_frame_id_without_labelling_the_way():
     assert sorted(lab.labels) == [50] and lab.fid == 51
     lab.key("g")
     assert lab.fid == 1
+
+
+def test_the_labeller_fills_a_range_to_a_frame_id():
+    lab = lf.Labeller(list(range(100, 200)))
+    for k in "120g" + "s" + "160f":
+        lab.key(k)
+    assert sorted(lab.labels) == list(range(120, 161)) and lab.fid == 160
+    assert lab.rows()[0]["first"] == 120 and lab.rows()[0]["last"] == 160
+    lab.key("f")                                        # nothing typed: an ordinary key, nothing filled
+    assert len(lab.labels) == 41

@@ -39,6 +39,7 @@ Keys (the label shown top left is what each frame you step over takes):
                                              F  offset cm (+ right)   R  range to sign or light, cm
                  with nothing typed, L and O toggle "none" (not there) and unset
     digits, g    jump to that frame id, labelling nothing on the way (g alone: the first frame)
+    digits, f    fill: this frame through that frame id take the current label
     c            next condition (--conditions)       p  label this frame without moving
     e            erase this frame's label            w  write labels.csv    q  write and quit
 """
@@ -95,6 +96,18 @@ class Labeller:
             return
         self.pos = next((i for i, f in enumerate(self.fids) if f >= target), len(self.fids) - 1)
 
+    def fill(self, typed: str) -> None:
+        """This frame through the one with that id take the current label; ends there."""
+        try:
+            target = int(float(typed))
+        except ValueError:
+            return
+        while True:
+            self.paint()
+            if self.pos == len(self.fids) - 1 or self.fids[self.pos + 1] > target:
+                break
+            self.pos += 1
+
     def key(self, k: str) -> str | None:
         """One keypress; 'write' or 'quit' when the caller should act."""
         if k in "0123456789.-":
@@ -115,6 +128,10 @@ class Labeller:
             return None
         if k == "g":
             self.jump(self.typed)
+            self.typed = ""
+            return None
+        if k == "f" and self.typed:
+            self.fill(self.typed)
             self.typed = ""
             return None
         self.typed = ""
