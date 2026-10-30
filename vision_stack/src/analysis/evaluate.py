@@ -145,14 +145,15 @@ def truth_for(labels: list[dict], fid: int) -> dict | None:
 # ---- frames ----
 
 def frames_in(folder) -> list[tuple[int, Path]]:
-    """(frame id, path) in order: the recorder's NNNNNN.jpg names give the id, else the position."""
+    """(frame id, path) in order: the recorder's NNNNNN.jpg names give the id (other images beside them
+    are skipped), else every image by position."""
     folder = Path(folder)
     files = sorted(p for p in folder.iterdir() if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".bmp"))
     if not files:
         raise FileNotFoundError(f"no frames in {folder}")
-    ids = [int(p.stem) if p.stem.isdigit() else None for p in files]
-    if all(i is not None for i in ids):
-        return list(zip(ids, files))
+    numbered = [p for p in files if p.stem.isdigit()]
+    if numbered:                        # the recorder's frames; anything else beside them is a report
+        return [(int(p.stem), p) for p in numbered]
     return list(enumerate(files))
 
 
@@ -656,10 +657,15 @@ def figure(res: dict, title: str, out_path) -> Path | None:
 # ---- command line ----
 
 def find_frames(run: Path) -> Path:
-    for p in (run / "frames", run):
-        if p.is_dir() and any(q.suffix.lower() in (".jpg", ".png") for q in p.iterdir()):
-            return p
-    raise FileNotFoundError(f"no frames in {run} or {run / 'frames'}")
+    """run/frames, or run itself if it holds the recorder's numbered frames (not a run's report PNGs)."""
+    run = Path(run)
+    frames = run / "frames"
+    if frames.is_dir() and any(q.suffix.lower() in (".jpg", ".png") for q in frames.iterdir()):
+        return frames
+    if run.is_dir() and any(q.suffix.lower() in (".jpg", ".png") and q.stem.isdigit() for q in run.iterdir()):
+        return run
+    raise FileNotFoundError(f"no frames in {run / 'frames'}: the recorder writes them there "
+                            "(copy the frames/ folder with the run)")
 
 
 def run_eval(run: Path, labels_path: Path | None = None, config=None, estimation=None) -> tuple[dict, str]:

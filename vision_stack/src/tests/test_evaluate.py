@@ -209,3 +209,15 @@ def test_with_glow_on_the_measured_config_the_scene_light_is_still_scored(tmp_pa
     labels(run / "labels.csv", "first,last,light\n0,2,red\n")
     res = ev.run_eval(run, config=replace(SCENE_CONFIG, color=replace(SCENE_CONFIG.color)), estimation=EST)[0]
     assert sum(res["light"]["frame"]["matrix"]["red"].values()) == 3
+
+
+def test_a_run_s_report_pngs_are_not_taken_for_frames(tmp_path):
+    run = tmp_path / "attempt_01"
+    run.mkdir()
+    cv2.imwrite(str(run / "nav_run.png"), scene())
+    (run / "labels.csv").write_text("first,last,sign\n0,0,no\n")
+    with pytest.raises(FileNotFoundError, match="no frames in"):
+        ev.find_frames(run)
+    assert ev.main([str(run)]) == 1
+    write_frames(run, [scene()])                      # the recorder's 000000.png beside them: those are frames
+    assert ev.find_frames(run) == run and [f for f, _ in ev.frames_in(run)] == [0]
