@@ -221,3 +221,18 @@ def test_a_run_s_report_pngs_are_not_taken_for_frames(tmp_path):
     assert ev.main([str(run)]) == 1
     write_frames(run, [scene()])                      # the recorder's 000000.png beside them: those are frames
     assert ev.find_frames(run) == run and [f for f, _ in ev.frames_in(run)] == [0]
+
+
+def test_the_labeller_jumps_to_a_frame_id_without_labelling_the_way():
+    lab = lf.Labeller([1, 2, 3, 50, 51, 52])
+    lab.key("s")
+    for k in "50g":
+        lab.key(k)
+    assert lab.fid == 50 and lab.labels == {}
+    for k in "4g":                                      # no frame 4: the next one there is
+        lab.key(k)
+    assert lab.fid == 50
+    lab.key("d")
+    assert sorted(lab.labels) == [50] and lab.fid == 51
+    lab.key("g")
+    assert lab.fid == 1
