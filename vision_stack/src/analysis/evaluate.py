@@ -676,10 +676,59 @@ def find_frames(run: Path) -> Path:
                             "(copy the frames/ folder with the run)")
 
 
-def run_eval(run: Path, labels_path: Path | None = None, config=None, estimation=None) -> tuple[dict, str]:
+DRIVE_COLOUR = {"stop": "red", "caution": "yellow", "go": "green"}
+
+
+def readings_from_log(path) -> list[dict]:
+    """
+    What the robot read on the day, from a run's p3.csv, in replay()'s form: no frames needed, no
+    replay. Each frame's sign, stop line and obstacle as Phase 2 found them (a sign Phase 3's gate
+    logged as too weak counts as not seen), and the votes. The log keeps no per-frame light colour:
+    a gated light takes the vote's colour, so the light's frame-level matrix leans on the vote.
+    """
+    with open(path, newline="") as f:
+        rows = list(csv.DictReader(f))
+    if not rows or "p2_stop" not in rows[0]:
+        raise ValueError(f"{Path(path).name}: not a p3.csv with Phase 2's readings")
+    yes = lambda v: str(v).strip().lower() in ("1", "true")          # noqa: E731
+    num = lambda v: float(v) if str(v).strip() not in ("", "None") else None   # noqa: E731
+    out = []
+    for r in rows:
+        log = r.get("p3_log") or ""
+        light_seen = (r.get("p2_traffic") or "0") not in ("", "0") and "[TRAFFIC]" not in log
+        out.append({"fid": int(r["frame_id"]),
+                    "sign": (r.get("p2_stop") or "0") not in ("", "0") and "[SIGN]" not in log,
+                    "light": DRIVE_COLOUR.get(r.get("drive_state")) if light_seen else None,
+                    "line": num(r.get("p2_stop_line_px")) is not None, "line_cm": num(r.get("p2_stop_line_cm")),
+                    "obstacle": num(r.get("p2_obstacle_px")) is not None, "obstacle_cm": num(r.get("p2_obstacle_cm")),
+                    "offset": num(r.get("p2_offset")), "lane_mode": r.get("p2_mode") or "none",
+                    "vote_sign": yes(r.get("stop_sign_detected")), "vote_drive": r.get("drive_state") or "go",
+                    "vote_line": yes(r.get("stop_line_detected")), "vote_line_cm": num(r.get("stop_line_distance_cm")),
+                    "vote_obstacle": yes(r.get("obstacle_detected")),
+                    "vote_obstacle_cm": num(r.get("obstacle_distance_cm")),
+                    "vote_offset_cm": num(r.get("lane_offset_cm")), "lane_status": r.get("lane_status")})
+    return out
+
+
+def run_eval(run: Path, labels_path: Path | None = None, config=None, estimation=None,
+             from_log: bool = False) -> tuple[dict, str]:
     """Scores for a run folder (its frames and labels.csv) or a routine folder; (result, what was scored)."""
     run = Path(run)
     auto = labels_from_routine(run) if labels_path is None else []
+    if from_log:
+        log = next((p for p in (run / "p3.csv", run.parent / "p3.csv") if p.is_file()), None)
+        if log is None:
+            raise FileNotFoundError(f"no p3.csv in {run}")
+        lp = labels_path or run / "labels.csv"
+        if not lp.is_file():
+            raise FileNotFoundError(f"no labels.csv in {run}: pass --labels")
+        labels = [lb for lb in read_labels(lp) if lb.get("condition") != UNCHECKED]
+        readings = readings_from_log(log)
+        res = evaluate(readings, lambda fid: truth_for(labels, fid))
+        res["from_log"] = True
+        res["findings"].insert(0, "scored from the run's log (p3.csv), not a replay: what the robot read on the "
+                                  "day; the light's per-frame colour is the vote's")
+        return res, f"{len(readings)} logged frames, labels {lp.name}"
     if auto:
         readings = replay([(i, p) for i, (p, _) in enumerate(auto)], config, estimation, sequence=False)
         truth = {i: {"first": i, "last": i, **t} for i, (_, t) in enumerate(auto)}
@@ -707,12 +756,14 @@ def main(argv=None) -> int:
     p.add_argument("run", help="a run folder with frames/ and labels.csv, or a detect-range / obstacle-check / "
                                "lane-offset routine folder")
     p.add_argument("--labels", help="labels.csv elsewhere")
+    p.add_argument("--from-log", action="store_true",
+                   help="score what the run logged (p3.csv) instead of replaying frames: no frames needed")
     p.add_argument("--base", help="an earlier eval.json on the same frames, to compare")
     p.add_argument("--out", help="output folder (default: the run folder)")
     args = p.parse_args(argv)
     run = Path(args.run)
     try:
-        res, what = run_eval(run, Path(args.labels) if args.labels else None)
+        res, what = run_eval(run, Path(args.labels) if args.labels else None, from_log=args.from_log)
         base = json.loads(Path(args.base).read_text()) if args.base else None
     except (FileNotFoundError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)

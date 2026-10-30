@@ -296,3 +296,28 @@ def test_an_obstacle_labelled_yes_is_scored_for_presence_without_a_distance(tmp_
     labels(run / "labels.csv", "first,last,offset_cm\n0,3,yes\n")
     with pytest.raises(ValueError, match="offset_cm 'yes' is not a number or 'none'"):
         ev.read_labels(run / "labels.csv")
+
+
+def test_from_log_scores_what_the_run_logged_without_frames(tmp_path):
+    run = tmp_path / "attempt_01"
+    run.mkdir()
+    head = ("frame_id,p2_stop,p2_traffic,p3_log,drive_state,p2_stop_line_px,p2_stop_line_cm,p2_obstacle_px,"
+            "p2_obstacle_cm,p2_offset,p2_mode,stop_sign_detected,stop_line_detected,stop_line_distance_cm,"
+            "obstacle_detected,obstacle_distance_cm,lane_offset_cm,lane_status\n")
+    rows = ["0,1,0,,go,,,,,0.1,two_boundary,0,0,,0,,,vision",                      # a sign
+            "1,1,0,[SIGN] conf=0.300 below 0.45,go,,,,,0.1,two_boundary,1,0,,0,,,vision",   # too weak: not seen
+            "2,0,1,,stop,12,10.5,,,0.1,two_boundary,1,1,10.5,0,,,vision",          # a red light, a line
+            "3,0,0,,go,,,30,14,0.1,two_boundary,0,0,,1,14,,vision"]               # an obstacle
+    (run / "p3.csv").write_text(head + "\n".join(rows) + "\n")
+    labels(run / "labels.csv", "first,last,sign,light,line_cm,obstacle_cm\n0,1,yes,off,none,none\n"
+                               "2,2,no,red,yes,none\n3,3,no,off,none,yes\n")
+    r = {x["fid"]: x for x in ev.readings_from_log(run / "p3.csv")}
+    assert r[0]["sign"] and not r[1]["sign"] and r[2]["light"] == "red" and r[2]["line_cm"] == 10.5
+    res, what = ev.run_eval(run, from_log=True)
+    assert "4 logged frames" in what and res["from_log"]
+    assert (res["sign"]["frame"]["tp"], res["sign"]["frame"]["fn"]) == (1, 1)
+    assert res["light"]["frame"]["matrix"]["red"]["red"] == 1
+    assert res["line"]["frame"]["tp"] == 1 and res["obstacle"]["frame"]["tp"] == 1
+    (run / "p3.csv").write_text("frame_id,x\n0,1\n")
+    with pytest.raises(ValueError, match="not a p3.csv"):
+        ev.run_eval(run, from_log=True)
