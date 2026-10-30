@@ -19,7 +19,8 @@ Labels (labels.csv beside the frames, or --labels): ranges of frame ids,
     line_cm, obstacle_cm: distance from the robot's front edge, the stop-line
     table's reference, or none. offset_cm: + = robot right of the lane's
     center. range_cm: how far the sign or light is, for range curves.
-    condition: any tag (glare, dim, angled) to break the scores down by.
+    condition: any tag (glare, dim, angled) to break the scores down by;
+    "unchecked" (a draft of what the robot read) is never scored.
     Lines starting with # are comments. src/scripts/label_frames.py writes it.
 
     A routine folder (detect-range, obstacle-check, lane-offset) labels
@@ -47,6 +48,8 @@ from src.params import STOP_SIGN, TRAFFIC_LIGHT
 LABEL_FIELDS = ("first", "last", "sign", "light", "line_cm", "obstacle_cm", "offset_cm", "range_cm", "condition")
 LIGHTS = ("red", "yellow", "green", "off")
 NONE = "none"
+# label_frames --draft tags what the robot read with this; it's never scored until a person accepts it
+UNCHECKED = "unchecked"
 FRAME_MS = 50
 # A detector's distance is within this of the tape: lane offset P3's 2 cm, the routines' 3 cm for the rest
 TOLERANCE_CM = {"line": 3.0, "obstacle": 3.0, "offset": 2.0}
@@ -681,9 +684,16 @@ def run_eval(run: Path, labels_path: Path | None = None, config=None, estimation
     if lp is None:
         raise FileNotFoundError(f"no labels.csv in {run}: write one (make label RUN={run}) or pass --labels")
     labels = read_labels(lp)
+    unchecked = sum(lb["last"] - lb["first"] + 1 for lb in labels if lb.get("condition") == UNCHECKED)
+    labels = [lb for lb in labels if lb.get("condition") != UNCHECKED]
     items = frames_in(frames)
     readings = replay(items, config, estimation, sequence=True)
-    return evaluate(readings, lambda fid: truth_for(labels, fid)), f"{len(items)} frames, labels {lp.name}"
+    res = evaluate(readings, lambda fid: truth_for(labels, fid))
+    if unchecked:
+        res["unchecked_frames"] = unchecked
+        res["findings"].insert(0, f"{unchecked} frames are still an unchecked draft and weren't scored: "
+                                  "review them (make label: n, k)")
+    return res, f"{len(items)} frames, labels {lp.name}"
 
 
 def main(argv=None) -> int:

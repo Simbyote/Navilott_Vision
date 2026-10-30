@@ -18,10 +18,11 @@ import csv
 import sys
 from pathlib import Path
 
-from src.analysis.evaluate import LABEL_FIELDS, NONE, find_frames, frames_in, read_labels
+from src.analysis.evaluate import LABEL_FIELDS, NONE, UNCHECKED, find_frames, frames_in, read_labels
 
 FIELDS = LABEL_FIELDS[2:]               # what a frame's label holds
 NUMERIC = {"L": "line_cm", "O": "obstacle_cm", "F": "offset_cm", "R": "range_cm"}
+DRAFT_LIGHT = {"stop": "red", "caution": "yellow", "go": "green"}
 SIGN_CYCLE = (None, "yes", "no")
 LIGHT_CYCLE = (None, "off", "red", "yellow", "green")
 
@@ -40,6 +41,11 @@ Keys (the label shown top left is what each frame you step over takes):
                  with nothing typed, L and O toggle "none" (not there) and unset
     digits, g    jump to that frame id, labelling nothing on the way (g alone: the first frame)
     digits, f    fill: this frame through that frame id take the current label
+    k            accept this frame's draft label and go on; digits then k: accept up to that frame id
+    n            the next frame still unchecked (a draft not yet accepted or corrected)
+
+    --draft writes what the robot read into labels.csv, every row "unchecked" (no window):
+    make eval ignores those, so only what you accept (k) or relabel counts.
     c            next condition (--conditions)       p  label this frame without moving
     e            erase this frame's label            w  write labels.csv    q  write and quit
 """
@@ -108,6 +114,32 @@ class Labeller:
                 break
             self.pos += 1
 
+    def accept(self, typed: str = "") -> None:
+        """Drafts from here through that frame id (this one alone with nothing typed) lose 'unchecked'."""
+        try:
+            target = int(float(typed)) if typed else self.fid
+        except ValueError:
+            return
+        while True:
+            lb = self.labels.get(self.fid)
+            if lb and lb.get("condition") == UNCHECKED:
+                lb = {k: v for k, v in lb.items() if k != "condition"}
+                if self.state.get("condition"):
+                    lb["condition"] = self.state["condition"]
+                self.labels[self.fid] = lb
+                self.dirty = True
+            if self.pos == len(self.fids) - 1 or self.fids[self.pos + 1] > target:
+                break
+            self.pos += 1
+        if not typed and self.pos < len(self.fids) - 1:
+            self.pos += 1
+
+    def next_unchecked(self) -> None:
+        for i in range(self.pos + 1, len(self.fids)):
+            if (self.labels.get(self.fids[i]) or {}).get("condition") == UNCHECKED:
+                self.pos = i
+                return
+
     def key(self, k: str) -> str | None:
         """One keypress; 'write' or 'quit' when the caller should act."""
         if k in "0123456789.-":
@@ -134,6 +166,10 @@ class Labeller:
             self.fill(self.typed)
             self.typed = ""
             return None
+        if k == "k":
+            self.accept(self.typed)
+            self.typed = ""
+            return None
         self.typed = ""
         if k == "d":
             self.step(1)
@@ -156,6 +192,8 @@ class Labeller:
         elif k == "e":
             self.labels.pop(self.fid, None)
             self.dirty = True
+        elif k == "n":
+            self.next_unchecked()
         elif k == "w":
             return "write"
         elif k == "q":
@@ -216,6 +254,36 @@ def template(path, fids: list[int]) -> Path:
     return write_labels(path, [{"first": fids[0], "last": fids[-1], **{f: "" for f in FIELDS}}])
 
 
+def draft(run, fids: list[int]) -> dict:
+    """
+    Per frame, what the robot read (p3.csv beside the frames: the sign and obstacle votes, a light colour
+    from the vote when a light was in view), tagged unchecked. A starting point to review, never truth.
+    """
+    path = next((p for p in (Path(run) / "p3.csv", Path(run).parent / "p3.csv") if p.is_file()), None)
+    if path is None:
+        raise FileNotFoundError(f"no p3.csv in {run}: the draft comes from the run's own readings")
+    with open(path, newline="") as f:
+        rows = {int(r["frame_id"]): r for r in csv.DictReader(f) if (r.get("frame_id") or "").isdigit()}
+    out = {}
+    for fid in fids:
+        r = rows.get(fid)
+        if r is None:
+            continue
+        yes = lambda v: str(v).strip().lower() in ("1", "true")          # noqa: E731
+        lb = {"sign": "yes" if yes(r.get("stop_sign_detected")) else "no"}
+        seen = (r.get("p2_traffic") or "0").strip() not in ("", "0")
+        lb["light"] = DRAFT_LIGHT.get(r.get("drive_state"), "off") if seen else "off"
+        if yes(r.get("obstacle_detected")):
+            cm = (r.get("obstacle_distance_cm") or "").strip()
+            if cm:
+                lb["obstacle_cm"] = round(float(cm), 1)
+        else:
+            lb["obstacle_cm"] = NONE
+        lb["condition"] = UNCHECKED
+        out[fid] = lb
+    return out
+
+
 def _overlay(img, lab: Labeller, total: int):
     import cv2
     def put(text, y, color=(255, 255, 255)):
@@ -236,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("run", help="a run folder (frames/ inside) or a folder of frames")
     ap.add_argument("--conditions", default="", help="comma-separated tags that c steps through")
     ap.add_argument("--template", action="store_true", help="write a labels.csv to fill in by hand, no window")
+    ap.add_argument("--draft", action="store_true",
+                    help="fill unlabelled frames with what the robot read, tagged unchecked, and write labels.csv")
     ap.add_argument("--scale", type=float, default=2.0, help="window zoom (default 2)")
     args = ap.parse_args(argv)
     run = Path(args.run)
@@ -253,12 +323,19 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(f"wrote {template(out, fids)}: frames {fids[0]}-{fids[-1]}")
         return 0
-    import cv2
     try:
         existing = load_labels(out, fids) if out.exists() else {}
-    except ValueError as e:
+        if args.draft:
+            drafted = {f: lb for f, lb in draft(run, fids).items() if f not in existing}
+            lab = Labeller(fids, labels={**drafted, **existing})
+            write_labels(out, lab.rows())
+            print(f"wrote {out}: {len(drafted)} frames drafted unchecked, {len(existing)} kept as labelled. "
+                  f"Review them: make label RUN={run} (n: next unchecked, k: accept)")
+            return 0
+    except (ValueError, FileNotFoundError) as e:
         print(f"label: {e}")
         return 2
+    import cv2
     lab = Labeller(fids, [c for c in args.conditions.split(",") if c], existing)
     paths = dict(items)
     win = "label frames"

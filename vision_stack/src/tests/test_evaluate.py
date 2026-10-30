@@ -246,3 +246,42 @@ def test_the_labeller_fills_a_range_to_a_frame_id():
     assert lab.rows()[0]["first"] == 120 and lab.rows()[0]["last"] == 160
     lab.key("f")                                        # nothing typed: an ordinary key, nothing filled
     assert len(lab.labels) == 41
+
+
+def test_a_draft_is_what_the_robot_read_and_isnt_scored_until_accepted(tmp_path):
+    run = tmp_path / "attempt_01"
+    write_frames(run / "frames", [scene()] * 4 + [scene(sign=True)] * 4)
+    with open(run / "p3.csv", "w") as f:
+        f.write("frame_id,p2_traffic,drive_state,stop_sign_detected,obstacle_detected,obstacle_distance_cm\n")
+        for i in range(8):
+            f.write(f"{i},{1 if i == 2 else 0},stop,{1 if i >= 5 else 0},0,\n")
+    assert lf.main([str(run), "--draft"]) == 0
+    rows = ev.read_labels(run / "labels.csv")
+    assert {lb["condition"] for lb in rows} == {"unchecked"}
+    assert [(lb["first"], lb["last"], lb["sign"], lb["light"]) for lb in rows] == [
+        (0, 1, False, "off"), (2, 2, False, "red"), (3, 4, False, "off"), (5, 7, True, "off")]
+    res = ev.run_eval(run, config=SCENE_CONFIG, estimation=EST)[0]
+    assert res["labelled"] == 0 and res["unchecked_frames"] == 8 and "8 frames are still an unchecked draft" in res["findings"][0]
+    # review: frame 2 wasn't a light (correct it), the sign starts at 4 not 5 (relabel), the rest accepted
+    lab = lf.Labeller(list(range(8)), labels=lf.load_labels(run / "labels.csv", list(range(8))))
+    for k in "1k":
+        lab.key(k)                                      # frames 0-1 accepted
+    for k in "s" + "s" + "l" + "d":                    # sign no, light off: frame 2 painted
+        lab.key(k)
+    lab.key("k")                                        # frame 3 accepted
+    for k in "ss" + "7f":                              # sign no -> unset -> yes, from 4 through 7
+        lab.key(k)
+    lf.write_labels(run / "labels.csv", lab.rows())
+    res = ev.run_eval(run, config=SCENE_CONFIG, estimation=EST)[0]
+    assert res["labelled"] == 8 and "unchecked_frames" not in res
+    s = res["sign"]["frame"]
+    assert (s["tp"], s["fp"]) == (4, 0)
+    assert lf.main([str(tmp_path / "nothing"), "--draft"]) == 2
+
+
+def test_n_finds_the_next_unchecked_frame():
+    lab = lf.Labeller([0, 1, 2, 3], labels={2: {"sign": "no", "condition": "unchecked"}})
+    lab.key("n")
+    assert lab.fid == 2
+    lab.key("k")
+    assert lab.labels[2] == {"sign": "no"} and lab.fid == 3
