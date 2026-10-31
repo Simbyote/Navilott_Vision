@@ -153,7 +153,11 @@ class VideoFrameSource(FrameSource):
 
 
 class DirectoryFrameSource(FrameSource):
-    """Images sorted by name; unreadable files skipped without using a frame id."""
+    """
+    Images sorted by name; unreadable files skipped without using a frame id. Named by the
+    recorder (000123.jpg), a frame keeps its recorded id, and its time follows from it, so a
+    replay's results line up with the run's own log and with labels.csv; else they count from 0.
+    """
     def __init__(self, path: str, fps: float = FPS) -> None:
         super().__init__(os.path.basename(os.path.normpath(path)), fps)
         self.files = [
@@ -163,13 +167,19 @@ class DirectoryFrameSource(FrameSource):
         if not self.files:
             raise CaptureError(f"no images in {path}")
         self._n = 0
+        stems = [os.path.splitext(os.path.basename(f))[0] for f in self.files]
+        self._recorded = all(st.isdigit() for st in stems)
 
     def read(self) -> Stamped | None:
         while self._n < len(self.files):
-            frame = cv2.imread(self.files[self._n])
+            path = self.files[self._n]
+            frame = cv2.imread(path)
             self._n += 1
             if frame is not None:
                 fid, ts = self._stamp()
+                if self._recorded:
+                    fid = int(os.path.splitext(os.path.basename(path))[0])
+                    ts = int(fid * 1000.0 / max(self.fps, 1))
                 return frame, fid, ts
         return None
 

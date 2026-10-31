@@ -92,6 +92,16 @@ def test_directory_source_reads_images_in_filename_order_and_ignores_other_files
 
 
 @pytest.mark.software
+def test_recorded_frames_keep_their_own_ids_so_a_replay_lines_up_with_the_run(tmp_path):
+    # the recorder's names; a subsample (every 3rd) keeps its gaps, and its times follow the ids
+    d = write_frames(tmp_path / "frames", names=["000003.jpg", "000006.jpg", "000009.jpg"])
+    assert [(fid, ts) for _, fid, ts in drain(lv.DirectoryFrameSource(str(d), fps=20))] == \
+        [(3, 150), (6, 300), (9, 450)]
+    mixed = write_frames(tmp_path / "mixed", names=["000003.jpg", "cover.jpg"])
+    assert [fid for _, fid, _ in drain(lv.DirectoryFrameSource(str(mixed)))] == [0, 1]
+
+
+@pytest.mark.software
 def test_directory_source_skips_unreadable_images_without_using_a_frame_id(tmp_path):
     d = write_frames(tmp_path / "f", names=["a.png", "c.png"])
     (d / "b.png").write_bytes(b"corrupt")
