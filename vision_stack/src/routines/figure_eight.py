@@ -27,7 +27,7 @@ ROUTE_LAP = (LEFT,) * 3 + (STRAIGHT,) * 1 + (LEFT,) * 3 + (RIGHT,) * 3 + (STRAIG
 MINUTES = 10.0
 MAX_LAPS = 200              # far more than a run's minutes allow
 TIME_UP = "time up"
-EXPECTED_DEG = {LEFT: -90.0, RIGHT: 90.0}               # + = turned right
+EXPECTED_DEG = {LEFT: -90.0, RIGHT: 90.0, STRAIGHT: 0.0}  # + = turned right
 INTERSECTION_FIELDS = ("step", "lap", "maneuver", "t_enter", "turn_end", "turn_deg", "exit_deg", "heading_deg",
                        "heading_off_deg", "lane_back", "slip_s", "battery_v")
 LAP_FIELDS = ("lap", "t_start", "seconds", "battery_v")
