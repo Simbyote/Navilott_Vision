@@ -29,7 +29,7 @@ A requirement is **Verified** only when its check has passed on the current hard
 | --- | --- | --- | --- | --- | --- |
 | P1 | Process at least **20 frames per second**, sustained | **While driving**, over a run of at least 5 minutes: effective FPS (frames ÷ wall time in `summary.txt`) ≥ 20.0, and ≤ 5% of frames over the 50 ms budget (P2 + P3 > 50 ms) | T | Any recorded course run (`make routine-figure-eight`, `make routine-course-run`): the run's `summary.txt`. The bench routine `make routine-frame-budget` (3 × 60 s, motors off) is a diagnostic. | **Not met** (2026-10-28, 10-min figure-eight): 19.3 FPS effective, 324 of 11,629 frames (2.8%) over budget; Phase 2 averaged 38.9 ms while driving. On the bench: 20.0 FPS. |
 | P2 | Deliver each navigation update within **50.0 ms** of the frame being captured | **While driving:** p95 of P2 + P3 time (the `total` row in `summary.txt`) ≤ 50.0 ms. The clock starts when the frame reaches the application, after exposure and the ISP; see note. | T | The same run's `summary.txt`. Also report "command latency" (frame in → motor write) next to it. | **Not met** (2026-10-28, driving): P2 + P3 p95 51.8 ms; frame → motors p95 52.9 ms. On the bench: 40.7 ms frame → motors. |
-| P3 | Report lateral position in the lane to within **±2 cm** | Parked at ruler-measured offsets of ±2 and ±4 cm from lane centre, on 2 straights (8 placements): the mean reported `lane_offset_cm` within ±2.0 cm of the ruler at every placement. The 0 cm look sets the scale, so it isn't judged. | T | `make routine-lane-offset`; see [Procedure for P3](#procedure-for-p3-lane-offset-accuracy) | Not verified |
+| P3 | Report lateral position in the lane to within **±2 cm** | Parked at ruler-measured offsets of 0, ±2 and ±4 cm from lane centre, on 2 straights (10 placements): the mean reported `lane_offset_cm` within ±2.0 cm of the ruler at every placement. The 0 cm look also sets the scale (14 cm ÷ lane width in px); its own error tests the centre (`robot_x_px`), and the ±2 and ±4 cm looks test the scale. | T | `make routine-lane-offset`; see [Procedure for P3](#procedure-for-p3-lane-offset-accuracy) | Not verified |
 | P4 | Run entirely on board, with no network connection | Nothing in the pipeline opens a network connection | I | By design | Met by design |
 
 On P2: the pipeline stamps a frame when it reaches the application, after exposure and ISP processing. Time from exposure to that stamp is a few frame periods at most but hasn't been measured. If P2 means "light to decision", it needs a separate measurement, such as filming an LED next to the robot's display.
@@ -98,8 +98,8 @@ These are internal targets from the design, not PSR requirements. They're here s
 1. **Measure the ground scale.** Park the robot centred in a straight lane and run `phase3_linker --camera --limit 100`. Note `L` and `R` in the status line. The ground scale is 14 cm ÷ (R − L) px, using the lane width measured the same way: centre of one line to centre of the other (see `course.md`).
 2. **Record the noise floor.** Still parked and centred, run `--limit 300` and note the offset `std` in `summary.txt`.
 3. **Measure at known offsets.** Shift the robot 2 cm and then 4 cm right of centre, then the same to the left. Measure each offset with a ruler, from the lane centre to the robot's centreline. At each position run `phase3_linker --camera --cm-per-px <scale> --limit 100` and note the mean `lane_offset_cm` in `p3.csv`.
-4. **Repeat on a second straight.** That gives 8 judged placements in total.
-5. **Pass:** at every off-centre placement, the mean reported offset is within 2 cm of the ruler.
+4. **Repeat on a second straight.** That gives 10 judged placements in total.
+5. **Pass:** at every placement, the mean reported offset is within 2 cm of the ruler.
 
 Record the results in the status column above, with the date and commit.
 
@@ -126,7 +126,7 @@ The proposed values below are what the plans and test sheets use. Agree them wit
 | Date | Requirement | Change | Reason |
 | --- | --- | --- | --- |
 | 2026-11-02 | P1, P2, R4 | Judged **while driving**. The bench routine became a diagnostic. | The requirements describe a driving robot; bench numbers were being read as verdicts. |
-| 2026-11-02 | P3 | 0 cm placement not judged; a second straight added | The 0 cm look sets the scale, so it can't fail. |
+| 2026-11-02 | P3 | A second straight added | More independent placements. (The 0 cm look sets only the scale; its offset comes from `robot_x_px`, so it is judged like the others.) |
 | 2026-11-02 | D4 | Reference changed to the robot's front edge; gaps now 8–20 cm instead of 0–20 cm; split into D4a / D4b; new placements required | Matches `stop_line_table.json`. Since the camera was remounted upright, the line leaves the view below about 8 cm. |
 | 2026-11-02 | D1, D2, D3, D6 | TBD values filled with **proposed** rules | See Open decisions. |
 | 2026-11-02 | D2 | False stops: at most 1 per 10 no-sign trials or 10 minutes driven, instead of 0 | Agreed with the team: real signs must always be stopped for; a rare false stop is tolerated |
