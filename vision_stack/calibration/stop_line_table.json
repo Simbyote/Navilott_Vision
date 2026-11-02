@@ -1,160 +1,160 @@
 {
   "model": "stop_line_rows_to_cm",
   "curve": [
-    745.4187864750822,
-    125.99588086457263,
-    1.7974502812394877
+    1292.067753645438,
+    137.23470129122336,
+    -0.43831917969874495
   ],
   "formula": "cm = curve[0] / (curve[1] - rows) + curve[2]; rows = distance_px above the lane ROI bottom",
   "reference": "the front edge of the robot",
   "marks": [
     {
-      "cm": 8.0,
-      "rows": 6.34,
-      "seen": 15,
-      "frames": 15,
-      "clipped": 0,
-      "candidates": 1,
-      "spread": 0.02,
-      "fit_cm": 8.027,
-      "error_cm": 0.027
-    },
-    {
       "cm": 9.0,
-      "rows": 23.92,
+      "rows": 2.26,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.0,
-      "fit_cm": 9.1,
-      "error_cm": 0.1
+      "spread": 0.05,
+      "fit_cm": 9.134,
+      "error_cm": 0.134
     },
     {
       "cm": 10.0,
-      "rows": 34.9,
-      "seen": 15,
-      "frames": 15,
-      "clipped": 0,
-      "candidates": 1,
-      "spread": 0.01,
-      "fit_cm": 9.98,
-      "error_cm": 0.02
-    },
-    {
-      "cm": 11.0,
-      "rows": 45.07,
-      "seen": 15,
-      "frames": 15,
-      "clipped": 0,
-      "candidates": 1,
-      "spread": 0.01,
-      "fit_cm": 11.009,
-      "error_cm": 0.009
-    },
-    {
-      "cm": 12.0,
-      "rows": 52.41,
-      "seen": 15,
-      "frames": 15,
-      "clipped": 0,
-      "candidates": 1,
-      "spread": 0.04,
-      "fit_cm": 11.927,
-      "error_cm": 0.073
-    },
-    {
-      "cm": 13.0,
-      "rows": 59.58,
-      "seen": 15,
-      "frames": 15,
-      "clipped": 0,
-      "candidates": 1,
-      "spread": 0.1,
-      "fit_cm": 13.021,
-      "error_cm": 0.021
-    },
-    {
-      "cm": 14.0,
-      "rows": 64.98,
+      "rows": 13.0,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
       "spread": 0.0,
-      "fit_cm": 14.014,
-      "error_cm": 0.014
+      "fit_cm": 9.962,
+      "error_cm": 0.038
+    },
+    {
+      "cm": 11.0,
+      "rows": 22.21,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.05,
+      "fit_cm": 10.795,
+      "error_cm": 0.205
+    },
+    {
+      "cm": 12.0,
+      "rows": 32.7,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.07,
+      "fit_cm": 11.922,
+      "error_cm": 0.078
+    },
+    {
+      "cm": 13.0,
+      "rows": 42.54,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.7,
+      "fit_cm": 13.206,
+      "error_cm": 0.206
+    },
+    {
+      "cm": 14.0,
+      "rows": 48.19,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.01,
+      "fit_cm": 14.072,
+      "error_cm": 0.072
     },
     {
       "cm": 15.0,
-      "rows": 69.98,
+      "rows": 52.51,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.35,
-      "fit_cm": 15.105,
-      "error_cm": 0.105
+      "spread": 0.18,
+      "fit_cm": 14.812,
+      "error_cm": 0.188
     },
     {
       "cm": 16.0,
-      "rows": 73.34,
+      "rows": 58.95,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
       "spread": 0.01,
-      "fit_cm": 15.954,
-      "error_cm": 0.046
+      "fit_cm": 16.066,
+      "error_cm": 0.066
     },
     {
-      "cm": 8.5,
-      "rows": 13.55,
+      "cm": 17.0,
+      "rows": 63.22,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.02,
-      "fit_cm": 8.427,
-      "error_cm": 0.073
+      "spread": 0.09,
+      "fit_cm": 17.019,
+      "error_cm": 0.019
     },
     {
-      "cm": 9.5,
-      "rows": 28.9,
+      "cm": 18.0,
+      "rows": 67.36,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.01,
-      "fit_cm": 9.475,
-      "error_cm": 0.025
+      "spread": 0.15,
+      "fit_cm": 18.053,
+      "error_cm": 0.053
     },
     {
-      "cm": 10.5,
-      "rows": 41.07,
+      "cm": 19.0,
+      "rows": 70.7,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.01,
-      "fit_cm": 10.575,
-      "error_cm": 0.075
+      "spread": 0.53,
+      "fit_cm": 18.981,
+      "error_cm": 0.019
     },
     {
-      "cm": 11.5,
-      "rows": 48.31,
+      "cm": 20.0,
+      "rows": 73.95,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.01,
-      "fit_cm": 11.393,
-      "error_cm": 0.107
+      "spread": 0.0,
+      "fit_cm": 19.978,
+      "error_cm": 0.022
+    },
+    {
+      "cm": 21.0,
+      "rows": 77.0,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.23,
+      "fit_cm": 21.012,
+      "error_cm": 0.012
     }
   ],
   "error_cm": {
-    "mean": 0.0534637681046847,
-    "max": 0.1072567494428629
+    "mean": 0.08560672667301156,
+    "max": 0.2062431456189362
   },
   "image_size": [
     480,
@@ -163,7 +163,7 @@
   "undistort_alpha": 0.0,
   "lens_calibration": {
     "file": "camera_calibration.json",
-    "sha256": "781e1eea45aae63544c02e38bc44ea847f123dd69feee6477df7d4ae148cb95a"
+    "sha256": "f705c6a39437278b4b60662256f4c91357e53184d1b39076950d62b2d9f4d138"
   },
-  "created": "2026-10-22T18:31:43"
+  "created": "2026-10-28T11:46:28"
 }

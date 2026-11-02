@@ -80,10 +80,10 @@ MEASURED = PipelineConfig(
         min_intensity = 90.0,
         # Half the 357 px lane measured on 2026-10-12. The hand-set 228 put one-line
         # frames ~0.25 off their neighbours; 178 puts them ~0.06 off
-        expected_half_lane_px = 178.0,
+        expected_half_lane_px = 200.0,
         # ~0.84 of the lane. At 60 a line and something beside it passed as a
         # lane, flipped the estimate's sign and the robot veered off (2026-10-20)
-        min_lane_width_px = 300.0,
+        min_lane_width_px = 250.0,
     ),
 )
 

@@ -20,10 +20,10 @@ from pathlib import Path
 from src.intersection_linker import HEADING_TOLERANCE_DEG
 from src.navigation.intersection import STAGE_EXIT, TURN_END_GYRO
 from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING
-from src.navigation.route import LEFT, RIGHT
+from src.navigation.route import LEFT, RIGHT, STRAIGHT
 from src.routines.harness import Routine, criterion
 
-ROUTE_LAP = (LEFT,) * 4 + (RIGHT,) * 4
+ROUTE_LAP = (LEFT,) * 3 + (STRAIGHT,) * 1 + (LEFT,) * 3 + (RIGHT,) * 3 + (STRAIGHT,) * 1 + (RIGHT,) * 3
 MINUTES = 10.0
 MAX_LAPS = 200              # far more than a run's minutes allow
 TIME_UP = "time up"

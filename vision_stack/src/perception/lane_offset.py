@@ -198,7 +198,7 @@ def _single_sided(
     if half is None:
         log.append(
             "[UNCALIBRATED] one usable boundary, but expected_half_lane_px is "
-            "unset — emitting no steering signal rather than one of unknown scale"
+            "unset â€” emitting no steering signal rather than one of unknown scale"
         )
         return LaneOffsetResult(
             offset = 0.0, left_x = None, right_x = None, lane_width_px = None,
@@ -359,7 +359,7 @@ def compute_lane_offset(
         if lane_width_px < config.min_lane_width_px:
             log.append(
                 f"[MERGE] anchors {lane_width_px:.1f}px apart, below "
-                f"{config.min_lane_width_px} — same marking, not opposite boundaries"
+                f"{config.min_lane_width_px} â€” same marking, not opposite boundaries"
             )
             best = max(anchors, key=lambda a: a.weight)
             side = "left" if best.foot_x < center_x else "right"
@@ -370,7 +370,7 @@ def compute_lane_offset(
         if lane_width_px > config.max_lane_width_px:
             log.append(
                 f"[SPAN] anchors {lane_width_px:.1f}px apart, above "
-                f"{config.max_lane_width_px} — pair spans more than one lane"
+                f"{config.max_lane_width_px} â€” pair spans more than one lane"
             )
             best = max(anchors, key=lambda a: a.weight)
             side = "left" if best.foot_x < center_x else "right"
