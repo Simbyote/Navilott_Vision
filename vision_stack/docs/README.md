@@ -103,7 +103,9 @@ wheel encoders       │                  heading, votes, odometry
 
 The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. On the IMX290, no requirement is formally verified on the course yet, apart from P4 by design; the routines are how each gets verified. `requirements.md` has the per-requirement status, and each `vision_pipeline/` doc ends with its open items. The most important:
 
-- The frame rate: about 15 FPS against the 20 FPS target (P1); `make routine-frame-budget` measures it
+- The frame rate and latency while driving: 19.3 FPS and 51.8 ms p95 against 20 FPS and 50 ms (P1, P2, 2026-10-28); Phase 2 is the main thread's cost
 - The ground scale and lane offset accuracy against ±2 cm (P3): `make routine-lane-offset`
-- The traffic light and stop sign read on the course (D2, D3): `make routine-detect-range`; the traffic and sign ROI bounds need a small re-tune on the track
+- Stop-sign false stops on the red traffic lamp and red objects (D2), and yellow read as red (D3): `make routine-detect-range`
+- Dark obstacles aren't seen (D6): `make routine-obstacle-check` per object class
+- Several pass rules are proposed and wait on the team: `requirements.md`, Open decisions
 - The whole course, timed: `make routine-course-run`
