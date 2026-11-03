@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map range-compare gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map range-compare line-replay gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -224,6 +224,9 @@ label: ## step through a run's frames and write labels.csv for make eval (RUN=; 
 
 obstacle-map: ## several obstacle-check runs as one object-by-gap grid, misses with their gate (RUN=<folder of runs>)
 	$(PY) -m src.analysis.obstacle_map $(strip $(RUN)) $(ARGS)
+
+line-replay: ## stop-line cm against the tape over every detect-range line run in a folder, D4b's tolerance; replays saved looks of older runs (RUN=<folder of runs>)
+	$(PY) -m src.analysis.line_replay $(strip $(RUN)) $(ARGS)
 
 range-compare: ## several detect-range runs by condition, round and gap, the sign's redness, frame_meta beside (RUN=<folder of runs>; ARGS="--conditions c.csv --meta <folder>")
 	$(PY) -m src.analysis.range_compare $(strip $(RUN)) $(ARGS)
