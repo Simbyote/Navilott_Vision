@@ -60,7 +60,8 @@ def test_seen_counts_lights_and_signs_at_their_gates():
                  "lane_status": "vision", "p2_offset": 0.1, "lane_mode": "two", "lane_width_px": 300,
                  "obstacle": False, "obstacle_cm": None, "obstacle_clipped": False, "obstacle_voted": False,
                  "obstacle_voted_cm": None, "obstacle_voted_clipped": False,
-                 "stop_line": False, "stop_line_voted": False, "stop_line_tilt": None, "total_ms": 31.5}
+                 "stop_line": False, "stop_line_voted": False, "stop_line_tilt": None, "stop_line_cm": None,
+                 "stop_line_clipped": False, "total_ms": 31.5}
     under = seen(result([det(TRAFFIC_LIGHT, RED, p3.min_confidence_traffic - 0.01),
                          det(STOP_SIGN, "stop", p3.min_confidence_sign - 0.01)]), p3)
     assert under["light"] is None and under["sign"] is False
@@ -308,9 +309,10 @@ def test_need_cm_moves_the_line(tmp_path):
     assert [c["name"] for c in res["criteria"] if not c["passed"]] == ["trials not read right within 30 cm"]
 
 
-def line_look(n=40, tilt=0.0, seen_=True):
+def line_look(n=40, tilt=0.0, seen_=True, cm=None, clipped=False):
     return [{"light": None, "sign": False, "drive_state": "go", "stop_sign": False, "stop_line": seen_,
-             "stop_line_voted": seen_, "stop_line_tilt": tilt if seen_ else None} for _ in range(n)]
+             "stop_line_voted": seen_, "stop_line_tilt": tilt if seen_ else None,
+             "stop_line_cm": cm if seen_ else None, "stop_line_clipped": clipped and seen_} for _ in range(n)]
 
 
 @pytest.mark.software
@@ -319,6 +321,17 @@ def test_a_line_look_reads_the_vote_the_share_and_the_median_tilt():
                        dr.LINE, dr.PRESENT)
     assert (got["seen_pct"], got["voted"], got["tilt_deg"], got["result"]) == (77.5, True, -2.0, dr.OK)
     assert dr.read_look(line_look(seen_=False), dr.LINE, dr.PRESENT)["result"] == dr.MISSED
+
+
+@pytest.mark.software
+def test_a_line_look_reads_its_distance_leaving_clipped_frames_out():
+    frames = line_look(n=20, cm=12.0) + line_look(n=20, cm=13.0) + line_look(n=10, cm=0.0, clipped=True)
+    got = dr.read_look(frames, dr.LINE, dr.PRESENT)
+    assert (got["reported_cm"], got["cm_frames"], got["clipped_pct"]) == (12.5, 40, 20.0)
+    assert got["cm_sd"] == pytest.approx(0.51, abs=0.01)
+    none = dr.read_look(line_look(n=10, cm=None), dr.LINE, dr.PRESENT)
+    assert (none["reported_cm"], none["cm_sd"], none["cm_frames"]) == (None, None, 0), "no table, no cm"
+    assert "reported_cm" not in dr.read_look(look(), dr.SIGN, dr.PRESENT), "only the line has a distance"
 
 
 @pytest.mark.software
@@ -353,12 +366,14 @@ def test_every_gap_from_every_pose_with_a_range_per_pose(tmp_path):
 
 @pytest.mark.software
 def test_the_line_target_looks_once_per_pose_and_gives_the_tilt_correction(tmp_path):
-    looks = [line_look(tilt=0.5 - 0.25 * a) for a in (-10, 0, 10)]
+    looks = [line_look(tilt=0.5 - 0.25 * a, cm=15.8) for a in (-10, 0, 10)]
     person = Person(*[""] * 6)
     res = go(FakeEyes(looks), person, tmp_path, target="line", gaps=15, angles="-10,0,10")
     assert res["trials_planned"] == 3 and res["verdict"] == h.PASS
     assert not any("Set " in p for p in person.prompts)                  # nothing to set for a line
     assert [r["tilt_deg"] for r in results(tmp_path)["rows"]] == [3.0, 0.5, -2.0]
+    assert [r["error_cm"] for r in results(tmp_path)["rows"]] == [0.8, 0.8, 0.8], "reported less the gap"
+    assert "reads 15.8 cm (error +0.8, sd 0)" in person.said()
     assert results(tmp_path)["state"]["tilt_fit"] == {"tilt_zero_deg": 0.5, "tilt_to_heading": -4.0, "points": 3}
     assert "TILT_ZERO_DEG = 0.5, TILT_TO_HEADING = -4" in person.said()
 

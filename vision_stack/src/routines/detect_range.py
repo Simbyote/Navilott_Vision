@@ -35,10 +35,12 @@ OK, MISSED, WRONG = "ok", "missed", "wrong"
 def read_look(frames: list[dict], target: str, state: str) -> dict:
     """
     seen_pct: share of frames that saw what's there (for off / absent, anything,
-    all wrong). wrong_frames saw what isn't there. voted is the last vote.
+    all wrong). wrong_frames saw what isn't there. voted is the last vote. For
+    the line, also its distance over the frames that measured one (median and
+    SD, frames clipped at the view's bottom left out) and the clipped share.
     """
     n = len(frames)
-    tilt = None
+    tilt, distance = None, {}
     if target == LIGHT:
         here = state if state != OFF else None
         right = sum(1 for f in frames if here is not None and f["light"] == here)
@@ -49,6 +51,11 @@ def read_look(frames: list[dict], target: str, state: str) -> dict:
         voted = frames[-1].get("stop_line_voted") if frames else None
         tilts = [f["stop_line_tilt"] for f in frames if f.get("stop_line_tilt") is not None]
         tilt = round(statistics.median(tilts), 2) if tilts else None
+        cms = [f["stop_line_cm"] for f in frames if f.get("stop_line_cm") is not None and not f.get("stop_line_clipped")]
+        distance = {"reported_cm": round(statistics.median(cms), 2) if cms else None,
+                    "cm_sd": round(statistics.stdev(cms), 2) if len(cms) > 1 else None, "cm_frames": len(cms),
+                    "clipped_pct": round(100.0 * sum(1 for f in frames if f.get("stop_line_clipped")) / n, 1)
+                    if n else 0.0}
     else:
         here = state == PRESENT
         right = sum(1 for f in frames if here and f["sign"])
@@ -65,7 +72,7 @@ def read_look(frames: list[dict], target: str, state: str) -> dict:
     else:
         result = MISSED
     return {"frames": n, "seen_pct": seen_pct, "wrong_frames": wrong, "voted": voted,
-            "expected": expected, "tilt_deg": tilt, "result": result}
+            "expected": expected, "tilt_deg": tilt, "result": result, **distance}
 
 
 def tilt_fit(rows: list[dict]) -> dict | None:
@@ -116,7 +123,7 @@ class DetectRange(Routine):
     requirement = "D3 (light colour), D2 (stop sign), the stop line"
     trials = len(parse_numbers(GAPS_CM)) * len(STATES[LIGHT])
     fields = ("gap_cm", "angle_deg", "offset_cm", "state", "frames", "seen_pct", "wrong_frames", "voted",
-              "expected", "tilt_deg", "result")
+              "expected", "tilt_deg", "result", "reported_cm", "error_cm", "cm_sd", "cm_frames", "clipped_pct")
     settings = {"target": "light, sign or line (default light)",
                 "gaps": f"gaps before the stop line in cm, comma separated (default {GAPS_CM})",
                 "angles": f"robot turned from square, deg, + = right, comma separated (default {ANGLES_DEG})",
@@ -207,13 +214,17 @@ Keep people and bright clothes out of the view while it looks."""
         frames, last = self._eyes.look(int(ctx.options["frames"]))
         row = {"gap_cm": gap, "angle_deg": angle, "offset_cm": offset, "state": state,
                **read_look(frames, target, state)}
+        if row.get("reported_cm") is not None:
+            row["error_cm"] = round(row["reported_cm"] - gap, 2)
         save_frame(ctx.out_dir / f"attempt_{ctx.attempt + 1:02d}_{gap:g}cm{pose_tag(angle, offset)}_{state}.jpg", last)
         ctx.state["results"][str(i)] = {k: row[k] for k in ("gap_cm", "angle_deg", "offset_cm", "state",
                                                             "tilt_deg", "result")}
         if row["result"] != OK:
             ctx.console.say(f"  {row['result'].upper()}: voted {row['voted']}, expected {row['expected']}")
         elif target == LINE and row["tilt_deg"] is not None:
-            ctx.console.say(f"  tilt {row['tilt_deg']:g} deg")
+            cm = "" if row.get("reported_cm") is None else \
+                f", reads {row['reported_cm']:g} cm (error {row['error_cm']:+g}, sd {row['cm_sd'] or 0:g})"
+            ctx.console.say(f"  tilt {row['tilt_deg']:g} deg{cm}")
         return row
 
     def judge(self, rows):

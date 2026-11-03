@@ -29,7 +29,9 @@ def seen(res, p3) -> dict:
     and the *_voted keys are votes after this frame. lane_offset is [-1, 1] of
     half the ROI, + = robot right; p2_* is Phase 2's raw measurement.
     obstacle_cm is None without cm, *_clipped when the base is below the view.
-    stop_line_tilt (deg, + = right end nearer) is None unless seen this frame.
+    stop_line_tilt (deg, + = right end nearer) is None unless seen this frame;
+    stop_line_cm is Phase 2's distance this frame (None unseen or without a
+    ground plane or table), stop_line_clipped when the line runs off the view's bottom.
     """
     light = sign = None
     for d in res.chain.phase2.detections:
@@ -51,6 +53,8 @@ def seen(res, p3) -> dict:
             "stop_line": bool(line is not None and line.detected),
             "stop_line_voted": bool(getattr(pk, "stop_line_detected", False)),
             "stop_line_tilt": getattr(pk, "stop_line_tilt_deg", None),
+            "stop_line_cm": None if line is None or not line.detected else line.distance_cm,
+            "stop_line_clipped": bool(line is not None and line.detected and line.clipped),
             "total_ms": res.timings_ms["phase2"] + res.timings_ms["phase3"]}
 
 
