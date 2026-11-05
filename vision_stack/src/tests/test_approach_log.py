@@ -45,7 +45,9 @@ def approach(rows, t, odo, line_at, step, sign=False, red=False):
             kw.update(phase="crossing")
         if red and gap <= 25:
             kw["drive_state"] = "stop"
-        rows.append(frame(t, odo, step=f"{step - 1}/28", **kw))
+        # the route counts a line once its crossing starts, before the robot reaches it
+        label = step if kw.get("phase") == "crossing" else step - 1
+        rows.append(frame(t, odo, step=f"{label}/28", **kw))
         t, odo = t + DT, odo + SPEED * DT
     hold_reason = "stop_sign_hold" if sign else "red_light" if red else "steer"
     for _ in range(int((2.0 if sign else 1.0) / DT)):
@@ -73,6 +75,7 @@ def test_approaches_cut_at_reach_and_counted_back_by_odometry(tmp_path):
     res = al.analyze(make_run(tmp_path), sign_at=(1,), light_at=(2,))
     a, b = res["approaches"]
     assert (a["step"], a["position"], a["maneuver"]) == (1, 1, "left")
+    assert (b["step"], b["position"]) == (2, 2)       # not the next line's count, already up in a's window
     assert a["sign_expected"] == "Y" and b["sign_expected"] == "N"
     assert a["stopped_for"] == "stop sign" and a["hold_s"] == pytest.approx(2.0, abs=0.06)
     assert a["sign_first_est_cm"] == pytest.approx(30.0, abs=0.6)

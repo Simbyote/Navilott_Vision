@@ -114,9 +114,11 @@ def analyze(nav_csv: Path, sign_at=(), light_at=(), lap_len: int = LAP_LEN, run:
         end = marks[k + 1] if k + 1 < len(marks) else len(rows)
         turn = next((j for j in range(r_i, end) if rows[j].get("rule") == RULE_INTERSECTION), end)
         start = turn
-        after = rows[r_i:max(turn, r_i + 1)]
         at = rows[r_i]
-        step = max([_step(x.get("step")) for x in rows[r_i:end]] or [0])
+        after = rows[r_i:max(turn, r_i + 1)]
+        # The route counts a line when its crossing starts, before the reach: the reach frame
+        # carries this line's step; later frames in the window already count the next line
+        step = _step(at.get("step"))
         position = (step - 1) % lap_len + 1 if step else None
         maneuver = next((x["maneuver"] for x in rows[r_i:end] if x.get("maneuver")), "")
         left = _num(at.get("line_left_cm"))
