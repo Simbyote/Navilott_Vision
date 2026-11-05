@@ -30,14 +30,14 @@ class LaneOffsetConfig:
     min_width_px: float = 1.0
     max_width_px: float = 25.0          # wider is a blob, glare or a merged pair
     min_intensity: float = 90.0         # rejects shadow edges and mat seams
-    min_lane_width_px: float = 207.0    # closer anchors are fragments of one marking
+    min_lane_width_px: float = 60.0     # closer anchors are fragments of one marking
     max_lane_width_px: float = 400.0    # wider apart spans more than one lane
     # Lane-ROI px from a boundary to the lane center; None disables one-boundary
     # mode. MEASURED sets the course's 178 (config.py)
-    expected_half_lane_px: float | None = 197.1
+    expected_half_lane_px: float | None = 228
     # Lane-ROI px of the robot's centerline: where a centered robot sees its lane's middle.
     # None is the ROI's middle, right for a camera square on the centerline
-    robot_x_px: float | None = 224
+    robot_x_px: float | None = None
     foot_band_px: int = FOOT_BAND_PX    # only when geometry didn't store a foot_x
     # Candidates this much within a stop line are it, or the pocket it encloses: skipped. None disables
     stop_line_overlap: float | None = 0.5

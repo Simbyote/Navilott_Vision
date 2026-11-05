@@ -84,6 +84,9 @@ MEASURED = PipelineConfig(
         # ~0.84 of the lane. At 60 a line and something beside it passed as a
         # lane, flipped the estimate's sign and the robot veered off (2026-10-20)
         min_lane_width_px = 331.0,
+        # Where the centered robot sees its lane's middle (calibrated on the robot, 2026-11-05;
+        # the ROI's middle is 216): make calib-lane
+        robot_x_px = 224.0,
     ),
 )
 
