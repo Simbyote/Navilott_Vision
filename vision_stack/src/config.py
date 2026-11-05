@@ -81,11 +81,14 @@ MEASURED = PipelineConfig(
         # Half the 357 px lane measured on 2026-10-12. The hand-set 228 put one-line
         # frames ~0.25 off their neighbours; 178 puts them ~0.06 off
         expected_half_lane_px = 197.1,
-        # ~0.84 of the lane. At 60 a line and something beside it passed as a
-        # lane, flipped the estimate's sign and the robot veered off (2026-10-20)
-        min_lane_width_px = 331.0,
-        # Where the centered robot sees its lane's middle (calibrated on the robot, 2026-11-05;
-        # the ROI's middle is 216): make calib-lane
+        # Under every real lane: off center the lane reads narrower (~270-300 px at 3-4 cm,
+        # TP-01 2026-11-03; 0.5% of 2026-10-28's two-line frames under 268), well over a
+        # fragment pair. At 60 a line and something beside it passed as a lane, flipped
+        # the estimate's sign and the robot veered off (2026-10-20); 331 (0.84 x 394)
+        # dropped ~10% of real two-line frames to one line
+        min_lane_width_px = 260.0,
+        # Where the centered robot sees its lane's middle: make calib-lane gave 224
+        # (2026-11-05); TP-01's centered looks 221-222 (2026-11-03). The ROI's middle is 216
         robot_x_px = 224.0,
     ),
 )

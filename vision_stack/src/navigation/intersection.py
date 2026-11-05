@@ -27,7 +27,7 @@ from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 TWO_BOUNDARY_FRAMES = 15
 # ...or at least one for this many (~1 s): past some intersections only one
 # line shows, and the crossing never ended (2026-10-01; 40 until 2026-10-26)
-ONE_BOUNDARY_FRAMES = 300
+ONE_BOUNDARY_FRAMES = 30
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # ...or this much exit driving (tuned on the mat, 2026-10-19)
 MAX_CROSS_MS = 5500
@@ -53,10 +53,11 @@ RIGHT_TURN = Command(0.77, 0.26)
 LEFT_TURN_SPEED = 0.8
 # 90 less the coast after the turn stops
 TURN_TARGET_DEG = 85.0
-# Heading deg per deg of stop-line tilt, measured with detect-range at
-# -6..6 deg (2026-10-20; how: navigation_contract.md). Negative and over 1: a
-# low camera flattens the line. Check its sign on the robot: wrong, it doubles the error
-TILT_TO_HEADING: float | None = -0.3
+# Heading deg per deg of stop-line tilt: the inverse of the tilt read per deg of
+# approach, -0.31 at 8-12 cm, where the tilt is taken (detect-range at -10..10 deg,
+# 2026-11-02, TP-05; how: navigation_contract.md). Negative and over 1: a low
+# camera flattens the line. Check its sign on the robot: wrong, it doubles the error
+TILT_TO_HEADING: float | None = -3.2
 # The tilt a square approach reads, from the same fit
 TILT_ZERO_DEG = 0.63
 # Caps a wrong scale; the stop-line tilt gate refuses steeper lines anyway
