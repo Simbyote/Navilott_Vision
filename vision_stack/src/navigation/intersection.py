@@ -24,15 +24,15 @@ from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 
 # Two boundaries this many frames (~0.5 s) ends the crossing. 3 ended it as
 # soon as the far side's lines showed (2026-10-05)
-TWO_BOUNDARY_FRAMES = 10
+TWO_BOUNDARY_FRAMES = 15
 # ...or at least one for this many (~1 s): past some intersections only one
 # line shows, and the crossing never ended (2026-10-01; 40 until 2026-10-26)
-ONE_BOUNDARY_FRAMES = 20
+ONE_BOUNDARY_FRAMES = 300
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # ...or this much exit driving (tuned on the mat, 2026-10-19)
 MAX_CROSS_MS = 5500
 # The same by odometry, from stage_cm where timed exits ended (2026-10-20)
-MAX_CROSS_CM: float | None = 49.7
+MAX_CROSS_CM: float | None = 50.0
 MAX_DT_MS = 500
 # Drive into the intersection before turning: the stop lines sit back from
 # it and the robot stops early for the hanging light, so turning from the
@@ -40,11 +40,11 @@ MAX_DT_MS = 500
 ADVANCE_MS = 2500
 # The same by odometry, which doesn't drift with the battery; from stage_cm
 # where timed advances ended (2026-10-20)
-ADVANCE_CM: float | None = 23.3
+ADVANCE_CM: float | None = 25.0
 # Tuned on the mat at ~11.7 V (2026-10-19; left 0.48 -> 0.50, 2026-10-26). With encoders, WheelSpeed holds
 # these duties' wheel speeds at any voltage
-LEFT_TURN = Command(0.52, 0.72)
-RIGHT_TURN = Command(0.76, 0.25)
+LEFT_TURN = Command(0.50, 0.76)
+RIGHT_TURN = Command(0.77, 0.26)
 # The left turn's speed, as a share of the tuned one. Its outer (right) wheel ran
 # 4 s at ~2190 counts/s, the robot's fastest, twice the high-duty time the left
 # motor got, and the right N20 failed there (2026-10-28: weakest at speed, 20%
@@ -56,9 +56,9 @@ TURN_TARGET_DEG = 85.0
 # Heading deg per deg of stop-line tilt, measured with detect-range at
 # -6..6 deg (2026-10-20; how: navigation_contract.md). Negative and over 1: a
 # low camera flattens the line. Check its sign on the robot: wrong, it doubles the error
-TILT_TO_HEADING: float | None = -4.3
+TILT_TO_HEADING: float | None = -0.3
 # The tilt a square approach reads, from the same fit
-TILT_ZERO_DEG = 0.19
+TILT_ZERO_DEG = 0.63
 # Caps a wrong scale; the stop-line tilt gate refuses steeper lines anyway
 MAX_APPROACH_DEG = 10.0
 # Turn time limits when the gyro never gets there: the turn's time plus half. The

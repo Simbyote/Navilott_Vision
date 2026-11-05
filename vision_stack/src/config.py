@@ -69,7 +69,7 @@ MEASURED = PipelineConfig(
     # sign reads aspect 0.55-0.72, extent 0.63-0.75 (sign_check, 2026-10-20); a
     # leg is ~0.3 wide, a chair back boxier than 0.92
     geometry = GeometryConfig(
-        stop_line = StopLineFilter(max_tilt_deg = 5.0),
+        stop_line = StopLineFilter(max_tilt_deg = 4.0),
         sign = SignContourFilter(aspect_range = (0.5, 1.6), extent_range = (0.6, 0.92), min_letter_share = 0.03),
     ),
     lane_offset = LaneOffsetConfig(
@@ -80,10 +80,10 @@ MEASURED = PipelineConfig(
         min_intensity = 90.0,
         # Half the 357 px lane measured on 2026-10-12. The hand-set 228 put one-line
         # frames ~0.25 off their neighbours; 178 puts them ~0.06 off
-        expected_half_lane_px = 200.0,
+        expected_half_lane_px = 197.1,
         # ~0.84 of the lane. At 60 a line and something beside it passed as a
         # lane, flipped the estimate's sign and the robot veered off (2026-10-20)
-        min_lane_width_px = 250.0,
+        min_lane_width_px = 331.0,
     ),
 )
 
