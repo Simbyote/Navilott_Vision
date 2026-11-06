@@ -15,10 +15,10 @@ Values marked **TBD** haven't been measured or written down yet.
 | Lane width | about 14 cm | Ground scale (cm per px); single-line lane center projection |
 | Lane line (tape) width | about 1 cm | Lane-line width gates in geometry and lane offset |
 | Full street width (two lanes) | about 29–30 cm | Maximum plausible lane width; choosing the robot's own lane over the whole street |
-| Intersection square | about 28–30 cm per side | How far a turn drives in before turning and the longest crossing: `ADVANCE_CM` (22.3) and `MAX_CROSS_CM` (49.7) in `navigation/intersection.py` |
+| Intersection square | about 28–30 cm per side | How far a turn drives in before turning and the longest crossing: `ADVANCE_CM` (25.0) and `MAX_CROSS_CM` (50.0) in `navigation/intersection.py` |
 | Center line | Dashed: dash and gap about 4 cm each | Minimum line length for steering (so dashes don't anchor a boundary) |
 | Surface / marking | White tape on dark mats | Edge thresholds and the minimum brightness gates |
-| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `perception/geometry_shared.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (5° in `MEASURED`). Check all three against real captures |
+| Stop line | Width and distance from the intersection **TBD** | `StopLineFilter` in `perception/geometry_shared.py`: minimum length 60 px (longer than any lane-tape width), thickness 3–40 px, tilt ≤ 20° (4° in `MEASURED`). Check all three against real captures |
 
 **How lane width is measured:** from the center of one line to the center of the other.
 
@@ -67,9 +67,10 @@ Moving the mount changes the height, tilt or position, which invalidates the len
 | Setting | Current value | Where it should come from |
 | --- | --- | --- |
 | Lane ROI | Bottom 30% of the frame, 5–95% across | The rows showing the road just ahead of the robot at this height and tilt |
-| Minimum plausible lane width | 300 px (MEASURED; 60 the default) | ~0.84 of the measured 357 px lane: pairs 61–65 px apart (a line and something beside it) were taken for a lane and flipped the estimate's sign (2026-10-20) |
+| Minimum plausible lane width | 260 px (MEASURED, 2026-11-05; 300 until then; 60 the default) | Under every real lane, which reads ~270–300 px with the robot 3–4 cm off centre: pairs 61–65 px apart (a line and something beside it) were taken for a lane and flipped the estimate's sign (2026-10-20) |
 | Maximum plausible lane width | 400 px | Between one lane and a full street, in px |
-| Lane center from one visible line | 178 px (MEASURED; 228 hand-set until 2026-10-12) | Half the lane width in px: the median two-boundary width over the 2026-10-12 runs, 350–357 px |
+| Lane center from one visible line | 197.1 px (MEASURED, 2026-11-02; 178 until then, 228 hand-set until 2026-10-12) | Half the lane width in px: ~394 px measured 2026-11-02 |
+| Robot's centre in the lane ROI | 224 px (MEASURED, 2026-11-05; the ROI's middle, 216, when unset) | `make calib-lane` with the robot parked centred on a straight |
 | Ground scale | Not set | 14 cm ÷ lane width in px, measured at the bottom of the lane ROI |
 
 Once the ground scale is measured, the three px values above can be checked against it. For example, at a scale of 0.05 cm/px, one lane (14 cm) is about 280 px and a full street (29–30 cm) is about 590 px. The 400 px maximum would sit correctly between them, and a 228 px half-lane value would be too high (140 px expected). The numbers are only an example; use the measured scale.

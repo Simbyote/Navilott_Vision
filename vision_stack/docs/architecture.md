@@ -18,7 +18,7 @@ Two layouts were considered:
 **We went with Pi only.** The reasons:
 
 - **The camera sets the control rate either way.** Steering corrections come from lane offset, which updates once per frame (20 Hz). An MCU running a 1 kHz loop would mostly repeat the last command between frames.
-- **PWM is in hardware already.** The motor PWM runs on GPIO12 and GPIO13, the Pi's two hardware PWM channels, through the pigpio daemon. The duty cycle holds steady even when Python is late, so scheduler jitter delays a command change but doesn't disturb the waveform.
+- **PWM is in hardware already.** The motor PWM runs on GPIO12 and GPIO13, the Pi's two hardware PWM channels, through the pigpio daemon, at 20 kHz (`params.MOTOR_PWM_HZ`; 1 kHz until 2026-10-28). The duty cycle holds steady even when Python is late, so scheduler jitter delays a command change but doesn't disturb the waveform.
 - **One board, one codebase.** No second firmware, no UART packet format, no checksums, and no link to debug between two processors.
 
 The MCU option got as far as a UART packet format on paper; nothing of it was built.
@@ -65,7 +65,7 @@ The MCU option got as far as a UART packet format on paper; nothing of it was bu
 | MPU-6050 | Gyro yaw rate for heading while vision is lost; lateral acceleration | I²C, 0x68 (AD0 low), sampled at 100 Hz |
 | ADS1115 | 16-bit ADC: the pack's voltage, on A0 through a 4:1 divider (30 kΩ / 10 kΩ; `peripherals/battery.py`) | I²C, 0x48 |
 | TB6612FNG | Dual H-bridge for the two drive motors | PWM on GPIO12 (left) and GPIO13 (right); direction GPIO22/27 (left) and 25/24 (right); standby GPIO23 |
-| N20 gearmotors with encoders (×2) | Differential drive; encoders for wheel speed and distance | Quadrature on GPIO19/16 (left) and GPIO20/21 (right), counted by pigpio callbacks |
+| N20 gearmotors with encoders (×2) | Differential drive; encoders for wheel speed and distance. 12 V motors, 200:1 gearbox, 140 RPM no load (the seller's listing); 7-pulse encoders, 1,400 counts a wheel turn | Quadrature on GPIO19/16 (left) and GPIO20/21 (right), counted by pigpio callbacks |
 | MP1584EN | Buck converter: battery to the Pi's supply | The pack (9.0–12.6 V) in, 5 V out |
 | 3×18650 pack | Power for everything: 3S, 11.1 V nominal, 12.6 V full | Warning at 10.5 V, critical (the run ends) at 9.9 V; `peripherals/battery.py` |
 | TM1637 | 4-digit display: ready, countdown, run time | GPIO5 (CLK), GPIO6 (DIO) |
@@ -111,7 +111,9 @@ The Pi and the motors share a battery but not a regulator. Motor current spikes,
 
 **Reading the pack.** A 3S pack has no protection board (DEC-019), so the software watches it: `peripherals/battery.py` reads the ADS1115 once a second on its own thread, smooths it, and runs it through a state machine (`battery_state.py`) that needs several readings in a row to change state, so a brief sag under motor load doesn't raise an alarm; CRITICAL latches for the rest of the run. With `params.ADS1115_CONTINUOUS` the chip converts on its own and each read is two combined I²C transfers, the config checked and the result fetched; single-shot (off) is the Adafruit library's 11–30 transfers over ~9 ms. The chip has one pointer register naming what the next read returns, shared by everything that talks to it. The library's own continuous mode reads without setting it, so anything else that touches the chip (a second process opening the ADC) moves it and the "voltage" is another register: most likely why that version read 9.44 V for a 12 V pack (2026-10-21, reverted). `ContinuousADC` sets the pointer in every read, in the same transfer, and puts back a config someone else changed.
 
-Still to measure: the current draw of the Pi and of each motor at stall. The robot measures voltage only (`make routine-power-profile` records the sag under each load); current needs a sensor such as an INA219 on the I²C bus. **TBD**
+Still to measure: the current draw of the Pi and of each motor at stall. The robot measures voltage only (`make routine-power-profile` records the sag under each load); current needs a sensor such as an INA219 on the I²C bus, or a bench supply's current reading with the Pi on its own supply. **TBD**
+
+Also still to measure again: the stall duty (`STALL_DUTY`, 0.25, the lowest duty that turns a loaded wheel) and the starting speed gain (`CPS_PER_DUTY`, 3000 counts/s per unit of duty) were both measured at 1 kHz PWM, before the change to 20 kHz. Measure them on the mat at 20 kHz, near 11.7 V and again near 10.5 V: the stall duty rises as the pack drains, and the right turn's inner wheel runs at 0.26. **TBD**
 
 ---
 
@@ -213,7 +215,7 @@ Measured with navigation in the same process: the frame rate is about 15 FPS on 
 | Scheduler jitter | Linux isn't real-time; a frame can arrive 5–20 ms late under load | PWM is in hardware, so only command updates are late. Phase 3 clamps large `dt` |
 | CPU contention | Navigation or logging slows perception; frame times spike | Profile first; see CPU contention below |
 | Single point of failure | A crash in the Python process leaves the motors at their last command | A watchdog in `drive.py` brakes the motors when no command arrives for `MOTOR_WATCHDOG_S` (0.5 s); a copy runs inside pigpiod, so it brakes even when Python stalls (a 1,558 ms frame on 2026-10-20 kept a turn's command on the wheels); the run loop halts them on any exception (`main.py`) |
-| Brownout | Motor current sags the battery and the Pi resets | Buck headroom; measure stall current |
+| Brownout | Motor current sags the battery and the Pi resets | Buck headroom; measure stall current. On a current-limited bench supply, a stalled wheel can sag the rail far enough to drop the camera: after such a stop, check `vcgencmd get_throttled` and `dmesg` for under-voltage before blaming the code |
 | Memory | 512 MB shared by the OS, libcamera, OpenCV and Python | Stay in one process; check peak memory during a full run |
 
 The watchdog was the one to do before running at speed, since a frozen Python process with the motors still driving is the likeliest way to damage the robot. It's in place.

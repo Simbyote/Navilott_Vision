@@ -267,7 +267,7 @@ The robot sits at `robot_x_px` of the lane ROI: its middle unless the camera is 
 2. All anchors on one side (the robot has drifted out): take the two nearest center. They still describe the nearest lane, and the offset steers back.
 3. One anchor: single-boundary mode.
 
-Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 300 px (~0.84 of the 357 px lane). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
+Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 260 px (2026-11-05): under every real lane, which reads ~270-300 px with the robot 3-4 cm off centre, and well over a fragment pair (300 px, ~0.84 of the 357 px lane, until then). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
 
 ### The offset
 
@@ -289,7 +289,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 197.1 px, half the ~394 px lane measured 2026-11-02; until then 178 px, half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 put it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 
@@ -325,7 +325,7 @@ One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+,
 
 The board-free alternative for the stop line. The homography needs a checkerboard found flat and square on the floor, which is hard to get right; the stop line needs only one number, and it depends almost entirely on how many rows above the lane ROI's bottom the line appears. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C` (B is the horizon's height above the ROI bottom, in rows), is then fit through them by linear least squares. Measured by the detector the robot drives with, it needs no board, no corner finding and no squareness. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
-**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (178) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
+**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (197.1) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
 ---
 
@@ -430,7 +430,7 @@ The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 F
 
 ## Parallel perception
 
-**File:** `parallel.py` · **Switch:** `params.PARALLEL_PERCEPTION` (off), or `--parallel` / `--serial` on a linker for one run
+**File:** `parallel.py` · **Switch:** `params.PARALLEL_PERCEPTION` (on since 2026-11-02), or `--parallel` / `--serial` on a linker for one run
 
 Phase 2 ran every stage on the main thread, one after another: on the 2026-10-14 diag run the main thread sat at 70% of a core on average (99.7% peak) while the Pi as a whole was at 43%. Three stages read only the cropped ROIs and nothing of each other's: geometry (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With parallel perception on, color and obstacle run on one side thread (`p2-side`) while the main thread runs geometry, then the lane offset and the stop line (which need geometry), and only then waits for the side thread.
 
@@ -472,7 +472,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 - **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
 - **Traffic and sign ROI bounds** need a small re-tune on the track: both were set from one day's frames (2026-10-06, 2026-10-20). `make phase2 VIEWS=traffic,stop` shows them on a run.
 - **Stop-sign range.** The shape gates are tuned on the course's sign (2026-10-20); the range, and Phase 3's 0.45 vote gate, are measured by `make routine-detect-range ARGS="--set target=sign"`.
-- **`expected_half_lane_px`** re-measured whenever the mount moves (178 px from the 2026-10-12 runs' two-boundary widths).
+- **`expected_half_lane_px`** re-measured whenever the mount moves (197.1 px since 2026-11-02; 178 px from the 2026-10-12 runs' two-boundary widths before), with `robot_x_px` (`make calib-lane`).
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Obstacle gates on real frames:** the not-floor thresholds against the mats under the venue's light, `open_px` against the widest tape, the false-alarm rate on a clear course, and what a stop sign low in the corridor does (`make phase2 VIEWS=obstacle`, then `test_obstacle --hardware --obstacle-cm`).
 - **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and `MEASURED`'s 5° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
