@@ -107,7 +107,7 @@ def test_the_gain_stays_within_its_limits():
 def test_the_pi_puts_a_weak_or_strong_motor_on_target(factor):
     ws = WheelSpeed()
     ws.encoders = True                                    # learning off: the PI alone does it
-    target = (0.40 * CPS_PER_DUTY, 0.584 * CPS_PER_DUTY)          # the eased left turn
+    target = (0.40 * CPS_PER_DUTY, 0.608 * CPS_PER_DUTY)          # the eased left turn
     motor = (factor * CPS_PER_DUTY, factor * CPS_PER_DUTY)
     cmds, speeds = run(ws, target, motor, 40, observe=False)
     assert speeds[-1] == pytest.approx(target, rel=0.03)  # 2 s at 20 FPS

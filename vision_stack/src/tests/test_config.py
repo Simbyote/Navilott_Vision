@@ -64,7 +64,7 @@ def test_measured_keeps_the_swept_lane_gates():
 def test_measured_takes_a_pair_as_a_lane_only_near_the_measured_width():
     # Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line.
     lo = MEASURED.lane_offset
-    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (300.0, 400.0, 178.0)
+    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (260.0, 400.0, 197.1)   # 2026-11-05
     assert lo.min_lane_width_px < 2 * lo.expected_half_lane_px < lo.max_lane_width_px
 
 
@@ -81,13 +81,15 @@ def test_scene_config_is_measured_without_undistortion():
     assert SCENE_CONFIG.preprocess.calibration_path is None
     # Everything else, the HSV bands included, is MEASURED's; the cm
     # calibrations (ground plane, stop-line table) are left out on purpose,
-    # the lamps get the scenes' own traffic ROI and blob gates, and the
-    # scenes' narrower lanes the default floor for a pair
+    # the lamps get the scenes' own traffic ROI and blob gates, the
+    # scenes' narrower lanes the default floor for a pair, and the centered
+    # synthetic camera no robot_x_px
     assert replace(SCENE_CONFIG, preprocess=MEASURED.preprocess, ground=MEASURED.ground,
                    stop_line_table=MEASURED.stop_line_table, roi=MEASURED.roi, color=MEASURED.color,
                    lane_offset=MEASURED.lane_offset) == MEASURED
-    assert replace(SCENE_CONFIG.lane_offset, min_lane_width_px=MEASURED.lane_offset.min_lane_width_px) \
-        == MEASURED.lane_offset
+    assert SCENE_CONFIG.lane_offset.robot_x_px is None
+    assert replace(SCENE_CONFIG.lane_offset, min_lane_width_px=MEASURED.lane_offset.min_lane_width_px,
+                   robot_x_px=MEASURED.lane_offset.robot_x_px) == MEASURED.lane_offset
     assert SCENE_CONFIG.color.hsv_ranges == MEASURED.color.hsv_ranges
     assert replace(SCENE_CONFIG.roi, traffic=MEASURED.roi.traffic) == MEASURED.roi
     assert replace(SCENE_CONFIG.preprocess, calibration_path=MEASURED.preprocess.calibration_path) \
@@ -244,10 +246,10 @@ def test_the_route_file_config_points_at_loads():
 
 
 @pytest.mark.software
-def test_measured_takes_stop_lines_within_5_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
+def test_measured_takes_stop_lines_within_4_degrees_gates_ghost_signs_and_keeps_the_rest_of_the_geometry():
     from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
     assert MEASURED.geometry == GeometryConfig(
-        stop_line=StopLineFilter(max_tilt_deg=5.0),                 # 2 until 2026-10-19, 4 until 2026-10-23
+        stop_line=StopLineFilter(max_tilt_deg=4.0),                 # 2 until 10-19, 4 until 10-23, 5 until 11-05
         # aspect and extent lowered 2026-10-20 to the course's own sign (0.55-0.72, 0.63-0.75)
         sign=SignContourFilter(aspect_range=(0.5, 1.6), extent_range=(0.6, 0.92), min_letter_share=0.03))
 

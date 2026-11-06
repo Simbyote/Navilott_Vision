@@ -26,7 +26,7 @@ import numpy as np
 from src.config import MEASURED, MEASURED_ESTIMATION
 from src.peripherals.sensing import SensorSample
 from src.params import FRAME_H, FRAME_W
-from src.navigation.intersection import ADVANCE_MS
+from src.navigation.intersection import ADVANCE_MS, TWO_BOUNDARY_FRAMES
 from src.perception.color_branch import BlobFilter
 from src.perception.geometry import CannyParams, LaneContourFilter, SignContourFilter, StopLineFilter
 from src.perception.ground import GroundHomography
@@ -67,7 +67,8 @@ SCENE_CONFIG = replace(
     preprocess = replace(MEASURED.preprocess, calibration_path = None),
     roi = replace(MEASURED.roi, traffic = SCENE_TRAFFIC_ROI),
     color = replace(MEASURED.color, blob = BlobFilter(), glow = None),
-    lane_offset = replace(MEASURED.lane_offset, min_lane_width_px = 60.0),
+    # The synthetic camera sits on the centerline, so the robot's own robot_x_px doesn't apply
+    lane_offset = replace(MEASURED.lane_offset, min_lane_width_px = 60.0, robot_x_px = None),
     ground = None,
     stop_line_table = None,
 )
@@ -477,7 +478,8 @@ def course_sequence() -> list[SequenceFrame]:
         # Let go on green: on into the intersection for ADVANCE_MS, then the turn
         ("advance", scene(**green), ADVANCE_MS // FRAME_MS, moving),
         ("green_turn", scene(**green), 35, turning_left),
-        ("after_turn", scene(), 10, moving),
+        # The new lane, long enough for the crossing to hand back to lane keeping
+        ("after_turn", scene(), TWO_BOUNDARY_FRAMES, moving),
         # The mat's edge: the lane runs out and stays out
         ("edge", scene(marks=()), 50, moving),
     ]

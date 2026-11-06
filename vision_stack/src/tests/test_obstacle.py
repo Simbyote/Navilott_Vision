@@ -311,7 +311,8 @@ def test_twins_agree_on_random_boxes():
 def test_the_chain_measures_it_and_packages_it():
     chain = run_chain(SCENES["obstacle_near"], 3, 150, SCENE_CONFIG)
     assert chain.obstacle.detected and chain.phase2.obstacle_results == [chain.obstacle]
-    assert "obstacle" in chain.timings_ms and chain.obstacle_debug["frame_id"] == 3
+    # Timed in timings_ms when serial, in side_timings_ms when on the side thread (params.PARALLEL_PERCEPTION)
+    assert "obstacle" in {**chain.timings_ms, **chain.side_timings_ms} and chain.obstacle_debug["frame_id"] == 3
 
 
 # Where the hardware check holds the measurement: within this many cm of the

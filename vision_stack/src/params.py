@@ -21,8 +21,8 @@ MAX_FPS = 30
 # OpenCV's TBB workers spin while idle. Threads 4 / 2 / 1 on the lane (2026-10-03):
 # median frame 32.7 / 33.7 / 42.7 ms, CPU 189 / 165 / 153% of a core
 OPENCV_THREADS = 2
-# Color and obstacle beside geometry (perception/parallel.py). Off until measured
-# on the Pi; --parallel / --serial override it for one run
+# Color and obstacle beside geometry (perception/parallel.py). On since 2026-11-02,
+# after compare-parallel on the Pi; --parallel / --serial override it for one run
 PARALLEL_PERCEPTION = True
 
 # A collection holds the GIL and stops every thread: one took 122 ms in a figure

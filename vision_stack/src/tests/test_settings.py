@@ -30,7 +30,7 @@ def test_the_camera_runs_at_20_fps_480x270_upright():
 
 def test_threads_perception_and_the_collector_as_the_robot_runs_them():
     assert params.OPENCV_THREADS == 2
-    assert params.PARALLEL_PERCEPTION is False          # serial until compare-parallel shows a gain on the Pi
+    assert params.PARALLEL_PERCEPTION is True           # on since 2026-11-02, after compare-parallel on the Pi
     # No automatic collections while driving; the youngest generation on braked
     # frames and every 200 frames (~10 s at 20 FPS)
     assert params.GC_DISABLE_IN_RUN is True and params.GC_COLLECT_EVERY == 200

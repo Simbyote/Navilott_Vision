@@ -18,7 +18,7 @@ from src.navigation.navigation import (
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
-from src.navigation.intersection import ADVANCE_MS, LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES
+from src.navigation.intersection import ADVANCE_MS, LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES, TWO_BOUNDARY_FRAMES
 from src.tests.navigation_checks import (
     APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
     contract_problems, frames, intersection, packet,
@@ -185,7 +185,7 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
     red_ms = STOP_DELAY_MS + 3000                        # still red after the 2 s stop-sign hold
     case = intersection({"stop_sign_detected": True, "drive_state": "stop"}, after_frames=0)
     case += [{"drive_state": "stop", "lane_mode": "right_only"}] * (red_ms // MS)
-    case += [{"lane_mode": "right_only"}] * 10 + [{}] * 10
+    case += [{"lane_mode": "right_only"}] * 10 + [{}] * TWO_BOUNDARY_FRAMES
     out = run(Navigation(), case)
     assert rules_over(out) == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
                                RULE_INTERSECTION, RULE_LANE_KEEPING]
@@ -315,7 +315,7 @@ def test_a_line_like_mark_while_crossing_neither_restarts_the_crossing_nor_count
     mark = [{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "none"} for r in APPROACH_ROWS]
     after_reached = STOP_DELAY_MS // MS + 10                     # the tracker is idle again, the crossing isn't over
     case = (intersection(after={"lane_mode": "none"}, after_frames=after_reached) + mark
-            + [{"lane_mode": "none"}] * 40 + [{"lane_mode": "two_boundary"}] * 5
+            + [{"lane_mode": "none"}] * 40 + [{"lane_mode": "two_boundary"}] * TWO_BOUNDARY_FRAMES
             + intersection(after={"lane_mode": "two_boundary"}, after_frames=40))
     out = run(Navigation(), case)
     n = len(APPROACH_ROWS)

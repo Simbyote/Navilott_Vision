@@ -62,9 +62,9 @@ MEASURED = PipelineConfig(
     color = load_color_config(str(HSV_RANGES_PATH), blob = _TRAFFIC_LIGHT_BLOB, glow = _TRAFFIC_LIGHT_GLOW),
     ground = load_ground_homography(GROUND_HOMOGRAPHY_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
     stop_line_table = load_stop_line_table(STOP_LINE_TABLE_PATH, _MEASURED_PREPROCESS, (FRAME_H, FRAME_W)),
-    # Stop lines within 5 deg (default 20): wider let a diagonal lane line pass;
-    # 2 missed lines approached slightly off square. At 5, parts of the
-    # intersection have passed for lines (2026-10-05): watch nav.csv's step column
+    # Stop lines within 4 deg (default 20; 5 until 2026-11-05): wider let a diagonal
+    # lane line pass; 2 missed lines approached slightly off square. At 5, parts of
+    # the intersection have passed for lines (2026-10-05): watch nav.csv's step column
     # Ghost signs (a leg, a chair) stopped the robot at plain lines. The course's
     # sign reads aspect 0.55-0.72, extent 0.63-0.75 (sign_check, 2026-10-20); a
     # leg is ~0.3 wide, a chair back boxier than 0.92
@@ -78,8 +78,8 @@ MEASURED = PipelineConfig(
         max_width_px = 45.0,
         # 130 from the sweep; a darker stretch of the course needed 90 (2026-10-05)
         min_intensity = 90.0,
-        # Half the 357 px lane measured on 2026-10-12. The hand-set 228 put one-line
-        # frames ~0.25 off their neighbours; 178 puts them ~0.06 off
+        # Half the ~394 px lane measured 2026-11-02 (178, half the 357 px of 2026-10-12,
+        # until then; the hand-set 228 put one-line frames ~0.25 off their neighbours)
         expected_half_lane_px = 197.1,
         # Under every real lane: off center the lane reads narrower (~270-300 px at 3-4 cm,
         # TP-01 2026-11-03; 0.5% of 2026-10-28's two-line frames under 268), well over a

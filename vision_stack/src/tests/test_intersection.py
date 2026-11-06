@@ -79,15 +79,16 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 20, 5500, 500)   # 2026-10-26
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (15, 30, 5500, 500)   # 2026-11-05
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
     # By odometry since 2026-10-20 (None keeps the timed advance and exit);
     # the advance ends well inside the exit limit
-    assert (ADVANCE_CM, MAX_CROSS_CM) == (22.3, 49.7)
+    assert (ADVANCE_CM, MAX_CROSS_CM) == (25.0, 50.0)          # 2026-11-02, 2026-11-05
     assert ADVANCE_CM < MAX_CROSS_CM
-    # The approach angle from the line's tilt, measured 2026-10-20 (detect-range, 10 cm, -6..6 deg)
-    assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-4.3, 0.19)
+    # The approach angle from the line's tilt, measured 2026-11-02 (detect-range, TP-05, -10..10 deg) and
+    # set on the course 2026-11-05
+    assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-3.2, 0.63)
     assert MAX_APPROACH_DEG == 10.0                                    # 15 until 2026-10-20
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
@@ -258,9 +259,9 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.73), Command(0.78, 0.27))     # 2026-10-28
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.76), Command(0.77, 0.26))     # 2026-11-05
     # the left turn eased, both wheels alike: the same arc, slower on the right motor
-    assert LEFT_TURN_SPEED == 0.8 and LEFT_TURN_DRIVEN == Command(0.40, 0.584)
+    assert LEFT_TURN_SPEED == 0.8 and LEFT_TURN_DRIVEN == Command(0.40, 0.608)
     assert LEFT_TURN_DRIVEN.right / LEFT_TURN_DRIVEN.left == pytest.approx(LEFT_TURN.right / LEFT_TURN.left)
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
     assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 7300, 2400)     # left eased 2026-10-28
