@@ -1,9 +1,10 @@
-"""Figure 8: four lefts then four rights, lap after lap, for minutes on the course.
+"""The course lap: three lefts, straight, three lefts, three rights, straight, three rights, for minutes.
 
 Purpose:
     Stop distance asks how accurately one maneuver lands; this asks whether
-    the robot keeps working over many intersections, with left and right side
-    by side and minutes for the pack and heat to build up.
+    the robot keeps working over many intersections, with left, right and
+    straight side by side and minutes for the pack and heat to build up. (The
+    name is the old lap's, four lefts and four rights; make target unchanged.)
 
 Main package:
     FigureEight (make routine-figure-eight). EightWatch follows each run;
@@ -222,7 +223,7 @@ class EightWatch:
 
 class FigureEight(Routine):
     name = "figure-eight"
-    title = "Figure 8: four lefts, four rights, for minutes"
+    title = "Course laps: lefts, rights and straights, for minutes"
     question = "Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time?"
     requirement = "course repeatability; demo-day endurance"
     trials = 1
@@ -234,9 +235,10 @@ class FigureEight(Routine):
     settings = {"minutes": f"how long the run lasts (default {MINUTES:.0f})",
                 "record": "1 saves every frame (the default), 0 saves none: the recorder-off A/B for stalls.csv"}
     instructions = """\
-The course: two blocks side by side; four lefts loop around one, four rights
-around the other, a figure 8 through the intersection they share. Start the
-robot at that intersection's stop line, in its lane, about to turn LEFT.
+The course: two blocks side by side, six intersections. One lap is 14
+crossings: three lefts, straight across the middle, three lefts, then the
+same with rights. Start the robot at the lap's first stop line, in its lane,
+about to turn LEFT.
 It runs until the time is up. Motors are ON: stay near the track. If you have
 to touch it (nudge, catch, put it back), press Enter in this terminal right
 after, once per touch: it's logged with the lap and corner. Ctrl-C stops it
@@ -270,7 +272,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
         source, sensors, motor, _ = self._open_rig(True, motors=True, button=False)
         battery = self._open_battery()
         try:
-            ctx.console.wait(f"Robot at the shared stop line, about to turn left? Enter drives it for {minutes:g} min")
+            ctx.console.wait(f"Robot at the lap's first stop line, about to turn left? Enter drives it for {minutes:g} min")
         except BaseException:
             for close in (source.close, sensors.stop, motor.stop, getattr(battery, "cleanup", None)):
                 if close is not None:
@@ -321,17 +323,19 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
     @staticmethod
     def _row(watch: EightWatch, report: dict, touches: int, laps_seen: int) -> dict:
         done = watch.finished()
+        turns = [i for i in done if i["maneuver"] in (LEFT, RIGHT)]
         mean = lambda m: (round(statistics.fmean(x), 1) if (x := [i["heading_deg"] for i in done            # noqa: E731
                                                                   if i["maneuver"] == m and i["heading_deg"] is not None]) else None)
         laps = watch.laps()
         volts = [i["battery_v"] for i in watch.intersections if i["battery_v"] is not None]
         wall = report.get("run", {}).get("wall_s") or watch.t
         return {"minutes": round(watch.t / 60, 2), "ended_by": report["ended_by"],
-                # a lap counts once its eighth turn finished, as the tester saw it
+                # a lap counts once its last crossing finished, as the tester saw it
                 "intersections": len(watch.intersections), "laps_robot": len(done) // len(ROUTE_LAP),
                 "laps_seen": laps_seen, "touches": touches, "touches_logged": len(watch.touches),
-                "turns_off_gyro": sum(1 for i in done if i["turn_end"] != TURN_END_GYRO),
-                "turns_off_heading": sum(1 for i in done if i["heading_off_deg"] is None
+                # Turns only: a straight crossing logs no turn end or turn heading
+                "turns_off_gyro": sum(1 for i in turns if i["turn_end"] != TURN_END_GYRO),
+                "turns_off_heading": sum(1 for i in turns if i["heading_off_deg"] is None
                                          or abs(i["heading_off_deg"]) > HEADING_TOLERANCE_DEG),
                 "left_mean_deg": mean(LEFT), "right_mean_deg": mean(RIGHT),
                 "lap_s_mean": round(statistics.fmean(x["seconds"] for x in laps), 1) if laps else None,

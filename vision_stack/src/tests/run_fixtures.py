@@ -123,6 +123,11 @@ def figure_eight(folder, laps=3, slow_corner=3, seed=5, touch_frame=None) -> Pat
         sign = -1 if m == "left" else 1
         for _ in range(50):
             frame(rule="lane_keeping", lane_status="vision", left_cps=1100, right_cps=1100, yaw_rate=0, brake=0)
+        if m == "straight":                         # no turn: the exit alone, with no turn end or turn heading
+            for _ in range(10):
+                frame(rule="intersection", stage="exit", maneuver=m, heading_deg=0.0,
+                      left_cps=1100, right_cps=1100, yaw_rate=0, brake=0)
+            continue
         stalled = (step - 1) % len(fe.ROUTE_LAP) + 1 == slow_corner
         limit, rate = (4.1, 28.0) if m == "left" else (2.4, 42.0)
         h, k = 0.0, 0

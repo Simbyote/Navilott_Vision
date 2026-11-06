@@ -21,26 +21,35 @@ import src.routines.figure_eight as fe
 import src.routines.harness as h
 from src.intersection_linker import HEADING_TOLERANCE_DEG
 from src.navigation.intersection import TURN_END_GYRO, TURN_END_TIME
-from src.navigation.route import RIGHT
+from src.navigation.route import RIGHT, STRAIGHT
 from src.tests.test_routines import Person, no_conditions
 
 DT = 0.05
+LAP = len(fe.ROUTE_LAP)                                         # crossings a lap
+TURNS = sum(m != STRAIGHT for m in fe.ROUTE_LAP)                # of them turns
 
 
 def lap_rows(laps=1, t0=0.0, step0=0, heading=lambda step, m: fe.EXPECTED_DEG[m], turn_end=TURN_END_GYRO,
              volts=lambda step: 12.0 - step * 0.01, lane_back=True, lost_frames=0, drift=lambda step, m: 0.0):
     """
-    Rows for laps of the figure 8, as the intersection rule logs them: per
-    intersection 8 frames turning (the heading rising toward heading()), 2
-    of the exit (turn_deg the heading the turn ended on, heading_deg the
-    exit's drift from it, from 0), then lane keeping.
+    Rows for laps of the course, as the intersection rule logs them: per
+    turn 8 frames turning (the heading rising toward heading()), 2 of the
+    exit (turn_deg the heading the turn ended on, heading_deg the exit's
+    drift from it, from 0), then lane keeping. A straight logs 10 frames of
+    the exit and no turn end or turn heading, as the rule does.
     """
     rows, t, total = [], t0, len(fe.ROUTE_LAP) * laps
     for k in range(total):
         step = step0 + k + 1
-        m = fe.ROUTE_LAP[(step - 1) % 8]
+        m = fe.ROUTE_LAP[(step - 1) % len(fe.ROUTE_LAP)]
         label = f"{step}/1600 {m}"
         for f in range(10):
+            if m == STRAIGHT:
+                rows.append({"t": round(t, 2), "rule": "intersection", "step": label, "stage": "exit",
+                             "turn_end": "", "turn_deg": "", "heading_deg": drift(step, m),
+                             "lane_status": "stale", "reason": "turn", "battery_v": volts(step)})
+                t += DT
+                continue
             ended = f >= 8
             rows.append({"t": round(t, 2), "rule": "intersection", "step": label, "stage": "exit" if ended else "turn",
                          "turn_end": turn_end if ended else "", "turn_deg": heading(step, m) if ended else "",
@@ -71,12 +80,16 @@ def test_each_intersection_its_maneuver_turn_heading_and_lane():
     w = fe.EightWatch(seconds=1e9)
     assert feed(w, lap_rows(laps=2)) is None
     assert [i["maneuver"] for i in w.intersections] == list(fe.ROUTE_LAP) * 2
-    first, fifth = w.intersections[0], w.intersections[4]
+    first, straight = w.intersections[0], w.intersections[fe.ROUTE_LAP.index(STRAIGHT)]
+    right = w.intersections[fe.ROUTE_LAP.index(RIGHT)]
     assert (first["step"], first["lap"], first["turn_end"], first["heading_deg"], first["heading_off_deg"]) == \
         (1, 1, TURN_END_GYRO, -90.0, 0.0)
-    assert (fifth["maneuver"], fifth["heading_deg"], fifth["lane_back"], fifth["battery_v"]) == (RIGHT, 90.0, True, 11.95)
-    assert w.intersections[8]["lap"] == 2 and len(w.finished()) == 16
-    assert w.frames == 16 * 20 and w.lane_lost_s == 0.0 and w.contract == 0
+    assert (right["maneuver"], right["heading_deg"], right["lane_back"], right["battery_v"]) == \
+        (RIGHT, 90.0, True, round(12.0 - right["step"] * 0.01, 2))
+    assert (straight["maneuver"], straight["turn_end"], straight["heading_deg"], straight["lane_back"]) == \
+        (STRAIGHT, None, None, True)
+    assert w.intersections[LAP]["lap"] == 2 and len(w.finished()) == 2 * LAP
+    assert w.frames == 2 * LAP * 20 and w.lane_lost_s == 0.0 and w.contract == 0
 
 
 @pytest.mark.software
@@ -98,7 +111,17 @@ def test_a_turn_with_no_logged_end_heading_counts_as_off():
     w = fe.EightWatch(seconds=1e9)
     feed(w, rows)
     assert w.intersections[0]["heading_deg"] is None
-    assert fe.FigureEight._row(w, {"ended_by": fe.TIME_UP}, 0, 1)["turns_off_heading"] == 8
+    assert fe.FigureEight._row(w, {"ended_by": fe.TIME_UP}, 0, 1)["turns_off_heading"] == TURNS   # straights aren't turns
+
+
+@pytest.mark.software
+def test_straight_crossings_are_not_judged_as_turns():
+    # A straight logs no turn end or turn heading: counted as turns, every lap failed both criteria
+    w = fe.EightWatch(seconds=1e9)
+    feed(w, lap_rows(laps=2))
+    row = fe.FigureEight._row(w, {"ended_by": fe.TIME_UP}, 0, 2)
+    assert (row["turns_off_gyro"], row["turns_off_heading"], row["laps_robot"]) == (0, 0, 2)
+    assert sum(i["maneuver"] == STRAIGHT for i in w.finished()) == 2 * (LAP - TURNS)
 
 
 @pytest.mark.software
@@ -188,8 +211,9 @@ def test_a_short_disagreement_is_not_a_slip():
 def test_laps_run_from_one_lap_start_to_the_next():
     w = fe.EightWatch(seconds=1e9)
     feed(w, lap_rows(laps=3))
-    assert w.laps() == [{"lap": 1, "t_start": 0.0, "seconds": 8.0, "battery_v": 11.99},
-                        {"lap": 2, "t_start": 8.0, "seconds": 8.0, "battery_v": 11.91}]   # the 3rd has no next start
+    assert w.laps() == [{"lap": 1, "t_start": 0.0, "seconds": float(LAP), "battery_v": 11.99},     # 1 s a crossing
+                        {"lap": 2, "t_start": float(LAP), "seconds": float(LAP),
+                         "battery_v": round(12.0 - (LAP + 1) * 0.01, 2)}]                       # the 3rd has no next start
 
 
 @pytest.mark.software
@@ -199,7 +223,7 @@ def test_lane_lost_time_contract_brakes_and_the_time_limit():
     rows.insert(5, {"t": rows[5]["t"], "rule": "lane_keeping", "step": rows[5]["step"], "lane_status": "vision",
                     "reason": "contract"})
     feed(w, rows)
-    assert w.lane_lost_s == pytest.approx(8 * 4 * DT) and w.contract == 1
+    assert w.lane_lost_s == pytest.approx(LAP * 4 * DT) and w.contract == 1
     timed = fe.EightWatch(seconds=3.0)
     assert feed(timed, lap_rows(laps=1)) == fe.TIME_UP and timed.t == 3.0
 
@@ -236,7 +260,7 @@ def fake_run(rows, log, wall=None):
     def run(source, sensors, motor, nav, config, p3, out_dir, system, max_run_s, motors_on, render, stop_when,
             battery, record, warmup):
         log.append(("run", out_dir.rsplit("/", 1)[-1], max_run_s, len(nav.progress.route.maneuvers),
-                    nav.progress.route.maneuvers[:8], motors_on, render, battery is not None))
+                    nav.progress.route.maneuvers[:LAP], motors_on, render, battery is not None))
         log.append(("record", record))
         log.append(("warmup", warmup))
         why = feed(stop_when, rows)
@@ -275,46 +299,46 @@ def go(r, person, tmp_path, minutes=0.5, **options):
 def test_the_record_setting_turns_the_frame_recorder_on_or_off(tmp_path, setting, on):
     log = []
     options = {} if setting is None else {"record": setting}
-    go(routine(lap_rows(laps=4), log), Person("", "0", "3", ""), tmp_path, **options)
+    go(routine(lap_rows(laps=4), log), Person("", "0", "2", ""), tmp_path, **options)
     assert ("record", on) in log and ("warmup", True) in log
 
 
 @pytest.mark.software
 def test_one_continuous_run_judged_on_touches_time_laps_and_turns(tmp_path):
     log = []
-    res = go(routine(lap_rows(laps=4), log), Person("", "0", "3", ""), tmp_path)   # 30 s: 3 laps and change
+    res = go(routine(lap_rows(laps=4), log), Person("", "0", "2", ""), tmp_path)   # 30 s: 2 laps and change
     assert res["verdict"] == h.PASS, res["criteria"]
     run = next(e for e in log if e[0] == "run")
-    assert run == ("run", "attempt_01", 60.0, 8 * fe.MAX_LAPS, fe.ROUTE_LAP, True, False, True)
+    assert run == ("run", "attempt_01", 60.0, LAP * fe.MAX_LAPS, fe.ROUTE_LAP, True, False, True)
     assert "battery released" in log
     row = json.loads((tmp_path / "out" / "results.json").read_text())["rows"][0]
     assert (row["ended_by"], row["minutes"], row["laps_robot"], row["laps_seen"], row["touches"]) == \
-        (fe.TIME_UP, 0.5, 3, 3, 0)
+        (fe.TIME_UP, 0.5, 2, 2, 0)
     assert (row["left_mean_deg"], row["right_mean_deg"], row["lap_s_mean"], row["turns_off_gyro"]) == \
-        (-90.0, 90.0, 8.0, 0)
+        (-90.0, 90.0, float(LAP), 0)
     assert row["battery_start_v"] == 11.99 and row["fps"] == pytest.approx(20.0, abs=0.1)
     with open(tmp_path / "out" / "attempt_01" / "intersections.csv") as f:
         assert len(list(csv.DictReader(f))) == 31                               # 30 s at 1 s an intersection
     with open(tmp_path / "out" / "attempt_01" / "laps.csv") as f:
-        assert [r["lap"] for r in csv.DictReader(f)] == ["1", "2", "3"]
+        assert [r["lap"] for r in csv.DictReader(f)] == ["1", "2"]
 
 
 @pytest.mark.software
 def test_touches_pressed_during_the_run_are_written_and_counted(tmp_path):
     log = []
-    p = Person("", "2", "3", "")
+    p = Person("", "2", "2", "")
     res = go(routine(lap_rows(laps=4), log, touch_frames=[45, 300]), p, tmp_path)
     assert "keys stopped" in log and "touches logged with Enter: 2" in p.said()
     row = json.loads((tmp_path / "out" / "results.json").read_text())["rows"][0]
     assert (row["touches"], row["touches_logged"]) == (2, 2) and res["verdict"] == h.FAIL
     with open(tmp_path / "out" / "attempt_01" / "touches.csv") as f:
         assert [(r["lap"], r["step"], r["maneuver"]) for r in csv.DictReader(f)] == \
-            [("1", "3", "left"), ("2", "16", "right")]
+            [("1", "3", "left"), ("2", "16", fe.ROUTE_LAP[(16 - 1) % LAP])]
 
 
 @pytest.mark.software
 def test_a_run_ended_mid_turn_doesnt_count_that_lap(tmp_path):
-    rows = lap_rows(laps=1)[:-10] + lap_rows(laps=1, t0=7.5, step0=8)[:5]      # the 8th turn never finishes
+    rows = lap_rows(laps=1)[:-10] + lap_rows(laps=1, t0=LAP - 0.5, step0=LAP)[:5]   # the lap's last turn never finishes
     w = fe.EightWatch(seconds=1e9)
     feed(w, rows)
     assert fe.FigureEight._row(w, {"ended_by": fe.TIME_UP, "run": {"wall_s": 8.0}}, 0, 0)["laps_robot"] == 0
@@ -322,12 +346,12 @@ def test_a_run_ended_mid_turn_doesnt_count_that_lap(tmp_path):
 
 @pytest.mark.software
 @pytest.mark.parametrize("kw, answers, failing", [
-    ({}, ("1", "3"), "touches"),
+    ({}, ("1", "2"), "touches"),
     ({"rows": lap_rows(laps=1)}, ("0", "1"), "ran the whole time"),
-    ({}, ("0", "2"), "laps counted minus laps seen"),
-    ({"rows": lap_rows(laps=4, turn_end=TURN_END_TIME)}, ("0", "3"), "turns not ended on the gyro"),
+    ({}, ("0", "3"), "laps counted minus laps seen"),
+    ({"rows": lap_rows(laps=4, turn_end=TURN_END_TIME)}, ("0", "2"), "turns not ended on the gyro"),
     ({"rows": lap_rows(laps=4, heading=lambda s, m: fe.EXPECTED_DEG[m] + (HEADING_TOLERANCE_DEG + 1) * (s == 6))},
-     ("0", "3"), "turns off by over 20 deg"),
+     ("0", "2"), "turns off by over 20 deg"),
 ])
 def test_each_criterion_fails_on_its_own(tmp_path, kw, answers, failing):
     log = []
@@ -339,7 +363,7 @@ def test_each_criterion_fails_on_its_own(tmp_path, kw, answers, failing):
 @pytest.mark.software
 def test_a_heading_right_at_the_tolerance_passes(tmp_path):
     rows = lap_rows(laps=4, heading=lambda s, m: fe.EXPECTED_DEG[m] + HEADING_TOLERANCE_DEG * (s == 6))
-    assert go(routine(rows, []), Person("", "0", "3", ""), tmp_path)["verdict"] == h.PASS
+    assert go(routine(rows, []), Person("", "0", "2", ""), tmp_path)["verdict"] == h.PASS
 
 
 @pytest.mark.software

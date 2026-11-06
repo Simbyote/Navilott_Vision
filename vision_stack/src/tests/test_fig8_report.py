@@ -11,21 +11,26 @@ a touch, and set against a base run where corner 2 was slow.
 import pytest
 
 from src.analysis import fig8_report as f8
+from src.routines import figure_eight as fe
 from src.tests import run_fixtures as rf
 
 pytestmark = pytest.mark.software
+
+# The lap's crossings that turn: its straights log no turn
+TURNS_A_LAP = sum(m != "straight" for m in fe.ROUTE_LAP)
 
 
 def test_the_slow_corner_its_slips_and_the_turn_curves(tmp_path):
     a = rf.figure_eight(tmp_path / "routine_figure-eight_x" / "attempt_01", touch_frame=500)
     res = f8.analyze(a)
-    assert res["turns"] == 24 and res["time_limit_positions"] == [3]
-    assert len(res["time_limit_steps"]) == 3 and res["on_gyro"] == 21
+    turns = 3 * TURNS_A_LAP
+    assert res["turns"] == turns and res["time_limit_positions"] == [3]
+    assert len(res["time_limit_steps"]) == 3 and res["on_gyro"] == turns - 3
     assert res["slips"] >= 3 and next(iter(res["slip_spots"])).startswith("turn 3")
     assert len(res["laps"]) == 2 and res["touches"] == 1
     assert "position 3 of the lap: the same corner every time" in " ".join(res["findings"])
     turns = f8.turns_of(f8.Table(a / "nav.csv"))
-    assert len(turns) == 24 and turns[0]["t"][0] == 0.0 and turns[0]["heading"][-1] <= -85
+    assert len(turns) == 3 * TURNS_A_LAP and turns[0]["t"][0] == 0.0 and turns[0]["heading"][-1] <= -85
 
 
 def test_against_a_base_run_and_main(tmp_path, capsys):

@@ -22,8 +22,10 @@ import numpy as np
 from src.analysis import common, motor_health
 from src.analysis.common import Table
 from src.navigation.intersection import LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS, TURN_END_GYRO, TURN_END_TIME
+from src.routines.figure_eight import ROUTE_LAP
 
-TURNS_PER_LAP = 8               # routines.figure_eight.ROUTE_LAP: four lefts, four rights
+# A turn's position counts every crossing of the lap, the straights included, as its step does
+TURNS_PER_LAP = len(ROUTE_LAP)
 TURN_LIMIT_DEG = 20.0           # the routine's tolerance on a turn's end
 LIMIT_S = {"left": LEFT_TURN_MAX_MS / 1000.0, "right": RIGHT_TURN_MAX_MS / 1000.0}
 COLORS = {"left": "#1E63B5", "right": "#2A9A88"}
