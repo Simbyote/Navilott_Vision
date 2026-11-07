@@ -112,7 +112,7 @@ These are internal targets from the design, not PSR requirements. They're here s
 | R1 | A single dropped frame never stops the robot; a dead camera is reported within about 1 s | As the test asserts | T | `test_capture` (software) | Verified in software |
 | R2 | A lost lane is held for at most about 350 ms, then reported as unusable | As the test asserts | T | `test_estimation` (software) | Verified in software. Seen on the course (2026-10-28): longest hold 7 frames (350 ms). |
 | R3 | No single frame can flip the traffic or stop-sign state | As the test asserts | T | `test_estimation` (software) | Verified in software |
-| R4 | CPU under 70% and memory under 400 MB with navigation running | **While driving:** process CPU (mean over the run) < 70% and the **busiest core's** p95 < 90%; peak RSS < 400 MB | T | `make diag-run`, then `make pi-load`. `make routine-frame-budget` is the bench diagnostic. | Not verified while driving. On the bench (frame-budget, motors off): 41% process CPU, 157 MB peak. Per-core not yet reported. |
+| R4 | CPU under 70% and memory under 400 MB with navigation running | **While driving:** process CPU (mean over the run) < 70% and the **busiest core's** p95 < 90%; peak RSS < 400 MB | T | `make diag-run`, then `make pi-load`. `make routine-frame-budget` is the bench diagnostic. | **Verified while driving** (2026-10-28, `make diag-run` on the course, `src.main --route route.json`, 133 s, diag_20261028_131532): CPU 40% of the Pi (mean, every process; the run itself 36%), busiest core p95 74%, peak RSS 148 MB; no throttling, 59 °C max. The run was too short (2.2 min) to judge memory growth, which needs 5. On the bench (frame-budget, motors off): 41% CPU, 157 MB peak. |
 | R5 | The motors stop if control stops arriving | Brake within `MOTOR_WATCHDOG_S` (0.5 s) of the last command | T | `test_drive` (software): the watchdog in `drive.py`. Hardware: `pytest --hardware -k watchdog` with the wheels up | Verified in software; the hardware test is written, not yet recorded |
 
 ---
@@ -170,4 +170,4 @@ The proposed values below are what the plans and test sheets use. Agree them wit
 | --- | --- | --- | --- |
 | Performance | P4 | P1, P2, P3 (slope 0.63) | |
 | Detection | D3 (one lighting setup), D4a (in view), D6 (cube, box) | D2 (false signs while driving), D4b (+1.7 cm), D6 (blue can) | D1, D5 (one run so far), D4a plain lane, D6 stop |
-| Robustness | R1, R2, R3, R5 (in software) | | R4 (while driving) |
+| Robustness | R1, R2, R3, R5 (in software), R4 (while driving) | | |
