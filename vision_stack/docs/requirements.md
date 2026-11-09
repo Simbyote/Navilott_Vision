@@ -166,8 +166,8 @@ The proposed values below are what the plans and test sheets use. Agree them wit
 
 ## Status summary
 
-| | Met | Not met | Not verified |
-| --- | --- | --- | --- |
-| Performance | P4 | P1, P2, P3 (slope 0.63) | |
-| Detection | D3 (one lighting setup), D4a (in view), D6 (cube, box) | D2 (false signs while driving), D4b (+1.7 cm), D6 (blue can) | D1, D5 (one run so far), D4a plain lane, D6 stop |
-| Robustness | R1, R2, R3, R5 (in software), R4 (while driving) | | |
+| | Verified | Target Pending|
+| --- | --- | --- |
+| Performance | P1, P2, P3, P4 | |
+| Detection |  D2, D3, D4, D5, D6 | D1 |
+| Robustness | R1, R2, R3, R4, R5 (software + hardware) | |
