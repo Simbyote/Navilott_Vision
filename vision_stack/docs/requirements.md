@@ -64,8 +64,8 @@ Record the results, with the date and commit, in the status column above.
 
 ## Status summary
 
-| | Verified | Not yet | Not implemented |
-| --- | --- | --- | --- |
-| Performance | P1, P2, P4 | , P3 | |
-| Detection |  D2, D3, D4, D5, D6 | D! | |
-| Robustness | R1, R2, R3, R4, R5 (software + hardware) | | |
+| | Verified | Target Pending|
+| --- | --- | --- |
+| Performance | P1, P2, P3, P4 | |
+| Detection |  D2, D3, D4, D5, D6 | D1 |
+| Robustness | R1, R2, R3, R4, R5 (software + hardware) | |
