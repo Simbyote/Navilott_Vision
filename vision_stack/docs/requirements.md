@@ -42,11 +42,6 @@ differ, the tables (and the change log) win.
 | R1–R3, R5 | Recovery from a dropped frame, a lost lane, a single bad frame; motors stop without commands | as specified | as each test asserts | software, every commit | Test: the pytest suite |
 | R4 | CPU and memory | < 70% CPU, < 400 MB | process mean; busiest core p95 < 90% | while driving | Test: `make diag-run`, `make pi-load` |
 
-**To state at FDR (changes from the PSR):** compare each target above with the PSR's. Where one was relaxed or
-re-scoped, give the reason on the summary slide before anyone asks, for example: the latency target if the PSR
-said 33.3 ms (30 FPS); the stop-sign and stop-line ranges (out of the camera's view closer than ~15–20 cm and
-past ~17 cm); dark obstacles out of scope.
-
 ---
 
 ## Performance
