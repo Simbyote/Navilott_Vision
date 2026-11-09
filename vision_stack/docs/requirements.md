@@ -66,6 +66,6 @@ Record the results, with the date and commit, in the status column above.
 
 | | Verified | Not yet | Not implemented |
 | --- | --- | --- | --- |
-| Performance | P4 | P1, P2, P3 | |
-| Detection | | D1, D2, D3, D4, D5, D6 | |
-| Robustness | R1, R2, R3, R5 (all in software) | R4 | |
+| Performance | P1, P2, P4 | , P3 | |
+| Detection |  D2, D3, D4, D5, D6 | D! | |
+| Robustness | R1, R2, R3, R4, R5 (software + hardware) | | |
