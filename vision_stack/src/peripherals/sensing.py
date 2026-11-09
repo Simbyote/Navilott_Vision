@@ -1,37 +1,14 @@
 """Sensor collection: the IMU and wheel encoders read together, grouped per camera frame.
 
 Purpose:
-    The sensors run faster than the camera (100 Hz against ~20 FPS), so a
-    background thread reads the IMU and both encoder counts together at
-    SENSOR_RATE_HZ, stamps each reading on the camera's clock
-    (time.monotonic), and keeps them until the frame loop drains them. Each
-    frame then gets every reading taken since the previous frame as one
-    SensorBatch, and SensorSample.from_batch() turns that into Phase 3's input.
-    Yaw is put into Estimation's convention (+ = turning right) here, once,
-    with IMU_YAW_SIGN, so nothing downstream knows how the IMU is mounted.
-
-    This module never imports the board drivers or pigpio. SensorHub takes
-    any objects with the drivers' read() / counts(); SensorHub.open() imports
-    the real ones only when asked for, so replays and tests never load them.
+    The sensors run at 100 Hz against the camera's ~20 FPS, so readings are
+    collected between frames on the camera's clock and handed to each frame
+    as one group, yaw already + = right. Drivers load only when asked for,
+    so replays and tests never import them.
 
 Main package:
-    SensorReading: one reading: time, yaw rate, lateral accel, both counts,
-        and how long the IMU read took (imu_ms: I2C plus the GIL, as the
-        thread lived it; diagnostics.i2c_trace has the bus's side).
-    SensorBatch: one frame window's readings, what Phase 3 needs from them
-        (the yaw integrated reading by reading, so a long window loses
-        nothing), and the window's IMU reads: attempted, failed, the slowest.
-    SensorHub: the sampling thread, its buffer, and drain().
-    Sensors: what a frame loop uses (src/main.py and every linker): opens and
-        starts a hub, then one read() / sample() per frame.
-
-Flow:
-    1. Sensors(imu=..., encoders=...): SensorHub.open() and start().
-       (Or by hand: SensorHub.open() / SensorHub(imu, encoders), start().)
-    2. Once per frame, sample() (or read() for the batch too): the hub's
-       drain() closes the window with a fresh encoder reading and hands over
-       every reading since the previous one, as a SensorSample.
-    3. stop(): end the thread and release whatever open() opened.
+    SensorBatch: one frame window's readings; SensorSample.from_batch() makes
+    it Phase 3's input.
 """
 import logging
 import threading
@@ -39,44 +16,34 @@ import time
 from collections import deque
 from dataclasses import dataclass
 
-from src.diagnostics.threads import name_os_thread
-from src.estimation.estimation import SensorSample
-from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
+from src.os_threads import name_os_thread, set_realtime
+from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_HUB_RT_PRIORITY, SENSOR_RATE_HZ
 
 log = logging.getLogger(__name__)
 
-# An IMU reading stands for the time since the previous one, up to this long.
-# A longer gap means readings were lost (I2C errors, or a buffer that filled
-# during a stall): the turn made in them can't be recovered, so it isn't
-# guessed at either
+# A reading stands for the time since the previous one, up to this. A longer
+# gap lost readings, and the turn in them isn't guessed at
 MAX_YAW_GAP_S = 0.1
+# Of the nominal period: room for the chip's clock, not for a stall's lost time
+FIFO_STEP = (0.8, 1.2)
 
 
 @dataclass(frozen=True)
 class SensorReading:
-    """
-    One reading. A field is None when its sensor isn't there, or when the
-    read failed (IMU) or wasn't taken (the IMU in a drain's closing reading).
-    """
+    """A field is None when its sensor isn't there, or its read failed or wasn't taken."""
     t: float                        # time.monotonic() seconds
-    yaw_dps: float | None           # gyro Z, deg/s, + = turning right (IMU_YAW_SIGN applied)
-    lateral_accel: float | None     # accel Y, m/s^2, as the driver reports it
-    left_count: int | None          # cumulative since the encoders' reset(), + = forward
+    yaw_dps: float | None           # + = turning right
+    lateral_accel: float | None     # m/s^2
+    left_count: int | None          # cumulative, + = forward
     right_count: int | None
-    imu_ms: float | None = None     # how long the IMU read took, failed or not; None when not read
+    imu_ms: float | None = None     # the read's time, failed or not
 
 
 @dataclass(frozen=True)
 class SensorBatch:
     """
-    Every reading in one frame window, oldest first.
-
-    base: The previous window's last reading, where this window's wheel
-        speeds are measured from. None only if the hub had no reading to
-        start from.
-    dropped: Readings lost to a full buffer since the previous drain.
-    imu_base_t: When the last IMU reading before this window was taken,
-        where its first IMU reading's interval starts. None before any.
+    Oldest first. base is the previous window's last reading, which the wheel speeds are
+    measured from. dropped counts readings lost to a full buffer.
     """
     readings: tuple[SensorReading, ...]
     base: SensorReading | None = None
@@ -85,7 +52,6 @@ class SensorBatch:
 
     @property
     def span_s(self) -> float:
-        """Seconds from base (or the first reading) to the last reading; 0 when empty."""
         if not self.readings:
             return 0.0
         start = self.base if self.base is not None else self.readings[0]
@@ -93,27 +59,23 @@ class SensorBatch:
 
     @property
     def imu_count(self) -> int:
-        """Readings that carry an IMU value."""
         return sum(r.yaw_dps is not None for r in self.readings)
 
     @property
     def imu_attempts(self) -> int:
-        """IMU reads tried in the window: SENSOR_RATE_HZ / FPS (5) when the hub keeps its ticks."""
+        """SENSOR_RATE_HZ / FPS (5) while the hub keeps its ticks."""
         return sum(r.imu_ms is not None for r in self.readings)
 
     @property
     def imu_failed(self) -> int:
-        """IMU reads tried that gave nothing (an I2C error)."""
         return sum(r.imu_ms is not None and r.yaw_dps is None for r in self.readings)
 
     @property
     def imu_read_ms_max(self) -> float | None:
-        """The slowest IMU read in the window, ms; None without any."""
         return max((r.imu_ms for r in self.readings if r.imu_ms is not None), default=None)
 
     @property
     def mean_yaw_dps(self) -> float | None:
-        """Mean yaw rate over the window's IMU readings; None without any."""
         yaws = [r.yaw_dps for r in self.readings if r.yaw_dps is not None]
         return sum(yaws) / len(yaws) if yaws else None
 
@@ -134,24 +96,21 @@ class SensorBatch:
     @property
     def yaw_deg(self) -> float | None:
         """
-        Degrees turned over the window, + = right: each IMU reading's rate
-        times the time since the previous IMU reading (at most
-        MAX_YAW_GAP_S), so the window is integrated however long it is.
-        Raw: the gyro bias is the caller's, over yaw_span_s. None without
-        an IMU reading.
+        Degrees turned, + = right: each reading's rate times the time since the previous one
+        (at most MAX_YAW_GAP_S), however long the window. Raw; the bias is the caller's.
         """
         got = self._yaw_integral()
         return None if got is None else got[0]
 
     @property
     def yaw_span_s(self) -> float | None:
-        """Seconds yaw_deg covers (what a gyro bias is subtracted over); None without an IMU reading."""
+        """The seconds yaw_deg covers, which a bias is subtracted over."""
         got = self._yaw_integral()
         return None if got is None else got[1]
 
     @property
     def peak_lateral_accel(self) -> float | None:
-        """The signed lateral accel with the largest magnitude; None without any."""
+        """The signed value with the largest magnitude."""
         accels = [r.lateral_accel for r in self.readings if r.lateral_accel is not None]
         return max(accels, key=abs) if accels else None
 
@@ -160,13 +119,11 @@ class SensorBatch:
 
     @property
     def left_count(self) -> int | None:
-        """Cumulative left count at the window's end; None without encoders."""
         last = self._last_counts()
         return None if last is None else last.left_count
 
     @property
     def right_count(self) -> int | None:
-        """Cumulative right count at the window's end; None without encoders."""
         last = self._last_counts()
         return None if last is None else last.right_count
 
@@ -181,32 +138,47 @@ class SensorBatch:
 
     @property
     def left_cps(self) -> float | None:
-        """Left counts per second from base to the window's end; 0.0 stopped, None without encoders."""
+        """From base to the window's end; 0.0 stopped, None without encoders."""
         return self._cps("left_count")
 
     @property
     def right_cps(self) -> float | None:
-        """Right counts per second from base to the window's end; 0.0 stopped, None without encoders."""
         return self._cps("right_count")
+
+
+@dataclass(frozen=True)
+class SensorSample:
+    """None means not available."""
+    yaw_rate_dps: float | None = None          # mean over the window, + = right
+    lateral_accel_mps2: float | None = None    # the largest |a|, signed
+    left_wheel_cps: float | None = None
+    right_wheel_cps: float | None = None
+    left_count: int | None = None              # cumulative, at the window's end
+    right_count: int | None = None
+    # Raw; None falls back to yaw_rate_dps x the frame step, as replays do
+    yaw_deg: float | None = None
+    yaw_span_s: float | None = None
+
+    @classmethod
+    def from_batch(cls, batch) -> "SensorSample":
+        """Duck-typed on the batch's fields, so test fakes need only the ones they set."""
+        return cls(
+            yaw_rate_dps = batch.mean_yaw_dps,
+            lateral_accel_mps2 = batch.peak_lateral_accel,
+            left_wheel_cps = batch.left_cps,
+            right_wheel_cps = batch.right_cps,
+            left_count = getattr(batch, "left_count", None),
+            right_count = getattr(batch, "right_count", None),
+            yaw_deg = getattr(batch, "yaw_deg", None),
+            yaw_span_s = getattr(batch, "yaw_span_s", None),
+        )
 
 
 class SensorHub:
     """
-    Reads the IMU and encoders together on one background thread and hands
-    each frame its readings.
-
-    Inputs:
-        imu: An object with read() -> (raw yaw deg/s, lateral accel m/s^2),
-            like peripherals.imu.IMUReader; None without an IMU.
-        encoders: An object with counts() -> (left, right), like
-            peripherals.drive.EncoderReader; None without encoders.
-        rate_hz: Readings per second.
-        yaw_sign: Multiplies the IMU's yaw into + = turning right.
-        history_s: Seconds of readings kept between drains; older ones are
-            dropped and counted.
-        clock: Seconds, time.monotonic's clock (the camera stamps with
-            time.monotonic_ns, so batches line up with frames).
-        timer: Seconds, for timing each IMU read (time.perf_counter).
+    Reads the IMU and encoders together on one thread. An IMU with fifo True is read per
+    drain instead. yaw_sign maps the IMU's yaw to + = right. rt_priority None stays at normal
+    priority; open() asks for SENSOR_HUB_RT_PRIORITY. clock is time.monotonic's, as the camera's.
     """
     def __init__(
             self,
@@ -215,10 +187,13 @@ class SensorHub:
             rate_hz: float = SENSOR_RATE_HZ,
             yaw_sign: int = IMU_YAW_SIGN,
             history_s: float = SENSOR_HISTORY_S,
+            rt_priority: int | None = None,
             clock=time.monotonic,
             timer=time.perf_counter,
         ) -> None:
         self._imu, self._encoders = imu, encoders
+        self._rt_priority = rt_priority
+        self.priority = "not started"            # the thread's: "SCHED_FIFO 20", "normal" or "normal (why)"
         self._rate_hz, self._yaw_sign, self._clock, self._timer = rate_hz, yaw_sign, clock, timer
         self._buf: deque[SensorReading] = deque(maxlen=max(1, int(rate_hz * history_s)))
         self._lock = threading.Lock()
@@ -229,19 +204,14 @@ class SensorHub:
         self._dropped = 0
         self._closers: list = []
         self.read_errors = 0
+        self._fifo = bool(getattr(imu, "fifo", False))
+        self._fifo_t: float | None = None       # the last FIFO sample's stamp
 
     @classmethod
     def open(cls, imu: bool = False, encoders: bool = False, **kw) -> "SensorHub":
         """
-        A hub over the robot's real sensors, each opened only when asked for.
-
-        Inputs:
-            imu: Open the MPU-6050 (IMU_I2C_ADDRESS). It isn't calibrated
-                here, so its gyro bias is left to Phase3Config.gyro_bias_dps.
-            encoders: Open the encoders; needs the pigpio daemon (sudo pigpiod).
-            kw: SensorHub's other arguments.
-        Side effects:
-            Opens I2C and / or a pigpio connection; stop() releases them.
+        The real sensors, each only when asked for. The IMU isn't calibrated here, so the bias
+        is Phase3Config's. Encoders need the pigpio daemon. stop() releases them.
         """
         imu_reader = enc_reader = None
         closers = []
@@ -254,6 +224,7 @@ class SensorHub:
             pi = pigpio.pi()
             enc_reader = EncoderReader(pi)
             closers += [enc_reader.cancel, pi.stop]
+        kw.setdefault("rt_priority", SENSOR_HUB_RT_PRIORITY)
         hub = cls(imu_reader, enc_reader, **kw)
         hub._closers = closers
         return hub
@@ -263,10 +234,13 @@ class SensorHub:
         return self._imu is not None or self._encoders is not None
 
     def start(self) -> None:
-        """Take the first window's starting reading and start sampling; a no-op if running."""
+        """Takes the first window's starting reading; a no-op if running."""
         if self._thread is not None and self._thread.is_alive():
             return
         self._base = self._counts_reading()
+        if self._fifo:
+            self._start_fifo()
+            return
         self._stop_evt.clear()
         self._thread = threading.Thread(target=self._worker, daemon=True, name="sensor-hub")
         self._thread.start()
@@ -274,7 +248,6 @@ class SensorHub:
                  self._rate_hz, self._imu is not None, self._encoders is not None)
 
     def stop(self, timeout: float = 0.5) -> None:
-        """Stop the thread, then release whatever open() opened."""
         self._stop_evt.set()
         if self._thread is not None:
             self._thread.join(timeout=timeout)
@@ -284,15 +257,7 @@ class SensorHub:
         log.info("SensorHub stopped (%d IMU read errors).", self.read_errors)
 
     def tick(self) -> SensorReading:
-        """
-        Take one full reading now and keep it. The thread calls this every
-        period; tests call it directly.
-
-        Outputs:
-            The reading. A failed IMU read leaves its fields None and is
-            counted in read_errors, never raised. Either way imu_ms holds
-            how long the read took.
-        """
+        """One full reading, kept. A failed IMU read leaves its fields None and is counted, never raised."""
         yaw = accel = imu_ms = None
         if self._imu is not None:
             r0 = self._timer()
@@ -309,18 +274,57 @@ class SensorHub:
         self._keep(reading)
         return reading
 
+    def _start_fifo(self) -> None:
+        """Empty what built up since it opened, so the first window starts now."""
+        try:
+            self._imu.fifo_reset()
+        except Exception as exc:
+            log.warning("IMU FIFO reset failed: %s", exc)
+        self._fifo_t = None
+        self.priority = "no thread (the IMU's FIFO)"
+        log.info("SensorHub started on the IMU's FIFO (%.0f Hz on the chip's clock, encoders=%s)",
+                 1.0 / self._imu.period_s, self._encoders is not None)
+
+    @property
+    def fifo_overflows(self) -> int | None:
+        return getattr(self._imu, "fifo_overflows", None) if self._fifo else None
+
+    def _drain_fifo(self) -> None:
+        """
+        Every FIFO sample into the buffer, spread over the time since the last drain, newest
+        stamped now, so yaw integrates over real time even if the chip's clock runs a few percent
+        off. The step stays within FIFO_STEP of nominal, so lost time isn't spread over survivors.
+        """
+        now, r0 = self._clock(), self._timer()
+        try:
+            samples = self._imu.read_fifo()
+        except Exception as exc:
+            self.read_errors += 1
+            if self.read_errors % 100 == 1:
+                log.warning("IMU FIFO read error #%d: %s", self.read_errors, exc)
+            self._keep(SensorReading(now, None, None, None, None, round((self._timer() - r0) * 1000.0, 3)))
+            return
+        ms = round((self._timer() - r0) * 1000.0, 3)
+        if not samples:
+            return
+        n, nominal = len(samples), self._imu.period_s
+        if self._fifo_t is None:
+            step, first = nominal, now - (n - 1) * nominal
+        else:
+            lo, hi = FIFO_STEP
+            step = min(max((now - self._fifo_t) / n, lo * nominal), hi * nominal)
+            first = self._fifo_t + step
+        for i, (raw_yaw, accel) in enumerate(samples):
+            self._keep(SensorReading(first + i * step, self._yaw_sign * raw_yaw, accel, None, None, ms))
+        self._fifo_t = first + (n - 1) * step
+
     def drain(self) -> SensorBatch:
         """
-        Every reading since the previous drain, as one batch.
-
-        The window is closed with an encoder reading taken now (the IMU
-        isn't read, so the frame loop never waits on I2C), so the wheel
-        speeds run right up to this frame.
-
-        Side effects:
-            Empties the buffer; the batch's last reading becomes the next
-            batch's base.
+        Every reading since the last drain, closed with an encoder reading taken now (the IMU
+        isn't read, so the frame loop never waits on I2C). The last reading becomes the next base.
         """
+        if self._fifo:
+            self._drain_fifo()
         if self._encoders is not None:
             self._keep(self._counts_reading())
         with self._lock:
@@ -346,8 +350,8 @@ class SensorHub:
             self._buf.append(reading)
 
     def _worker(self) -> None:
-        """tick() every period until stop(), on deadline pacing like the IMU's own thread."""
-        name_os_thread("sensor-hub")            # top, ps and diagnostics.monitor show it by name
+        name_os_thread("sensor-hub")
+        self._take_priority()
         interval = 1.0 / self._rate_hz
         next_t = time.perf_counter()
         while not self._stop_evt.is_set():
@@ -360,21 +364,20 @@ class SensorHub:
                 next_t = time.perf_counter()          # fell behind; resync
 
 
+    def _take_priority(self) -> None:
+        """Says once what it got."""
+        if self._rt_priority is None:
+            self.priority = "normal"
+            return
+        why = set_realtime(self._rt_priority)
+        self.priority = f"SCHED_FIFO {self._rt_priority}" if not why else f"normal ({why})"
+        (log.info if not why else log.warning)("SensorHub thread: %s", self.priority)
+
+
 class Sensors:
     """
-    A frame loop's sensors: a started SensorHub over the IMU and wheel
-    encoders, each opened only when asked for, so replays never load the
-    board drivers or pigpio. With neither, every frame runs without sensors.
-
-    The IMU uses IMU_I2C_ADDRESS from params and isn't calibrated here, so
-    any gyro bias correction comes from Phase3Config.gyro_bias_dps, in the
-    hub's frame (+ = turning right). The encoders need the pigpio daemon
-    (sudo pigpiod).
-
-    Inputs:
-        imu, encoders: Which sensors SensorHub.open() opens.
-        hub: A hub to use instead (tests, or one built by hand); imu and
-            encoders are then ignored. Started here if it has sensors.
+    A frame loop's started SensorHub, each sensor opened only when asked for; with
+    neither, frames run without sensors. hub replaces imu and encoders (tests).
     """
     def __init__(self, imu: bool = False, encoders: bool = False, hub: SensorHub | None = None) -> None:
         self._hub = hub if hub is not None else SensorHub.open(imu=imu, encoders=encoders)
@@ -382,23 +385,22 @@ class Sensors:
             self._hub.start()
 
     def read(self) -> tuple[SensorSample | None, SensorBatch | None]:
-        """
-        This frame window's readings.
-
-        Outputs:
-            (sample, batch): Phase 3's SensorSample and the SensorBatch it came
-            from, which also carries the cumulative counts the sample leaves
-            out. (None, None) with no sensors.
-        """
+        """(SensorSample, the SensorBatch it came from), or (None, None) without sensors."""
         if not self._hub.has_sensors:
             return None, None
         batch = self._hub.drain()
         return SensorSample.from_batch(batch), batch
 
+    @property
+    def priority(self) -> str:
+        return self._hub.priority
+
+    @property
+    def fifo_overflows(self) -> int | None:
+        return self._hub.fifo_overflows
+
     def sample(self) -> SensorSample | None:
-        """This frame window's readings; None with no sensors."""
         return self.read()[0]
 
     def stop(self) -> None:
-        """Stop the hub and release its sensors."""
         self._hub.stop()

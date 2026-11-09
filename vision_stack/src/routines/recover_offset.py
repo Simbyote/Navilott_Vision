@@ -1,47 +1,22 @@
-"""Recover offset: from how far off the lane's center does the robot steer back, and how well does it hold a straight?
+"""Recover offset: from how far off center does the robot steer back, and how well does it hold a straight?
 
 Purpose:
-    Ignacio's two lane-keeping tests from the IDR (slide 10), on the robot:
-    the maximum recoverable offset, and the mean distance from the lane's
-    center on a straight run. Each trial is a short run of the whole chain,
-    motors on (navigation_linker.run, as stop-distance drives), on a
-    straight lane, from a start offset the tester measured with a ruler.
-    RecoverWatch follows the run through the robot's own lane_offset_cm:
-    that's a measurement only once lane-offset has passed (P3), so this
-    needs the ground scale lane-offset measured (--set cm_per_px=..., or
-    cm_per_px set in config.py).
-
-    A start of 0 is the straight run: STRAIGHT_S of lane keeping, reporting
-    the mean and largest distance from the center. Any other start ends
-    once the robot's offset has stayed within BAND_CM for HOLD_S (or at
-    max_s); the tester then measures where it stopped. The ruler decides
-    whether it recovered (|end| within BAND_CM); the robot's trace gives
-    how long it took and how far it overshot.
-
-    Pass (first guesses): every start up to need_cm recovered; the straight
-    run never more than BAND_CM off the center (by the robot's reading).
-    The summary gives the maximum recoverable offset: the largest start
-    up to which every trial, left and right, recovered.
+    The IDR's two lane-keeping tests (slide 10): maximum recoverable offset
+    and mean distance from center on a straight. It follows the robot's own
+    lane_offset_cm, so it needs lane-offset's cm_per_px; the ruler at the end
+    decides recovery.
 
 Main package:
-    RecoverWatch: navigation_linker.run's stop_when for one trial.
-    RecoverOffset: the routine (make routine-recover-offset).
-
-Flow (per trial):
-    1. The rig opened; the tester places the robot at the planned offset,
-       pointing along the lane, and enters the offset measured.
-    2. Enter drives: one run with a straight route until RecoverWatch ends
-       it; the run folder lands in attempt_NN/.
-    3. The tester measures where it stopped.
+    RecoverOffset (make routine-recover-offset). RecoverWatch ends each run
+    once the offset has held within BAND_CM for HOLD_S.
 """
 from src.routines.detect_range import reliable_range
 from src.routines.harness import Routine, criterion, read_battery_volts
 
 POSITIONS_CM = "0,2,-2,3,-3,4,-4,5,-5"     # + = robot right of the lane's center; 0: the straight run
-# The robot is 11 cm wide in a 14 cm lane (line center to line center): 1.5 cm a side before its
-# body is over a line's center. Within this it counts as centered
+# 11 cm robot in a 14 cm lane: 1.5 cm a side before the body is over a line
 BAND_CM = (14.0 - 11.0) / 2
-HOLD_S = 1.0                # centered this long (by its own reading) ends a recovery trial
+HOLD_S = 1.0                # centered this long, by its own reading, ends a trial
 MAX_S = 6.0                 # a recovery trial's backstop
 STRAIGHT_S = 5.0            # the straight run's length in time
 NEED_CM = 3.0               # every start up to this must recover (first guess)
@@ -57,14 +32,10 @@ def _num(v) -> float | None:
 
 class RecoverWatch:
     """
-    Follows one run's nav.csv rows through lane_offset_cm on vision.
+    Follows lane_offset_cm on vision; the straight runs to max_s, others end after hold_s within band_cm.
 
-    straight: run until max_s and keep the offset's mean and max; else end
-        once the offset has stayed within band_cm for hold_s.
-    start_cm: the first offset on vision. recover_s: from the first row to
-        the start of the hold that ended it. overshoot_cm: the farthest past
-        the center on the far side from the start. lane_lost_s: time off
-        vision.
+    recover_s runs from the first row to the start of that hold; overshoot_cm is the
+    farthest past center on the far side.
     """
     def __init__(self, straight: bool, band_cm: float = BAND_CM, hold_s: float = HOLD_S, max_s: float = MAX_S):
         self.straight, self.band, self.hold_s, self.max_s = straight, band_cm, hold_s, max_s

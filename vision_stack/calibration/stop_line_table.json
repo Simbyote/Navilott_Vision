@@ -1,105 +1,160 @@
 {
   "model": "stop_line_rows_to_cm",
   "curve": [
-    938.7856288575099,
-    156.19383641234006,
-    2.5982877065451517
+    1292.067753645438,
+    137.23470129122336,
+    -0.43831917969874495
   ],
   "formula": "cm = curve[0] / (curve[1] - rows) + curve[2]; rows = distance_px above the lane ROI bottom",
   "reference": "the front edge of the robot",
   "marks": [
     {
-      "cm": 12.7,
-      "rows": 63.8,
+      "cm": 9.0,
+      "rows": 2.26,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.06,
-      "fit_cm": 12.759,
-      "error_cm": 0.059
+      "spread": 0.05,
+      "fit_cm": 9.134,
+      "error_cm": 0.134
     },
     {
-      "cm": 11.9,
-      "rows": 55.24,
+      "cm": 10.0,
+      "rows": 13.0,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.1,
-      "fit_cm": 11.897,
-      "error_cm": 0.003
+      "spread": 0.0,
+      "fit_cm": 9.962,
+      "error_cm": 0.038
     },
     {
-      "cm": 11.4,
-      "rows": 49.58,
+      "cm": 11.0,
+      "rows": 22.21,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.08,
-      "fit_cm": 11.404,
-      "error_cm": 0.004
+      "spread": 0.05,
+      "fit_cm": 10.795,
+      "error_cm": 0.205
     },
     {
-      "cm": 10.6,
-      "rows": 38.83,
+      "cm": 12.0,
+      "rows": 32.7,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.72,
-      "fit_cm": 10.597,
-      "error_cm": 0.003
+      "spread": 0.07,
+      "fit_cm": 11.922,
+      "error_cm": 0.078
     },
     {
-      "cm": 8.7,
-      "rows": 2.98,
+      "cm": 13.0,
+      "rows": 42.54,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.09,
-      "fit_cm": 8.726,
-      "error_cm": 0.026
+      "spread": 0.7,
+      "fit_cm": 13.206,
+      "error_cm": 0.206
     },
     {
-      "cm": 9.1,
-      "rows": 12.61,
+      "cm": 14.0,
+      "rows": 48.19,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
       "spread": 0.01,
-      "fit_cm": 9.137,
-      "error_cm": 0.037
+      "fit_cm": 14.072,
+      "error_cm": 0.072
     },
     {
-      "cm": 9.4,
-      "rows": 16.57,
+      "cm": 15.0,
+      "rows": 52.51,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.88,
-      "fit_cm": 9.322,
-      "error_cm": 0.078
+      "spread": 0.18,
+      "fit_cm": 14.812,
+      "error_cm": 0.188
     },
     {
-      "cm": 13.2,
-      "rows": 67.31,
+      "cm": 16.0,
+      "rows": 58.95,
       "seen": 15,
       "frames": 15,
       "clipped": 0,
       "candidates": 1,
-      "spread": 0.21,
-      "fit_cm": 13.16,
-      "error_cm": 0.04
+      "spread": 0.01,
+      "fit_cm": 16.066,
+      "error_cm": 0.066
+    },
+    {
+      "cm": 17.0,
+      "rows": 63.22,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.09,
+      "fit_cm": 17.019,
+      "error_cm": 0.019
+    },
+    {
+      "cm": 18.0,
+      "rows": 67.36,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.15,
+      "fit_cm": 18.053,
+      "error_cm": 0.053
+    },
+    {
+      "cm": 19.0,
+      "rows": 70.7,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.53,
+      "fit_cm": 18.981,
+      "error_cm": 0.019
+    },
+    {
+      "cm": 20.0,
+      "rows": 73.95,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.0,
+      "fit_cm": 19.978,
+      "error_cm": 0.022
+    },
+    {
+      "cm": 21.0,
+      "rows": 77.0,
+      "seen": 15,
+      "frames": 15,
+      "clipped": 0,
+      "candidates": 1,
+      "spread": 0.23,
+      "fit_cm": 21.012,
+      "error_cm": 0.012
     }
   ],
   "error_cm": {
-    "mean": 0.030999295407671434,
-    "max": 0.07803492589514072
+    "mean": 0.08560672667301156,
+    "max": 0.2062431456189362
   },
   "image_size": [
     480,
@@ -108,7 +163,7 @@
   "undistort_alpha": 0.0,
   "lens_calibration": {
     "file": "camera_calibration.json",
-    "sha256": "781e1eea45aae63544c02e38bc44ea847f123dd69feee6477df7d4ae148cb95a"
+    "sha256": "f705c6a39437278b4b60662256f4c91357e53184d1b39076950d62b2d9f4d138"
   },
-  "created": "2026-10-20T11:23:04"
+  "created": "2026-10-28T11:46:28"
 }

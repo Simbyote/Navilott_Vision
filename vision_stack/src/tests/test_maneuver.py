@@ -42,10 +42,6 @@ def trial(cfg=CFG, max_ticks=4000, dts=None, each=None, hold=False, **robot):
     return m, bot, records
 
 
-# =============================================================================
-# The whole trial
-# =============================================================================
-
 @pytest.mark.software
 def test_the_trial_runs_every_step_in_order_and_turns_the_robot_around():
     m, bot, recs = trial()
@@ -66,10 +62,6 @@ def test_done_commands_stop_forever():
     cmd = m.step(Tick(99.0, DT, 0.0, 0.0, 0, 0, 0.0, 0.0))
     assert m.step_name == DONE and (cmd.left, cmd.right) == (0.0, 0.0)
 
-
-# =============================================================================
-# Settle and the yaw sign
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("bias", [-0.90, 0.0, 2.5])
@@ -126,10 +118,6 @@ def test_a_dead_drivetrain_is_named_in_the_yaw_sign_stop():
     assert "encoders didn't move either" in m.report()["abort_reason"]
 
 
-# =============================================================================
-# Legs
-# =============================================================================
-
 @pytest.mark.software
 def test_a_dragging_wheel_is_corrected_back_to_straight():
     loose, bot_loose, _ = trial(cfg=replace(CFG, kp_counts=0.0, kp_heading=0.0, leg_counts=800),
@@ -172,10 +160,6 @@ def test_a_leg_that_cannot_reach_its_counts_is_capped_in_time():
     leg = m.report()["forward_1"]
     assert leg["ended_by"] == "time cap" and leg["duration_s"] == pytest.approx(1.0, abs=DT)
 
-
-# =============================================================================
-# The 180
-# =============================================================================
 
 @pytest.mark.software
 def test_the_turn_slows_over_the_last_band():
@@ -239,10 +223,6 @@ def test_the_turn_reports_encoder_counts_per_degree():
     assert t["counts_per_deg"] == pytest.approx((abs(t["left_counts"]) + t["right_counts"]) / 2 / t["final_deg"], abs=1e-3)
 
 
-# =============================================================================
-# Safety
-# =============================================================================
-
 @pytest.mark.software
 def test_a_late_frame_stops_the_trial():
     m, _, recs = trial(dts=lambda i: 0.8 if i == 60 else DT)
@@ -289,11 +269,6 @@ def test_no_imu_while_settling_stops_before_moving():
     m, bot, _ = trial(imu=False)
     assert "no IMU readings" in m.report()["abort_reason"] and not any(any(c) for c in bot.commands)
 
-
-
-# =============================================================================
-# Holds for measuring by hand
-# =============================================================================
 
 def resume_after(frames):
     """each(): resume a hold once it has lasted this many frames."""
@@ -360,7 +335,6 @@ def test_hold_time_does_not_count_against_the_run_limit():
 def test_resume_outside_a_hold_does_nothing():
     m, _, _ = trial(each=lambda m, bot: m.resume())
     assert m.report()["completed"] and "holds" not in m.report()
-
 
 
 @pytest.mark.software

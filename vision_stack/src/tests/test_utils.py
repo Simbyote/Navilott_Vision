@@ -55,10 +55,6 @@ def test_laps_mark_restarts_the_clock_without_recording():
     assert list(laps.times) == ["after_mark"] and laps.times["after_mark"] < 15.0
 
 
-# =============================================================================
-# GcWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_gc_watch_freezes_and_times_collections():
     import gc
@@ -75,6 +71,7 @@ def test_gc_watch_freezes_and_times_collections():
         watch.stop()
         gc.unfreeze()
     assert watch._callback not in gc.callbacks
+
 
 @pytest.mark.software
 def test_gc_watch_can_turn_collection_off_and_collect_the_young_itself(monkeypatch):

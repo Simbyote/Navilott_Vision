@@ -1,23 +1,12 @@
 """Every analysis a pytest --hardware run can feed, in one go.
 
 Purpose:
-    A hardware run (artifacts/<YYYYMMDD_HHMMSS>) holds one folder per test,
-    and several of them wrote a CSV some analysis tool reads: stage timing,
-    frame intervals, lane-offset stability, gate rejections, a soak. Each
-    tool picks one CSV per call, so graphing a whole run meant a call per
-    file. This finds every input under the run and runs each tool that
-    reads it, with the CSV itself as the argument, so each figure lands
-    next to the CSV it came from. Nothing new is computed: these are the
-    tools' own outputs.
+    A hardware run (artifacts/<stamp>) holds one folder per test, and each
+    tool takes one CSV per call. This runs every tool on every input it reads,
+    so figures land beside their CSVs. Nothing new is computed.
 
 Main package:
-    plan(): (tool, CSV) pairs for a run folder.
-    report(): run them; one line per run with what it wrote, or why it didn't.
-
-Flow:
-    1. For each tool in TOOLS, every file under the run named one of its CSV_NAMES.
-    2. tool.main([csv]); its printout is kept, and the figures and JSON it wrote are listed.
-    3. hw_report.txt in the run folder: per tool, per CSV, the headline lines and the figures.
+    report() -> hw_report.txt: per tool and CSV, the headline lines and figures.
 """
 import argparse
 import contextlib
@@ -25,16 +14,17 @@ import io
 import sys
 from pathlib import Path
 
-from src.analysis import common, gate_rejections, jitter, soak, stability, stage_timing
+from src.analysis import camera_meta, capture_report, common, gate_rejections, jitter, soak, stability, stage_timing
 
-# Each tool and the CSVs it can read from a hardware run. nav.csv and p3.csv
-# are left out: a hardware run has none, and nav_run reads navigation runs
+# nav.csv and p3.csv are left out: a hardware run has none
 TOOLS = {
     "stage_timing": (stage_timing, ("stage_timing.csv", "stages.csv")),
     "jitter": (jitter, ("frames.csv", "stage_timing.csv", "stages.csv")),
     "stability": (stability, ("lane_offset_timing.csv", "stages.csv")),
     "gate_rejections": (gate_rejections, gate_rejections.CSV_NAMES),
     "soak": (soak, ("system.csv",)),
+    "camera_meta": (camera_meta, (camera_meta.CSV_NAME,)),
+    "capture_report": (capture_report, (capture_report.CSV_NAME,)),
 }
 OUTPUT_SUFFIXES = (".png", ".json")
 REPORT = "hw_report.txt"
@@ -50,7 +40,6 @@ what each wrote in hw_report.txt in the run folder.
 
 
 def newest_run(root: Path = common.ARTIFACTS_DIR) -> Path:
-    """The newest artifacts/<stamp> folder."""
     runs = sorted((p for p in Path(root).iterdir() if p.is_dir()), key=lambda p: p.name) if Path(root).is_dir() else []
     if not runs:
         raise FileNotFoundError(f"no hardware runs in {root}")
@@ -59,10 +48,13 @@ def newest_run(root: Path = common.ARTIFACTS_DIR) -> Path:
 
 def _fits(name: str, csv: Path) -> bool:
     """
-    Whether the tool can use this CSV. Only jitter shares a name with an
-    unrelated file: frame_meta's frames.csv holds sensor timestamps, not a
-    loop's intervals, and has no column jitter reads.
+    jitter and camera_meta share frames.csv: capture's has frame intervals, frame_meta's the camera's
+    metadata, and each tool takes only its own.
     """
+    if name == "camera_meta":
+        return camera_meta.is_frame_meta(csv)
+    if name == "capture_report":
+        return capture_report.is_latency(csv)
     if name != "jitter":
         return True
     try:
@@ -72,7 +64,7 @@ def _fits(name: str, csv: Path) -> bool:
 
 
 def plan(run: Path) -> list[tuple[str, Path]]:
-    """(tool name, CSV) for every CSV under run that a tool reads and can use, in TOOLS order, then path order."""
+    """(tool, CSV) for every usable CSV under run, in TOOLS order, then path order."""
     out = []
     for name, (_, names) in TOOLS.items():
         for csv_name in names:
@@ -85,14 +77,14 @@ def _outputs(folder: Path) -> dict:
 
 
 def run_one(name: str, csv: Path) -> dict:
-    """One tool on one CSV: {"tool", "csv", "code", "lines" (its printout), "wrote" (new or updated files)}."""
+    """{tool, csv, code, lines (printout), wrote (new or updated files)}."""
     module = TOOLS[name][0]
     before = _outputs(csv.parent)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
         try:
             code = module.main([str(csv)])
-        except Exception as e:                  # one tool's crash shouldn't stop the rest
+        except Exception as e:                  # one crash doesn't stop the rest
             print(f"ERROR: {type(e).__name__}: {e}")
             code = 1
     after = _outputs(csv.parent)
@@ -102,7 +94,7 @@ def run_one(name: str, csv: Path) -> dict:
 
 
 def report(run: Path) -> tuple[list[dict], Path]:
-    """Every planned run; writes REPORT in the run folder. (results, report path)."""
+    """Every planned run; writes REPORT. Returns (results, report path)."""
     run = Path(run)
     results = [run_one(name, csv) for name, csv in plan(run)]
     text = [f"hardware run {run.name}: {len(results)} analyses", ""]

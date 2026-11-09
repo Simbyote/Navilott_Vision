@@ -17,9 +17,9 @@ import pytest
 import src.intersection_linker as il
 import src.linker_io as lio
 from src.config import GYRO_BIAS_DPS
-from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorSample
 from src.navigation.intersection import (
-    ADVANCE_MS, LEFT_TURN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
+    ADVANCE_MS, LEFT_TURN_DRIVEN, RIGHT_TURN, STAGE_ADVANCE, STAGE_EXIT, STAGE_TO_LINE, STAGE_TURN, TURN_END_GYRO,
     TURN_END_TIME,
 )
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
@@ -103,12 +103,8 @@ def go(tmp_path, maneuver):
     return findings, motor, source
 
 
-# =============================================================================
-# A sequence
-# =============================================================================
-
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, duties", [(LEFT, LEFT_TURN), (RIGHT, RIGHT_TURN), (STRAIGHT, None)])
+@pytest.mark.parametrize("maneuver, duties", [(LEFT, LEFT_TURN_DRIVEN), (RIGHT, RIGHT_TURN), (STRAIGHT, None)])
 def test_each_sequence_turns_its_way_holds_the_lane_after_and_passes(tmp_path, maneuver, duties):
     findings, motor, source = go(tmp_path, maneuver)
     assert findings["ended_by"] == il.SEQUENCE_DONE and findings["intersections"] == 1
@@ -142,6 +138,7 @@ def test_the_sequence_folder_holds_the_run_and_its_findings(tmp_path):
 def test_a_turn_the_gyro_never_sees_is_a_check(tmp_path):
     clock = FakeClock()
     frames = [(f, 0.0) for f, _ in sequence(LEFT)]                     # the robot "turns" but the gyro reads nothing
+    frames += [(scene(), 0.0)] * 100                                  # past the left turn's 7.3 s limit
     source = Source(clock, frames)
     findings = il.run_sequence(LEFT, source, Sensors(source), Motor(), SCENE_CONFIG,
                                out_dir=str(tmp_path / "left"), clock=clock, render=False)
@@ -149,10 +146,6 @@ def test_a_turn_the_gyro_never_sees_is_a_check(tmp_path):
     assert findings["turn_end"] == TURN_END_TIME and verdict == "CHECK"
     assert any("not the gyro target" in p for p in problems)
 
-
-# =============================================================================
-# judge() and SequenceWatch
-# =============================================================================
 
 GOOD = {"maneuver": LEFT, "intersections": 1, "turn_end": TURN_END_GYRO, "ended_by": il.SEQUENCE_DONE,
         "heading_deg": -88.0, "expected_deg": -90.0, "rejected": 0,
@@ -211,10 +204,6 @@ def test_the_watch_uses_a_rows_integrated_turn_when_the_log_has_it():
     w({**row(2.05, "intersection", STAGE_TURN, "1/1 left", yaw=-44.0), "yaw_deg": "", "yaw_span_s": ""})
     assert w.heading == pytest.approx(-88.0 - 2.0 + (-45.0) * 0.05)    # a blank cell falls back to the rate
 
-
-# =============================================================================
-# The command line
-# =============================================================================
 
 @pytest.mark.software
 def test_a_replay_of_one_straight_intersection_passes(tmp_path, capsys):

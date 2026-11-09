@@ -149,12 +149,14 @@ def test_imu_characterization(request, artifacts):
     hub = SensorHub(imu=r)                   # the path the robot reads the IMU through
     hub.start()
     hub.drain()                              # the first window starts now
+    t0 = time.perf_counter()
     try:
         for i in range(n):
             time.sleep(period_s)
             b = hub.drain()
             rows.append((i, b.imu_count, b.mean_yaw_dps, b.peak_lateral_accel))
     finally:
+        elapsed_s = time.perf_counter() - t0
         hub.stop()
 
     counts = [row[1] for row in rows]
@@ -167,6 +169,9 @@ def test_imu_characterization(request, artifacts):
     artifacts.json("summary.json", {
         "bias_dps": bias_dps, "rate_hz": IMU_RATE_HZ, "frame_fps": FPS,
         "expected_samples_per_window": expected, "read_errors": hub.read_errors,
+        # samples over the time they came in: the chip's own rate with the FIFO (its clock may be a few % off)
+        "measured_rate_hz": sum(counts) / elapsed_s if elapsed_s > 0 else None,
+        "window_ms_mean": 1000.0 * elapsed_s / n if n else None,
         "samples_per_window": summarize(counts),
         "yaw_rate_dps": summarize(yaws), "lateral_accel_mps2": summarize(accels),
     })
@@ -176,14 +181,13 @@ def test_imu_characterization(request, artifacts):
     if counts and sum(counts) / len(counts) < 0.9 * expected:
         warnings.warn(f"{sum(counts) / len(counts):.1f} samples per window, expected {expected:.1f}")
 
+
 @pytest.mark.hardware
 def test_the_block_read_agrees_with_the_adafruit_driver_and_is_faster(artifacts):
-    """
-    Robot still. Interleaves read()'s one transfer with the driver's own
-    .gyro / .acceleration (7 transfers) on the same chip: the two agree to
-    within the stationary noise, and the block read takes well under half
-    the time per reading.
-    """
+    # Robot still. Interleaves read()'s one transfer with the driver's own
+    # .gyro / .acceleration (7 transfers) on the same chip: the two agree to
+    # within the stationary noise, and the block read takes well under half
+    # the time per reading.
     import math
     i2c_device_or_skip("imu", MPU6050_ADDRESSES)
     try:
@@ -216,3 +220,99 @@ def test_the_block_read_agrees_with_the_adafruit_driver_and_is_faster(artifacts)
     assert abs(mean_dz) < 0.2, "gyro Z disagrees with the driver: wrong offset, scale or sign"
     assert abs(mean_dy) < 0.05, "accel Y disagrees with the driver: wrong offset, scale or sign"
     assert block_ms < driver_ms / 2, "the block read isn't faster: is it still several transfers?"
+
+
+# Written out from the register map (rev 4.2), independent of imu.py
+REG_SMPLRT_DIV, REG_CONFIG, REG_FIFO_EN, REG_USER_CTRL = 0x19, 0x1A, 0x23, 0x6A
+REG_FIFO_COUNTH, REG_FIFO_R_W = 0x72, 0x74
+
+
+class FakeFifoMPU(FakeMPU):
+    """
+    FakeMPU plus the FIFO registers: writes are recorded, CONFIG reads back
+    its DLPF setting, and the FIFO holds whatever push() put in it, encoded
+    as the chip writes it with gyro Z and the accel enabled: accel X Y Z,
+    gyro Z, big-endian int16s. Counts the FIFO's transfers.
+    """
+    def __init__(self, dlpf=3, **kw):
+        super().__init__(**kw)
+        self.regs = {REG_CONFIG: dlpf}
+        self.writes = []
+        self.fifo = bytearray()
+        self.fifo_transfers = 0
+
+    def push(self, gz_dps, ay=0.0, n=1, ax=123, az=-456):
+        for _ in range(n):
+            self.fifo += struct.pack(">4h", ax, round(ay / STANDARD_GRAVITY * ACCEL_LSB_PER_G[self.accelerometer_range]),
+                                     az, round(gz_dps * GYRO_LSB_PER_DPS[self.gyro_range]))
+
+    def write(self, data):
+        reg, value = data
+        self.regs[reg] = value
+        self.writes.append((reg, value))
+        if reg == REG_USER_CTRL and value & 0x04:
+            self.fifo.clear()
+
+    def write_then_readinto(self, out, buf, **kw):
+        reg = bytes(out)[0]
+        if reg == REG_CONFIG:
+            buf[0] = self.regs[REG_CONFIG]
+        elif reg == REG_FIFO_COUNTH:
+            self.fifo_transfers += 1
+            n = min(len(self.fifo), 1024)
+            buf[:] = bytes((n >> 8, n & 0xFF))
+        elif reg == REG_FIFO_R_W:
+            self.fifo_transfers += 1
+            assert len(buf) <= len(self.fifo), "read past what the FIFO holds"
+            buf[:] = self.fifo[:len(buf)]
+            del self.fifo[:len(buf)]
+        else:
+            super().write_then_readinto(out, buf, **kw)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("dlpf, div", [(3, 9), (0, 79)])       # 1 kHz with the filter on, 8 kHz off
+def test_the_fifo_samples_at_the_rate_with_gyro_z_and_the_accel_only(dlpf, div):
+    mpu = FakeFifoMPU(dlpf=dlpf)
+    r = IMUReader(mpu=mpu, rate_hz=100.0, fifo=True)
+    assert r.fifo and r.period_s == pytest.approx(0.01)
+    assert (REG_SMPLRT_DIV, div) in mpu.writes and (REG_FIFO_EN, 0x18) in mpu.writes
+    assert [v for reg, v in mpu.writes if reg == REG_USER_CTRL] == [0x04, 0x40]        # reset, then on
+
+
+@pytest.mark.software
+def test_read_fifo_takes_every_whole_sample_in_two_transfers_oldest_first():
+    mpu = FakeFifoMPU(gyro_range=1)
+    r = IMUReader(mpu=mpu, rate_hz=100.0, fifo=True)
+    mpu.push(10.0, ay=1.0)
+    mpu.push(-20.0, ay=-2.0)
+    mpu.fifo += b"\x01\x02\x03"                   # a sample still being written: left for next time
+    got = r.read_fifo()
+    assert [(round(g, 1), round(a, 2)) for g, a in got] == [(10.0, 1.0), (-20.0, -2.0)]
+    assert mpu.fifo_transfers == 2 and len(mpu.fifo) == 3
+    assert r.read_fifo() == [] and mpu.fifo_transfers == 3                # nothing whole: the count only
+
+
+@pytest.mark.software
+def test_read_fifo_subtracts_the_calibrated_bias():
+    mpu = FakeFifoMPU(gz_dps=0.5)
+    r = IMUReader(mpu=mpu, rate_hz=FAST_HZ, fifo=True)
+    r.calibrate(samples=5)
+    mpu.push(10.5)
+    assert r.read_fifo()[0][0] == pytest.approx(10.0, abs=0.02)
+
+
+@pytest.mark.software
+def test_a_full_fifo_is_reset_and_counted():
+    mpu = FakeFifoMPU()
+    r = IMUReader(mpu=mpu, rate_hz=100.0, fifo=True)
+    mpu.push(1.0, n=128)                          # 1024 bytes: overflowed
+    assert r.read_fifo() == [] and r.fifo_overflows == 1 and not mpu.fifo
+    mpu.push(2.0, n=3)
+    assert len(r.read_fifo()) == 3
+
+
+@pytest.mark.software
+def test_no_fifo_for_a_stand_in_unless_asked_or_a_chip_that_refuses():
+    assert not IMUReader(mpu=FakeFifoMPU()).fifo                 # a stand-in polls unless told
+    assert not IMUReader(mpu=FakeMPU(), fifo=True).fifo          # no register writes: stays polling

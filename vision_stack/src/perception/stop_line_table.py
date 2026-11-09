@@ -1,31 +1,12 @@
-"""Stop-line table: stop-line distance in cm from its row in the image, calibrated with tape marks.
+"""Stop-line distance in cm from the line's row in the image, calibrated with tape marks.
 
 Purpose:
-    The ground homography (ground.py) needs a checkerboard found flat and
-    square on the floor, which is hard to get right. The stop line only
-    needs one number, how far ahead the line is, and that depends almost
-    entirely on how many rows above the lane ROI's bottom the line appears
-    (StopLineResult.distance_px). So this is a 1-D calibration instead: tape
-    strips at a few measured distances, the row the robot's own stop-line
-    detector reports for each (scripts/calibrate_stop_line.py), and the
-    curve through them. For a flat floor seen by a fixed camera that curve is
-
-        cm = A / (B - rows) + C
-
-    (B is the horizon's height above the ROI bottom, in rows), fit to the
-    marks by linear least squares. Measured by the same detector the robot
-    drives with, it needs no board, no corner finding and no squareness.
-    It gives distance ahead only; the homography stays for full floor X/Y.
+    On a flat floor a line's distance follows from its row. A curve fit to
+    tape marks, measured with the robot's own detector, gives the cm without
+    the ground homography's checkerboard.
 
 Main package:
-    StopLineTable: the fit and the conditions it's valid for; to_cm(rows).
-    fit_stop_line_table(): (A, B, C) and each mark's error in cm.
-    load_stop_line_table(): the calibration file, or None.
-
-Flow:
-    1. calibrate_stop_line fits the marks and writes the JSON.
-    2. config.py loads it once into MEASURED.stop_line_table.
-    3. stop_line_distance uses it for distance_cm when there's no homography.
+    StopLineTable: cm = A / (B - rows) + C, and the image setup it is valid for.
 """
 import json
 import warnings
@@ -41,11 +22,7 @@ MIN_MARKS = 3               # the curve has three parameters
 
 @dataclass(frozen=True)
 class StopLineTable:
-    """
-    Rows above the lane ROI bottom -> cm ahead of the reference the marks were measured from.
-
-    Frozen and hashable, so it can sit in PipelineConfig.
-    """
+    """Frozen and hashable, so it can sit in PipelineConfig."""
     a: float
     b: float                        # rows; the horizon, above every mark
     c: float
@@ -56,28 +33,17 @@ class StopLineTable:
     error_max_cm: float = 0.0       # the worst mark's error in the fit
 
     def to_cm(self, rows: float) -> float:
-        """cm ahead for a line this many rows above the lane ROI bottom; never negative."""
+        """Never negative."""
         return max(self.a / (self.b - rows) + self.c, 0.0)
 
 
 def fit_stop_line_table(rows, cm) -> tuple[tuple[float, float, float], np.ndarray]:
     """
-    Fit cm = A / (B - rows) + C to the marks.
+    Fit cm = A / (B - rows) + C to the marks; returns ((A, B, C), |error| cm per mark).
 
-    Rearranged, (cm - C)(B - rows) = A is linear in B, (A + C B) and C:
-    rows x cm = B cm - (A + C B) + C rows, solved by least squares.
-
-    Inputs:
-        rows: Each mark's distance_px, the rows above the lane ROI bottom.
-        cm: Each mark's measured distance.
-
-    Outputs:
-        ((A, B, C), errors_cm): errors_cm is |fit - measured| per mark.
-
-    Raises:
-        ValueError: Fewer than MIN_MARKS marks, two marks at one row, or
-            marks that aren't farther in cm as they sit higher in the image
-            (a mismeasured or swapped mark).
+    Rearranged, rows x cm = B cm - (A + C B) + C rows is linear, so it's least
+    squares. ValueError on fewer than MIN_MARKS, two marks at one row, or marks
+    that don't get farther as they sit higher (a swapped mark).
     """
     r = np.asarray(rows, np.float64).ravel()
     y = np.asarray(cm, np.float64).ravel()
@@ -105,19 +71,7 @@ def _refuse(path, why: str) -> None:
 
 
 def load_stop_line_table(path, preprocess, frame_size: tuple[int, int]) -> StopLineTable | None:
-    """
-    Load the stop-line table, if it matches how preprocess will run.
-
-    Inputs:
-        path: calibration/stop_line_table.json, from calibrate_stop_line.py.
-        preprocess: The PreprocessParams the pipeline runs with.
-        frame_size: (height, width) of the frames the pipeline will see.
-
-    Outputs:
-        StopLineTable; None, silently, when there's no file (it's optional);
-        None with a warning when it's malformed or was fit under a different
-        image size, undistort_alpha or lens calibration. Never raises.
-    """
+    """None without a file; None with a warning if it's malformed or fit under another image setup."""
     path = Path(path)
     if not path.is_file():
         return None

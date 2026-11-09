@@ -1,53 +1,14 @@
-"""Detect range: from how far before the stop line does the robot read the traffic light (or the stop sign, or the line itself) right?
+"""Detect range: how far before the stop line the robot reads the light, sign or line right.
 
 Purpose:
-    D3 (light colour) and D2 (stop sign) have never been checked on the
-    robot. Navigation acts on the votes, so this asks what the votes say
-    with the robot parked at taped gaps before an intersection's stop line,
-    the light or sign posted as on the course, for every state the tester
-    can set: the light red, yellow, green and off; the sign there and taken
-    away. Each trial is one look (camera_look.Eyes: Phases 1-3 with a fresh
-    processor, `frames` frames, ~2 s): the share of frames that saw the
-    right thing, the frames that saw something else, and the vote at the
-    end. The look's last frame is saved beside the row.
-
-    target=line asks the same of the stop line: the vote, the share of
-    frames that found it, and the voted line's tilt.
-
-    angles and offsets park the robot off the square, centered pose at
-    each gap: turned so many degrees (+ = right of square) and shifted so
-    many cm (+ = right of the lane's center). Every gap is looked at from
-    every pose, so the trials map where each detection gives out: the
-    summary gives the range per pose. With target=line and two or more
-    angles, the tilts measure the approach-angle correction: TILT_ZERO_DEG
-    (the tilt a square robot reads) and TILT_TO_HEADING (degrees turned per
-    degree of tilt), for navigation/intersection.py.
-
-    A trial reads OK when the final vote is the expected one and, for a lit
-    light or a posted sign, at least SEEN_MIN_PCT of the frames saw it (a
-    missed green votes "go" like a real one: the frames tell them apart).
-    It's WRONG when the vote names something that isn't there (red read as
-    yellow, a light that's off read as any colour, a sign that isn't there),
-    or when it's wrong and at least SEEN_MIN_PCT of the frames saw a colour
-    that isn't there: red read as green votes "go", as seeing nothing does.
-    Anything else is MISSED (the vote fell back to "go" / no sign).
-
-    Pass (first guesses: the course's sign and light positions are TBD in
-    course.md): every trial at a gap up to `need_cm` reads OK; no WRONG
-    read at any gap. A miss farther out only limits the range; a wrong read
-    anywhere is a hazard (a red read as green runs the light). The summary
-    gives the range: the largest gap up to which every trial read OK.
+    Parked at taped gaps before a stop line, for every state the tester can
+    set (light red, yellow, green, off; sign posted or taken away). Each look
+    reads OK, WRONG or MISSED; a wrong read anywhere is a hazard, a far miss
+    only limits the range.
 
 Main package:
-    DetectRange: the routine (make routine-detect-range).
-    read_look(seen, target, state): one look's numbers and its result.
-    tilt_fit(rows): TILT_ZERO_DEG and TILT_TO_HEADING from line looks at
-        several angles.
-
-Flow (per trial):
-    each gap, each pose (angle, offset), each state: the robot moved at a
-    pose's first state; the tester sets the state; Enter; one look; the row
-    and attempt_NN_<gap>cm[_<angle>deg][_<offset>cm]_<state>.jpg.
+    DetectRange (make routine-detect-range). With target=line at several
+    angles, tilt_fit() gives intersection.py's TILT_ZERO_DEG and TILT_TO_HEADING.
 """
 import statistics
 
@@ -58,8 +19,7 @@ from src.routines.harness import Routine, criterion
 
 LIGHT, SIGN, LINE = "light", "sign", "line"
 OFF, PRESENT, ABSENT = "off", "present", "absent"
-# The line can't be taken away between looks, so it has one state; a false
-# line is a look at another lane's line, run as its own session (--notes)
+# The line can't be taken away between looks; test a false line as its own session (--notes)
 STATES = {LIGHT: (RED, YELLOW, GREEN, OFF), SIGN: (PRESENT, ABSENT), LINE: (PRESENT,)}
 EXPECTED = {RED: STOP, YELLOW: CAUTION, GREEN: GO, OFF: GO, PRESENT: True, ABSENT: False}
 NOTHING = {LIGHT: GO, SIGN: False, LINE: False}     # what the vote falls back to when it sees nothing
@@ -74,16 +34,13 @@ OK, MISSED, WRONG = "ok", "missed", "wrong"
 
 def read_look(frames: list[dict], target: str, state: str) -> dict:
     """
-    One look against the scene.
-
-    seen_pct: share of frames that saw what's there (for off / absent:
-        share that saw anything, which is all wrong).
-    wrong_frames: frames that saw something that isn't there.
-    voted: the vote after the last frame (None without frames).
-    result: OK, MISSED or WRONG (module docstring).
+    seen_pct: share of frames that saw what's there (for off / absent, anything,
+    all wrong). wrong_frames saw what isn't there. voted is the last vote. For
+    the line, also its distance over the frames that measured one (median and
+    SD, frames clipped at the view's bottom left out) and the clipped share.
     """
     n = len(frames)
-    tilt = None
+    tilt, distance = None, {}
     if target == LIGHT:
         here = state if state != OFF else None
         right = sum(1 for f in frames if here is not None and f["light"] == here)
@@ -94,6 +51,11 @@ def read_look(frames: list[dict], target: str, state: str) -> dict:
         voted = frames[-1].get("stop_line_voted") if frames else None
         tilts = [f["stop_line_tilt"] for f in frames if f.get("stop_line_tilt") is not None]
         tilt = round(statistics.median(tilts), 2) if tilts else None
+        cms = [f["stop_line_cm"] for f in frames if f.get("stop_line_cm") is not None and not f.get("stop_line_clipped")]
+        distance = {"reported_cm": round(statistics.median(cms), 2) if cms else None,
+                    "cm_sd": round(statistics.stdev(cms), 2) if len(cms) > 1 else None, "cm_frames": len(cms),
+                    "clipped_pct": round(100.0 * sum(1 for f in frames if f.get("stop_line_clipped")) / n, 1)
+                    if n else 0.0}
     else:
         here = state == PRESENT
         right = sum(1 for f in frames if here and f["sign"])
@@ -110,18 +72,14 @@ def read_look(frames: list[dict], target: str, state: str) -> dict:
     else:
         result = MISSED
     return {"frames": n, "seen_pct": seen_pct, "wrong_frames": wrong, "voted": voted,
-            "expected": expected, "tilt_deg": tilt, "result": result}
+            "expected": expected, "tilt_deg": tilt, "result": result, **distance}
 
 
 def tilt_fit(rows: list[dict]) -> dict | None:
     """
-    The approach-angle correction from line looks at known angles.
+    Least-squares tilt = zero + slope x angle: TILT_ZERO_DEG = zero, TILT_TO_HEADING = 1 / slope.
 
-    A least-squares line tilt = zero + slope x angle over the rows with a
-    tilt; TILT_ZERO_DEG = zero (what a square robot reads), TILT_TO_HEADING
-    = 1 / slope (degrees turned per degree of tilt: intersection.py's
-    heading = (tilt - zero) x it). None with fewer than two angles, or a
-    tilt that doesn't change with the angle.
+    None with fewer than two angles or a tilt that doesn't move with angle.
     """
     pts = [(float(r["angle_deg"]), float(r["tilt_deg"])) for r in rows if r.get("tilt_deg") is not None]
     if len({a for a, _ in pts}) < 2:
@@ -136,7 +94,7 @@ def tilt_fit(rows: list[dict]) -> dict | None:
 
 
 def reliable_range(results: list[tuple[float, str]]) -> float | None:
-    """The largest gap up to which every trial (gap, result) read OK; None if the nearest didn't."""
+    """Largest gap up to which every trial read OK; None if the nearest didn't."""
     best = None
     for gap in sorted({g for g, _ in results}):
         if any(r != OK for g, r in results if g == gap):     # sorted: the nearer gaps passed already
@@ -146,7 +104,6 @@ def reliable_range(results: list[tuple[float, str]]) -> float | None:
 
 
 def pose_text(angle: float, offset: float) -> str:
-    """How the tester places the robot at a pose: "centered" when square and centered."""
     if not angle and not offset:
         return "centered"
     turn = f"turned {abs(angle):g} deg {'right' if angle > 0 else 'left'}" if angle else "square"
@@ -155,7 +112,6 @@ def pose_text(angle: float, offset: float) -> str:
 
 
 def pose_tag(angle: float, offset: float) -> str:
-    """A pose in a file name: empty for square and centered."""
     return (f"_{angle:g}deg" if angle else "") + (f"_{offset:g}cm" if offset else "")
 
 
@@ -167,7 +123,7 @@ class DetectRange(Routine):
     requirement = "D3 (light colour), D2 (stop sign), the stop line"
     trials = len(parse_numbers(GAPS_CM)) * len(STATES[LIGHT])
     fields = ("gap_cm", "angle_deg", "offset_cm", "state", "frames", "seen_pct", "wrong_frames", "voted",
-              "expected", "tilt_deg", "result")
+              "expected", "tilt_deg", "result", "reported_cm", "error_cm", "cm_sd", "cm_frames", "clipped_pct")
     settings = {"target": "light, sign or line (default light)",
                 "gaps": f"gaps before the stop line in cm, comma separated (default {GAPS_CM})",
                 "angles": f"robot turned from square, deg, + = right, comma separated (default {ANGLES_DEG})",
@@ -258,13 +214,17 @@ Keep people and bright clothes out of the view while it looks."""
         frames, last = self._eyes.look(int(ctx.options["frames"]))
         row = {"gap_cm": gap, "angle_deg": angle, "offset_cm": offset, "state": state,
                **read_look(frames, target, state)}
+        if row.get("reported_cm") is not None:
+            row["error_cm"] = round(row["reported_cm"] - gap, 2)
         save_frame(ctx.out_dir / f"attempt_{ctx.attempt + 1:02d}_{gap:g}cm{pose_tag(angle, offset)}_{state}.jpg", last)
         ctx.state["results"][str(i)] = {k: row[k] for k in ("gap_cm", "angle_deg", "offset_cm", "state",
                                                             "tilt_deg", "result")}
         if row["result"] != OK:
             ctx.console.say(f"  {row['result'].upper()}: voted {row['voted']}, expected {row['expected']}")
         elif target == LINE and row["tilt_deg"] is not None:
-            ctx.console.say(f"  tilt {row['tilt_deg']:g} deg")
+            cm = "" if row.get("reported_cm") is None else \
+                f", reads {row['reported_cm']:g} cm (error {row['error_cm']:+g}, sd {row['cm_sd'] or 0:g})"
+            ctx.console.say(f"  tilt {row['tilt_deg']:g} deg{cm}")
         return row
 
     def judge(self, rows):

@@ -2,27 +2,13 @@
 """Stop-line calibration: tape marks at measured distances -> the curve from image rows to cm.
 
 Purpose:
-    The board-free way to give the stop line a distance in cm
-    (perception/stop_line_table.py has why). A strip of tape is laid across
-    the lane at a measured distance; the robot's own Phase 2 (run_chain,
-    with MEASURED's settings) looks at it for a few frames and reports how
-    many rows above the lane ROI's bottom it sees the line (distance_px,
-    median over the frames). Repeat at 4-6 distances; the curve through them
-    is written to calibration/stop_line_table.json, which config.py loads.
-    Because the rows come from the same detector the robot drives with,
-    whatever that detector does is calibrated in.
+    The board-free way to give the stop line cm. Tape lies across the lane
+    at a measured distance, and the robot's own Phase 2 says how many rows up
+    it sees it, so whatever the detector does is calibrated in.
 
 Main package:
-    measure_mark(): one tape mark's rows from a batch of frames, or why not.
-    parse_marks(): "cm:rows,..." from the command line, for a refit.
-    build_record(): the JSON, with the fit, each mark and its error.
-    main(): interactive with the camera, or --marks for a refit.
-
-Flow:
-    1. Open the camera. For each mark: place the tape, type its distance,
-       and the script grabs --frames frames and measures the line.
-    2. Enter on an empty line fits the curve through the marks (3 or more).
-    3. Print each mark's error, write the JSON.
+    calibration/stop_line_table.json: the curve's A, B and C, each mark and
+    its error, and the image setup it's valid for.
 """
 import argparse
 import json
@@ -40,16 +26,15 @@ from src.perception.roi_crop import resolve
 from src.perception.stop_line_table import MIN_MARKS, fit_stop_line_table
 
 FRAMES_PER_MARK = 15
-# A mark counts only if the line was seen in at least this share of its frames
+# Of its frames
 MIN_SEEN = 0.5
-# Rows between the 10th and 90th percentile above this: the detector wavered
-# (glare, a curled tape end); the mark is kept, with a warning
+# p90 - p10 over this: the detector wavered; kept, with a warning
 MAX_SPREAD_ROWS = 3.0
-# Fit verdicts on the worst mark's error, as the ground calibration's
+# Verdicts on the worst mark's error
 GOOD_CM, OK_CM = 0.5, 1.0
 DEFAULT_REFERENCE = "the front edge of the robot"
 
-# --help text. Kept apart from the module docstring, which documents the code.
+# --help text, apart from the module docstring
 _CLI_HELP = """\
 Calibrate the stop line's distance in cm from tape marks, without the
 checkerboard. Writes calibration/stop_line_table.json; the pipeline then
@@ -71,25 +56,9 @@ size or the lens calibration.
 """
 
 
-# =============================================================================
-# Measuring
-# =============================================================================
-
 def measure_mark(frames, config) -> dict:
-    """
-    One tape mark's rows above the lane ROI bottom, from a batch of frames.
-
-    Inputs:
-        frames: BGR frames with the tape in view.
-        config: The PipelineConfig to run Phase 2 with (MEASURED on the robot).
-
-    Outputs:
-        {"rows": median distance_px or None, "seen": frames with a line,
-        "frames": len(frames), "spread": p90 - p10 of the rows,
-        "clipped": frames where the line ran off the ROI bottom,
-        "candidates": most stop-line candidates in one frame}.
-    """
-    from src.phase2_linker import run_chain     # heavy; only when measuring
+    """The median rows over frames that saw a line, with seen, spread (p90 - p10), clipped and candidates."""
+    from src.phase2_linker import run_chain     # heavy
 
     rows, clipped, most = [], 0, 0
     for i, frame in enumerate(frames):
@@ -105,7 +74,6 @@ def measure_mark(frames, config) -> dict:
 
 
 def mark_problem(m: dict) -> str | None:
-    """Why a measured mark can't be used, or None."""
     if m["seen"] < MIN_SEEN * m["frames"]:
         return (f"the stop line was seen in only {m['seen']} of {m['frames']} frames "
                 f"(up to {m['candidates']} candidates, below the confidence gate or none): the whole strip "
@@ -116,7 +84,7 @@ def mark_problem(m: dict) -> str | None:
 
 
 def parse_marks(text: str) -> list[dict]:
-    """ "cm:rows,cm:rows,..." -> marks, for a refit without the camera. Raises ValueError."""
+    """"cm:rows,cm:rows,..." for a refit without the camera. ValueError if malformed."""
     marks = []
     for item in text.split(","):
         cm, sep, rows = item.partition(":")
@@ -126,21 +94,8 @@ def parse_marks(text: str) -> list[dict]:
     return marks
 
 
-# =============================================================================
-# Fit and output
-# =============================================================================
-
 def build_record(marks: list[dict], preprocess, frame_size, reference: str) -> dict:
-    """
-    The JSON load_stop_line_table reads, plus what's needed to audit or refit it.
-
-    Inputs:
-        marks: [{"cm", "rows", ...}], at least MIN_MARKS.
-        frame_size: (width, height) the frames were.
-
-    Raises:
-        ValueError: From fit_stop_line_table.
-    """
+    """The JSON load_stop_line_table reads, plus what's needed to audit or refit it."""
     cm = [m["cm"] for m in marks]
     rows = [m["rows"] for m in marks]
     (a, b, c), errors = fit_stop_line_table(rows, cm)
@@ -161,10 +116,9 @@ def build_record(marks: list[dict], preprocess, frame_size, reference: str) -> d
 
 
 def report_lines(rec: dict, roi_height: int) -> list[str]:
-    """The printed summary of a fit."""
     a, b, c = rec["curve"]
     err = rec["error_cm"]["max"]
-    verdict = "GOOD" if err < GOOD_CM else "OK" if err < OK_CM else "POOR - see calibrate_stop_line.md"
+    verdict = "GOOD" if err < GOOD_CM else "OK" if err < OK_CM else "POOR - remeasure"
     out = [f"  {'mark cm':>8} {'rows':>7} {'fit cm':>7} {'error':>6}"]
     out += [f"  {m['cm']:>8.2f} {m['rows']:>7.1f} {m['fit_cm']:>7.2f} {m['error_cm']:>6.2f}" for m in rec["marks"]]
     out.append(f"  worst error {err:.2f} cm, mean {rec['error_cm']['mean']:.2f} cm -> {verdict}")
@@ -178,19 +132,8 @@ def report_lines(rec: dict, roi_height: int) -> list[str]:
     return out
 
 
-# =============================================================================
-# Command line
-# =============================================================================
-
 def collect_marks(grab, ask, say, config, frames_per_mark: int) -> list[dict]:
-    """
-    The interactive loop: a distance typed per mark, frames grabbed and measured.
-
-    Inputs:
-        grab: grab(n) -> n BGR frames from the camera.
-        ask: ask(prompt) -> the typed line (input()).
-        say: say(line) prints.
-    """
+    """A distance typed per mark; grab(n) gives the frames."""
     marks = []
     while True:
         text = ask(f"\nMark {len(marks) + 1}: tape's distance in cm (Enter to fit, 'u' to undo): ").strip()
@@ -219,7 +162,6 @@ def collect_marks(grab, ask, say, config, frames_per_mark: int) -> list[dict]:
 
 
 def main(argv: list[str] | None = None, grab=None, ask=input, say=print) -> int:
-    """Parse arguments, collect or parse the marks, fit, and write the JSON."""
     p = argparse.ArgumentParser(prog="calibrate_stop_line", description=_CLI_HELP,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--marks", default=None, metavar="CM:ROWS,...",
@@ -235,7 +177,7 @@ def main(argv: list[str] | None = None, grab=None, ask=input, say=print) -> int:
         say("ERROR: no lens calibration; the pipeline measures on undistorted frames. "
             "Run scripts/calibrate_camera.py first.")
         return 2
-    # Distances in rows only: an existing cm calibration mustn't feed back in
+    # Rows only, so an existing cm calibration can't feed back in
     config = replace(MEASURED, ground=None, stop_line_table=None)
 
     if args.marks:
@@ -247,16 +189,11 @@ def main(argv: list[str] | None = None, grab=None, ask=input, say=print) -> int:
     else:
         cap = None
         if grab is None:
-            from src.scripts.calibrate_camera import open_camera
+            from src.scripts.calibrate_camera import grab_upright, open_camera
             cap = open_camera(FRAME_W, FRAME_H)
 
             def grab(n):
-                frames = []
-                while len(frames) < n:
-                    ok, frame = cap.read()
-                    if ok:
-                        frames.append(frame)
-                return frames
+                return grab_upright(cap, n)
         say(f"Measure every mark from {args.reference}.")
         try:
             marks = collect_marks(grab, ask, say, config, args.frames)

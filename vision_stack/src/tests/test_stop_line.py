@@ -1,5 +1,4 @@
-"""
-test_stop_line.py  --  src/navigation/stop_line.py
+"""test_stop_line.py  --  src/navigation/stop_line.py
 
 The stop-line tracker on hand-built packets: a line coming down the view and
 passing under it, reached STOP_DELAY_MS later (at least a frame: CROSSING
@@ -7,6 +6,8 @@ lasts one) and only once; a line lost far away is flicker, not reached; a
 re-sighting while crossing doesn't restart the delay; one after the line is
 reached is a new line unless accept_new is off, as Navigation keeps it while
 crossing; reset.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 
@@ -40,7 +41,6 @@ def test_the_constants_follow_the_calibration_and_the_runs():
     assert TILT_FRAMES == 5                                        # fresh tilts in the approach-angle median
     # The line leaves the view when its near edge reaches the bottom, not after the whole tape (2026-10-20)
     assert CROSS_ON_CLIP is True
-
 
 
 @pytest.mark.software
@@ -179,10 +179,6 @@ def test_the_reached_frame_says_when_its_line_first_came_into_view():
     assert t.seen_ms is None
 
 
-# =============================================================================
-# By distance, with odometry
-# =============================================================================
-
 def roll(tracker, sightings, after, step=3.0):
     """
     The robot rolling step cm a frame: sightings are the line's cm ahead on
@@ -271,10 +267,6 @@ def test_left_cm_is_logged_by_the_timed_stop_too():
     odo, left = reached_at(out)
     assert left == pytest.approx(20.0 - odo) and out[0][2] == 20.0
 
-
-# =============================================================================
-# The approach tilt
-# =============================================================================
 
 @pytest.mark.software
 def test_the_approach_tilt_is_the_median_of_the_last_fresh_tilts_until_the_line_is_reached():

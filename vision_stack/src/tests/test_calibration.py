@@ -12,7 +12,7 @@ subpixel refinement has real gradients. solve() then has a right answer.
 
 --software  Helper known-answers, solve() round trip on a known lens, error
             paths, preprocess.undistort against a reference map build,
-            and the contract of calibration/camera_calib.json if it exists
+            and the contract of calibration/camera_calibration.json if it exists
             (including 3x3 coverage of the frames it was solved from).
 --hardware  Times preprocess.undistort per frame (live or --replay), and on
             frames where the board is visible scores straightness raw vs
@@ -123,8 +123,8 @@ def solved(tmp_path_factory):
     """solve() run once on 18 synthetic frames covering all 9 cells; returns the JSON dict."""
     root = tmp_path_factory.mktemp("calib")
     frames_dir = write_frames(root / "frames", board_poses())
-    cc.solve(solve_args(frames_dir, root / "camera_calib.json"))
-    return json.loads((root / "camera_calib.json").read_text())
+    cc.solve(solve_args(frames_dir, root / "camera_calibration.json"))
+    return json.loads((root / "camera_calibration.json").read_text())
 
 
 @pytest.mark.software
@@ -230,7 +230,7 @@ def test_solve_refuses_mixed_resolutions(tmp_path):
 @pytest.fixture
 def calib_path(tmp_path, solved):
     """The solved calibration written to a path unique to this test."""
-    path = tmp_path / "camera_calib.json"                  # fresh path per test: preprocess caches by path
+    path = tmp_path / "camera_calibration.json"             # fresh path per test: preprocess caches by path
     path.write_text(json.dumps(solved))
     return path
 

@@ -225,6 +225,7 @@ def test_stop_view_characterization(request, frames, artifacts):
         pytest.skip("no frames delivered")
     (artifacts.path / "stop_summary.txt").write_text("\n".join(view.report()) + "\n")
 
+
 @pytest.mark.software
 def test_the_red_mask_is_outlined_on_the_redness_panel_and_the_threshold_named():
     from src.debugger.debug_stop import C_MASK

@@ -1,28 +1,13 @@
 """Navigation view: the navigation run's video, rendered after the run from what it recorded.
 
 Purpose:
-    navigation_linker draws nothing while the robot drives, so rendering
-    can't slow the control loop. It records each frame's JPEG and a record of
-    what the pipeline and the navigator decided; this module turns the run
-    folder into video afterwards: the Phase 3 view (debug_phase3) exactly as
-    the live decisions were, with a navigation strip under it. Nothing is
-    re-run, so the video shows what happened, not a re-computation. The
-    recording format (frames/, records.pkl) is maneuver_linker's, read with
-    debug_maneuver's helpers.
+    navigation_linker draws nothing while driving, so rendering can't slow
+    the control loop. This renders its run folder (maneuver_linker's format)
+    as the Phase 3 view with a navigation strip, re-running nothing.
 
 Main package:
-    render_run(): run folder in, nav.avi and nav_video.csv out.
-    draw_strip(): the strip for one frame: DRIVE or BRAKE and why, which
-    navigation rule decided it, the stop-line phase, the route step and the
-    intersection's stage (to_line, turn, exit), both
-    wheel duties as bars (with the stall duty marked), the steering and what
-    it came from, and the packet fields the navigator steered by.
-
-Flow:
-    1. Read records.pkl in order; load each frame's JPEG (skipping any the
-       recorder dropped).
-    2. Rebuild the Phase3Result shape Phase3View reads; render it.
-    3. Stack the navigation strip under it; record video and CSV.
+    render_run(): run folder in, nav.avi and nav_video.csv out. draw_strip()
+    shows the decision and rule, route step and stage, wheel duties and steering.
 """
 import os
 
@@ -43,7 +28,7 @@ def _fmt(v, spec: str) -> str:
 
 
 def _duty_bar(img, label: str, duty, y0: int, y1: int, x0: int, x1: int, s: int, fs: float, th: int) -> None:
-    """One wheel's duty as a bar from the center: right of it forward, left reverse, stall duty marked."""
+    """A wheel's duty as a bar from center, forward right, stall duty marked."""
     lw = 16 * s
     dv.draw_text(img, label, (x0, y1 - 1 * s), dv.C_WHITE, fs, th)
     bx0, bx1 = x0 + lw, x1
@@ -61,13 +46,7 @@ def _duty_bar(img, label: str, duty, y0: int, y1: int, x0: int, x1: int, s: int,
 
 
 def draw_strip(n: dict, width: int, scale: int = 1) -> np.ndarray:
-    """
-    The navigation strip for one frame.
-
-    Inputs:
-        n: The frame's record["nav"] from navigation_linker.
-        width: Output width in px, the Phase 3 view's.
-    """
+    """One frame's navigation strip from record["nav"]."""
     s = max(1, int(scale))
     fs, th, lh = 0.38 * s, max(1, s // 2), 16 * s
     img = np.zeros((STRIP_LINES * lh, width, 3), np.uint8)
@@ -109,20 +88,10 @@ def draw_strip(n: dict, width: int, scale: int = 1) -> np.ndarray:
 
 def render_run(out_dir: str, lane_config, fps: float, scale: int = 1, on_frame=None) -> dict:
     """
-    Render a run folder's recording to nav.avi and nav_video.csv.
+    Render a run folder to nav.avi and nav_video.csv.
 
-    Inputs:
-        lane_config: The LaneOffsetConfig the run used, for the lane
-            overlay's candidate gates.
-        fps: The video's rate; the run's measured rate plays it at real speed.
-        on_frame: Called with each finished image, e.g. to show it.
-
-    Outputs:
-        {"rendered": frames written, "missing": records whose JPEG wasn't
-        found, "report": the Phase 3 view's summary lines}.
-
-    Side effects:
-        Writes nav.avi and nav_video.csv into out_dir.
+    fps at the run's measured rate plays it at real speed. Returns rendered,
+    missing (no JPEG) and the Phase 3 view's report.
     """
     view = Phase3View(lane_config, fps)
     writer = dv.ViewWriter(os.path.join(out_dir, VIDEO_FILE), Phase3View.CSV_FIELDS,

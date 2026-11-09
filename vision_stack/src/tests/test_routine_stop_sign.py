@@ -45,10 +45,6 @@ def without_sign():
         + frames(1.5, 1.5, rule=RULE_INTERSECTION, stage=STAGE_EXIT)
 
 
-# =============================================================================
-# SignWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_the_watch_times_the_hold_and_ends_a_second_into_the_exit():
     w = ss.SignWatch()
@@ -75,10 +71,6 @@ def test_a_stop_that_never_lets_go_has_no_hold_and_never_ends():
     rows = frames(0.0, 1.0, sign=1) + frames(1.0, 4.0, rule=RULE_STOP_SIGN, reason=REASON_HOLD, brake=1)
     assert feed(w, rows) is None and (w.stops, w.hold_s, w.resumed, w.across) == (1, None, False, False)
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 def fake_run(scripts, log):
     attempts = iter(scripts)

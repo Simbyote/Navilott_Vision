@@ -87,7 +87,7 @@ BGR frame
 
 **Undistortion runs before the split** so both branches see the same corrected geometry. The remap tables are built once per calibration and cached. A calibration whose image size doesn't match the frame raises. `PreprocessResult.undistorted` is the unblurred frame that detection coordinates refer to; debug overlays are drawn on it.
 
-Whether undistortion runs on the robot is still open. It was removed to save preprocessing time on the IMX219, whose distortion was mild. The IMX290's M12 lens bends the edges more, so it needs retesting: `pytest --hardware src/tests/test_calibration.py` reports the per-frame cost (`stage_ms`) and how much straighter the boards get.
+Undistortion runs on the robot: `MEASURED` loads `calibration/camera_calibration.json` (`config.py`), since the IMX290's M12 lens bends the edges (k1 = −0.29). The lane gates were swept on distorted frames, and undistortion moves lane marks by up to ~20 px at the ROI edges, so they are due a re-sweep on undistorted captures. `pytest --hardware src/tests/test_calibration.py` reports the per-frame cost (`stage_ms`) and how much straighter the boards get.
 
 ---
 
@@ -100,24 +100,11 @@ Cuts four regions so each branch only processes the part of the frame where its 
 | ROI | Bounds (fraction of frame) | At 480×270 (x, y, w, h) | Source | Why there |
 | --- | --- | --- | --- | --- |
 | lane | x 0.05–0.95, y 0.70–1.00 | (24, 189, 432, 81) | gray | Near-field road just ahead of the robot |
-| traffic | x 0.25–0.75, y 0.00–0.50 | (120, 0, 240, 135) | BGR | Where a light sits when the robot is square to an intersection |
-| sign | x 0.50–1.00, y 0.00–0.55 | (240, 0, 240, 148) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane |
+| traffic | x 0.23–0.53, y 0.10–0.33 | (110, 27, 144, 62) | BGR | Around the course's light as seen from its stop line (2026-10-06; moved down on the track 2026-10-26); narrow, so a second light to the right and a red box below stay out |
+| sign | x 0.55–1.00, y 0.00–0.85 | (264, 0, 216, 230) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane. Tall: near the line the sign rises in the frame, and a lower edge cut it into 5–7 vertices (sign_check, 2026-10-20). Right of the traffic ROI, so the two don't overlap |
 | obstacle | x 0.25–0.75, y 0.45–1.00 | (120, 122, 240, 148) | gray and BGR (`obstacle_roi`, `obstacle_color_roi`) | The robot's own path, from the view bottom up past the lane ROI: an upright object rises above its base. Not drawn by `draw_roi_overlay`; the obstacle view draws it |
 
-```
-x:  0       120      240      360      480
-    ┌────────┬────────┬────────┬────────┐  y 0
-    │        │traffic │traffic │        │
-    │        │        │ + sign │  sign  │
-    │        ├────────┴────────┤        │  y 135
-    │        │                 └────────┤  y 148
-    │                                   │
-    ├──┬─────────────────────────────┬──┤  y 189
-    │  │            lane             │  │
-    └──┴─────────────────────────────┴──┘  y 270
-```
-
-Traffic and sign overlap in x 240–360, y 0–135.
+Traffic and sign sit side by side and don't overlap (x 110–254 and 264–480). The obstacle ROI overlaps the lane ROI (y 189–270) and the bottom of the sign ROI (x 264–360, y 122–230); each branch reads only its own crop, so the overlap costs nothing.
 
 - ROIs are read-only views, not copies. A stage that needs to draw on one calls `.copy()`.
 - Every rect is in frame pixels. Branch detections are ROI-local, and the rect is what maps them back: `frame_x = roi_x + rect[0]`.
@@ -127,7 +114,7 @@ Traffic and sign overlap in x 240–360, y 0–135.
 
 ## Stage 3A: Geometry branch
 
-**File:** `geometry.py` · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
+**Files:** `geometry.py` (runs the three detectors), `geometry_lanes.py`, `geometry_stop_line.py`, `geometry_sign.py`, `geometry_shared.py` (configs, candidate types, edge helpers) · **Config:** `GeometryConfig` (`CannyParams`, `LaneContourFilter`, `SignContourFilter`, `StopLineFilter`) · **Output:** `GeometryBranchResult`
 
 Finds lane boundaries and stop lines from intensity edges, and stop-sign shapes from color. Canny runs once on the lane ROI; the lane and stop-line detectors both read that edge map. The sign detector doesn't use Canny: it thresholds a redness image of the color sign ROI.
 
@@ -173,9 +160,9 @@ The kept edges split by polarity: a **top** edge (brightness rising going down, 
 | Gate | Default | Rejects |
 | --- | --- | --- |
 | `short` | length ≥ 60 px | Anything as short as a lane-tape width (up to ~41 px), such as the end of a dash |
-| `tilt` | ≤ 20° (`MEASURED`: 5°) | Edges fitted steeper than the split allowed. `MEASURED` uses 5°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run), 15° until 2026-10-05 |
+| `tilt` | ≤ 20° (`MEASURED`: 5°) | Edges fitted steeper than the split allowed. `MEASURED` uses 5°: the near end of a thick diagonal lane line passed at 20° (2026-10-01 run). Tighter (2° from 2026-10-07, 4° from 2026-10-19) missed real lines approached a little off square; at 5°, parts of the intersection itself have passed for stop lines (2026-10-05), so watch `nav.csv`'s `step` column (`config.py`) |
 | `unpaired` | a bottom edge 3–40 px below, overlapping half the shorter edge | Single edges, and bars thicker than tape |
-| `intensity` | mean between the edges ≥ 130 | Shadow edges and dim patches |
+| `intensity` | mean between the edges ≥ 70 | Shadow edges and dim patches |
 
 A top edge within `max_thickness_px` of the ROI bottom with no bottom edge is kept as **clipped**: the robot is on the line, its bottom edge below the ROI.
 
@@ -208,7 +195,7 @@ Why color: in gray a stop-sign red (BGR 40, 40, 200) is 88 and a gray floor abou
 | `extent` | off; `MEASURED`: contour area / box area 0.6–0.92 (0.68 until 2026-10-20) | Ghost signs: a chair back's boxy outline (a rectangle is 1.0, an octagon 0.83; the course's sign reads 0.63–0.75) |
 | `letters` | off; `MEASURED`: ≥ 3% of the hull white (each channel ≥ 150, redness ≤ 60), for contours ≥ 2000 px² | Ghost signs: any red blob without the sign's white letters. A far sign's letters blur into its red, so small ones aren't held to it |
 
-The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). Only the largest blob is gated, so there is at most one sign candidate per frame; a larger red object in the sign ROI hides a sign beside it. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
+The last three gates came from ghost signs on course runs: now and then a leg or parts of a chair in the background passed as a sign, and the robot stopped at a plain stop line. Their values are first guesses from synthetic signs, not yet checked against the course's own sign; navigation also ties a sign to the stop line it's for (`SIGN_LEAD_MS`, `navigation_contract.md`). At most one sign candidate comes out per frame: the first blob, largest first, that passes every gate. Confidence is unchanged: half closeness to 8 vertices, half area up to 5000 px².
 
 The blobs are gated largest first until one passes: until 2026-10-20 only the largest was gated, so a larger red thing in the sign ROI (a box, a chair), refused, hid the sign behind it (`make sign-check` on the detect-range looks found it). With `trace=True`, every contour that reached a gate is recorded with the gate that decided it, and the smaller blobs never gated, a larger one having passed, as `not_largest`. `debug_stop` draws these beside the redness image, with the mask outlined and the threshold used.
 
@@ -231,7 +218,7 @@ traffic ROI (BGR) → HSV → red / yellow / green masks → contours → area +
   - **area 30–1200 px², w/h aspect 0.3–3.0,** now only sanity bounds. The lamps measured red 300–400, yellow 400–500 and green 700–800 px² at normal exposure, green glowing most (2026-10-04). Earlier caps: 600 rejected every green lamp, 300 the red too, 70 (8b3944c) every lamp; 5000 passed background patches.
 
   Setting `min_core_px` to 0 turns the core gate off (some tests do, to test the other gates on solid shapes). The limit: a lamp that doesn't clip at the camera's exposure fails the gate; check the course lights with `calibrate_lamps` first.
-- **The course's light is not these lamps (2026-10-06).** It's bare 5 mm LEDs on a teal board, and the values above are `BlobFilter`'s defaults, not what the robot runs. From the stop line a lit LED is a white center with a thin colored ring of 10–35 px², and the red ring and its white center trace as separate blobs, so `MEASURED` (`config.py`) sets `min_area` 4, `max_area` 3000 (the green glow reaches ~700), `ref_area` 30, `min_roundness` 0.2 and turns the core gate off. `roi_crop.TRAFFIC` is cut narrow around the board, to keep out a second traffic light and a red box. It runs to the top of the frame, because stopped further forward (at a stop sign) the light rises out of a lower top edge. That brings the clear panel's reflection of each lit LED into view (red's reads yellow), and the swept bands still read the frames at the stop right with it there. On a nav run's frames at the stop, the real crop and detector got 201 of 201 right (87 green, 21 yellow, 93 red). Two caveats: the lowest red and yellow confidences were 0.46 and 0.44, close to Phase 3's 0.40; and another light, or this one from another stop line, has to land in that box.
+- **The course's light is not these lamps (2026-10-06).** It's bare 5 mm LEDs on a teal board, and the values above are `BlobFilter`'s defaults, not what the robot runs. From the stop line a lit LED is a white center with a thin colored ring of 10–35 px², and the red ring and its white center trace as separate blobs, so `MEASURED` (`config.py`) sets `min_area` 4, `max_area` 3000 (the green glow reaches ~700), `ref_area` 30, `min_roundness` 0.2 and turns the core gate off. `roi_crop.TRAFFIC` is cut narrow around the board, to keep out a second traffic light and a red box. It ran to the top of the frame until 2026-10-26, because stopped further forward (at a stop sign) the light rose out of a lower top edge; it now starts at 0.10, re-tuned on the track. The top edge brought the clear panel's reflection of each lit LED into view (red's reads yellow), and the swept bands still read the frames at the stop right with it there. On a nav run's frames at the stop, the real crop and detector got 201 of 201 right (87 green, 21 yellow, 93 red). Two caveats: the lowest red and yellow confidences were 0.46 and 0.44, close to Phase 3's 0.40; and another light, or this one from another stop line, has to land in that box. With the core gate on, 80 of 93 red frames were lost. `ref_area` 20 would lift the low scores to 0.75, but lets 73 frames carry a wrong color over 0.40 (the unlit yellow lens while green is lit), against 4 at 30.
 - **Glow mode (what the robot runs since 2026-10-06).** With `ColorConfig.glow` set (`GlowFilter`, set in `config.py`), the blob gates above aren't used. The course's lenses are colored plastic: unlit, the red one reads V ~180 and its color band takes it in, and its colored ring when lit is no brighter (lit 10th percentile V 133 against 178 unlit; `calibrate_lamps` with `off=`). What only a lit LED does is clip the camera to white. So glow mode starts there:
   1. **The white spots:** connected pixels with V ≥ `white_min_v` (230) and S ≤ `white_max_s` (60), the core gate's test. At least `min_white_px` (2), or it's a glint. Its box must be between `min_white_aspect` (0.25) and `max_white_aspect` (3.0) wide for its height: lit LED centers read 0.5–1.0, while the glare along the board's edge is a 2 px strip at 10–11. That glare had more white than any LED, and its ring picked up a red shirt below, so it won as red during green and yellow (2026-10-07).
   2. **Named by the ring:** the pixels within `ring_px` (2) of the spot, counted against each color's HSV band. The band with the most is the spot's color, if it has `min_ring_px` (3) and at least `min_ring_share` (10%) of the ring. A lit LED's ring held 18–20% of its color (the rest is washed-out glow under the bands' S floors); a glare passed on a few stray colored pixels, ~5% of its ring, where the debug view's mask panel showed nothing (2026-10-07). The spot's own pixels don't vote (a clipped center keeps a trace of tint, and yellow's S floor is 20). The board's glare clips too, but its ring is teal, below green's V floor of 190.
@@ -266,7 +253,7 @@ Geometry decides "is this a lane marking". Lane offset decides "is it trustworth
 | `min_proximity` | 0.25 | 0.05 | Markings too far up the ROI to describe where the robot is now |
 | `min_length_px` | 25 | 25 | Dashed-center-line fragments |
 | `width_px` range | 1–25 | 1–45 | Noise below; blobs, glare and merged pairs above |
-| `min_intensity` | 90 | 130 | Shadow edges and seams |
+| `min_intensity` | 90 | 90 | Shadow edges and seams. `MEASURED` was 130 from the candidate sweep until a darker stretch of the course dimmed the tape below it (2026-10-05) |
 
 `MEASURED` comes from a sweep of 4,827 recorded candidates rather than from course dimensions. The sweep ran on distorted frames; `MEASURED` now undistorts, which moves marks near the ROI edges by up to ~20 px, so the px gates need a re-sweep on undistorted captures. The default `min_proximity` sat above the observed median of 0.17 and threw out 1,752 candidates geometry had already scored at 0.30 or higher. The default width cap clipped detections whose 90th percentile was 27 px.
 
@@ -274,19 +261,19 @@ Geometry decides "is this a lane marking". Lane offset decides "is it trustworth
 
 Each usable candidate becomes an anchor at its `foot_x`, weighted by confidence × (0.5 + 0.5 × proximity). A strong marking far up the ROI is real, but it says less about where the robot is right now.
 
-The robot sits at the center of the lane ROI. Its lane is bounded by the **nearest** anchor on each side, not the outermost pair. On a two-lane street, the outermost pair would center the robot on the whole street.
+The robot sits at `robot_x_px` of the lane ROI: its middle unless the camera is off the robot's centerline (`make calib-lane` measures it). Its lane is bounded by the **nearest** anchor on each side, not the outermost pair. On a two-lane street, the outermost pair would center the robot on the whole street.
 
 1. Anchors on both sides of center: take the nearest on each side.
 2. All anchors on one side (the robot has drifted out): take the two nearest center. They still describe the nearest lane, and the offset steers back.
 3. One anchor: single-boundary mode.
 
-Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 300 px (~0.84 of the 357 px lane). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
+Then the pair's spacing is checked. Closer than `min_lane_width_px` means one marking seen twice, or a line and something beside it; wider than 400 px means the pair spans more than one lane. Either one falls back to the strongest single anchor. The default floor is 60 px; MEASURED uses 260 px (2026-11-05): under every real lane, which reads ~270-300 px with the robot 3-4 cm off centre, and well over a fragment pair (300 px, ~0.84 of the 357 px lane, until then). On 2026-10-20, pairs 61-65 px apart were taken as a lane as the robot neared its right line, and one flipped the estimate's sign; pairs 250-300 px apart put the robot twice as far left as the right line alone did.
 
 ### The offset
 
 ```
 lane_center = (left_x + right_x) / 2
-offset      = clamp((roi_center − lane_center) / roi_center, −1, +1)
+offset      = clamp((robot_x − lane_center) / (ROI width / 2), −1, +1)     robot_x: robot_x_px, or the ROI's middle
 ```
 
 **Sign: + means the robot is right of lane center, so steer left.** The lane center appears left of the image center when the robot has drifted right. Older docs said the opposite; the code and this doc are what count.
@@ -302,7 +289,7 @@ The offset is normalized by **half the lane ROI width** (216 px at 480×270), no
 | `single_uncalibrated` | One usable boundary, `expected_half_lane_px` is `None` | 0.0, confidence 0 |
 | `none` | No usable boundaries | 0.0, confidence 0 |
 
-Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 178 px: half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 puts it within ~0.04-0.08.
+Single-boundary mode projects the lane center `expected_half_lane_px` from the visible line. Its side comes from which half of the ROI the line is in, which is wrong once the robot has drifted past a boundary: the lane's right line is then left of center. So the result also carries `other_side_offset`, the offset were the line the lane's other side, and Phase 3 takes it when the guessed side breaks continuity (`phase3_estimation.md`, Lane filter). Without that scale, distance-from-a-line and distance-from-center would feed the same controller on different scales, so the mode reports `single_uncalibrated` instead. MEASURED uses 197.1 px, half the ~394 px lane measured 2026-11-02; until then 178 px, half the lane's median two-boundary width over the 2026-10-12 runs (350 / 357 px). The hand-set 228 put every single-line frame ~0.25 off the two-line frames around it; 178 put it within ~0.04-0.08.
 
 `boundary_count` counts usable boundaries, not raw detections, so "saw nothing" and "saw nothing it could steer by" are different.
 
@@ -328,17 +315,17 @@ The reference is the bottom of the lane ROI, which is the bottom of the frame: t
 
 ### Ground homography
 
-**File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`guides/calibrate_ground.md`)
+**File:** `ground.py` · **Config:** `PipelineConfig.ground` (`GroundHomography` or `None`) · **Calibration:** `calibration/ground_homography.json`, from `scripts/calibrate_ground.py` (`make calib-ground`)
 
 One 3×3 homography maps undistorted frame px to floor cm (X right+, Y forward+, origin at the reference point). It is fit on frames from `preprocess_frame` with `MEASURED`'s settings and records the lens calibration (a SHA-256 of its `image_size`, `camera_matrix` and `dist_coeffs`), `undistort_alpha` and image size it was fit under. `config.py` loads it once into `MEASURED.ground`; if it's missing, or any of those three differ from what preprocess uses, or undistortion is off, it warns and leaves `ground` None, which only turns the cm outputs off. `SCENE_CONFIG` has none, since synthetic frames aren't undistorted. Nothing reads it per frame.
 
 ### Stop-line table
 
-**File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`guides/calibrate_stop_line.md`)
+**File:** `stop_line_table.py` · **Config:** `PipelineConfig.stop_line_table` (`StopLineTable` or `None`) · **Calibration:** `calibration/stop_line_table.json`, from `scripts/calibrate_stop_line.py` (`make calib-stopline`)
 
-The board-free alternative for the stop line. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C`, is then fit through them by linear least squares. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
+The board-free alternative for the stop line. The homography needs a checkerboard found flat and square on the floor, which is hard to get right; the stop line needs only one number, and it depends almost entirely on how many rows above the lane ROI's bottom the line appears. Tape strips laid at measured distances are measured by the robot's own detector (`distance_px`). A flat floor's curve, `cm = A / (B − rows) + C` (B is the horizon's height above the ROI bottom, in rows), is then fit through them by linear least squares. Measured by the detector the robot drives with, it needs no board, no corner finding and no squareness. It gives distance ahead only, from whatever point the marks were measured from (the front of the robot, by default); a clipped line reads 0. It's tied to the same lens calibration, `undistort_alpha` and size as the homography, through the same check (`ground.fit_conditions_problem`). `config.py` loads it into `MEASURED.stop_line_table`; a missing file is silent, since it's optional. The homography wins when both are present.
 
-**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (178) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
+**Later, lane offset in cm.** `lane_offset_cm` still uses `offset × half ROI width × cm_per_px`, valid only at the bottom row. With the homography it would project both anchors (`foot_x` at their foot rows) to the floor and take the lane center's X there: `lane_offset_cm = −X_center` (+ = robot right of center). `cm_per_px` and `lane_roi_width_px` would retire, and the measured `expected_half_lane_px` (197.1) would become a course fact, `expected_half_lane_cm` (about 7 cm), projected per frame.
 
 ---
 
@@ -359,7 +346,7 @@ every 2nd px → floor level (25th percentile of the lane ROI) → not floor: gr
 - **The floor level** is measured each frame on the lane ROI, which is wider than the path, so a box in the path leaves floor beside it. The course's floor runs from dark mats to light gray (95–130 at the 2026-10-12 run's intersections): a fixed level (a cap at 70, the first version) called the light floor an obstacle, 376 of 537 frames on that run against 131 once measured (the can's, by eye).
 - **`open_px` (47)** is wider than any lane tape (MEASURED's lane gate allows 45 px, the widest seen 41.7) and taller than any stop line (`max_thickness_px` 40; near the view bottom 1 cm of floor is ~10 rows). Tape wider than it would survive.
 - **`distance_px`** is the rows from the blob's lowest row (where an upright object meets the floor) to the lane ROI bottom, as for the stop line. **`distance_cm`** is the floor there: through the ground homography at the base's center, else the stop-line table, whose curve maps any floor row to cm. The table's reference is the robot's front edge, and its row 0 is ~10.2 cm ahead of it, so a blob running off the ROI bottom is **`clipped`**: its base isn't in view, "this near or nearer".
-- **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess.
+- **Blind to** an object no brighter than the mats and with no color, and to one wholly outside the middle of the frame. By brightness alone, also to a light object so wide it covers the whole lane ROI: it becomes the floor level (by color it is still seen). **May mistake** a bright or colored patch on the floor at least 47 px across (glare, a light floor past the mat's edge, a stop sign low in the corridor) for one. The gates are a first guess; tune them on the course with the obstacle view (`make phase2 VIEWS=obstacle`).
 
 Phase 3 votes on it and holds the measurement through a missed frame, as for the stop line; Navigation's `ObstacleRule` brakes for one within 12 cm (or 24 rows with no cm, or clipped) and waits until it has been gone 1 s.
 
@@ -435,7 +422,26 @@ Checked on construction, so a malformed handoff fails loudly instead of reaching
 pytest --hardware --replay=src/tests/data/frames
 ```
 
-Each stage's test writes a timing CSV and histogram. The old tables (24–48 ms for the chain) were measured on the IMX219 at 480×360 with equalization on, and no longer apply. The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS.
+Each stage's test writes a timing CSV and histogram. Geometry, the longest stage, is also timed per part: `geometry.edges` (Canny and the gradient split every lane-ROI detector reads), `geometry.lanes`, `geometry.stop_line` and `geometry.sign` (`GEOMETRY_PARTS`). The parts print indented under `geometry` in `summary.txt`'s `[TIMING]` and aren't added to the total, since geometry's own time holds them.
+
+The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS (P1). On a run, `nav.csv`'s `phase2_ms` and `src.analysis.stage_timing` show where the time goes, and `make routine-frame-budget` judges it.
+
+---
+
+## Parallel perception
+
+**File:** `parallel.py` · **Switch:** `params.PARALLEL_PERCEPTION` (on since 2026-11-02), or `--parallel` / `--serial` on a linker for one run
+
+Phase 2 ran every stage on the main thread, one after another: on the 2026-10-14 diag run the main thread sat at 70% of a core on average (99.7% peak) while the Pi as a whole was at 43%. Three stages read only the cropped ROIs and nothing of each other's: geometry (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With parallel perception on, color and obstacle run on one side thread (`p2-side`) while the main thread runs geometry, then the lane offset and the stop line (which need geometry), and only then waits for the side thread.
+
+```
+main:  preprocess → roi ─┬─ geometry → lane_offset → stop_line ─┬─ branch_wait → fusion → package
+side:                    └─ color → obstacle ────────────────────┘
+```
+
+It's a thread, not a process: the heavy work is inside OpenCV calls, which release the GIL, so the two run on two cores without copying a frame. The Python between those calls still takes turns on the GIL, which is why the gain is measured rather than assumed. Stage timing reports `branch_wait`, the main thread's time waiting for the side (0 when the side finished first), and the side thread's own color and obstacle times (`side_timings_ms`). The frame waits on the longer path, which is geometry: splitting color and obstacle onto separate threads would not shorten it. `make compare-parallel` times Phase 2 alone on the same frames both ways; `make ab-parallel` alternates whole runs.
+
+The results are the same either way: the branches are pure functions of the ROIs and the config, and `test_parallel` holds them equal frame by frame.
 
 ---
 
@@ -451,7 +457,7 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 | View | Shows |
 | --- | --- |
 | lane (always on, `debug_lane`) | Every raw candidate (green usable, red with the gate that rejected it), each anchor's foot, the chosen left and right boundaries, robot and lane center, mode and offset gauge |
-| `stop` (`debug_stop`) | The color sign ROI with its red blobs colored by the gate that decided them ("smaller" for those behind the largest), with vertex count and confidence; beside it the redness image, the red mask outlined, and the threshold |
+| `stop` (`debug_stop`) | The color sign ROI with its red blobs colored by the gate that decided them ("smaller" for those never gated because a larger one passed), with vertex count and confidence; beside it the redness image, the red mask outlined, and the threshold |
 | `traffic` (`debug_traffic`) | HSV masks and blobs against the bands. In glow mode, also the white mask, and each white spot boxed with the glow gate that decided it (white, shape, ring, smaller) and its ring's winning share |
 | `lanegeo` (`debug_lanegeo`) | On the lane ROI: every contour the lane detector traced, red if geometry refused it (gate and measured value), amber if lane offset did, green if usable, with the chosen anchors; below it, the edges with what the horizontal-line filter removed and what closing added. Needs the chain's trace (`trace=True`, which the linker sets), which adds `lane_debug["trace"]` |
 | `stopline` (`debug_stopline`) | On the lane ROI: accepted stop lines as bands, rejected top edges with their gate, the measured distance, lane candidates skipped as part of a stop line; below it, the gradient split (all edges, kept top and bottom edges, fitted lines) |
@@ -463,12 +469,12 @@ Runs the chain with the debug overlay. Accepts `--camera`, `--video PATH` or `--
 
 ## Open items
 
-- **Undistortion** on the IMX290: cost against improvement, measured with the calibration test.
 - **Traffic lights under the day's lighting.** The color branch is on, in glow mode, tuned on the course's LEDs (2026-10-06, above); re-check under the venue's light (`make routine-detect-range`).
-- **Stop-sign geometry** tuned on real frames. The sign reaches Phase 3's vote now, gated only at 0.45 confidence there.
-- **`expected_half_lane_px`** re-measured whenever the mount moves (178 px from the 2026-10-12 runs' two-boundary widths).
+- **Traffic and sign ROI bounds** need a small re-tune on the track: both were set from one day's frames (2026-10-06, 2026-10-20). `make phase2 VIEWS=traffic,stop` shows them on a run.
+- **Stop-sign range.** The shape gates are tuned on the course's sign (2026-10-20); the range, and Phase 3's 0.45 vote gate, are measured by `make routine-detect-range ARGS="--set target=sign"`.
+- **`expected_half_lane_px`** re-measured whenever the mount moves (197.1 px since 2026-11-02; 178 px from the 2026-10-12 runs' two-boundary widths before), with `robot_x_px` (`make calib-lane`).
 - **The intersection failure:** in 3 of 3 runs the robot drifted right and failed at an intersection. On synthetic frames a stop line did exactly this: a stop line touching one lane line removes that line and the single-sided projection reports a large positive (robot right of center) offset, and a short one was taken as the right boundary. Stop lines are now detected and skipped; record those spots again and check what the lane does as the stop line comes into the ROI.
 - **Obstacle gates on real frames:** the not-floor thresholds against the mats under the venue's light, `open_px` against the widest tape, the false-alarm rate on a clear course, and what a stop sign low in the corridor does (`make phase2 VIEWS=obstacle`, then `test_obstacle --hardware --obstacle-cm`).
-- **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and the 20° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
+- **Stop-line gates on real frames:** tape thickness in px, the 60 px minimum length against real dash ends, and `MEASURED`'s 5° tilt against real approach angles. A lighter patch of mat next to the line can pair with it into a thick false candidate (seen with looser Canny thresholds on a synthetic frame).
 - **`distance_px` to cm:** needs a ground homography or a stop-line table, not `cm_per_px`.
 - **Offset accuracy on hardware:** the sign (+ = robot right of center) is what lane keeping steers by on every run; the accuracy against a ruler (P3) is `make routine-lane-offset`.

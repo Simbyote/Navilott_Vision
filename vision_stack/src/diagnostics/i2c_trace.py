@@ -1,49 +1,15 @@
 """I2C trace: every transfer on the Pi's I2C buses, from the kernel, as a bus analyzer would show it.
 
 Purpose:
-    The robot shares bus 1 (GPIO 2/3) between the MPU-6050 (the sensor
-    hub's thread, 100 Hz) and the ADS1115 battery ADC (the battery monitor's
-    thread, 1 Hz); the camera's own bus carries libcamera's exposure and
-    gain writes to the IMX290 every frame. Python sees only how long its own
-    call took. The kernel traces every transfer on every bus (the i2c
-    tracepoints: each message's address, direction, length and data, and
-    the result), from any process, timestamped to the microsecond. This
-    turns that trace into:
-
-    - every transfer: when, which bus and device, which thread asked, the
-      messages (w1 r14 = write 1 byte, then read 14), how long it held the
-      bus, how long it had to (its wire time: the bits clocked at the bus's
-      clock), and the result;
-    - per bus: occupancy (the share of time a transfer was in progress)
-      against wire occupancy (the share the bits alone need), and the
-      overhead between them (driver, interrupts, the controller's FIFO);
-    - per device: transfers and bytes per second, durations, errors, the
-      gaps between transfers (the IMU's should be a steady 10 ms), and how
-      many started right after another device's transfer (they queued
-      behind it on the bus).
-
-    Tracing needs root (tracefs); the recording is read back afterwards, so
-    the robot's run is untouched. --from re-analyzes a recorded folder
-    anywhere, without root (and draws the figure where matplotlib is).
+    Python sees only how long its own call took; the kernel's i2c tracepoints
+    see every transfer from any process, to the microsecond. This gives
+    per-transfer, per-bus and per-device timing: occupancy, wire time, gaps,
+    queueing, errors. Recording needs root;
+    --from re-analysis doesn't.
 
 Main package:
-    record_trace(tracefs, seconds) -> (text, window_s, lost, clock): turn
-        the i2c events on, wait, read them, put tracefs back as it was.
-    parse_events(text), assemble(events) -> transfers.
-    bus_info(): each adapter's name and clock (device tree).
-    analyze(transfers, window_s, buses, lost) -> dict: per bus, per device,
-        findings.
-    summary_lines(res), figure(transfers, res, path).
-    cli(): sudo python3 -m src.diagnostics.i2c_trace [--seconds S] [--out DIR]
-        | python3 -m src.diagnostics.i2c_trace --from DIR
-
-Flow:
-    1. Root and tracefs checked; the trace buffer enlarged, the clock set
-       to mono (so times line up with the runs' t0_monotonic), the buffer
-       cleared, the four i2c events turned on for --seconds.
-    2. Read back; every setting restored.
-    3. Events grouped into transfers per bus (a bus is locked for a whole
-       transfer, so its events never interleave); stats, findings, files.
+    The run folder: every transfer, per-bus and per-device statistics,
+    findings and a figure.
 """
 import argparse
 import csv
@@ -63,17 +29,17 @@ SECONDS = 10.0
 TRACEFS = (Path("/sys/kernel/tracing"), Path("/sys/kernel/debug/tracing"))
 ADAPTERS = Path("/sys/class/i2c-adapter")
 EVENTS = ("i2c_write", "i2c_read", "i2c_reply", "i2c_result")
-BUFFER_KB = 8192            # per CPU; a transfer is ~4 lines, ~400 bytes: minutes of the IMU at 100 Hz
-DEFAULT_CLOCK_HZ = 100_000  # the Pi's i2c_arm_baudrate when config.txt doesn't set it
+BUFFER_KB = 8192            # per CPU: minutes of the IMU at 100 Hz
+DEFAULT_CLOCK_HZ = 100_000  # the Pi's default i2c_arm_baudrate
 KNOWN = {IMU_I2C_ADDRESS: "MPU-6050 IMU", ADS1115_I2C_ADDRESS: "ADS1115 battery", 0x1A: "IMX290 camera"}
 IMU_PERIOD_MS = 1000.0 / SENSOR_RATE_HZ
-BACK_TO_BACK_US = 100.0     # a transfer starting this soon after another device's ended had queued behind it
-BUS_BUSY_PCT = 50.0         # past this occupancy a bus starts delaying its devices
-GAP_SLIP = 1.5              # IMU gaps over this x its period at p95: the sensor hub's ticks slip
-OVERHEAD_HIGH = 2.0         # transfers taking this x their wire time: overhead dominates
+BACK_TO_BACK_US = 100.0     # starting this soon after another device's: it queued
+BUS_BUSY_PCT = 50.0         # past this a bus delays its devices
+GAP_SLIP = 1.5              # IMU p95 gap over this x its period: the hub's ticks slip
+OVERHEAD_HIGH = 2.0         # x the wire time: overhead dominates
 TRANSFER_FIELDS = ("start_s", "bus", "addr", "device", "task", "pid", "msgs", "write_bytes", "read_bytes",
                    "wire_us", "dur_us", "ret", "ok", "wdata", "rdata")
-ZOOM_S = 0.2                # the figure's transfer timeline window
+ZOOM_S = 0.2
 
 _CLI_HELP = """\
 Trace every I2C transfer on the Pi's buses from the kernel for a few seconds:
@@ -95,10 +61,6 @@ Output (--out DIR, default <root>/runs/i2c_<timestamp>):
 """
 
 
-# =============================================================================
-# Parsing
-# =============================================================================
-
 # "   sensor-hub-1234    [002] d..1.  1234.567890: i2c_write: i2c-1 #0 a=068 f=0000 l=1 [3b]"
 _LINE = re.compile(r"^\s*(?P<task>.+?)-(?P<pid>\d+)\s+(?:\(\s*[\d-]+\)\s+)?\[(?P<cpu>\d+)\]\s+(?:\S+\s+)?"
                    r"(?P<ts>\d+\.\d+):\s+(?P<event>i2c_\w+):\s+i2c-(?P<bus>\d+)\s+(?P<rest>.*)$")
@@ -108,7 +70,6 @@ _RESULT = re.compile(r"n=(?P<n>\d+)\s+ret=(?P<ret>-?\d+)")
 
 
 def parse_events(text: str) -> list[dict]:
-    """The i2c events of a tracefs trace, in order: {ts, event, bus, task, pid, and the event's fields}."""
     out = []
     for line in text.splitlines():
         m = _LINE.match(line)
@@ -133,10 +94,7 @@ def parse_events(text: str) -> list[dict]:
 
 
 def wire_bits(msgs: list[tuple[str, int]]) -> int:
-    """
-    Bits a transfer clocks: per message a start (or repeated start), the
-    address byte and each data byte, each 9 bits with its ACK; one stop.
-    """
+    """Per message a start, the address byte and each data byte, 9 bits each with its ACK; one stop."""
     return sum(1 + 9 + 9 * n for _, n in msgs) + 1
 
 
@@ -145,14 +103,7 @@ def device_name(addr: int) -> str:
 
 
 def assemble(events: list[dict], clocks: dict | None = None) -> list[dict]:
-    """
-    Transfers from the events: per bus, messages (#0, #1...) then replies,
-    then the result closing it. A transfer cut off by the trace's start or
-    end is left out.
-
-    Inputs:
-        clocks: {bus: clock Hz} for the wire time; DEFAULT_CLOCK_HZ otherwise.
-    """
+    """Transfers per bus: messages, replies, then the result. One cut off by the trace's ends is left out."""
     clocks = clocks or {}
     open_ = {}
     out = []
@@ -163,7 +114,7 @@ def assemble(events: list[dict], clocks: dict | None = None) -> list[dict]:
             if cur is None or e["idx"] == 0:
                 cur = open_[bus] = {"start": e["ts"], "bus": bus, "task": e["task"], "pid": e["pid"],
                                     "addr": e["addr"], "msgs": [], "wdata": [], "rdata": []}
-            read = e["event"] == "i2c_read"          # the kernel's i2c_read is exactly the I2C_M_RD messages
+            read = e["event"] == "i2c_read"
             cur["msgs"].append(("r" if read else "w", e["len"]))
             if not read:
                 cur["wdata"] += e["data"]
@@ -187,16 +138,9 @@ def assemble(events: list[dict], clocks: dict | None = None) -> list[dict]:
     return out
 
 
-# =============================================================================
-# The system: buses and tracefs
-# =============================================================================
-
 def bus_info(adapters: Path = ADAPTERS) -> dict:
     """
-    {bus: {"name", "clock_hz", "clock_from"}} for every adapter. The clock
-    is the device tree's clock-frequency (a big-endian u32), from the
-    adapter's node or, for a mux's child bus (the camera's), its parent's;
-    otherwise DEFAULT_CLOCK_HZ, marked "assumed".
+    Each adapter's clock from the device tree (a mux's child bus from its parent), else DEFAULT_CLOCK_HZ, marked assumed.
     """
     out = {}
     if not adapters.is_dir():
@@ -222,7 +166,6 @@ def bus_info(adapters: Path = ADAPTERS) -> dict:
 
 
 def find_tracefs(candidates=TRACEFS) -> Path | None:
-    """The first tracefs that has the i2c events."""
     for p in candidates:
         if (p / "events" / "i2c").is_dir():
             return p
@@ -239,16 +182,15 @@ def _write(p: Path, value: str) -> None:
 
 
 def _selected(text: str) -> str:
-    """The [bracketed] choice in a tracefs option list such as trace_clock."""
+    """The [bracketed] choice in a tracefs option list."""
     m = re.search(r"\[(\S+)\]", text)
     return m.group(1) if m else text.split()[0] if text.split() else ""
 
 
 def record_trace(tracefs: Path, seconds: float, sleep=time.sleep, clock=time.monotonic) -> tuple[str, float, int, str]:
     """
-    The i2c events for seconds: (trace text, seconds actually traced,
-    events lost to a full buffer, the trace clock used). Every setting it
-    changes is restored, whatever happens.
+    (trace text, seconds traced, events lost to a full buffer, trace clock). Every setting
+    it changes is restored, whatever happens.
     """
     saved = {k: _read(tracefs / k) for k in ("tracing_on", "buffer_size_kb", "trace_clock")}
     clock_used = _selected(saved["trace_clock"])
@@ -283,10 +225,6 @@ def record_trace(tracefs: Path, seconds: float, sleep=time.sleep, clock=time.mon
     return text, window, lost, clock_used
 
 
-# =============================================================================
-# Analysis
-# =============================================================================
-
 def _q(xs: list[float], q: float) -> float:
     s = sorted(xs)
     return s[min(len(s) - 1, int(round(q * (len(s) - 1))))]
@@ -304,7 +242,6 @@ def _errname(ret: int) -> str:
 
 
 def analyze(transfers: list[dict], window_s: float, buses: dict | None = None, lost: int = 0) -> dict:
-    """Per bus and per device statistics, and findings; see the module docstring."""
     buses = buses or {}
     window_s = max(window_s, 1e-9)
     by_bus, by_dev = defaultdict(list), defaultdict(list)
@@ -347,7 +284,6 @@ def analyze(transfers: list[dict], window_s: float, buses: dict | None = None, l
 
 
 def findings(res: dict) -> list[str]:
-    """What the trace says, in words."""
     out = []
     if not res["transfers"]:
         return ["no I2C transfer in the trace: was a run going (make nav-dry in another terminal)?"]
@@ -379,7 +315,6 @@ def findings(res: dict) -> list[str]:
 
 
 def summary_lines(res: dict, meta: dict | None = None) -> list[str]:
-    """summary.txt."""
     meta = meta or {}
     d_ = lambda d, k: "--" if d is None else f"{d[k]:.1f}"          # noqa: E731
     lines = [f"i2c trace  {meta.get('started', '')}  {res['window_s']:.1f} s, {res['transfers']} transfers"
@@ -405,21 +340,14 @@ def summary_lines(res: dict, meta: dict | None = None) -> list[str]:
     return lines
 
 
-# =============================================================================
-# Figure
-# =============================================================================
-
-# Categorical slots 1-4 of the validated default palette (dataviz skill), as
-# pi_load's cores; the lanes are labeled, so color is never the only identity
+# The lanes are labeled, so color is never the only identity
 DEVICE_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
 INK, MUTED, GRID = "#1f1f1f", "#6b6b6b", "#d9d6cf"
 
 
 def figure(transfers: list[dict], res: dict, path) -> Path | None:
     """
-    i2c_trace.png: the transfers of a ZOOM_S window on one lane per device,
-    each bus's occupancy per second, and the IMU's gaps. None without
-    matplotlib (the Pi's venv): re-run --from on a laptop.
+    One lane per device over a ZOOM_S window, each bus's occupancy, the IMU's gaps. None without matplotlib.
     """
     try:
         import matplotlib
@@ -432,7 +360,7 @@ def figure(transfers: list[dict], res: dict, path) -> Path | None:
     devs = [(d["bus"], d["addr"]) for d in sorted(res["devices"], key=lambda d: -d["transfers"])]   # busiest first
     color = {k: DEVICE_COLORS[i % len(DEVICE_COLORS)] for i, k in enumerate(devs)}
     t0 = min(t["start_s"] for t in transfers)
-    # the window: around the first transfer of a device other than the busiest, to show sharing
+    # Around another device's first transfer, to show the sharing
     busiest = max(res["devices"], key=lambda d: d["transfers"])
     other = [t for t in transfers if (t["bus"], t["addr"]) != (busiest["bus"], busiest["addr"])]
     w0 = max(t0, (min(t["start_s"] for t in other) - ZOOM_S / 2) if other else t0)
@@ -453,7 +381,7 @@ def figure(transfers: list[dict], res: dict, path) -> Path | None:
     ax.set_xlabel(f"ms (a {ZOOM_S * 1000:.0f} ms window; bar length = time the transfer held the bus)", color=MUTED)
     ax.set_title("Transfers on the bus", loc="left", fontsize=11, color=INK)
     ax = axes[1]
-    # buses in neutral ink, told apart by line style: the device colors stay the devices'
+    # Buses in neutral ink by line style; the colors stay the devices'
     for i, bus in enumerate(sorted({t["bus"] for t in transfers})):
         sec = defaultdict(float)
         for t in transfers:
@@ -471,7 +399,7 @@ def figure(transfers: list[dict], res: dict, path) -> Path | None:
         ax = axes[2]
         starts = sorted(t["start_s"] for t in transfers if t["addr"] == IMU_I2C_ADDRESS and t["bus"] == imu["bus"])
         gaps = [(b - a) * 1000 for a, b in zip(starts, starts[1:])]
-        # half-ms bins centered on whole and half ms, from 0: a steady 10 ms is one bar on the period line
+        # Half-ms bins, so a steady 10 ms is one bar on the period line
         hi = max(2 * IMU_PERIOD_MS, max(gaps, default=0) * 1.05)
         ax.hist(gaps, bins=[k * 0.5 - 0.25 for k in range(int(hi / 0.5) + 2)],
                 color=color[(imu["bus"], imu["addr"])], edgecolor="white")
@@ -490,13 +418,9 @@ def figure(transfers: list[dict], res: dict, path) -> Path | None:
     return Path(path)
 
 
-# =============================================================================
-# Writing and the command line
-# =============================================================================
-
 def write(out_dir, trace_text: str, window_s: float, lost: int, buses: dict, meta: dict,
           draw: bool = True) -> dict:
-    """Parse, analyze and write the folder; returns the analysis."""
+    """Returns the analysis."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "trace.txt").write_text(trace_text)
@@ -531,7 +455,6 @@ def _give_back(path: Path) -> None:
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """sudo python3 -m src.diagnostics.i2c_trace [--seconds S] [--out DIR] | --from DIR"""
     ap = argparse.ArgumentParser(prog="python3 -m src.diagnostics.i2c_trace", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=SECONDS, metavar="S", help=f"how long (default {SECONDS:.0f})")

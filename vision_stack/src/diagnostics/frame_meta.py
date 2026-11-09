@@ -1,43 +1,14 @@
 """Frame metadata: what libcamera did to every frame, beside what the color branch read in it.
 
 Purpose:
-    The camera's auto exposure (AGC) and white balance (AWB) run in
-    libcamera's IPA on the ARM cores: from the ISP's statistics of each
-    frame they set the next frame's exposure time, analogue and digital
-    gain and colour gains. libcamera reports those per frame, with the
-    moment the sensor started exposing it, but the robot's GStreamer
-    pipeline drops that metadata at the appsink. This opens the camera
-    through Picamera2 instead, set up like the robot's (the same sensor
-    mode, size, frame rate, 180 degree flip and CAMERA_CONTROLS), and logs
-    every frame's metadata next to the color branch's own reading of its
-    traffic ROI (MEASURED: the label, confidence and clipped-white pixels).
-
-    That answers what the GStreamer path can't:
-    - did a red LED read yellow on frames with longer exposure or more
-      gain (hold the light on one color and compare the labels);
-    - how far AGC swings as the robot turns, and whether it has settled;
-    - how long a frame takes from the sensor starting to expose it to
-      Python having it (the ISP, the IPA and the queue included).
-
-    Like capture_anatomy, it needs the camera free: stop the robot's
-    pipeline first. --save-every keeps frames as a folder the linkers
-    (--frames) and calib-lamps read.
+    Auto exposure and white balance run in libcamera, and the robot's pipeline
+    drops their metadata at the appsink. This opens the camera through
+    Picamera2, set up like the robot, and logs each frame's exposure, gains
+    and timing next to the color branch's reading.
+    The camera must be free.
 
 Main package:
-    record(out_dir, seconds, ...) -> rows: the camera for that long, frames.csv,
-        meta.json, summary.txt and frames/ written.
-    to_libcamera_controls(controls): libcamerasrc names (exposure-value)
-        as Picamera2's (ExposureValue), enum names as their values.
-    frame_row(md, now_ns, t0_ns, detection): one frame's CSV row.
-    summarize(rows), findings(summary), summary_lines(summary).
-    cli(): python3 -m src.diagnostics.frame_meta [--seconds S] [--save-every N]
-        [--camera-control K=V] [--no-detect] [--out DIR]
-
-Flow:
-    1. Picamera2 (lazy import: only the Pi has it) configured like the robot.
-    2. Each frame: its request's metadata and image; the color branch on
-       the traffic ROI; a row; every Nth image saved.
-    3. Stop at --seconds (or Ctrl-C); write and summarize.
+    The run folder: frames.csv, meta.json, summary.txt, and frames/ with --save-every.
 """
 import argparse
 import csv
@@ -57,10 +28,10 @@ FRAME_FIELDS = ("frame", "t_s", "exposure_us", "analogue_gain", "digital_gain", 
                 "label", "confidence", "white_px")
 NUMERIC = ("exposure_us", "analogue_gain", "digital_gain", "colour_gain_r", "colour_gain_b", "colour_temp_k",
            "lux", "frame_duration_us", "sensor_to_python_ms", "white_px")
-MAX_LATENCY_MS = 1000.0         # a sensor-to-Python time past this means the clocks don't match: dropped
-EXPOSURE_SWING = 2.0            # exposure x gain moving more than this factor earns a finding
-LIGHT_GAP = 1.2                 # yellow frames with this much more light than red ones earn a finding
-AE_SETTLED_SHARE = 0.5          # under this share of frames AeLocked: AGC never settled
+MAX_LATENCY_MS = 1000.0         # past this, the clocks don't match
+EXPOSURE_SWING = 2.0            # findings past these
+LIGHT_GAP = 1.2                 # yellow frames' light over red ones'
+AE_SETTLED_SHARE = 0.5          # of frames AeLocked
 BUDGET_MS = 1000.0 / FPS
 MISSING_PICAMERA2 = ("Picamera2 isn't available: on Raspberry Pi OS `sudo apt install python3-picamera2` (a venv "
                      "needs --system-site-packages to see it). Without it, `rpicam-hello -n -t 10000 --metadata "
@@ -88,12 +59,8 @@ Output (--out DIR, default <root>/runs/meta_<timestamp>):
 """
 
 
-# =============================================================================
-# Controls
-# =============================================================================
-
 def _libcamera_enum(name: str, value: str):
-    """libcamera.controls.<name>Enum's member called value (any case, - and _ ignored)."""
+    """The enum member called value, ignoring case, - and _."""
     from libcamera import controls                      # only on the Pi
     enum = getattr(controls, f"{name}Enum", None)
     if enum is None:
@@ -106,13 +73,7 @@ def _libcamera_enum(name: str, value: str):
 
 
 def to_libcamera_controls(controls: dict, enum_lookup=_libcamera_enum) -> dict:
-    """
-    libcamerasrc controls (exposure-value=-1, awb-mode=daylight) as Picamera2's
-    ({"ExposureValue": -1, "AwbMode": <AwbModeEnum.Daylight>}).
-
-    Raises:
-        ValueError: An enum name the control doesn't have.
-    """
+    """libcamerasrc's names as Picamera2's. ValueError for an enum name the control doesn't have."""
     out = {}
     for key, value in controls.items():
         name = "".join(w[:1].upper() + w[1:] for w in key.split("-"))
@@ -120,22 +81,10 @@ def to_libcamera_controls(controls: dict, enum_lookup=_libcamera_enum) -> dict:
     return out
 
 
-# =============================================================================
-# One frame
-# =============================================================================
-
 def frame_row(n: int, md: dict, now_ns: int, t0_ns: int | None, detection: dict | None) -> dict:
     """
-    One frame's row.
-
-    Inputs:
-        md: The request's metadata (libcamera's names).
-        now_ns: time.monotonic_ns() when Python had the frame. The sensor
-            timestamp is on the same clock (the V4L2 buffer's), so the
-            difference is the sensor-to-Python time; past MAX_LATENCY_MS
-            or negative it's dropped as a clock mismatch.
-        t0_ns: The first frame's sensor timestamp: t_s counts from it.
-        detection: {label, confidence, white_px} or None (--no-detect).
+    now_ns and the sensor timestamp share a clock, so their difference is sensor-to-Python
+    time; past MAX_LATENCY_MS or negative it's dropped as a clock mismatch.
     """
     sensor_ns = md.get("SensorTimestamp")
     lat = None if sensor_ns is None else (now_ns - sensor_ns) / 1e6
@@ -157,7 +106,7 @@ def _r(v, digits=3):
 
 
 def detect(frame, n: int, ts_ms: int, config) -> dict:
-    """The color branch on the frame's traffic ROI, as the robot runs it: {label, confidence, white_px}."""
+    """The color branch on the traffic ROI, as the robot runs it."""
     from src.perception.color_branch import run_color_stage
     from src.perception.preprocess import preprocess_frame
     from src.perception.roi_crop import crop_rois
@@ -169,12 +118,7 @@ def detect(frame, n: int, ts_ms: int, config) -> dict:
             "white_px": None if white is None else int((white > 0).sum())}
 
 
-# =============================================================================
-# Recording
-# =============================================================================
-
 def open_camera(controls: dict, factory=None):
-    """Picamera2 configured like the robot's capture, started. factory: Picamera2 (injectable)."""
     if factory is None:
         from picamera2 import Picamera2
         factory = Picamera2
@@ -185,8 +129,8 @@ def open_camera(controls: dict, factory=None):
     except ImportError:                                  # a fake camera in tests
         transform = None
     config = cam.create_video_configuration(
-        main={"size": (FRAME_W, FRAME_H), "format": "RGB888"},       # RGB888 is BGR in memory: OpenCV's order
-        raw={"size": SENSOR_SIZE},                                    # SENSOR_CONFIG's mode, so the field of view matches
+        main={"size": (FRAME_W, FRAME_H), "format": "RGB888"},       # BGR in memory, OpenCV's order
+        raw={"size": SENSOR_SIZE},                                    # the robot's mode, so the view matches
         controls={"FrameRate": float(FPS), **controls},
         **({"transform": transform} if transform is not None else {}))
     cam.configure(config)
@@ -196,17 +140,7 @@ def open_camera(controls: dict, factory=None):
 
 def record(out_dir, seconds: float = SECONDS, controls: dict | None = None, save_every: int = 0,
            detect_fn=None, camera=None, clock_ns=time.monotonic_ns, max_frames: int | None = None) -> list[dict]:
-    """
-    The camera for seconds (or max_frames, or Ctrl-C); every frame's row.
-
-    Inputs:
-        controls: Picamera2 controls (to_libcamera_controls' output).
-        save_every: Keep every Nth frame as frames/<frame>.png; 0 keeps none.
-        detect_fn: (frame, n, ts_ms) -> detection dict, or None to skip.
-        camera: A started camera (open_camera's); opened here when None.
-    Outputs:
-        The rows; frames.csv, meta.json and summary.txt written to out_dir.
-    """
+    """The camera for seconds, max_frames or until Ctrl-C; writes frames.csv, meta.json and summary.txt."""
     import cv2
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -254,10 +188,6 @@ def record(out_dir, seconds: float = SECONDS, controls: dict | None = None, save
     return rows
 
 
-# =============================================================================
-# Summary
-# =============================================================================
-
 def _stats(xs: list) -> dict | None:
     v = sorted(float(x) for x in xs if x not in (None, ""))
     if not v:
@@ -267,7 +197,7 @@ def _stats(xs: list) -> dict | None:
 
 
 def _light(r: dict) -> float | None:
-    """Exposure x total gain: how much light the sensor gathered for a frame, in exposure-us units."""
+    """Exposure x total gain: the light the sensor gathered."""
     e, a = r.get("exposure_us"), r.get("analogue_gain")
     if e in (None, "") or a in (None, ""):
         return None
@@ -275,7 +205,6 @@ def _light(r: dict) -> float | None:
 
 
 def summarize(rows: list[dict]) -> dict:
-    """Ranges of every numeric field, the frame rate, AE settling, and per label the light it got."""
     s = {"frames": len(rows), "fields": {k: _stats([r.get(k) for r in rows]) for k in NUMERIC},
          "light": _stats([_light(r) for r in rows])}
     ts = [float(r["t_s"]) for r in rows if r.get("t_s") not in (None, "")]
@@ -295,7 +224,6 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def findings(s: dict) -> list[str]:
-    """What the recording says, in words."""
     out = []
     light = s["light"]
     if light and light["min"] > 0 and light["max"] / light["min"] > EXPOSURE_SWING:
@@ -325,7 +253,6 @@ def findings(s: dict) -> list[str]:
 
 
 def summary_lines(s: dict, meta: dict | None = None) -> list[str]:
-    """summary.txt."""
     meta = meta or {}
     f = s["fields"]
     rng = lambda st, spec=".0f": "--" if st is None else (                                  # noqa: E731
@@ -354,12 +281,7 @@ def summary_lines(s: dict, meta: dict | None = None) -> list[str]:
     return lines
 
 
-# =============================================================================
-# Command line
-# =============================================================================
-
 def cli(argv: list[str] | None = None) -> int:
-    """python3 -m src.diagnostics.frame_meta [--seconds S] [--save-every N] [--camera-control K=V] [--no-detect] [--out DIR]"""
     ap = argparse.ArgumentParser(prog="python3 -m src.diagnostics.frame_meta", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=SECONDS, metavar="S", help=f"how long (default {SECONDS:.0f})")

@@ -1,23 +1,13 @@
-"""Frame conditioning that feeds the geometry and color branches.
+"""Preprocessing: one captured frame into the gray and color frames the branches read.
 
 Purpose:
-    Conditions each captured BGR frame before ROI cropping splits the
-    pipeline into branches. Owns the BGR -> gray conversion: the geometry
-    branch rejects 3-channel input, so the conversion happens here and
-    nowhere else. Lens undistortion also lives here, ahead of the split, so
-    both branches see the same corrected geometry.
+    Everything done to the whole frame before the ROIs split it: lens
+    undistortion, so every branch sees the same geometry, and the one BGR
+    to gray conversion.
 
 Main package:
-    PreprocessResult: a blurred gray frame for the lane and sign ROIs, a
-    blurred BGR frame for the traffic and color sign ROIs (HSV thresholding
-    and the sign's redness need the chroma that gray discards), the unblurred undistorted frame that detection
-    coordinates refer to, and the frame identity carried from capture.
-
-Flow:
-    1. Validate the frame and blur kernels.
-    2. Undistort, if a calibration is configured.
-    3. Gray path: convert, optionally equalize, blur.
-    4. Color path: blur.
+    PreprocessResult: blurred gray and color frames, and the unblurred
+    undistorted frame that detection coordinates refer to.
 """
 
 import json
@@ -34,43 +24,34 @@ from src.capture.camera import FrameData
 
 @dataclass(frozen=True)
 class PreprocessParams:
-    """Tuning for the preprocessing stage. Kernels are (width, height) px, odd and positive."""
-    # Anisotropic on purpose: more smoothing across a lane line than along
-    # it, so fragments bridge without the line thinning out.
+    """Kernels are (width, height) px, odd and positive."""
+    # Wider than tall: fragments of a lane line bridge without it thinning
     gray_kernel: tuple[int, int] = (9, 3)
-    gray_sigma: float = 0.0             # 0.0 derives sigma from the kernel size
+    gray_sigma: float = 0.0             # 0.0: from the kernel size
     color_kernel: tuple[int, int] = (3, 3)
-    color_sigma: float = 0.0            # 0.0 derives sigma from the kernel size
-    # Off: it lifted sensor noise enough to cost more in false contours than
-    # it bought in contrast. Kept so the report comparison can be regenerated.
-    # Turning it on invalidates the LaneContourFilter.min_intensity tuning.
+    color_sigma: float = 0.0            # 0.0: from the kernel size
+    # Off: the noise it lifts cost more in false contours than it gained.
+    # On, it invalidates the min_intensity gates
     equalize: bool = False
-    # JSON from tools/calibrate_camera.py; None disables undistortion. Only
-    # valid for the resolution, sensor mode, flip and focus it was captured at.
+    # None: no undistortion. Valid only for the mode, size, flip and focus it was captured at
     calibration_path: str | None = None
-    # [0, 1]. 0.0 crops to valid pixels. Higher keeps more field of view but
-    # adds a curved black border whose edge the geometry branch picks up as a
-    # false contour. Leave at 0.0 unless the ROI is kept clear of the border.
+    # 0.0 crops to valid pixels; higher keeps more view but adds a black border geometry reads as a contour
     undistort_alpha: float = 0.0
 
 
 @dataclass(frozen=True)
 class PreprocessResult:
-    """Output of the preprocessing stage. frame_id and timestamp_ms are copied from FrameData, never re-derived."""
     gray: np.ndarray        # (H, W) uint8, blurred; source for the lane and sign ROIs
     color: np.ndarray       # (H, W, 3) uint8 BGR, blurred; source for the traffic ROI and sign_color_roi
     frame_id: int
     timestamp_ms: int
-    # (H, W, 3) uint8 BGR, unblurred. Detection coordinates refer to this
-    # frame, so draw debug overlays here, not on the raw capture. Same array
-    # as the input frame when undistortion is off.
+    # Unblurred; detection coordinates refer to it, so overlays are drawn here
     undistorted: np.ndarray | None = None
 
 
 def _validate_frame(
     frame: np.ndarray
 ) -> None:
-    """Reject frames the stage can't condition, naming what arrived instead of letting OpenCV raise from inside a kernel."""
     if frame is None:
         raise ValueError("preprocess: frame is None")
     if frame.ndim not in (2, 3):
@@ -82,11 +63,11 @@ def _validate_frame(
     if frame.dtype != np.uint8:
         raise TypeError(f"preprocess: expected uint8, got {frame.dtype}")
 
+
 def _validate_kernel(
     kernel: tuple[int, int],
     name: str
 ) -> None:
-    """Name the offending parameter when a kernel isn't odd and positive, instead of a context-free OpenCV assertion."""
     if len(kernel) != 2:
         raise ValueError(f"preprocess: {name} must be (width, height), got {kernel}")
     for axis, size in zip(("width", "height"), kernel):
@@ -96,26 +77,20 @@ def _validate_kernel(
             )
 
 
-@lru_cache(maxsize=4)   # one configuration is live per run; headroom for A/B comparisons
+@lru_cache(maxsize=4)
 def _undistort_maps(
     path: str,
     width: int,
     height: int,
     alpha: float
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """
-    Load the calibration and build remap tables, once per (path, size, alpha).
-
-    Outputs:
-        (map1, map2) for cv2.remap, or None if the file doesn't exist. The
-        None is cached too, so the missing-file warning fires once per run.
-    """
+    """Remap tables, built once per (path, size, alpha); None for a missing file, cached so it warns once."""
     calib_file = Path(path)
     if not calib_file.is_file():
         warnings.warn(
             f"preprocess: calibration {calib_file} not found; "
             "undistortion is OFF for this run. "
-            "Run tools/calibrate_camera.py to create it.",
+            "Create it: python3 -m src.scripts.calibrate_camera (make calib-camera).",
             stacklevel=2,
         )
         return None
@@ -134,27 +109,14 @@ def _undistort_maps(
     new_K, _ = cv2.getOptimalNewCameraMatrix(K, dist, size, alpha, size)
     return cv2.initUndistortRectifyMap(K, dist, None, new_K, size, cv2.CV_16SC2)
 
+
 def undistort(
     frame: np.ndarray,
     params: PreprocessParams
 ) -> np.ndarray:
     """
-    Remove lens distortion so straight lines in the world stay straight in the frame.
-
-    Inputs:
-        params: calibration_path selects the calibration (None = pass-through);
-            undistort_alpha trades field of view against a black border.
-
-    Outputs:
-        Corrected BGR frame, same size as the input. The input array itself
-        when undistortion is off or the calibration file is missing.
-
-    Side effects:
-        The first call per configuration reads the calibration file.
-
-    Raises:
-        ValueError: If undistort_alpha is outside [0, 1], or the calibration
-            resolution doesn't match the frame.
+    The frame with lens distortion removed; the input itself when it's off or the file
+    is missing. ValueError if undistort_alpha is outside [0, 1] or the sizes differ.
     """
     if params.calibration_path is None:
         return frame
@@ -177,33 +139,13 @@ def undistort(
 def to_grayscale(
     frame: np.ndarray
 ) -> np.ndarray:
-    """
-    Convert a BGR frame to single-channel.
-
-    Inputs:
-        frame: (H, W, 3) uint8 BGR. Not validated here; the caller owns that.
-
-    Outputs:
-        (H, W) uint8 gray.
-    """
     return cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
 
 def histogram_equalization(
     gray: np.ndarray
 ) -> np.ndarray:
-    """
-    Stretch intensities across the full 8-bit range to raise contrast.
-
-    Inputs:
-        gray: (H, W) uint8. cv2.equalizeHist rejects 3-channel input, so
-            convert with to_grayscale() first.
-
-    Outputs:
-        Equalized (H, W) uint8.
-
-    Raises:
-        ValueError: If the input isn't single-channel.
-    """
+    """ValueError unless the input is single-channel."""
     if gray.ndim != 2:
         raise ValueError(
             f"preprocess: equalizeHist needs single-channel, got {gray.shape}. "
@@ -211,31 +153,13 @@ def histogram_equalization(
         )
     return cv2.equalizeHist(gray)
 
+
 def gaussian_blur(
     frame: np.ndarray,
     kernel_size: tuple[int, int] = (5, 5),
     sigma: float = 0.0
 ) -> np.ndarray:
-    """
-    Suppress high-frequency sensor noise before edge detection and HSV thresholding.
-
-    Purpose:
-        Reduces false contours and spurious mask blobs without moving coarse
-        structural features.
-
-    Inputs:
-        frame: (H, W) gray or (H, W, 3) BGR, uint8.
-        kernel_size: (width, height) px, both odd and positive. Larger
-            kernels suppress more noise but soften thin features.
-        sigma: 0.0 derives sigma from the kernel size. Larger values blur
-            harder within the same kernel.
-
-    Outputs:
-        Blurred array, same shape and dtype as the input.
-
-    Raises:
-        ValueError: If kernel_size isn't odd and positive.
-    """
+    """ValueError unless kernel_size is odd and positive. sigma 0.0 derives it from the kernel."""
     _validate_kernel(kernel_size, "kernel_size")
     return cv2.GaussianBlur(frame, kernel_size, sigma)
 
@@ -244,29 +168,11 @@ def preprocess_frame(
     frame_data: FrameData,
     params: PreprocessParams = PreprocessParams()
 ) -> PreprocessResult:
-    """
-    Run the preprocessing stage on one captured frame.
-
-    Inputs:
-        params: Blur, equalization and undistortion settings. The default
-            runs with neither undistortion nor equalization.
-
-    Outputs:
-        PreprocessResult with both branch inputs and the undistorted frame,
-        with frame_id and timestamp_ms carried forward unchanged.
-
-    Side effects:
-        The first call per configuration reads the calibration file.
-
-    Raises:
-        ValueError / TypeError: If the frame or a blur kernel is malformed,
-            or the calibration doesn't match the frame size.
-    """
+    """ValueError or TypeError if the frame or a kernel is malformed, or the calibration's size differs."""
     _validate_frame(frame_data.frame)
     _validate_kernel(params.gray_kernel, "gray_kernel")
     _validate_kernel(params.color_kernel, "color_kernel")
 
-    # Undistort once, before the split, so both branches share the geometry
     frame = undistort(frame_data.frame, params)
 
     gray = to_grayscale(frame)

@@ -26,7 +26,7 @@ import src.linker_io as lio
 import src.navigation_linker as nl
 from src.tests.navigation_checks import reach_frames
 from src.navigation.stop_sign import STOP_SIGN_HOLD_TIME_MS
-from src.estimation.estimation import SensorSample
+from src.peripherals.sensing import SensorSample
 from src.peripherals.sensing import SensorBatch, SensorReading
 from src.navigation.navigation import Navigation
 from src.navigation.navigation_contract import BRAKE, Command
@@ -41,12 +41,13 @@ class Camera:
     """FrameSource stand-in: one scene per frame from a script, advancing the fake clock by DT per read."""
     fps, label = 20, "sim"
 
-    def __init__(self, clock, script=("two_boundary",), end_at=None, fail_at=None, drop_at=()):
+    def __init__(self, clock, script=("two_boundary",), end_at=None, fail_at=None, drop_at=(), late_at=None):
         self.clock, self.script, self.end_at, self.fail_at, self.drop_at = clock, script, end_at, fail_at, drop_at
+        self.late_at = late_at or {}            # {frame: extra seconds its read waits}
         self.i, self.closed = 0, False
 
     def read(self):
-        self.clock.now += DT
+        self.clock.now += DT + self.late_at.get(self.i + 1, 0.0)
         self.i += 1
         if self.i == self.fail_at:
             raise KeyboardInterrupt
@@ -139,10 +140,6 @@ def rows(path):
     with open(path) as f:
         return list(csv.DictReader(f))
 
-
-# =============================================================================
-# A run
-# =============================================================================
 
 @pytest.mark.software
 def test_a_run_writes_the_whole_folder_and_renders_the_video(tmp_path):
@@ -237,10 +234,6 @@ def test_reason_changes_are_logged_as_events(tmp_path):
     assert len(events) == 1 + sum(a != b for a, b in zip(reasons, reasons[1:]))
 
 
-# =============================================================================
-# The contract
-# =============================================================================
-
 @pytest.mark.software
 def test_a_command_that_breaks_the_contract_is_braked_and_counted(tmp_path):
     class Stalls:
@@ -284,10 +277,6 @@ def test_the_intersection_stage_and_maneuver_are_logged(tmp_path):
     assert (row["stage"], row["maneuver"], row["step"], row["reason"]) == ("turn", "left", "1/1 left", "turning")
     assert (row["heading_deg"], row["turn_end"]) == ("-42.5", "gyro target")
 
-
-# =============================================================================
-# How a run ends
-# =============================================================================
 
 @pytest.mark.software
 def test_the_run_time_cap_ends_the_run_and_stops_the_motors(tmp_path):
@@ -381,10 +370,6 @@ def test_dropped_camera_frames_are_counted_and_skipped(tmp_path):
     assert rep["run"]["camera_drops"] == 2 and rep["run"]["frames"] == 6
 
 
-# =============================================================================
-# Sensors and the start button
-# =============================================================================
-
 @pytest.mark.software
 def test_sensor_readings_reach_the_packet_and_the_sensors_are_stopped(tmp_path):
     sensors = Sensors(SensorSample(yaw_rate_dps=0.0, left_wheel_cps=900.0, right_wheel_cps=880.0))
@@ -424,6 +409,22 @@ def test_imu_read_times_and_reads_per_frame_reach_nav_csv_the_report_and_the_sum
 
 
 @pytest.mark.software
+def test_the_sensor_hubs_priority_reaches_the_report_and_the_summary(tmp_path):
+    sensors = TimedSensors()
+    sensors.priority = "normal (not permitted: Operation not permitted (rtprio limit 0))"
+    rep, out, *_ = go(tmp_path, sensors=sensors)
+    assert rep["sensors"]["hub_priority"] == sensors.priority
+    assert f"failed; hub {sensors.priority}" in (out / "summary.txt").read_text()
+    fifo = TimedSensors()
+    fifo.priority, fifo.fifo_overflows = "no thread (the IMU's FIFO)", 0
+    rep3, out3, *_ = go(tmp_path / "c", sensors=fifo)
+    assert rep3["sensors"]["fifo_overflows"] == 0
+    assert "hub no thread (the IMU's FIFO), FIFO overflows 0" in (out3 / "summary.txt").read_text()
+    plain, out2, *_ = go(tmp_path / "b", sensors=TimedSensors())          # sensors that don't say: no mention
+    assert plain["sensors"]["hub_priority"] is None and "; hub " not in (out2 / "summary.txt").read_text()
+
+
+@pytest.mark.software
 def test_without_imu_timing_there_is_no_sensors_line(tmp_path):
     rep, out, *_ = go(tmp_path, sensors=Sensors(SensorSample(yaw_rate_dps=0.0)))      # batches aren't kept: None
     assert rep["sensors"] is None and "IMU reads" not in (out / "summary.txt").read_text()
@@ -456,10 +457,6 @@ def test_ctrl_c_while_waiting_for_the_button_still_stops_everything(tmp_path):
     assert motor.calls == [("stop",)] and camera.closed
 
 
-# =============================================================================
-# The summary
-# =============================================================================
-
 @pytest.mark.software
 def test_nav_stats_counts_driving_braking_steering_and_latency():
     s = nl.NavStats()
@@ -484,10 +481,6 @@ def test_an_empty_run_still_summarizes():
                                       "recorder_dropped": 0}})
     assert lines[0] == "[NAVIGATION] ended by x   motors OFF (dry run)"
 
-
-# =============================================================================
-# Command line
-# =============================================================================
 
 @pytest.fixture
 def cli_env(monkeypatch, tmp_path):
@@ -641,7 +634,6 @@ def test_the_stop_line_distance_is_logged_only_while_the_line_is_voted(tmp_path,
     assert logged[3] == "8.0" and logged[4] == "" and logged[2] == ""
 
 
-
 @pytest.mark.software
 def test_a_lane_that_stays_lost_ends_the_run_as_the_end_of_the_course(tmp_path):
     # The blind scene has no lane; Phase 3 holds, goes stale, the end-of-course rule creeps then finishes
@@ -693,6 +685,72 @@ def test_the_default_route_is_config_s(cli_env):
     nl.cli(["--frames", str(tmp)])
     assert got["navigator"].progress.route == load_route(ROUTE_PATH)
 
+
+@pytest.mark.software
+def test_a_late_frame_is_written_to_stalls_csv_and_named_in_its_event(tmp_path):
+    rep, out, *_ = go(tmp_path, cam={"end_at": 9, "late_at": {2: 1.0, 6: 0.4}})
+    stalls = rows(out / "stalls.csv")
+    assert [s["frame_id"] for s in stalls] == ["6"]                  # frame 2's gap follows the first frame: start-up
+    assert float(stalls[0]["gap_ms"]) == pytest.approx(450.0, abs=1.0)
+    assert float(stalls[0]["capture_ms"]) == pytest.approx(450.0, abs=1.0)
+    assert float(stalls[0]["outside_ms"]) == pytest.approx(0.0, abs=1.0)
+    assert rep["run"]["stalls"] == 1 and rep["run"]["stall_ms"] == 150.0
+    events = {r["frame_id"]: r["event"] for r in rows(out / "nav.csv")}
+    assert "stall: see stalls.csv" in events["6"] and "stall" not in events["2"]
+    assert " stalls                1 gaps of 150 ms or more between frames (stalls.csv)" in \
+        (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_record_off_saves_no_frames_but_keeps_the_logs(tmp_path):
+    rep, out, *_ = go(tmp_path, record=False, render=True)
+    assert not (out / "frames").exists() and not (out / "records.pkl").exists()
+    assert (out / "nav.csv").exists() and (out / "report.json").exists()
+    assert rep["run"]["recorder"] is False and rep["run"]["recorder_written"] == 0
+    assert "video_frames" not in rep["run"]                                # nothing to render
+    assert "recorder off" in (out / "summary.txt").read_text()
+    on, out2, *_ = go(tmp_path / "b")
+    assert on["run"]["recorder"] is True and (out2 / "records.pkl").exists()
+
+
+@pytest.mark.software
+def test_warm_up_takes_one_frame_before_the_start_and_logs_none_of_it(tmp_path):
+    cold, *_ = go(tmp_path / "cold")
+    warm, out, *_ = go(tmp_path / "warm", warmup=True)
+    assert cold["run"]["warmup_ms"] is None and warm["run"]["warmup_ms"] is not None
+    assert warm["run"]["frames"] == cold["run"]["frames"] - 1
+    assert rows(out / "nav.csv")[0]["frame_id"] == "2"                  # frame 1 was the warm-up's
+
+
+@pytest.mark.software
+def test_the_motor_watchdogs_status_and_trips_reach_the_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(Motor, "watchdog_status", "python + pigpiod", raising=False)
+    monkeypatch.setattr(Motor, "watchdog_trips", 2, raising=False)
+    rep, out, *_ = go(tmp_path)
+    assert rep["motor_watchdog"] == {"status": "python + pigpiod", "trips": 2}
+    assert "watchdog python + pigpiod, 2 trips" in (out / "summary.txt").read_text()
+
+
+@pytest.mark.software
+def test_a_run_without_stalls_writes_no_stalls_csv(tmp_path):
+    rep, out, *_ = go(tmp_path)
+    assert rep["run"]["stalls"] == 0 and not (out / "stalls.csv").exists()
+
+
+@pytest.mark.software
+def test_the_label_and_the_code_reach_the_report_and_the_summary(tmp_path):
+    rep, out, *_ = go(tmp_path, label="recorder off")
+    assert rep["label"] == "recorder off" and set(rep["code"]) == {"commit", "uncommitted_changes"}
+    assert (out / "summary.txt").read_text().startswith("[recorder off] [NAVIGATION]")
+    plain, out2, *_ = go(tmp_path / "b")
+    assert plain["label"] == "" and (out2 / "summary.txt").read_text().startswith("[NAVIGATION]")
+
+
+@pytest.mark.software
+def test_the_label_from_the_command_line_reaches_the_run(cli_env):
+    got, tmp = cli_env
+    assert nl.cli(["--camera", "--out", str(tmp / "o"), "--label", "new tires"]) == 0
+    assert got["label"] == "new tires"
 
 
 @pytest.mark.software

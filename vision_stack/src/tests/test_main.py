@@ -114,14 +114,14 @@ class System:
 
 
 def go(route=Route(("left",)), max_run_s=main.MAX_RUN_S, system_kw=None, motor_kw=None, battery=None,
-       **camera_kw):
+       warmup=False, **camera_kw):
     clock, log = FakeClock(), []
     camera = Camera(clock, log, **camera_kw)
     sensors, motor, system = Sensors(camera, log), Motor(log, **(motor_kw or {})), System(log, **(system_kw or {}))
     pipeline = Pipeline(SCENE_CONFIG, route=route)
     sleeps = []
     result = main.run(camera, sensors, motor, pipeline, system, route, clock=clock, sleep=sleeps.append,
-                      max_run_s=max_run_s, battery=battery)
+                      max_run_s=max_run_s, battery=battery, warmup=warmup)
     return result, motor, system, log, pipeline, sleeps
 
 
@@ -130,10 +130,6 @@ def stepped_commands(route, n):
     pipeline = Pipeline(SCENE_CONFIG, route=route)
     return [pipeline.step(sf.frame, sf.frame_id, sf.timestamp_ms, sf.sensors) for sf in COURSE[:n]]
 
-
-# =============================================================================
-# A run
-# =============================================================================
 
 @pytest.mark.software
 def test_a_finished_course_drives_the_pipelines_commands_then_halts():
@@ -207,6 +203,24 @@ def test_a_healthy_battery_or_one_that_wont_start_changes_nothing():
 
 
 @pytest.mark.software
+def test_a_warm_up_frame_runs_before_the_start_and_changes_nothing_after():
+    # The warm-up takes the course's first frame, so the run proper starts on the second; it must
+    # drive exactly as a run started on that frame with no warm-up
+    warm, motor, system, log, pipeline, _ = go(warmup=True)
+    cold, motor_cold, *_ = go(sequence=COURSE[1:])
+    assert warm.frames == cold.frames and motor.commands == motor_cold.commands
+    assert pipeline.processor is not None and warm.ended_by == cold.ended_by
+
+
+@pytest.mark.software
+def test_warm_up_is_phase_2_only():
+    pipeline = Pipeline(SCENE_CONFIG, route=Route(("left",)))
+    before = (pipeline.last_packet, pipeline.navigation.progress.step, pipeline.last_timings_ms)
+    ms = pipeline.warm_up(COURSE[0].frame)
+    assert ms > 0 and (pipeline.last_packet, pipeline.navigation.progress.step, pipeline.last_timings_ms) == before
+
+
+@pytest.mark.software
 def test_ctrl_c_halts_the_motors_first():
     result, motor, _, log, _, _ = go(raise_at=10)
     assert (result.ended_by, result.frames, result.error) == (main.END_INTERRUPT, 9, None)
@@ -256,10 +270,6 @@ def test_halt_brakes_then_stands_by_and_stops_even_if_the_brake_fails():
     assert log == ["motor stop"]
 
 
-# =============================================================================
-# The screens
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("route, text", [(Route(), "St 0"), (Route(("left",) * 3), "St 3"),
                                          (Route(("left",) * 12), "St12"), (Route(("left",) * 120), "St99")])
@@ -276,7 +286,8 @@ def test_early_code(step, code):
 @pytest.mark.software
 @pytest.mark.parametrize("ended_by, screens", [
     (main.END_FINISHED, [42.5]), (main.END_INTERRUPT, [42.5]), (main.END_ERROR, ["Err "]),
-    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5]), (main.END_BATTERY, ["Lo-b", 42.5])])
+    (main.END_EARLY, ["E  2", 42.5]), (main.END_CAP, ["E  t", 42.5]), (main.END_BATTERY, ["Lo-b", 42.5]),
+    (main.END_STALLED, ["StAL", 42.5])])
 def test_end_screen(ended_by, screens):
     assert main.end_screen(main.RunResult(ended_by, 42.5, 100, 2)) == screens
 
@@ -301,10 +312,6 @@ def test_mm_ss_and_the_summary():
     assert (main.mm_ss(65.9), main.mm_ss(0), main.mm_ss(6000)) == ("01:05", "00:00", "99:00")
     assert main.summary(main.RunResult(main.END_EARLY, 65.0, 1300, 2)) == "ended early at step 2 after 01:05 (1300 frames)"
 
-
-# =============================================================================
-# The command line
-# =============================================================================
 
 @pytest.fixture
 def hardware(monkeypatch):
@@ -332,6 +339,9 @@ def hardware(monkeypatch):
             if made.get("camera_fails"):
                 raise CaptureError("no camera")
             return self
+
+        def read(self):
+            return None                  # no frame yet: the warm-up is skipped
 
         def release(self):
             log.append("camera released")

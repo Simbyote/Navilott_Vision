@@ -13,7 +13,6 @@ import json
 from dataclasses import replace
 
 import cv2
-import numpy as np
 import pytest
 
 import src.analysis.sign_check as sc

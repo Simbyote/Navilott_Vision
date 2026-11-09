@@ -52,10 +52,6 @@ def trace(*groups):
                      + [line for g in groups for line in g]) + "\n"
 
 
-# =============================================================================
-# Parsing and assembly
-# =============================================================================
-
 @pytest.mark.software
 def test_events_parse_in_the_kernels_formats():
     text = "\n".join([
@@ -122,10 +118,6 @@ def test_a_new_first_message_starts_a_new_transfer():
     assert t["start_s"] == 1.5
 
 
-# =============================================================================
-# The system
-# =============================================================================
-
 @pytest.mark.software
 def test_bus_clocks_from_the_device_tree_or_assumed(tmp_path):
     a = tmp_path / "i2c-adapter"
@@ -190,10 +182,6 @@ def test_record_trace_keeps_the_clock_without_mono_and_restores_on_an_error(tmp_
     assert all((t / "events" / "i2c" / e / "enable").read_text() == "0" for e in it.EVENTS)
     assert it.find_tracefs([tmp_path / "nope", t]) == t and it.find_tracefs([tmp_path / "nope"]) is None
 
-
-# =============================================================================
-# Analysis
-# =============================================================================
 
 FAST_US = 600.0         # an IMU read at 400 kHz: 1.5x its 390 us wire time, under every threshold
 
@@ -299,10 +287,6 @@ def test_summary_lists_buses_devices_and_findings():
     assert "  none" in "\n".join(it.summary_lines(analyzed(trace())))
 
 
-# =============================================================================
-# Figure, folder and command line
-# =============================================================================
-
 @pytest.mark.software
 def test_figure_draws_and_skips_without_matplotlib_or_transfers(tmp_path, monkeypatch):
     pytest.importorskip("matplotlib")
@@ -367,10 +351,6 @@ def test_cli_needs_root_and_tracefs_then_records_and_hands_the_folder_back(tmp_p
     monkeypatch.setattr(it, "record_trace", lambda tf, s: (trace(), s, 0, "local"))
     assert it.cli(["--out", str(tmp_path / "empty"), "--no-figure"]) == 1             # nothing traced
 
-
-# =============================================================================
-# On the Pi
-# =============================================================================
 
 @pytest.mark.hardware
 def test_i2c_trace_on_the_pi(artifacts):

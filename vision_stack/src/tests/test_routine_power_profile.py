@@ -20,7 +20,7 @@ import pytest
 
 import src.routines.harness as h
 import src.routines.power_profile as pp
-from src.diagnostics.battery import Power
+from src.peripherals.battery import Power
 from src.tests.test_routines import Person, no_conditions
 
 
@@ -184,10 +184,6 @@ def test_without_the_adc_it_says_so_and_still_runs(tmp_path, monkeypatch):
     assert "no battery ADC" in p.said() and r._power is None and r._read == r._read_pi
     assert ctx.options == {"stage_s": pp.STAGE_S, "duty": pp.BASE_SPEED}
 
-
-# =============================================================================
-# The real loads, on fake hardware
-# =============================================================================
 
 @pytest.mark.software
 def test_the_motors_load_keeps_refreshing_the_duty_then_stops(monkeypatch):

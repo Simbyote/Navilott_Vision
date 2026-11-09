@@ -24,14 +24,17 @@ from src.tests.scenes import SCENE_CONFIG, SCENES
 
 LANE = SCENE_CONFIG.lane_offset
 
+
 def results(*names, processor=None):
     """Phase3Results for a run of scenes, one frame each, 50 ms apart."""
     processor = processor or TracedPhase3Processor()
     return [run_phase3_chain(SCENES[n], i, i * 50, processor, None, SCENE_CONFIG)
             for i, n in enumerate(names)]
 
+
 def view(fps=20):
     return Phase3View(LANE, fps)
+
 
 def shown(v, res, scale=1):
     """extract, observe and render one result, as the linker does."""
@@ -45,16 +48,13 @@ LIGHT = {"label": "red", "confidence": 0.62, "gate": 0.40, "passed": True,
 SIGN = {"label": "stop", "confidence": 0.31, "gate": 0.45, "passed": False,
         "bbox": (5, 5, 20, 20), "source_rect": (360, 60, 100, 100)}
 
+
 def with_detections(res):
     dbg = copy.deepcopy(res.p3_debug)
     dbg["traffic"]["detections"] = [LIGHT]
     dbg["stop_sign"]["detections"] = [SIGN]
     return replace(res, p3_debug=dbg)
 
-
-# =============================================================================
-# Size
-# =============================================================================
 
 @pytest.mark.software
 def test_the_frame_is_as_wide_as_the_camera_frame_and_one_height_for_every_state():
@@ -74,10 +74,6 @@ def test_scale_2_is_twice_scale_1():
     b = view().render(view().extract(r), 2)
     assert b.shape[:2] == (2 * a.shape[0], 2 * a.shape[1])
 
-
-# =============================================================================
-# Edge cases
-# =============================================================================
 
 @pytest.mark.software
 def test_the_first_frame_renders_with_an_empty_timeline():
@@ -135,15 +131,12 @@ def test_a_held_distance_renders_with_px_and_cm():
     assert v.render({**d, "dbg": dbg}).shape == v.render(d).shape
 
 
-# =============================================================================
-# What it draws
-# =============================================================================
-
 def _near(img, color, box, tol=30):
     """Pixels close to color inside box (x0, y0, x1, y1)."""
     x0, y0, x1, y1 = box
     patch = img[y0:y1, x0:x1].astype(int)
     return int((abs(patch - color).sum(axis=2) < tol).sum())
+
 
 @pytest.mark.software
 @pytest.mark.parametrize("scale", [1, 2])
@@ -184,10 +177,6 @@ def test_the_lane_bar_is_colored_by_status():
     # "none" reports offset 0.0 with nothing behind it: not plotted as a raw measurement
     assert d["dbg"]["lane"]["raw_offset"] == 0.0 and v.history[-1]["raw"] is None
 
-
-# =============================================================================
-# CSV row and summary
-# =============================================================================
 
 @pytest.mark.software
 def test_row_matches_the_header_and_carries_the_decisions():

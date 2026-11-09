@@ -1,27 +1,13 @@
-"""Obstacle view: what the obstacle detector took for "not floor", what survived, and what it measured.
+"""Obstacle view: what the detector took for "not floor", what survived, and what it measured.
 
 Purpose:
-    Lets the obstacle detector's thresholds and gates be checked on real
-    footage (make phase2 VIEWS=obstacle). The top panel is the obstacle ROI
-    in color with every not-floor pixel tinted, each blob that survived the
-    opening boxed by its fate (green: passed, red: the gate that stopped it)
-    and the measured one in white, with an arrow from its base to the view
-    bottom and its distance. The bottom panel is the two masks: gray is not
-    floor, white is what survived the opening. A missed obstacle shows in
-    the bottom panel as never not-floor (too dark, no color: lower
-    min_contrast or min_chroma) or as removed by the opening (narrower
-    than open_px); a false one shows in the top panel with what it really
-    was. The lane ROI's top edge is drawn across both, since distances are
-    counted from the lane ROI's bottom.
-
-    Coordinates are obstacle-ROI-relative.
+    Checks the obstacle thresholds on real footage (make phase2 VIEWS=obstacle).
+    The top panel boxes each surviving blob by fate with the measured one's
+    distance; the bottom shows the not-floor and opened masks, which tell a
+    never-seen obstacle from one opened away.
 
 Main package:
-    ObstacleView: implements the view interface in debug_video.
-
-Flow:
-    1. Pull the obstacle result and its debug (masks, blobs, counts) from the chain.
-    2. Draw both panels, the header and the footer.
+    ObstacleView, a debug_video view in obstacle-ROI coordinates.
 """
 import cv2
 import numpy as np
@@ -36,13 +22,7 @@ C_LANE = (0, 0, 200)            # the lane ROI's top edge (distances count from 
 
 
 class ObstacleView(dv.CandidateView):
-    """
-    Obstacle view; implements the view interface in debug_video, drawing on the obstacle ROI.
-
-    conf_threshold: Unused (the detector has no confidence); taken so
-        live_view can build every view the same way.
-    zoom: Extra magnification on top of the run's scale.
-    """
+    """conf_threshold is unused, accepted so live_view builds every view alike."""
     name = "obstacle"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "floor_level", "threshold", "not_floor_px", "blobs",
                   "passed", *(f"rej_{g}" for g in GATES), "detected", "distance_px", "distance_cm",
@@ -58,18 +38,8 @@ class ObstacleView(dv.CandidateView):
         self._floor = []
         self._counts = {}
 
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
-
     def extract(self, chain, frame=None) -> dict:
-        """
-        This frame's obstacle data from a chain result.
-
-        Reads chain.roi (the obstacle ROI, its rect and the lane ROI's),
-        chain.obstacle (the measurement) and chain.obstacle_debug (floor
-        level, threshold, masks, blobs, reject_counts).
-        """
+        """This frame's obstacle data from chain.roi, chain.obstacle and chain.obstacle_debug."""
         dbg = getattr(chain, "obstacle_debug", None) or {}
         roi = chain.roi
         return {
@@ -141,10 +111,6 @@ class ObstacleView(dv.CandidateView):
                 out.append(f"  {gate:<20}{v:6}")
         return out
 
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
-
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)
         roi = data["roi"]
@@ -165,7 +131,7 @@ class ObstacleView(dv.CandidateView):
 
         pt = lambda x, y, y0: (int(round(x * s)), int(round(y0 + y * s)))
 
-        # The lane ROI's top edge, in obstacle-ROI rows, across both panels
+        # Lane ROI's top edge, across both panels
         lane_top = data["lane_rect"][1] - data["rect"][1]
         if 0 < lane_top < H:
             for y0 in (top_y, bot_y):
@@ -193,7 +159,6 @@ class ObstacleView(dv.CandidateView):
             dv.draw_text(canvas, self._distance(m), (p0[0] + 4, min(p0[1] + lh, top_y + ph - 3)),
                          dv.C_WHITE, fs, th)
 
-        # Header
         rc = data["counts"]
         head_color = dv.C_RED if m is not None else (dv.C_AMBER if data["blobs"] else dv.C_WHITE)
         title = f"#{data['frame_id']}  obstacle"
@@ -206,7 +171,6 @@ class ObstacleView(dv.CandidateView):
         info += f"   floor {data['floor_level']:.0f}  bright >= {data['threshold']:.0f}"
         dv.draw_text(canvas, info, (6, 2 * lh + 2), dv.C_WHITE, fs, th)
 
-        # Footer
         foot = (f"not floor {data['not_floor_px']} px   blobs {len(data['blobs'])}   "
                 + "  ".join(f"{g} {rc.get(g, 0)}" for g in GATES))
         dv.draw_text(canvas, foot, (6, bot_y + ph + lh), dv.C_GRAY, fs, th)
@@ -221,7 +185,7 @@ class ObstacleView(dv.CandidateView):
 
     @staticmethod
     def _tinted(roi: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """The color ROI with not-floor pixels blended toward C_TINT."""
+        """Not-floor pixels blended toward C_TINT."""
         out = roi.copy()
         sel = mask > 0
         out[sel] = (0.55 * out[sel] + 0.45 * np.array(C_TINT)).astype(np.uint8)

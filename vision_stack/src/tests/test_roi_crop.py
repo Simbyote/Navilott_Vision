@@ -344,6 +344,7 @@ def test_roi_crop_characterization(request, frames, artifacts):
         artifacts.image(f"{fid:06d}{TRAFFIC_ROI_SUFFIX}", r.traffic_roi)
         artifacts.image(f"{fid:06d}{SIGN_ROI_SUFFIX}", r.sign_roi)
 
+
 @pytest.mark.software
 def test_the_color_sign_roi_is_the_sign_rect_of_the_color_frame_and_read_only():
     rng = np.random.default_rng(3)

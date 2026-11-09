@@ -1,22 +1,15 @@
 """Gate rejections: which filter throws away the most candidates, per detector.
 
 Purpose:
-    Each detector passes candidates through a chain of gates (area, aspect,
-    intensity, ...), and every candidate lands in exactly one bucket: the
-    gate that rejected it, or accepted. When a detector finds too little,
-    the gate with the largest share is the first threshold to look at; when
-    it finds too much, the accepted share says how permissive the chain is.
+    Every candidate lands in one bucket, the gate that rejected it or
+    accepted. When a detector finds too little, the largest gate is the first
+    threshold to look at; when it finds too much, the accepted share shows
+    how permissive the chain is.
 
 Main package:
-    analyze()            per group: candidates seen, and per gate the total,
-                         share of seen and frames it fired on, largest first
-    gate_rejections.png  one bar chart per group, largest gate at the top
-
-Input:
-    geometry_timing.csv (groups lane, sign) and color_timing.csv (groups red,
-    yellow, green) from the hardware tests; any CSV works whose groups have a
-    <group>_seen column and <group>_<gate> count columns. Give files, run
-    folders (searched recursively) or nothing for the newest of each.
+    analyze(): per group, candidates and each gate's total, share and frames;
+    gate_rejections.png. Reads geometry_timing.csv, color_timing.csv, or any
+    CSV with <group>_seen and <group>_<gate> columns.
 """
 
 import argparse
@@ -43,7 +36,7 @@ Run from vision_stack/, venv active:
 
 
 def groups(columns) -> dict:
-    """{group: [gate columns]} for every <group>_seen column; *_ms columns are never gates."""
+    """{group: [gate columns]} per <group>_seen column; *_ms columns are never gates."""
     out = {}
     for c in columns:
         if c.endswith("_seen"):
@@ -55,15 +48,8 @@ def groups(columns) -> dict:
 
 def analyze(table: Table) -> dict:
     """
-    Outputs:
-        {group: {
-            "frames", "seen" (total candidates),
-            "frames_with_candidates",
-            "gates": [{"gate", "count", "share", "frames"}] rejections by
-                     count, largest first, then accepted last,
-            "unbucketed": seen minus the bucket totals (0 when the counts
-                          are consistent),
-        }}
+    Per group: frames, seen, frames_with_candidates, gates (largest first, accepted
+    last), and unbucketed, 0 when the counts agree.
     """
     found = groups(table.columns)
     if not found:
@@ -99,7 +85,7 @@ def figure(results: dict, title: str, out_path) -> Path | None:
         len(results[n]["gates"]) for n in names) + 0.6 * len(names)), squeeze=False)
     for ax, g in zip(axes[:, 0], names):
         r = results[g]
-        gates = list(reversed(r["gates"]))              # largest ends up on top
+        gates = list(reversed(r["gates"]))              # largest on top
         labels = [x["gate"] for x in gates]
         shares = [100 * x["share"] for x in gates]
         colors = ["#2ca02c" if x["gate"] == ACCEPTED else "#1f77b4" for x in gates]

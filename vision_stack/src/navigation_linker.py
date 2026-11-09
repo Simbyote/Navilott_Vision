@@ -1,43 +1,13 @@
 """Phases 1-3 plus Navigation: the whole chain driving the robot, recorded and rendered afterwards.
 
 Purpose:
-    The integration test of the Navigation step, ahead of adding it to
-    pipeline.py. Every frame runs capture, Phase 2 and the traced Phase 3
-    (run_phase3_chain, reused from phase3_linker), hands the packet to the
-    Navigation subsystem (navigation.Navigation: the stop sign, traffic light
-    and intersection rules over lane keeping, which is everything behind it),
-    checks the Command against the contract, and drives the motors with it. Nothing is drawn while the robot
-    drives: frames and per-frame records go to disk on linker_io's
-    background recorder, and nav.avi is rendered once the run ends, so the
-    run measures the real control loop.
-
-    The motors only run with the camera. --no-motors is a bench dry run, and
-    --video / --frames replays are always dry: they show what the navigator
-    would have commanded on recorded footage.
+    The instrumented twin of the production run. Nothing is drawn while it
+    drives, so the run measures the real control loop; nav.avi is rendered
+    after. Replays and --no-motors are dry runs.
 
 Main package:
-    run(): one run; returns its findings. The run folder holds nav.csv,
-    p3.csv, frames/, records.pkl, report.json, summary.txt and, after
-    rendering, nav.avi.
-    NavStats: the [NAVIGATION] summary: how the run ended, which rule decided
-    how many frames, time driving and braked (and why), steering, command
-    latency, the IMU's read times and reads per frame (nav.csv: imu_reads,
-    imu_read_ms, imu_failed), and the battery (start, lowest, end, and how
-    long its ADC reads take) when it's monitored.
-
-Flow:
-    1. Open the source, sensors, motors and start button; wait for the press.
-    2. Per frame: read the camera and sensors, run the vision chain, ask the
-       navigator, check the command, drive the motors, log, queue the frame.
-    3. On the navigator finishing (end of course), the run-time cap, a
-       critical battery, the source ending, the caller's stop_when, Ctrl-C or
-       an error: stop the motors first, flush the recorder, write the summary.
-
-    The battery (diagnostics.battery_run), with the camera only: judged at
-    rest before the start (a critical pack refuses to drive the motors; a
-    low one, or any pack on a dry run, only warns), watched from the start,
-    and logged per frame in nav.csv (battery_v, battery_state).
-    4. Render nav.avi from the recording, and play it if there's a display.
+    The run folder: nav.csv (every frame), p3.csv, report.json, summary.txt,
+    frames/ and nav.avi.
 """
 import argparse
 import csv
@@ -51,25 +21,28 @@ from dataclasses import replace
 
 import numpy as np
 
+from src.analysis import motor_health
+from src.analysis.common import Table
 from src.capture.camera import parse_controls
 from src.config import MEASURED, MEASURED_ESTIMATION, ROUTE_PATH, PipelineConfig
 from src.debugger.debug_navigation import VIDEO_FILE, render_run
 from src.debugger.live_view import Display
-from src.diagnostics import battery_run
+from src.peripherals import battery_run
+from src.diagnostics.pressure import StallLog
 from src.estimation.estimation import Phase3Config
-from src.linker_io import OPEN_ERRORS, FrameRecorder, chain_record, countdown, open_rig
+from src.linker_io import OPEN_ERRORS, FrameRecorder, NoRecorder, chain_record, countdown, open_rig
 from src.navigation.end_of_course import OUTCOME_EARLY
+from src.navigation.wheel_stall import OUTCOME_STALLED
 from src.navigation.navigation import Navigation, enforce
 from src.navigation.route import RouteError, load_route
 from src.params import FPS, FRAME_H, FRAME_W, RUNS_DIR, SENSOR_RATE_HZ, GC_COLLECT_EVERY, GC_DISABLE_IN_RUN
 from src.perception.color_branch import load_hsv_ranges
+from src.phase2_linker import warm_up
 from src.phase3_linker import CsvLog, Phase3Stats, make_processor, run_phase3_chain
-from src.utils import GcWatch
+from src.utils import GcWatch, code_version
 from src.perception import parallel
 
-# The run's backstop: brake and end after this long, whatever the navigator
-# does. The only linker-level safety stop (decided 2026-09-30); a run that
-# reaches a stop line stays braked there until it
+# The backstop, whatever the navigator does
 MAX_RUN_S = 30.0
 
 END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
@@ -77,33 +50,28 @@ END_CAP, END_SOURCE, END_INTERRUPT, END_ERROR, END_LIMIT = (
 END_COURSE = "end of course"                    # the navigator finished the route
 END_EARLY = "ended early (lane lost before the route was done)"
 END_BATTERY = "battery critical"
-REASON_CONTRACT = "contract"        # the linker braked: the navigator's command broke the contract
-# A frame whose Phases 1-3 took this long is named in nav.csv's event column
-# with its slowest stage: past the motor watchdog's 0.5 s the robot stops on
-# its own. The 2026-10-12 runs had 0.6-1.6 s frames mid-run, which braked it
+END_STALLED = "wheel stalled"                   # a wheel driven hard didn't turn: motor, gearbox or a jam
+REASON_CONTRACT = "contract"        # the navigator's command broke the contract
+# Named in nav.csv with its slowest stage; 0.6-1.6 s frames braked the robot on 2026-10-12
 SLOW_FRAME_MS = 250.0
 
 NAV_FIELDS = ("frame_id", "t", "capture_ms", "phase2_ms", "phase3_ms", "nav_ms", "latency_ms",
-              "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "approach_deg", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
+              "rule", "phase", "line_left_cm", "step", "maneuver", "stage", "stage_cm", "turn_end", "turn_deg", "approach_deg", "heading_deg", "lane_mode", "lane_status", "lane_offset", "lane_offset_cm", "heading_error", "drive_state",
               "stop_sign", "stop_line_cm", "obstacle_cm", "reason", "source", "steer",
               "cmd_left", "cmd_right", "brake", "left_cps", "right_cps", "yaw_rate", "yaw_deg", "yaw_span_s", "distance_cm",
               "target_left_cps", "target_right_cps", "gain_left", "gain_right",
               "imu_reads", "imu_read_ms", "imu_failed", "gc_ms",
               "battery_v", "battery_state", "event")
 
+
 def wheel_columns(rec: dict, wheels) -> dict:
-    """
-    nav.csv's wheel-speed columns: the turn's target counts/s (blank off a
-    turn) and each wheel's learned counts/s per duty (blank without a
-    WheelSpeed). The gains falling as the pack drains is the voltage the
-    turns no longer feel.
-    """
+    """The turn's target counts/s and each wheel's learned gain; the gains fall as the pack drains."""
     target = (rec.get("wheels") or {}).get("target", (None, None))
     gains = (None, None) if wheels is None else tuple(round(g, 1) for g in wheels.gains)
     return {"target_left_cps": target[0], "target_right_cps": target[1], "gain_left": gains[0], "gain_right": gains[1]}
 
 
-# --help text. Kept apart from the module docstring, which documents the code.
+# --help text, apart from the module docstring
 _CLI_HELP = """\
 Drive the robot with the whole chain: camera -> perception -> estimation ->
 navigation (obstacle, stop sign, red light, intersection and end-of-course
@@ -133,16 +101,10 @@ Output (--out DIR, default <root>/runs/nav_<timestamp>):
 """
 
 
-# =============================================================================
-# Findings
-# =============================================================================
-
 def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen: int = -1) -> str:
     """
-    nav.csv's event for a frame whose capture + Phases 2-3 took limit_ms or
-    more, naming its slowest stage and, if it ran, the garbage collector's
-    time (it stops every thread, so it shows up in whatever stage was
-    running); "" otherwise.
+    The event for a frame of limit_ms or more: its slowest stage, and the garbage collector's
+    time if it ran (it stops every thread, so it shows up in whatever stage was running).
     """
     t = res.timings_ms
     total = t.get("capture", 0.0) + t.get("phase2", 0.0) + t.get("phase3", 0.0)
@@ -155,14 +117,13 @@ def slow_frame(res, limit_ms: float = SLOW_FRAME_MS, gc_ms: float = 0.0, gc_gen:
 
 
 def obstacle_cm(pkt) -> float | str | None:
-    """nav.csv's obstacle_cm: the voted obstacle's cm, "view bottom" when clipped, None when there's none (or no cm)."""
+    """The voted obstacle's cm, "view bottom" when clipped, None when there's none."""
     if not pkt.obstacle_detected:
         return None
     return "view bottom" if pkt.obstacle_clipped else pkt.obstacle_distance_cm
 
 
 class NavStats:
-    """Per-frame navigation outcomes, summarized for summary.txt and report.json."""
     def __init__(self) -> None:
         self.frames = self.driving = self.rejected = 0
         self.brake_reasons: Counter = Counter()
@@ -172,7 +133,6 @@ class NavStats:
         self.latency_ms: list[float] = []
 
     def update(self, n: dict) -> None:
-        """Count one frame's record["nav"]."""
         self.frames += 1
         self.latency_ms.append(n["latency_ms"])
         self.rules[n.get("rule") or "-"] += 1
@@ -198,8 +158,17 @@ class NavStats:
                 "rejected": self.rejected}
 
 
+def motor_lines(out_dir: str, report: dict) -> list[str]:
+    """A weakening or stalled motor, from this run's nav.csv, at the top of the summary; report["motor_health"] keeps them."""
+    try:
+        found = motor_health.analyze(Table(os.path.join(out_dir, "nav.csv")))["findings"]
+    except (OSError, ValueError):
+        return []
+    report["motor_health"] = found
+    return [f" MOTORS                {f}" for f in found]
+
+
 def summary_lines(report: dict) -> list[str]:
-    """summary.txt's [NAVIGATION] section, from run()'s findings."""
     n, r = report["nav"], report["run"]
     pct = lambda k: 100.0 * k / n["frames"] if n["frames"] else 0.0
     reasons = ", ".join(f"{k} {v}" for k, v in sorted(n["brake_reasons"].items())) or "none"
@@ -207,12 +176,21 @@ def summary_lines(report: dict) -> list[str]:
     rules = ", ".join(f"{k} {v}" for k, v in sorted(n["decided_by"].items())) or "none"
     lat = n["latency_ms"]
     return [
-        f"[NAVIGATION] ended by {report['ended_by']}"
+        ("" if not report.get("label") else f"[{report['label']}] ")
+        + f"[NAVIGATION] ended by {report['ended_by']}"
         + ("" if report.get("end_step") is None else f" at step {report['end_step']}")
         + f"   motors {'ON' if report['motors'] else 'OFF (dry run)'}"
-        + ("   perception PARALLEL" if report.get("parallel_perception") else ""),
+        + ("   perception PARALLEL" if report.get("parallel_perception") else "")
+        + ("" if not report.get("motor_watchdog") else
+           "   watchdog {status}, {trips} trips".format(**report["motor_watchdog"])),
         f" run                   {r['frames']} frames in {r['wall_s']:.1f} s ({r['fps']:.1f} FPS), "
-        f"camera drops {r['camera_drops']}, recorder dropped {r['recorder_dropped']}",
+        f"camera drops {r['camera_drops']}, "
+        + (f"recorder dropped {r['recorder_dropped']}" if r.get("recorder", True) else "recorder off"),
+    ] + ([] if "stalls" not in r else [
+        f" stalls                {r['stalls']} gaps of {r['stall_ms']:.0f} ms or more between frames"
+        + (" (stalls.csv)" if r["stalls"] else "")
+        + ("" if r["psi"] else "; PSI off, so no CPU / IO / memory split (setup.mk psi)"),
+    ]) + [
         f" decided by            {rules}",
         f" driving               {n['driving']} frames ({pct(n['driving']):.0f}%), steering by: {sources}",
         f" braked                {n['braked']} frames ({pct(n['braked']):.0f}%): {reasons}",
@@ -224,6 +202,9 @@ def summary_lines(report: dict) -> list[str]:
         " IMU reads             {p50:.2f} ms p50, {p95:.2f} p95, {max:.2f} max; ".format(**report["sensors"]["imu_read_ms"])
         + f"{report['sensors']['imu_reads_per_frame']:g} a frame (median; expect {SENSOR_RATE_HZ / FPS:g}), "
         f"{report['sensors']['imu_failed']} failed"
+        + ("" if not report["sensors"].get("hub_priority") else f"; hub {report['sensors']['hub_priority']}")
+        + ("" if report["sensors"].get("fifo_overflows") is None else
+           f", FIFO overflows {report['sensors']['fifo_overflows']}")
     ]) + ([] if not report.get("battery") else [
         " battery               start {start_v} V, lowest {min_v} V, end {end_v} V; {state}".format(**report["battery"])
         + ("" if report["battery"]["sensor_ok"] else " (ADC unreadable at the end)")
@@ -232,17 +213,12 @@ def summary_lines(report: dict) -> list[str]:
 
 
 def read_stats(ms: list[float]) -> dict | None:
-    """p50 / p95 / max of read times in ms; None without any."""
     if not ms:
         return None
     a = np.array(ms, dtype=float)
     return {"n": int(a.size), "p50": round(float(np.percentile(a, 50)), 3),
             "p95": round(float(np.percentile(a, 95)), 3), "max": round(float(a.max()), 3)}
 
-
-# =============================================================================
-# The run
-# =============================================================================
 
 def run(
         source,
@@ -262,39 +238,16 @@ def run(
         scale: int = 1,
         stop_when=None,
         battery=None,
+        record: bool = True,
+        warmup: bool = False,
+        label: str = "",
     ) -> dict:
     """
-    Run the navigator on every frame until the cap, the source's end or Ctrl-C.
-
-    Inputs:
-        source: A live_view FrameSource: the camera, or a replay.
-        sensors: sensing.Sensors (anything with read() -> (SensorSample,
-            batch) and stop()); None runs Phase 3 without sensors.
-        motor: drive.MotorController, or anything with drive(left, right),
-            brake() and stop(); NoMotors for a dry run.
-        navigator: A Navigator; navigation.Navigation. Its record, if it has
-            one, says which rule decided each command and why.
-        config, p3_config: Phase 2 and Phase 3 tuning, as phase3_linker.
-        system: peripherals.system.System for the start button, countdown
-            and run-time display; None starts at once.
-        clock: Seconds, monotonic; injected by tests.
-        max_run_s: Brake and end once this long has passed since the start.
-        limit: Stop after this many frames (replays); None runs to the end.
-        motors_on: Reported in the summary; False for a dry run.
-        render: Render nav.avi after the run.
-        display: Play the rendered video in a window afterwards.
-        stop_when: Called with each frame's nav.csv row once the motors have
-            its command; a non-empty string it returns ends the run, as
-            ended_by (intersection_linker ends a sequence this way).
-        battery: diagnostics.battery.Power, or None: monitored from the
-            start, logged per frame, and the run ends once it should_stop().
-
-    Outputs:
-        The findings, also written to report.json.
-
-    Side effects:
-        Drives the motors. Writes the run folder. Always stops the motors
-        before returning or raising, whatever ended the run.
+    Drive the navigator on every frame until the cap, the source's end, Ctrl-C, or stop_when
+    returning an ended_by. record=False writes no frames or video; the CSVs and report are
+    written either way. warmup is for the live camera (a replay would lose its first frame).
+    label is kept in the report with the commit. Always stops the motors before returning or
+    raising; returns the findings, also in report.json.
     """
     os.makedirs(out_dir, exist_ok=True)
     navigator.reset()
@@ -305,14 +258,21 @@ def run(
     n_file = open(os.path.join(out_dir, "nav.csv"), "w", newline="")
     n_log = csv.DictWriter(n_file, NAV_FIELDS, extrasaction="ignore")
     n_log.writeheader()
-    recorder = FrameRecorder(out_dir)
+    recorder = FrameRecorder(out_dir) if record else NoRecorder()
+    stalls = StallLog(out_dir)
     camera_drops = 0
     ended_by, error = END_SOURCE, None
     last_reason = None
     t0 = None
     gc_watch = GcWatch(GC_DISABLE_IN_RUN, GC_COLLECT_EVERY)
+    warmup_ms = None
 
     try:
+        if warmup:
+            item = source.read()
+            if item is not None and item[0] is not None:
+                warmup_ms = warm_up(item[0], config)
+                print(f"warmed up: one frame through Phase 2 in {warmup_ms:.0f} ms")
         if system is not None:
             system.wait_for_start()
             system.run_countdown()
@@ -346,13 +306,16 @@ def run(
                 continue
 
             sample, batch = (None, None) if sensors is None else sensors.read()
+            stalled = stalls.frame(fid, arrived - t0, capture_ms,
+                                   None if batch is None else batch.imu_attempts,
+                                   None if batch is None else batch.imu_read_ms_max)
             if processor is None:
                 processor = make_processor(frame, fid, ts, config, p3_config)
             res = run_phase3_chain(frame, fid, ts, processor, sample, config, capture_ms)
             pkt = res.packet
 
             n0 = clock()
-            cmd, problems = enforce(navigator.update(pkt))     # as the pipeline: a bad command brakes
+            cmd, problems = enforce(navigator.update(pkt))
             rec = dict(getattr(navigator, "record", {}) or {})
             if problems:
                 rec = {**rec, "reason": REASON_CONTRACT, "source": "none", "steer": 0.0}
@@ -362,6 +325,7 @@ def run(
             else:
                 motor.drive(cmd.left, cmd.right)
             latency_ms = (clock() - arrived) * 1000.0
+            stalls.worked(latency_ms)
 
             reason = rec.get("reason", "brake" if cmd.brake else "drive")
             event = "; ".join(problems) if problems else ("" if reason == last_reason else f"-> {reason}")
@@ -370,6 +334,9 @@ def run(
             slow = slow_frame(res, gc_ms=gc_ms, gc_gen=gc_gen)
             if slow:
                 event = f"{event}; {slow}" if event else slow
+            if stalled:
+                note = "stall: see stalls.csv"
+                event = f"{event}; {note}" if event else note
             last_reason = reason
             n = {"frame_id": fid, "t": round(arrived - t0, 3), "capture_ms": round(capture_ms, 2),
                  "phase2_ms": round(res.timings_ms["phase2"], 2), "phase3_ms": round(res.timings_ms["phase3"], 3),
@@ -378,7 +345,7 @@ def run(
                  "line_left_cm": None if rec.get("line_left_cm") is None else round(rec["line_left_cm"], 1),
                  "step": rec.get("step", ""),
                  "maneuver": rec.get("maneuver") or "", "stage": rec.get("stage") or "", "stage_cm": rec.get("stage_cm"),
-                 "turn_end": rec.get("turn_end") or "", "approach_deg": rec.get("approach_deg"), "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
+                 "turn_end": rec.get("turn_end") or "", "turn_deg": rec.get("turn_deg"), "approach_deg": rec.get("approach_deg"), "heading_deg": rec.get("heading_deg", ""), "lane_mode": pkt.lane_mode,
                  "lane_status": pkt.lane_status, "lane_offset": pkt.lane_offset,
                  "lane_offset_cm": pkt.lane_offset_cm, "heading_error": pkt.heading_error,
                  "drive_state": pkt.drive_state, "stop_sign": int(pkt.stop_sign_detected),
@@ -417,7 +384,8 @@ def run(
                 ended_by = why
                 break
             if getattr(navigator, "finished", False):     # the navigator ended the run, braked, this frame
-                ended_by = END_EARLY if getattr(navigator, "outcome", None) == OUTCOME_EARLY else END_COURSE
+                ended_by = {OUTCOME_EARLY: END_EARLY, OUTCOME_STALLED: END_STALLED}.get(
+                    getattr(navigator, "outcome", None), END_COURSE)
                 break
     except KeyboardInterrupt:
         ended_by = END_INTERRUPT
@@ -428,6 +396,7 @@ def run(
     finally:
         motor.stop()                                # first, whatever happened
         gc_watch.stop()
+        stalls.close()
         try:
             recorder.close()
         finally:
@@ -448,19 +417,24 @@ def run(
                           "read_ms": read_stats(battery.read_ms())}
     if t0 is not None and imu_reads:
         sensors_report = {"imu_read_ms": read_stats(imu_ms), "imu_reads_per_frame": float(np.median(imu_reads)),
-                          "imu_failed": imu_failed}
-    report = {"ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+                          "imu_failed": imu_failed, "hub_priority": getattr(sensors, "priority", None),
+                          "fifo_overflows": getattr(sensors, "fifo_overflows", None)}
+    report = {"label": label, "code": code_version(),
+              "ended_by": ended_by if error is None else f"{END_ERROR}: {error!r}", "motors": motors_on,
+              "motor_watchdog": None if not hasattr(motor, "watchdog_status") else
+              {"status": motor.watchdog_status, "trips": motor.watchdog_trips},
               "parallel_perception": parallel.enabled(),
               "outcome": getattr(navigator, "outcome", None), "end_step": getattr(navigator, "end_step", None),
               "nav": nav_stats.report(), "battery": battery_report, "sensors": sensors_report,
               "run": {"frames": nav_stats.frames, "wall_s": round(wall, 2),
                       "fps": round(nav_stats.frames / wall, 2) if wall > 0 else 0.0,
-                      "camera_drops": camera_drops, "recorder_dropped": recorder.dropped,
+                      "camera_drops": camera_drops, "recorder": record, "recorder_dropped": recorder.dropped,
                       "recorder_written": recorder.written,
-                      # nav.csv's t counts from here; with the real clock (perf_counter, monotonic on
-                      # Linux) a diagnostics recording lines up with it (analysis.pi_load --run)
+                      "warmup_ms": None if warmup_ms is None else round(warmup_ms, 1),
+                      "stalls": stalls.count, "stall_ms": stalls.stall_ms, "psi": stalls.psi_on,
+                      # nav.csv's t counts from here, so pi_load --run can line a recording up
                       "t0_monotonic": None if t0 is None else round(t0, 4)}}
-    lines = summary_lines(report) + [""] + stats.report()
+    lines = summary_lines(report) + motor_lines(out_dir, report) + [""] + stats.report()
 
     if render and recorder.written:
         window = Display(display, out_dir, ["navigation"])
@@ -487,18 +461,8 @@ def run(
     return report
 
 
-# =============================================================================
-# Command line
-# =============================================================================
-
 def cli(argv: list[str] | None = None) -> int:
-    """
-    Parse arguments, open the source and hardware, and run (or only render a run).
-
-    Outputs:
-        Process exit code: 0 after a run, 2 on a bad argument or a source or
-        hardware that won't open.
-    """
+    """0 after a run, 2 on a bad argument or a rig that won't open."""
     ap = argparse.ArgumentParser(prog="navigation_linker", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     src = ap.add_mutually_exclusive_group(required=True)
@@ -519,6 +483,8 @@ def cli(argv: list[str] | None = None) -> int:
                     help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
     ap.add_argument("--no-render", action="store_true", help="skip the video; render later with --render")
+    ap.add_argument("--no-record", action="store_true",
+                    help="save no frames (no video): the CSVs and report only, nothing else on the SD card")
     ap.add_argument("--no-display", action="store_true", help="don't play the video afterwards")
     ap.add_argument("--scale", type=int, default=1)
     ap.add_argument("--width", type=int, default=FRAME_W)
@@ -527,6 +493,8 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
     ap.add_argument("--out", default=None, metavar="DIR")
+    ap.add_argument("--label", default="", metavar="TEXT",
+                    help='what this run is for or under, kept in report.json, e.g. --label "recorder off"')
     parallel.add_arguments(ap)
     args = ap.parse_args(sys.argv[1:] if argv is None else argv)
     parallel.apply(args)
@@ -589,7 +557,8 @@ def cli(argv: list[str] | None = None) -> int:
         run(source, sensors, motor, Navigation(gyro_bias_dps=args.gyro_bias, route=route), config, p3_config,
             out_dir, system,
             max_run_s=args.max_run_s, limit=args.limit, motors_on=motors_on,
-            render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery)
+            render=not args.no_render, display=not args.no_display, scale=args.scale, battery=battery,
+            record=not args.no_record, warmup=args.camera, label=args.label)
     finally:
         if battery is not None:
             battery.cleanup()

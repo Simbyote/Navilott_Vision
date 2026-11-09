@@ -1,9 +1,10 @@
-"""
-test_debug_navigation.py  --  src/debugger/debug_navigation.py
+"""test_debug_navigation.py  --  src/debugger/debug_navigation.py
 
 The navigation strip (one size for every kind of frame, the duty bars on
 the right side of center and in the right color, DRIVE green and BRAKE red)
 and render_run() on a real run folder from navigation_linker.
+
+--software  A run folder navigation_linker writes on fakes. No camera or Pi.
 """
 import os
 from pathlib import Path
@@ -76,10 +77,6 @@ def test_a_braked_frame_draws_no_duty_bars():
     img = draw_strip(BRAKED, W)
     assert not has(img, dv.C_USABLE, bars) and not has(img, dv.C_RED, bars)
 
-
-# =============================================================================
-# render_run on a real run folder
-# =============================================================================
 
 @pytest.fixture(scope="module")
 def run_dir(tmp_path_factory):

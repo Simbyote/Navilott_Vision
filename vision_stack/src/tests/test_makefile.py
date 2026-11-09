@@ -28,9 +28,10 @@ pytestmark = [pytest.mark.software,
 
 MAKEFILE = PIPELINE_ROOT / "Makefile"
 # Targets that only print or tidy, with no python command to check
-NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "calib-lamps", "sweep-lamps", "render"}
+NO_COMMAND = {"help", "session", "pigpiod", "newest", "clean", "compare", "load-compare", "calib-lamps", "sweep-lamps",
+              "render"}
 # Arguments the guarded targets need before they run anything
-NEEDS = {"compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "sweep-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
+NEEDS = {"compare": "BASE=a NEW=b", "load-compare": "BASE=a NEW=b", "calib-lamps": "LAMPS=red=x", "sweep-lamps": "LAMPS=red=x", "render": "RUN=runs/nav_x"}
 
 
 def _clean_make_env() -> dict:
@@ -78,10 +79,6 @@ def help_text(module):
     return out.stdout
 
 
-# =============================================================================
-# Every target
-# =============================================================================
-
 def test_the_makefile_documents_every_target_it_declares_phony():
     text = MAKEFILE.read_text()
     phony = set(re.search(r"\.PHONY:(.*?)\n\n", text, re.S).group(1).replace("\\", " ").split())
@@ -119,10 +116,6 @@ def test_help_lists_every_target():
     listed = re.findall(r"^  ([a-z0-9-]+) ", re.sub(r"\x1b\[[0-9;]*m", "", out.stdout), re.M)
     assert listed == targets()
 
-
-# =============================================================================
-# The variables
-# =============================================================================
 
 def test_the_camera_is_the_default_source_and_a_replay_replaces_it():
     assert make_n("phase2")[-1] == "python3 -m src.phase2_linker --camera"

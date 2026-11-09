@@ -31,10 +31,6 @@ PATTERN = (9, 6)
 PX = np.array([[240, 270], [240, 200], [60, 250], [400, 190], [10, 265]], float)
 
 
-# =============================================================================
-# Mapping
-# =============================================================================
-
 @pytest.mark.software
 def test_px_to_cm_to_px_round_trips():
     np.testing.assert_allclose(G.to_image(G.to_floor(PX)), PX, atol=1e-9)
@@ -71,10 +67,6 @@ def test_homography_is_frozen_hashable_and_refuses_a_singular_matrix():
     np.testing.assert_allclose(np.asarray(scaled.H), np.asarray(G.H), rtol=1e-12, atol=1e-12)
 
 
-# =============================================================================
-# Fit
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("noise_px", [0.0, 0.2])
 def test_fit_recovers_a_known_homography_from_its_own_corners(noise_px):
@@ -96,10 +88,6 @@ def test_fit_refuses_too_few_or_mismatched_points():
         fit_ground_homography(PX, PX[:4])
 
 
-# =============================================================================
-# Loading
-# =============================================================================
-
 def write_ground(tmp_path, **overrides):
     """A ground JSON that matches MEASURED's preprocess, with fields replaced by overrides."""
     rec = {"model": "floor_homography", "H": np.asarray(G.H).tolist(),
@@ -111,6 +99,7 @@ def write_ground(tmp_path, **overrides):
     path = tmp_path / "ground.json"
     path.write_text(json.dumps(rec))
     return path
+
 
 def load(path, preprocess=MEASURED.preprocess, frame_size=(FRAME_H, FRAME_W)):
     with warnings.catch_warnings(record=True) as caught:
@@ -177,10 +166,6 @@ def test_synthetic_scenes_run_without_a_ground_plane():
     assert SCENE_CONFIG.ground is None and PipelineConfig().ground is None
 
 
-# =============================================================================
-# Calibration script
-# =============================================================================
-
 @pytest.mark.software
 def test_board_points_run_right_across_and_toward_the_robot_down_the_board():
     pts = cg.board_points_cm(PATTERN, 2.5, -10.0, 22.0).reshape(6, 9, 2)
@@ -216,7 +201,7 @@ def test_the_reference_moves_to_the_floor_at_the_bottom_center_of_the_view():
 
 @pytest.mark.software
 def test_floor_board_corners_are_found_to_a_fraction_of_a_pixel():
-    """The window sized to the squares; a fixed 11x11 one is visibly worse on a squeezed floor board."""
+    # The window sized to the squares; a fixed 11x11 one is visibly worse on a squeezed floor board.
     board = cv2.cvtColor(floor_board(G, -10.0, 22.0, 2.5), cv2.COLOR_BGR2GRAY)
     truth = G.to_image(cg.board_points_cm(PATTERN, 2.5, -10.0, 22.0))
     found = cg.find_ground_corners(board, PATTERN)

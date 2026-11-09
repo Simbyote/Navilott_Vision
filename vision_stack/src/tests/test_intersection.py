@@ -1,5 +1,4 @@
-"""
-test_intersection.py  --  src/navigation/intersection.py
+"""test_intersection.py  --  src/navigation/intersection.py
 
 The intersection rule against a real tracker and lane keeper: it drives
 straight from the moment the line leaves the view, steers against the
@@ -17,13 +16,15 @@ hold squares the robot to the street and a turn ends square to it; without
 a scale or a tilt it starts at 0. With odometry and a distance set (ADVANCE_CM, MAX_CROSS_CM),
 the advance and the exit go by cm instead; without either, by time; every
 record carries the stage's cm.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import math
 
 import pytest
 
 from src.navigation.intersection import (
-    ADVANCE_CM, MAX_APPROACH_DEG, ADVANCE_MS, MAX_CROSS_CM, TILT_TO_HEADING, TILT_ZERO_DEG, LEFT_TURN, LEFT_TURN_MAX_MS, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
+    ADVANCE_CM, MAX_APPROACH_DEG, ADVANCE_MS, MAX_CROSS_CM, TILT_TO_HEADING, TILT_ZERO_DEG, LEFT_TURN, LEFT_TURN_DRIVEN, LEFT_TURN_MAX_MS, LEFT_TURN_SPEED, MAX_CROSS_MS, MAX_DT_MS, ONE_BOUNDARY_FRAMES, REASON_CROSSING,
     REASON_TURNING, RIGHT_TURN, RIGHT_TURN_MAX_MS, SOURCE_HEADING_HOLD, SOURCE_TURN, STAGE_ADVANCE, STAGE_EXIT,
     STAGE_TO_LINE, STAGE_TURN, TURN_TARGET_DEG, TWO_BOUNDARY_FRAMES, IntersectionRule,
 )
@@ -78,15 +79,16 @@ def active(out):
 
 @pytest.mark.software
 def test_the_constants():
-    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (10, 40, 5500, 500)   # 2026-10-19
+    assert (TWO_BOUNDARY_FRAMES, ONE_BOUNDARY_FRAMES, MAX_CROSS_MS, MAX_DT_MS) == (15, 30, 5500, 500)   # 2026-11-05
     assert ADVANCE_MS == 2500         # tuned on the course: the robot stops as the line leaves view
     assert RIGHT_TURN_MAX_MS == 2400
     # By odometry since 2026-10-20 (None keeps the timed advance and exit);
     # the advance ends well inside the exit limit
-    assert (ADVANCE_CM, MAX_CROSS_CM) == (22.3, 49.7)
+    assert (ADVANCE_CM, MAX_CROSS_CM) == (25.0, 50.0)          # 2026-11-02, 2026-11-05
     assert ADVANCE_CM < MAX_CROSS_CM
-    # The approach angle from the line's tilt, measured 2026-10-20 (detect-range, 10 cm, -6..6 deg)
-    assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-4.3, 0.19)
+    # The approach angle from the line's tilt, measured 2026-11-02 (detect-range, TP-05, -10..10 deg) and
+    # set on the course 2026-11-05
+    assert (TILT_TO_HEADING, TILT_ZERO_DEG) == (-3.2, 0.63)
     assert MAX_APPROACH_DEG == 10.0                                    # 15 until 2026-10-20
     assert ONE_BOUNDARY_FRAMES > TWO_BOUNDARY_FRAMES      # one line is weaker evidence than two
 
@@ -103,7 +105,7 @@ def test_it_drives_straight_from_the_line_leaving_the_view():
     assert active(out)[0] == LOST and out[LOST][0] == Command(BASE_SPEED, BASE_SPEED)   # ignores the offset
     assert out[LOST][1] == {"reason": REASON_CROSSING, "source": SOURCE_HEADING_HOLD, "steer": 0.0,
                             "heading_deg": 0.0, "stage": STAGE_TO_LINE, "step": "1/0 extra", "maneuver": STRAIGHT,
-                            "turn_end": None, "approach_deg": 0.0, "stage_cm": None}
+                            "turn_end": None, "turn_deg": None, "approach_deg": 0.0, "stage_cm": None}
 
 
 @pytest.mark.software
@@ -235,10 +237,6 @@ def test_the_record_names_the_route_step_and_maneuver(maneuver):
     assert (out[LOST][1]["step"], out[LOST][1]["maneuver"]) == (f"1/1 {maneuver}", maneuver)
 
 
-# =============================================================================
-# Turns
-# =============================================================================
-
 # Turning at 60 deg/s: TURN_TARGET_DEG takes ~1.4 s
 YAW_DPS = 60.0
 TURN_FRAMES = int(TURN_TARGET_DEG / YAW_DPS * 1000) // MS + 1
@@ -261,13 +259,16 @@ def stages(out):
 
 @pytest.mark.software
 def test_the_turn_duties_and_keep_the_contract():
-    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.48, 0.73), Command(0.78, 0.25))     # 2026-10-19
+    assert (LEFT_TURN, RIGHT_TURN) == (Command(0.50, 0.76), Command(0.77, 0.26))     # 2026-11-05
+    # the left turn eased, both wheels alike: the same arc, slower on the right motor
+    assert LEFT_TURN_SPEED == 0.8 and LEFT_TURN_DRIVEN == Command(0.40, 0.608)
+    assert LEFT_TURN_DRIVEN.right / LEFT_TURN_DRIVEN.left == pytest.approx(LEFT_TURN.right / LEFT_TURN.left)
     assert command_problems(LEFT_TURN) == command_problems(RIGHT_TURN) == []
-    assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 4100, 2400)
+    assert (TURN_TARGET_DEG, LEFT_TURN_MAX_MS, RIGHT_TURN_MAX_MS) == (85.0, 7300, 2400)     # left eased 2026-10-28
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN), (RIGHT, YAW_DPS, RIGHT_TURN)])
+@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN_DRIVEN), (RIGHT, YAW_DPS, RIGHT_TURN)])
 def test_a_turn_starts_at_the_line_and_ends_on_the_gyro_target(maneuver, yaw, duties):
     _, out = drive(turn_case(yaw), maneuver=maneuver)
     st = stages(out)
@@ -292,7 +293,7 @@ def test_a_turn_the_gyro_never_sees_ends_at_its_time_limit(maneuver, max_ms):
 
 
 @pytest.mark.software
-@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN), (RIGHT, YAW_DPS, RIGHT_TURN)])
+@pytest.mark.parametrize("maneuver, yaw, duties", [(LEFT, -YAW_DPS, LEFT_TURN_DRIVEN), (RIGHT, YAW_DPS, RIGHT_TURN)])
 def test_with_wheel_speed_a_turn_runs_its_duties_without_encoders_and_more_on_slow_wheels(maneuver, yaw, duties):
     _, out = drive(turn_case(yaw), maneuver=maneuver, wheels=WheelSpeed())
     turning = [i for i, s in enumerate(stages(out)) if s == STAGE_TURN]
@@ -361,15 +362,21 @@ def test_after_a_turn_the_exit_holds_the_heading_the_turn_ended_on():
 
 
 @pytest.mark.software
+def test_the_heading_a_turn_ended_on_is_logged_through_the_exit():
+    _, out = drive(turn_case(-YAW_DPS, after=[{"lane_mode": "none"}] * 3), maneuver=LEFT)
+    turning = [rec for _, rec in out if rec.get("stage") == STAGE_TURN]
+    exit_ = [rec for _, rec in out if rec.get("stage") == STAGE_EXIT]
+    assert all(rec["turn_deg"] is None for rec in turning)
+    assert exit_[0]["turn_deg"] <= -TURN_TARGET_DEG < turning[-1]["heading_deg"]         # the end frame's, not the last logged
+    assert {rec["turn_deg"] for rec in exit_} == {exit_[0]["turn_deg"]}
+
+
+@pytest.mark.software
 def test_straight_and_no_route_never_turn():
     for maneuver in (STRAIGHT, None):
         _, out = drive(turn_case(-YAW_DPS), maneuver=maneuver)
         assert STAGE_TURN not in stages(out) and STAGE_EXIT in stages(out)
 
-
-# =============================================================================
-# By distance, when there's odometry
-# =============================================================================
 
 def rolling(n, cm_per_frame, start=0, **fields):
     """n frames after the line, the odometry rising cm_per_frame each from the line's frames."""
@@ -414,10 +421,6 @@ def test_the_exit_ends_on_distance_when_set():
     assert active(out)[-1] == exit_ + 19                    # 40 cm at 2 cm a frame
     assert out[exit_ + 19][1]["stage_cm"] == 38.0
 
-
-# =============================================================================
-# The approach angle, from the stop line's tilt
-# =============================================================================
 
 # This file's scale: a robot turned right of square sees the line's left end
 # nearer (a negative tilt), and the line looks 3x flatter than it is

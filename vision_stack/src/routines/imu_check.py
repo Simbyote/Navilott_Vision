@@ -1,42 +1,17 @@
-"""IMU check: is the gyro's bias still the configured one, does a real 90 degrees read 90, and what do the motors add.
+"""IMU check: is the gyro bias still the configured one, does a real 90 degrees read 90, and what do the motors add?
 
 Purpose:
-    Every turn ends when the gyro says TURN_TARGET_DEG, and every heading
-    hold subtracts config.GYRO_BIAS_DPS (measured once, 2026-09-29) before
-    integrating. If the bias has moved, the heading drifts (0.3 deg/s is
-    18 deg a minute); if the gyro's scale is off, a turn ends early or late;
-    if IMU_YAW_SIGN is wrong, it turns the wrong way. test_imu --hardware
-    measures bias and noise; this checks them against what the robot uses,
-    through the same sensor hub, plus what the bench can't: real turns.
-
-    Ten trials, three parts:
-        rest (trial 1)        REST_S still on the floor: bias against
-                              GYRO_BIAS_DPS, noise, the heading's drift over
-                              the time with the configured bias, read rate,
-                              read time, errors, temperature
-        turns (trials 2-9)    the tester turns the robot 90 deg by hand,
-                              lined up on the mat's grid, alternating left
-                              and right: the gyro's heading (net of the rest
-                              bias) against -90 / +90; the sign and the scale
-        vibration (trial 10)  VIB_S wheels up at base duty: the noise with
-                              the motors on, against rest
-
-    Pass: the bias within BIAS_TOLERANCE_DPS of GYRO_BIAS_DPS; the rest
-    drift under DRIFT_MAX_DEG; every turn within TURN_TOLERANCE_DEG of 90
-    with the right sign; no read errors. The vibration noise is reported,
-    not judged. The summary says the bias to put in config.py, the left and
-    right scale, and whether IMU_YAW_SIGN looks flipped (both directions the
-    wrong way).
+    A moved GYRO_BIAS_DPS drifts every heading hold, a scale error ends turns
+    early or late, and a wrong IMU_YAW_SIGN turns the wrong way. This checks
+    them through the sensor hub, with real turns the bench can't do.
 
 Main package:
-    ImuCheck: the routine (make routine-imu-check).
-    rest_stats(readings, configured_bias), heading(readings, bias): the numbers.
+    ImuCheck (make routine-imu-check). Its summary gives config.py's bias,
+    each direction's scale, and whether IMU_YAW_SIGN looks flipped.
 
 Flow (per trial):
-    rest: drain, wait REST_S, drain; turns: Enter at the start line-up,
-    turn, Enter at the end, drain; vibration: wheels-up motors on a thread
-    for VIB_S, drain. One sensor hub (IMU only) for the whole routine, with
-    HISTORY_S of buffer so a part is one drain.
+    rest: wait REST_S between drains; turns: Enter, hand turn, Enter, drain;
+    vibration: motors on wheels-up for VIB_S, drain.
 """
 import statistics
 import threading
@@ -49,7 +24,7 @@ from src.routines.harness import Routine, criterion
 REST_S = 60.0
 VIB_S = 30.0
 TURNS = 8
-HISTORY_S = 600.0           # the hub keeps this much between drains: a slow hand turn still fits
+HISTORY_S = 600.0           # buffer between drains, enough for a slow hand turn
 BIAS_TOLERANCE_DPS = 0.2    # 0.2 deg/s is 12 deg a minute of heading hold
 DRIFT_MAX_DEG = 2.0         # over the rest minute, with the configured bias
 TURN_TOLERANCE_DEG = 3.0    # hand turns lined up on the grid are good to ~1-2 deg
@@ -63,18 +38,18 @@ def _pct(values, q):
 
 
 def _reads(readings) -> list:
-    """The readings that tried the IMU (imu_ms set): the drain's closing encoder reading isn't one."""
+    """Readings that tried the IMU (imu_ms set), not the drain's closing encoder reading."""
     return [r for r in readings if r.imu_ms is not None]
 
 
 def heading(readings, bias: float) -> float:
-    """Degrees turned over the readings, net of bias, + = right (the hub's frame): trapezoids between readings."""
+    """Degrees turned net of bias, + = right, by trapezoids between readings."""
     pts = [(r.t, r.yaw_dps - bias) for r in readings if r.yaw_dps is not None]
     return sum((t1 - t0) * (y0 + y1) / 2 for (t0, y0), (t1, y1) in zip(pts, pts[1:]))
 
 
 def rest_stats(readings, configured_bias: float = GYRO_BIAS_DPS) -> dict:
-    """At rest: bias (mean yaw), noise (sd), drift with the configured bias, rate, read time, errors."""
+    """At rest: bias (mean yaw), noise (sd), drift under the configured bias, rate, read time, errors."""
     reads = _reads(readings)
     yaws = [r.yaw_dps for r in reads if r.yaw_dps is not None]
     span = reads[-1].t - reads[0].t if len(reads) > 1 else 0.0

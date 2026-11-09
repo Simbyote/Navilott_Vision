@@ -1,39 +1,17 @@
 """Pad timing: how long each element of a GStreamer pipeline holds each frame, by buffer probes.
 
-Purpose:
-    GStreamer's latency tracer stalls libcamerasrc before PLAYING on the
-    robot's Pi, in every flags mode (2026-10-14). This measures the same
-    thing from inside the pipeline instead: a buffer probe on each element's
-    pads stamps a monotonic time as each frame goes in and comes out. Nothing
-    is injected into the stream (no tracer hooks, no custom queries), so the
-    pipeline runs as it does by hand.
+Usage: python3 pad_timing.py "PIPELINE"   (one that ends itself, e.g. num-buffers)
 
-    Standalone on purpose: stdlib + PyGObject only, so the system python3
-    (which has python3-gi) can run it when the venv can't import gi.
-
-Usage:
-    python3 pad_timing.py "PIPELINE"
-    The pipeline must end itself (a sink with num-buffers): this waits for
-    EOS or an error.
-
-Output (stdout, tab-separated, printed after the run so printing doesn't
-land inside a measurement):
-    [pad-timing]  KIND  ELEMENT  TS_MS  MS
-        element   element's sink pad in -> its src pad out
-        pipeline  the source's src pad -> the sink's sink pad ("src -> sink")
-        camera    the buffer's PTS (libcamerasrc sets it from the sensor
-                  timestamp, as running time) -> the source's src pad: sensor
-                  readout, Unicam, the ISP and the IPA
-    then one of:
-    [pad-timing]  EOS
-    [pad-timing]  ERROR  message
-    [pad-timing]  NOGI   why          (PyGObject / Gst 1.0 not importable)
+GStreamer's latency tracer stalls libcamerasrc on the robot (2026-10-14), so
+this stamps each frame in and out at every pad instead. Stdlib and PyGObject
+only, for the system python3. Prints "[pad-timing] KIND ELEMENT TS_MS MS" rows
+(KIND: element, pipeline or camera), then EOS, ERROR or NOGI.
 """
 import sys
 import time
 
 TAG = "[pad-timing]"
-SKIP_FACTORIES = ("capsfilter",)     # pass-through: ~0 ms, only noise in the table
+SKIP_FACTORIES = ("capsfilter",)     # pass-through, ~0 ms
 
 
 def _out(*fields) -> None:

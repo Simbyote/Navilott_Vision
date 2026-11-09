@@ -1,22 +1,14 @@
 """Soak: does the Pi hold its frame rate as it heats up, and does memory stay flat?
 
 Purpose:
-    A 30-second bench run can't show thermal throttling or a slow leak; a
-    10-30 minute run can. This lines up the system samples (temperature,
-    clock, throttle flags, memory) with the loop timings on one clock and
-    reports the three things that go wrong over time: throttling, memory
-    growth, and a loop that slows as the run goes on.
+    A 30 s bench run can't show throttling or a slow leak; a 10-30 minute run
+    can. This lines up system samples with loop timings and reports
+    throttling, memory growth, and a loop that slows over the run.
 
 Main package:
-    analyze()   temperature rise, clock, throttle events, RSS leak rate
-                (MB/min, fitted after warm-up), per-window loop timing and
-                its drift, and a findings list in plain words
-    soak.png    temperature, CPU clock, memory and loop time on one time axis
-
-Input (a soak artifact folder, or any folder holding these):
-    system.csv        SystemMonitor rows, required
-    soak_frames.csv   per-frame elapsed_s and interval_ms / *_ms, optional;
-                      without it only the system side is reported
+    analyze(): temperature rise, clock, throttle events, RSS leak rate
+    (after WARMUP_S), per-window loop timing and drift, findings; soak.png.
+    soak_frames.csv is optional; without it only the system side is judged.
 """
 
 import argparse
@@ -65,20 +57,9 @@ def _window_means(t: np.ndarray, v: np.ndarray, edges: np.ndarray) -> np.ndarray
 def analyze(system: Table, frames: Table | None = None, budget_ms: float = BUDGET_MS,
             window_s: float = WINDOW_S) -> dict:
     """
-    Outputs:
-        {
-          "duration_s",
-          "temp_c": {"start", "end", "max", "rise"} (start/end: means over
-                    the first and last window_s of the run),
-          "cpu_mhz": {"max", "min", "share_below_max"},
-          "throttle": {flag: {"samples", "first_s"}} while set during the run,
-          "memory": {"rss_start_mb", "rss_end_mb", "rss_max_mb",
-                     "leak_mb_per_min", "mem_available_min_mb"},
-          "loop": None, or {"windows": [{"start_s", "median", "p95", "temp_c"}],
-                  "overall": stats(), "drift_p95": last/first window p95,
-                  "over_budget_share"},
-          "findings": [plain-language lines],
-        }
+    temp_c start and end are means over the first and last window_s. loop is None
+    without frames, else per-window median and p95, drift_p95 (last over first
+    window) and over_budget_share.
     """
     t = system.numeric("elapsed_s")
     if np.all(np.isnan(t)) or len(system) < 2:
@@ -92,8 +73,7 @@ def analyze(system: Table, frames: Table | None = None, budget_ms: float = BUDGE
     temp_w = _window_means(t, temp, edges)
     temp_out = None
     if not np.all(np.isnan(temp)):
-        # Start and end are the first and last window_s of the run, not grid
-        # windows, so a short last grid window can't make the end noisy
+        # Not grid windows, so a short last one can't make the end noisy
         head = temp[(t < min(window_s, duration / 2)) & ~np.isnan(temp)]
         tail = temp[(t > duration - min(window_s, duration / 2)) & ~np.isnan(temp)]
         start = float(head.mean()) if head.size else float(np.nanmin(temp))

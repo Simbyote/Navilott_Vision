@@ -1,13 +1,15 @@
-"""
-test_calibrate_stop_line.py  --  src/scripts/calibrate_stop_line.py
+"""test_calibrate_stop_line.py  --  src/scripts/calibrate_stop_line.py
 
 Measuring a tape mark on drawn frames through the real Phase 2, the reasons
 a mark isn't recorded, the interactive loop (undo, too few marks, a typo, a
 mark the detector can't see), and the file it writes, loaded back through
-load_stop_line_table. No camera.
+load_stop_line_table.
+
+--software  Drawn frames and a scripted console. No camera.
 """
 import json
 
+import cv2
 import numpy as np
 import pytest
 
@@ -25,10 +27,6 @@ def tape(y_top):
     """A frame with a tape strip whose top edge is y_top lane-ROI rows down: its near edge is y_top + THICK."""
     return scene(stop_line=(120, 320, y_top), stop_line_thickness=THICK)
 
-
-# =============================================================================
-# Measuring a mark
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("y_top", [10, 30, 50])
@@ -63,10 +61,6 @@ def test_no_line_at_all_measures_nothing():
     m = cs.measure_mark([scene()] * 3, SCENE_CONFIG)
     assert (m["rows"], m["seen"], m["spread"]) == (None, 0, 0.0) and cs.mark_problem(m)
 
-
-# =============================================================================
-# The interactive loop
-# =============================================================================
 
 def interactive(answers, frames_for):
     """collect_marks with typed answers; frames_for(cm) -> the frame the camera sees for that mark."""
@@ -105,9 +99,48 @@ def test_a_mark_the_detector_cannot_see_is_not_recorded():
     assert any("not recorded" in s for s in said)
 
 
-# =============================================================================
-# The file
-# =============================================================================
+class UpsideDownCamera:
+    """open_camera's capture: hands over the frame as the pipeline does, upside down."""
+    def __init__(self, upright):
+        self.frame = cv2.rotate(upright, cv2.ROTATE_180)
+        self.released = False
+
+    def read(self):
+        return True, self.frame.copy()
+
+    def release(self):
+        self.released = True
+
+
+@pytest.mark.software
+def test_camera_frames_are_turned_upright_before_measuring(monkeypatch):
+    import src.capture.camera as camera
+    monkeypatch.setattr(camera, "CAMERA_ROTATE_180", True)      # an upside-down mount, as before 2026-10-28
+    # Since the pipeline stopped flipping (ac99b10), a frame used as read puts
+    # the tape at the top of the view, outside the lane ROI: 0 of 15 frames
+    cam = UpsideDownCamera(tape(30))
+    assert cs.measure_mark([cam.read()[1]] * 3, SCENE_CONFIG)["seen"] == 0
+    from src.scripts.calibrate_camera import grab_upright
+    m = cs.measure_mark(grab_upright(cam, 3), SCENE_CONFIG)
+    assert m["seen"] == 3 and m["rows"] == cs.measure_mark([tape(30)], SCENE_CONFIG)["rows"]
+
+
+@pytest.mark.software
+def test_main_grabs_upright_frames_from_the_camera(monkeypatch):
+    import src.capture.camera as camera
+    import src.scripts.calibrate_camera as cc
+    monkeypatch.setattr(camera, "CAMERA_ROTATE_180", True)
+    cam = UpsideDownCamera(tape(30))
+    monkeypatch.setattr(cc, "open_camera", lambda w, h: cam)
+    grabbed = {}
+
+    def collect(grab, ask, say, config, n):
+        grabbed["frames"] = grab(2)
+        return cs.parse_marks(marks_text())
+    monkeypatch.setattr(cs, "collect_marks", collect)
+    assert cs.main(["--out", "/dev/null"], say=lambda s: None) == 0
+    assert all(np.array_equal(f, tape(30)) for f in grabbed["frames"]) and cam.released
+
 
 @pytest.mark.software
 def test_parse_marks():

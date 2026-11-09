@@ -1,34 +1,12 @@
 """Lane-geometry view: every contour the lane detector traced, and who refused it.
 
 Purpose:
-    The lane view (debug_lane) shows what lane_offset decided on the frame.
-    This one shows the step before, on the lane ROI: every contour the lane
-    detector traced, colored by the stage that decided it. Red contours were
-    refused by geometry's own gates (area, aspect, span, intensity), which
-    the lane view never draws; amber ones were accepted by geometry and
-    refused by lane_offset (confidence, proximity, length, width, intensity,
-    or lying on a stop line); green ones are usable boundaries, and the two
-    chosen as left and right are marked at their foot. If a lane line is
-    missing, the color says which stage lost it and the label says why.
-
-    The bottom panel is the edge map the contours came from: every Canny
-    edge in gray, the edges the horizontal-line filter took out (a stop line
-    across the lane) in red, the edges the lane detector kept in white, and
-    what the closing step added between them in blue. Contours that join
-    things they shouldn't, like a lane line and a stop line, show here.
-
-    Coordinates are lane-ROI-relative. Rejected contours need the chain's
-    trace (trace=True, which live_view uses); without it only the candidates
-    geometry accepted are drawn, and the footer says so.
+    The lane view shows what lane_offset decided; this shows the step before.
+    Contours are red when geometry refused them, amber for lane_offset, green
+    when usable, over a panel of the edge map they came from. Rejected contours need trace=True.
 
 Main package:
-    LaneGeometryView: implements the view interface in debug_video.
-
-Flow:
-    1. Pull the lane trace, edge maps, candidates and the lane result from
-       the chain; classify each candidate with lane_offset's gates.
-    2. Draw the ROI panel (red / amber / green contours, anchors) and the edge panel.
-    3. Header with the lane result, footer with this frame's gate counts.
+    LaneGeometryView, a debug_video view in lane-ROI coordinates.
 """
 import cv2
 import numpy as np
@@ -52,14 +30,9 @@ C_EDGE, C_REMOVED, C_KEPT, C_CLOSED = (90, 90, 90), (60, 60, 255), (235, 235, 23
 
 class LaneGeometryView(dv.CandidateView):
     """
-    Lane-geometry view; implements the view interface in debug_video, drawing on the lane ROI.
+    conf_threshold is unused, accepted so live_view builds every view alike.
 
-    conf_threshold: Unused (lane_offset's own gates decide); accepted so
-        live_view can build every view the same way.
-    zoom: Extra magnification on top of the run's scale.
-    lane_config: The LaneOffsetConfig the chain ran with, used to say which
-        gate refused each candidate (debug_lane.candidate_gates). live_view.run
-        sets it from its own lane_config; it must be set before extract().
+    lane_config must be set before extract(); live_view.run sets it.
     """
     name = "lanegeo"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "contours", "geo_rejected", "candidates", "usable",
@@ -75,23 +48,8 @@ class LaneGeometryView(dv.CandidateView):
         self._offset = {}
         self._filtered_frames = 0
 
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
-
     def extract(self, chain, frame=None) -> dict:
-        """
-        This frame's lane-geometry data from a chain result.
-
-        Reads chain.lane_debug (lane_roi, edges_raw, edges_lane, edges,
-        reject_counts, and "trace" when the chain ran with trace=True),
-        chain.geometry's lane and stop-line candidates and chain.offset.
-        Each candidate's lane_offset gate is worked out again with
-        self.lane_config.
-
-        Raises:
-            ValueError: If lane_config was never set.
-        """
+        """This frame's lane-geometry data from a chain result. ValueError if lane_config was never set."""
         if self.lane_config is None:
             raise ValueError("LaneGeometryView needs lane_config (the chain's LaneOffsetConfig)")
         dbg = getattr(chain, "lane_debug", None) or {}
@@ -170,10 +128,6 @@ class LaneGeometryView(dv.CandidateView):
                 out.append(f"  {g:<20}{c:6}")
         return out
 
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
-
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)
         roi = data["roi"]
@@ -196,7 +150,7 @@ class LaneGeometryView(dv.CandidateView):
             pts = (np.asarray(contour).reshape(-1, 2) * s + np.array([0, top_y])).astype(np.int32)
             cv2.polylines(canvas, [pts.reshape(-1, 1, 2)], True, color, width, cv2.LINE_AA)
 
-        placed = []                             # label boxes already drawn, so labels don't overprint
+        placed = []                             # drawn label boxes, against overprinting
 
         def label(text, bbox, color):
             x, y, w, h = bbox
@@ -208,7 +162,7 @@ class LaneGeometryView(dv.CandidateView):
             placed.append((lx, ly, tw))
             dv.draw_text(canvas, text, (lx, ly), color, fs, th)
 
-        # Detected stop lines, faint, for context
+        # Stop lines, faint, for context
         for sl in data["stop_lines"]:
             x, y, w, h = sl.bbox
             cv2.rectangle(canvas, (x * s, top_y + y * s), ((x + w) * s, top_y + (y + h) * s), dv.C_GRAY, 1)
@@ -242,7 +196,6 @@ class LaneGeometryView(dv.CandidateView):
                 cv2.drawMarker(canvas, (int(mid * s), bottom - 4 * s), C_CENTER, cv2.MARKER_TRIANGLE_UP,
                                8 * s, 2)
 
-        # Header
         usable, offset_rej = self._tally(data)
         geo_rej = len(self._geo_rejects(data)) if data["trace"] is not None else sum(
             data["counts"].get(g, 0) for g in GEO_GATES)
@@ -261,7 +214,6 @@ class LaneGeometryView(dv.CandidateView):
             info += f"   horizontal filter removed {data['removed_edge_px']} edge px"
         dv.draw_text(canvas, info, (6, 2 * lh + 2), dv.C_WHITE, fs, th)
 
-        # Footer
         rc = data["counts"]
         foot = (f"contours {rc.get('seen', 0)}  "
                 + "  ".join(f"{GEO_SHORT[g]} {rc.get(g, 0)}" for g in ("area", "aspect", "intensity"))
@@ -274,7 +226,7 @@ class LaneGeometryView(dv.CandidateView):
         return canvas
 
     def _edge_panel(self, data, size, out_size) -> np.ndarray:
-        """All Canny edges gray, the ones the horizontal filter removed red, kept white, closing's additions blue."""
+        """Canny edges gray, horizontally filtered red, kept white, closing's additions blue."""
         W, H = size
         panel = np.zeros((H, W, 3), np.uint8)
         raw, lane, closed = data["edges_raw"], data["edges_lane"], data["edges"]

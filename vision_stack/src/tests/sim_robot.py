@@ -8,10 +8,10 @@ sensing hub delivers it, so the yaw-sign check and the bias measurement have
 something real to find. Readings go through sensing.SensorBatch, so the wheel
 speeds are the hub's own count-delta math.
 Time is a FakeClock the tests advance; nothing sleeps. FakeBattery stands in
-for diagnostics.battery.Power in the runs that watch the pack.
+for peripherals.battery.Power in the runs that watch the pack.
 """
-from src.diagnostics.battery_state import BatteryState
-from src.estimation.estimation import SensorSample
+from src.peripherals.battery_state import BatteryState
+from src.peripherals.sensing import SensorSample
 from src.peripherals.sensing import SensorBatch, SensorReading
 
 
@@ -26,7 +26,7 @@ class FakeClock:
 
 class FakeBattery:
     """
-    diagnostics.battery.Power stand-in: a pack draining volts_step per
+    peripherals.battery.Power stand-in: a pack draining volts_step per
     should_stop() check (once per frame in the runs) from start_v, CRITICAL
     once it reaches critical_at (None: never). log gets "battery started" /
     "battery released".

@@ -1,26 +1,14 @@
-"""
-sign_check.py  --  why a stop sign in view isn't detected: which gate, and what relaxing it would find
+"""Why a stop sign in view isn't detected: which gate, and what relaxing it would find.
 
 Purpose:
-    The sign detector (perception/geometry.py) takes the red pixels in the
-    sign ROI and gates the blobs largest first: area, vertex count,
-    solidity, then the ghost-sign gates (aspect, extent, letters); the first
-    that passes is the sign. Until 2026-10-20 it gated only the largest, so
-    something larger and red in the ROI, refused, hid the sign; this check
-    found it, and still counts those frames (found behind a larger blob).
+    The detector gates red blobs largest first and takes the first that
+    passes. This replays frames through Phases 1-2, gates every blob on its
+    own, then relaxes one gate at a time, naming the gate that brings the sign
+    back.
 
-    This replays recorded frames through Phase 1-2 with the run's tuning
-    and, per frame, gates every red blob on its own: the largest's gate, and
-    whether a smaller one would have passed. Then it gates them again with
-    one gate relaxed at a time, so the gate whose relaxing brings the sign
-    back is named, with the frames it would add.
-
-Output (printed, and sign_check.csv + sign_check.json in --out):
-    Per frame: red blobs, the largest's area, gate and measured values,
-    which edges of the sign ROI it touches (a sign cut off by the ROI loses
-    its corners: an octagon cut across the top reads 6 vertices), whether a
-    smaller blob passes, and which relaxed gates would pass the largest. The summary: frames with a red blob, detected as it stands,
-    lost behind a larger red blob, and the frames each relaxed gate adds.
+Main package:
+    sign_check.csv (per frame: blobs, the largest's gate and values, ROI edges
+    touched, hidden passes, relaxed passes) and sign_check.json (totals).
 
 Usage (from vision_stack/, on the Pi or a laptop with the frames):
     python3 -m src.analysis.sign_check --frames runs/nav_<time>/frames
@@ -37,7 +25,7 @@ from pathlib import Path
 from src.config import MEASURED
 from src.params import RUNS_DIR
 
-# One gate relaxed at a time, from the run's tuning: (name, SignContourFilter changes)
+# (name, SignContourFilter changes), one gate relaxed at a time
 RELAXED = (
     ("vertices 7-10", {"min_vertices": 7, "max_vertices": 10}),
     ("solidity 0.7", {"min_solidity": 0.70}),
@@ -49,10 +37,7 @@ RELAXED = (
 
 
 def gate_of(contour, sign_filter, sign_color_roi) -> tuple[str | None, dict]:
-    """
-    One blob through the detector's gates on its own: (the gate that refused
-    it, or None if it passes; what was measured on the way).
-    """
+    """(the refusing gate or None, what was measured) for one blob on its own."""
     import cv2
     from src.perception import geometry as g
     area = cv2.contourArea(contour)
@@ -74,7 +59,7 @@ def gate_of(contour, sign_filter, sign_color_roi) -> tuple[str | None, dict]:
 
 
 def blobs(sign_color_roi, sign_filter) -> list:
-    """The red mask's external contours at or over min_area, largest first, as the detector finds them."""
+    """The red mask's external contours at or over min_area, largest first."""
     import cv2
     from src.perception import geometry as g
     mask, _ = g._red_mask(g._redness(sign_color_roi), sign_filter)
@@ -83,7 +68,7 @@ def blobs(sign_color_roi, sign_filter) -> list:
 
 
 def edges_touched(contour, shape) -> str:
-    """Which sides of the ROI the blob's bounding box touches: "top", "right", ... joined by "+"; "" for none."""
+    """ROI sides the blob's box touches, joined by "+"; "" for none."""
     import cv2
     x, y, w, h = cv2.boundingRect(contour)
     rows, cols = shape[:2]
@@ -95,13 +80,8 @@ def check_frame(sign_color_roi, sign_filter) -> dict:
     """
     One frame's sign ROI.
 
-    Outputs:
-        blobs; largest_area, largest_gate and its measured values (None
-        without a blob); cut: the ROI edges the largest touches; detected
-        (the largest passes, as the robot runs);
-        hidden (the largest is refused but a smaller blob passes: found
-        behind it, which the detector missed before 2026-10-20); relaxed:
-        for a frame not detected, the RELAXED names under which a blob passes.
+    hidden: the largest is refused but a smaller blob passes (missed before
+    2026-10-20). relaxed: for an undetected frame, the RELAXED names that pass a blob.
     """
     found = blobs(sign_color_roi, sign_filter)
     row = {"blobs": len(found), "largest_area": None, "largest_gate": None, "measured": {}, "cut": "",
@@ -124,7 +104,6 @@ def check_frame(sign_color_roi, sign_filter) -> dict:
 
 
 def summarize(rows: list[dict]) -> dict:
-    """Frames with a red blob, detected, hidden behind a larger blob, refused per gate, and what each relaxed gate adds."""
     red = [r for r in rows if r["blobs"]]
     refused = [r for r in red if not r["detected"]]
     largest_refused = [r for r in red if r["largest_gate"] is not None]
@@ -139,7 +118,6 @@ def summarize(rows: list[dict]) -> dict:
 
 
 def report(s: dict) -> list[str]:
-    """The summary as printed."""
     lines = [f"{s['frames']} frames, {s['with_red_blob']} with a red blob in the sign ROI, "
              f"{s['detected']} detected as the robot runs",
              f"found behind a larger, refused red blob (missed before 2026-10-20): {s['found_behind_larger']} frames",

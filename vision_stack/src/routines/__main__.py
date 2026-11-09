@@ -9,17 +9,13 @@ _CLI_HELP = """\
 Run a hardware test routine: it prompts every step, asks for any hand
 measurement, and writes runs/routine_<name>_<time>/ with every trial, the
 conditions and a PASS / FAIL verdict. At any prompt, q stops and keeps what's
-done. docs/guides/routines.md has each routine; make routines lists them.
+done. make routines lists them.
 """
 
 
 def parse_settings(pairs: list[str], known: dict) -> dict:
     """
-    --set KEY=VALUE pairs as a dict, numbers as numbers, checked against
-    the routine's settings ({name: what it is}).
-
-    Raises:
-        ValueError: A pair without "=", or a setting the routine doesn't have.
+    --set KEY=VALUE pairs, numbers as numbers. ValueError without "=" or for a setting the routine doesn't have.
     """
     out = {}
     for pair in pairs:

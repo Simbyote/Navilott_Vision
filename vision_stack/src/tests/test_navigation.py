@@ -1,11 +1,12 @@
-"""
-test_navigation.py  --  src/navigation/navigation.py, the navigation subsystem's orchestrator
+"""test_navigation.py  --  src/navigation/navigation.py, the navigation subsystem's orchestrator
 
 The rules in priority order over lane keeping: lane keeping when no rule
 speaks; the first rule that speaks wins, but every rule sees every frame and
 is told when a higher one already decided; record names the deciding part;
 the contract checks and the intersection scenarios end to end; reset; the
 contract re-exported.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 
@@ -17,7 +18,7 @@ from src.navigation.navigation import (
 )
 from src.navigation.navigation_contract import BRAKE, Command, Navigator
 from src.navigation.stop_line import APPROACH, CROSSING, IDLE, STOP_DELAY_MS
-from src.navigation.intersection import ADVANCE_MS, LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES
+from src.navigation.intersection import ADVANCE_MS, LEFT_TURN_MAX_MS, ONE_BOUNDARY_FRAMES, TWO_BOUNDARY_FRAMES
 from src.tests.navigation_checks import (
     APPROACH_ROWS, INTERSECTION_CHECKS, check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
     contract_problems, frames, intersection, packet,
@@ -53,10 +54,6 @@ def run(nav, case):
         out.append((p, nav.update(p), dict(nav.record)))
     return out
 
-
-# =============================================================================
-# The orchestration
-# =============================================================================
 
 @pytest.mark.software
 def test_the_rules_in_priority_order():
@@ -124,10 +121,6 @@ def test_it_is_a_navigator_and_re_exports_the_contract():
         assert getattr(navigation, name) is getattr(contract, name)
 
 
-# =============================================================================
-# The contract, end to end
-# =============================================================================
-
 @pytest.mark.software
 def test_every_command_is_valid():
     mixed = frames(intersection({"stop_sign_detected": True}, {"drive_state": "stop"}, after_frames=40)
@@ -177,10 +170,6 @@ def test_a_stale_lane_while_crossing_an_intersection_does_not_end_the_run():
     assert not any(rec.get("reason") == "end_of_course" for _, _, rec in out)
 
 
-# =============================================================================
-# Who decides, frame by frame
-# =============================================================================
-
 def rules_over(out):
     """The deciding rule per frame, collapsed to its runs."""
     runs = []
@@ -196,7 +185,7 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
     red_ms = STOP_DELAY_MS + 3000                        # still red after the 2 s stop-sign hold
     case = intersection({"stop_sign_detected": True, "drive_state": "stop"}, after_frames=0)
     case += [{"drive_state": "stop", "lane_mode": "right_only"}] * (red_ms // MS)
-    case += [{"lane_mode": "right_only"}] * 10 + [{}] * 10
+    case += [{"lane_mode": "right_only"}] * 10 + [{}] * TWO_BOUNDARY_FRAMES
     out = run(Navigation(), case)
     assert rules_over(out) == [RULE_LANE_KEEPING, RULE_INTERSECTION, RULE_STOP_SIGN, RULE_TRAFFIC_LIGHT,
                                RULE_INTERSECTION, RULE_LANE_KEEPING]
@@ -206,7 +195,7 @@ def test_a_stop_sign_and_a_red_light_at_one_line_stop_then_wait_for_green():
 
 @pytest.mark.software
 def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
-    from src.navigation.intersection import LEFT_TURN, STAGE_ADVANCE, STAGE_TURN
+    from src.navigation.intersection import LEFT_TURN_DRIVEN, STAGE_ADVANCE, STAGE_TURN
     from src.navigation.route import Route
     wait_ms = STOP_DELAY_MS + 1000
     case = intersection({"drive_state": "caution"}, after_frames=0)
@@ -219,7 +208,7 @@ def test_after_waiting_at_a_yellow_light_the_route_s_turn_still_runs():
     assert out[after_wait][2]["stage"] == (STAGE_ADVANCE if ADVANCE_MS else STAGE_TURN)
     assert out[after_wait][2]["maneuver"] == "left"
     turning = [(cmd, rec) for _, cmd, rec in out[after_wait:] if rec.get("stage") == STAGE_TURN]
-    assert turning and turning[0][0] == LEFT_TURN           # the advance used none of its time while held
+    assert turning and turning[0][0] == LEFT_TURN_DRIVEN    # the advance used none of its time while held
 
 
 @pytest.mark.software
@@ -243,7 +232,6 @@ def test_a_green_line_is_crossed_straight_then_lane_keeping_takes_over():
     assert all(cmd == Command(0.4, 0.4) for cmd in crossing)          # straight, not chasing the offset
 
 
-
 @pytest.mark.software
 def test_once_finished_no_rule_is_asked_again():
     # A stop line passing under the view after the finish would make the intersection rule speak
@@ -258,10 +246,6 @@ def test_once_finished_no_rule_is_asked_again():
         assert nav.update(p) == BRAKE and nav.record["rule"] == RULE_END_OF_COURSE
     assert asked == [] and nav.tracker.phase == IDLE
 
-
-# =============================================================================
-# The route
-# =============================================================================
 
 # Frames after each line: to the line, the advance, a turn's time limit (no
 # yaw in these packets, so a turn runs to it) and the exit
@@ -323,7 +307,6 @@ def test_reset_starts_the_route_over():
     assert nav.progress.step == 0 and nav.outcome is None and nav.end_step is None
 
 
-
 @pytest.mark.software
 def test_a_line_like_mark_while_crossing_neither_restarts_the_crossing_nor_counts():
     # 2026-10-01 run: past an intersection the near end of a thick lane line
@@ -332,7 +315,7 @@ def test_a_line_like_mark_while_crossing_neither_restarts_the_crossing_nor_count
     mark = [{"stop_line_detected": True, "stop_line_distance_px": r, "lane_mode": "none"} for r in APPROACH_ROWS]
     after_reached = STOP_DELAY_MS // MS + 10                     # the tracker is idle again, the crossing isn't over
     case = (intersection(after={"lane_mode": "none"}, after_frames=after_reached) + mark
-            + [{"lane_mode": "none"}] * 40 + [{"lane_mode": "two_boundary"}] * 5
+            + [{"lane_mode": "none"}] * 40 + [{"lane_mode": "two_boundary"}] * TWO_BOUNDARY_FRAMES
             + intersection(after={"lane_mode": "two_boundary"}, after_frames=40))
     out = run(Navigation(), case)
     n = len(APPROACH_ROWS)

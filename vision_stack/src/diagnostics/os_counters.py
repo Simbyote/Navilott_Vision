@@ -1,38 +1,13 @@
 """OS counters: what the rest of the Pi does while the robot runs.
 
 Purpose:
-    The recorder (monitor.py) follows the robot's own threads. Around them,
-    the kernel and the other processes keep working, and some of it is the
-    robot's work done elsewhere: the camera's frames arrive as Unicam
-    interrupts and go to the VideoCore ISP over VCHIQ, the ADS1115 and the
-    IMU answer over I2C, pigpiod times the motor PWM by DMA in its own
-    process, a recording writes to the SD card. All of it is in /proc and
-    vcgencmd, as counters to read once a second:
-
-    - interrupts per second, per line of /proc/interrupts: hardware events
-      counted by the hardware, not by Python (Unicam ~ the frame rate);
-    - the VideoCore ISP and core clocks (vcgencmd, every CLOCK_EVERY_S);
-    - CmaFree: the contiguous memory camera buffers come from;
-    - the SD card's read and write rate and busy time (/proc/diskstats);
-    - pressure stalls (/proc/pressure): the share of time some task waited
-      on CPU, I/O or memory, when the kernel has PSI;
-    - every other process's CPU (/proc/<pid>/stat): pigpiod, sshd,
-      journald, the recorder itself.
-
-    Every source is optional: a missing one reads None (or no rows), so a
-    laptop records what it has.
+    Some of the robot's work happens outside its threads: camera interrupts,
+    the ISP, I2C, pigpiod's PWM, the SD card. All of it is in /proc and
+    vcgencmd as counters, read once a second for monitor.py; every source is
+    optional.
 
 Main package:
-    OsCounters(target_pid): take(elapsed_s, now) -> {"system": {SYSTEM_FIELDS},
-        "irqs": [IRQ_FIELDS rows], "procs": [PROC_FIELDS rows]}, rates over
-        the time since the last take (none on the first).
-    read_interrupts(), read_disk(), read_pressure(), read_cma_mb(),
-    read_process_ticks(), parse_vcgencmd(), read_vc_clock_mhz(): one reading each.
-    irq_summary(rows, n), proc_summary(rows, n): per IRQ / process means over n intervals.
-
-Flow:
-    monitor.record() calls take() on its once-a-second system tick; the
-    system fields join system.csv, the rows go to irqs.csv and procs.csv.
+    OsCounters.take(): the system fields, and per-IRQ and per-process rates since the last take.
 """
 import os
 import re
@@ -41,9 +16,9 @@ from collections import defaultdict
 from pathlib import Path
 
 PROC = Path("/proc")
-DISK_DEVICE = "mmcblk0"     # the Pi's SD card
-CLOCK_EVERY_S = 5.0         # vcgencmd is a subprocess each: the clocks rarely move, so not every second
-SECTOR_BYTES = 512          # /proc/diskstats counts 512-byte sectors whatever the device's own size
+DISK_DEVICE = "mmcblk0"     # the SD card
+CLOCK_EVERY_S = 5.0         # each read is a subprocess, and the clocks rarely move
+SECTOR_BYTES = 512          # /proc/diskstats' unit, whatever the device's
 PSI_KINDS = ("cpu", "io", "memory")
 SYSTEM_FIELDS = ("os_dt_s", "cma_free_mb", "isp_mhz", "core_mhz", "disk_read_kbps", "disk_write_kbps",
                  "disk_busy_pct", "psi_cpu_some", "psi_io_some", "psi_memory_some")
@@ -56,17 +31,12 @@ except (ValueError, OSError, AttributeError):        # not POSIX
     CLK_TCK = 100
 
 
-# =============================================================================
-# Readings
-# =============================================================================
-
-# A trigger type: "Edge" / "Level" on the Pi's ARM controller, "5-edge" on x86's IO-APIC. A chip
-# name such as ARMCTRL-level isn't one: it comes before the hardware IRQ number
+# "Edge" / "Level" on the Pi, "5-edge" on x86; a chip name like ARMCTRL-level isn't one
 _TRIGGER = re.compile(r"(?:\d+-)?(?:[Ee]dge|[Ll]evel)")
 
 
 def _irq_name(desc: str) -> str:
-    """The device a /proc/interrupts line is for: what follows its trigger type (Edge / Level), else the whole text."""
+    """What follows the trigger type (Edge / Level), else the whole text."""
     tokens = desc.split()
     marks = [i for i, t in enumerate(tokens) if _TRIGGER.fullmatch(t)]
     if marks and marks[-1] + 1 < len(tokens):
@@ -75,7 +45,7 @@ def _irq_name(desc: str) -> str:
 
 
 def read_interrupts(path: Path = PROC / "interrupts") -> dict:
-    """{irq: (device name, count summed over the cores)}; {} when unreadable."""
+    """{irq: (device, count over all cores)}; {} when unreadable."""
     try:
         lines = path.read_text().splitlines()
     except OSError:
@@ -100,7 +70,7 @@ def read_interrupts(path: Path = PROC / "interrupts") -> dict:
 
 
 def read_disk(path: Path = PROC / "diskstats", device: str = DISK_DEVICE) -> dict | None:
-    """The device's cumulative sectors read and written and ms spent doing I/O; None when absent."""
+    """Cumulative sectors read and written and ms doing I/O; None when absent."""
     try:
         for line in path.read_text().splitlines():
             f = line.split()
@@ -112,7 +82,7 @@ def read_disk(path: Path = PROC / "diskstats", device: str = DISK_DEVICE) -> dic
 
 
 def read_pressure(path: Path) -> float | None:
-    """A /proc/pressure file's "some avg10": % of the last 10 s some task stalled; None without PSI."""
+    """"some avg10": % of the last 10 s some task stalled; None without PSI."""
     try:
         m = re.search(r"^some avg10=([0-9.]+)", path.read_text(), re.M)
     except OSError:
@@ -121,7 +91,6 @@ def read_pressure(path: Path) -> float | None:
 
 
 def read_cma_mb(path: Path = PROC / "meminfo") -> dict:
-    """CmaTotal and CmaFree from /proc/meminfo in MB; None each where absent."""
     out = {"cma_total_mb": None, "cma_free_mb": None}
     try:
         text = path.read_text()
@@ -138,13 +107,12 @@ _VC_NUMBER = re.compile(r"=\s*([0-9.]+)")
 
 
 def parse_vcgencmd(text: str) -> float | None:
-    """The number after '=' in a vcgencmd reply: frequency(45)=500000000, volt=1.2000V, gpu=64M."""
+    """The number after '=': frequency(45)=500000000, volt=1.2000V, gpu=64M."""
     m = _VC_NUMBER.search(text or "")
     return float(m.group(1)) if m else None
 
 
 def read_vc_clock_mhz(clock: str, run=subprocess.run) -> float | None:
-    """vcgencmd measure_clock <clock> in MHz; None without vcgencmd. run is injectable for tests."""
     try:
         out = run(["vcgencmd", "measure_clock", clock], capture_output=True, text=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
@@ -154,7 +122,7 @@ def read_vc_clock_mhz(clock: str, run=subprocess.run) -> float | None:
 
 
 def read_process_ticks(proc: Path = PROC, exclude: tuple[int, ...] = ()) -> dict:
-    """{pid: (name, user + system clock ticks)} for every process but exclude."""
+    """{pid: (name, user + system ticks)}."""
     out = {}
     for entry in proc.iterdir():
         if not entry.name.isdigit() or int(entry.name) in exclude:
@@ -163,7 +131,6 @@ def read_process_ticks(proc: Path = PROC, exclude: tuple[int, ...] = ()) -> dict
             text = (entry / "stat").read_text()
         except OSError:
             continue
-        # comm is in parentheses and may hold spaces or parentheses itself
         lpar, rpar = text.find("("), text.rfind(")")
         fields = text[rpar + 2:].split()
         try:
@@ -173,30 +140,16 @@ def read_process_ticks(proc: Path = PROC, exclude: tuple[int, ...] = ()) -> dict
     return out
 
 
-# =============================================================================
-# Sampling
-# =============================================================================
-
 class OsCounters:
-    """
-    The counters above, as rates between takes.
-
-    Inputs:
-        target_pid: The robot's process: monitor.py records its threads, so
-            it is left out of procs.
-        proc: The /proc to read (a fake tree in tests).
-        clock_reader: (clock name) -> MHz | None; vcgencmd by default.
-        disk_device: The block device whose I/O is recorded.
-    """
+    """target_pid is left out of procs: monitor.py records its threads."""
     def __init__(self, target_pid: int | None = None, proc: Path = PROC, clock_reader=read_vc_clock_mhz,
                  disk_device: str = DISK_DEVICE, self_pid: int | None = None):
         self.target_pid, self.proc, self.clock_reader, self.disk_device = target_pid, proc, clock_reader, disk_device
         self.self_pid = os.getpid() if self_pid is None else self_pid
-        self._prev = None               # (now, irqs, disk, ticks) at the last take
+        self._prev = None               # (now, irqs, disk, ticks)
         self._clock_at = None
 
     def take(self, elapsed_s: float, now: float) -> dict:
-        """This tick's system fields and the rate rows since the last take."""
         irqs = read_interrupts(self.proc / "interrupts")
         disk = read_disk(self.proc / "diskstats", self.disk_device)
         ticks = read_process_ticks(self.proc, exclude=() if self.target_pid is None else (self.target_pid,))
@@ -230,12 +183,8 @@ class OsCounters:
         return out
 
 
-# =============================================================================
-# Summaries
-# =============================================================================
-
 def _per_key(rows: list[dict], key, value: str, n: int) -> list[dict]:
-    """Per key: the mean of value over n intervals (absent intervals are 0) and the max; largest mean first."""
+    """Mean over n intervals (absent ones count 0) and max, largest mean first."""
     groups = defaultdict(list)
     for r in rows:
         groups[key(r)].append(float(r[value]))
@@ -245,28 +194,26 @@ def _per_key(rows: list[dict], key, value: str, n: int) -> list[dict]:
 
 
 def irq_summary(rows: list[dict], n_intervals: int) -> list[dict]:
-    """Per IRQ line: {irq, name, mean_hz, max_hz}; rows only hold intervals it fired in."""
     return [{"irq": e["key"][0], "name": e["key"][1], "mean_hz": e["mean"], "max_hz": e["max"]}
             for e in _per_key(rows, lambda r: (str(r["irq"]), r["name"]), "rate_hz", n_intervals)]
 
 
 def proc_summary(rows: list[dict], n_intervals: int) -> list[dict]:
-    """Per process: {pid, name, mean_pct, max_pct} of one core; rows only hold intervals it ran in."""
+    """mean_pct and max_pct are of one core."""
     return [{"pid": e["key"][0], "name": e["key"][1], "mean_pct": e["mean"], "max_pct": e["max"]}
             for e in _per_key(rows, lambda r: (int(r["pid"]), r["name"]), "cpu_pct", n_intervals)]
 
 
 def intervals(system_rows: list[dict]) -> int:
-    """How many system rows carry rates (os_dt_s set): the n the summaries average over."""
+    """System rows carrying rates: what the summaries average over."""
     return sum(1 for r in system_rows if r.get("os_dt_s") not in (None, ""))
 
 
-TOP_IRQS = 8                # interrupt lines a summary lists, busiest first
-TOP_PROCS = 6               # other processes a summary lists
+TOP_IRQS = 8
+TOP_PROCS = 6
 
 
 def _num(v) -> float | None:
-    """A CSV cell or a row value as a float; None when blank or not a number."""
     try:
         return None if v in (None, "") else float(v)
     except (TypeError, ValueError):
@@ -274,7 +221,7 @@ def _num(v) -> float | None:
 
 
 def system_extremes(rows: list[dict]) -> dict:
-    """Over the system rows: CMA free min, clock ranges, SD rates and busy max, pressure max per kind; None where never read."""
+    """None where never read."""
     def col(k):
         return [x for x in (_num(r.get(k)) for r in rows) if x is not None]
 
@@ -294,7 +241,6 @@ def system_extremes(rows: list[dict]) -> dict:
 
 
 def summary_lines(system_rows: list[dict], irq_rows: list[dict], proc_rows: list[dict]) -> list[str]:
-    """The OS part of a summary: memory pool, clocks, SD card, pressure, interrupts, other processes."""
     e = system_extremes(system_rows)
     n = intervals(system_rows)
     fmt = lambda v, spec=".0f", unit="": "--" if v is None else f"{v:{spec}}{unit}"      # noqa: E731

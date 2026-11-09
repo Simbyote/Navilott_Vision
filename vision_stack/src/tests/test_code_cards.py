@@ -134,8 +134,6 @@ def project(tmp_path):
     return tmp_path
 
 
-# --- reading ------------------------------------------------------------------
-
 def test_sections_are_titled_lines_and_flow_is_found_by_its_first_word():
     summary, sections = cc.doc_sections(RULES.split('"""')[1])
     assert summary == "Rules: the small parts."
@@ -216,8 +214,6 @@ def test_used_by_counts_package_imports_lazy_importers_and_test_files(project):
     assert not cc.lazy_module(boss, "src.pkg")                 # rules at the top, helper inside a function
 
 
-# --- drawing ------------------------------------------------------------------
-
 def test_reflow_joins_prose_and_keeps_list_items():
     text = "One line\ncontinues here.\n\n1. Item\n2. Item\n   indented\nHeading:\nnext"
     assert cc.reflow(text) == "One line continues here.\n\n1. Item\n2. Item\n   indented\nHeading:\nnext"
@@ -263,8 +259,6 @@ def test_card_names_follow_the_module_path():
     assert cc.card_name("src.main") == "main.png"
 
 
-# --- the command line ---------------------------------------------------------
-
 def test_main_writes_one_png_per_module(project, tmp_path):
     out, said = tmp_path / "cards", []
     assert cc.main(["--root", str(project), "--out", str(out)], say=said.append) == 0
@@ -288,8 +282,6 @@ def test_an_unknown_module_is_exit_2_and_draws_nothing(project, tmp_path):
     assert said[0].startswith("ERROR: not a source module") and "src.pkg.nope" in said[0]
     assert not out.exists()
 
-
-# --- the real code ------------------------------------------------------------
 
 def test_navigation_card_shows_the_rules_in_order_and_the_call_through_the_loop():
     mods = cc.scan(PIPELINE_ROOT)

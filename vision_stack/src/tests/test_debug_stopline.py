@@ -29,16 +29,14 @@ from src.tests.scenes import SCENE_CONFIG, SCENES, SYNTHETIC_GROUND
 NO_LANE_FILTER = replace(SCENE_CONFIG, geometry=replace(
     SCENE_CONFIG.geometry, lane=replace(SCENE_CONFIG.geometry.lane, horizontal_edge_deg=None)))
 
+
 def chain(scene, trace=True, config=NO_LANE_FILTER):
     return run_chain(SCENES[scene], 7, 350, config, trace=trace)
+
 
 def data(scene, view=None, config=NO_LANE_FILTER):
     return (view or StopLineView()).extract(chain(scene, config=config))
 
-
-# =============================================================================
-# What the view reads
-# =============================================================================
 
 @pytest.mark.software
 def test_extract_reads_the_candidates_the_measurement_and_the_trace():
@@ -62,20 +60,16 @@ def test_extract_finds_the_lane_candidates_lane_offset_skipped():
 
 @pytest.mark.software
 def test_each_top_edge_is_graded_pass_low_or_rejected_with_its_gate():
-    view = StopLineView(conf_threshold=0.62)
-    sm = view._summary(data("stop_line_tilted", view))         # 1.5 deg, conf 0.513: accepted but below
+    view = StopLineView(conf_threshold=0.66)                    # between the two lines below
+    sm = view._summary(data("stop_line_tilted", view))         # 1.5 deg, conf 0.635: accepted but below
     assert (sm["passed"], sm["low"], sm["rejected"]) == (0, 1, 0)
-    sm = view._summary(data("stop_line_wide", view))           # 0.704
+    sm = view._summary(data("stop_line_wide", view))           # 0.686
     assert (sm["passed"], sm["low"], sm["rejected"]) == (1, 0, 0)
     blob = view._summary(data("horizontal_blob", view))
     assert blob["rejected"] == 1 and blob["entries"][0]["gate"] == "short"
-    steep = view._summary(data("stop_line_too_tilted", view))  # 5 deg: past MEASURED's 4
+    steep = view._summary(data("stop_line_too_tilted", view))  # 6 deg: past MEASURED's 5
     assert steep["rejected"] == 1 and steep["entries"][0]["gate"] == "tilt"
 
-
-# =============================================================================
-# Drawing
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("scene", ["stop_line_wide", "stop_line_clipped", "stop_line_tilted",
@@ -120,10 +114,6 @@ def test_a_chain_without_a_lane_roi_renders_a_notice():
     assert view.render(d).shape[2] == 3
 
 
-# =============================================================================
-# CSV row and summary
-# =============================================================================
-
 @pytest.mark.software
 def test_row_matches_the_header_and_carries_the_measurement():
     view = StopLineView()
@@ -154,10 +144,6 @@ def test_report_counts_measured_frames_distances_skips_and_rejections():
     assert "skipped as part of a stop line  1" in text
     assert "short" in text
 
-
-# =============================================================================
-# live_view and the lane view
-# =============================================================================
 
 @pytest.mark.software
 def test_live_view_runs_the_stopline_view_and_writes_its_video_csv_and_summary(tmp_path):

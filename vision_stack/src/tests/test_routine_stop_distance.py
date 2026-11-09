@@ -44,10 +44,6 @@ def feed(watch, rows):
     return None
 
 
-# =============================================================================
-# StopWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_the_watch_keeps_the_last_line_and_speed_before_braking_and_ends_when_still():
     w = sd.StopWatch()
@@ -85,10 +81,6 @@ def test_a_braked_row_without_encoders_reads_still():
                           "left_cps": "", "right_cps": ""} for k in range(1, 9)]
     assert feed(w, rows) == sd.STOPPED
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class Rig:
     def __init__(self, log):

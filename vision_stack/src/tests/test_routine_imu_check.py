@@ -95,17 +95,13 @@ def results(tmp_path):
     return json.loads((tmp_path / "out" / "results.json").read_text())
 
 
-# =============================================================================
-# The numbers
-# =============================================================================
-
 @pytest.mark.software
 def test_rest_stats_bias_noise_drift_rate_time_and_errors():
     rs = rest(bias=-1.0, noise=0.1, seconds=2.0, fail={5}) + [SensorReading(2.5, None, None, 3, 4, None)]
     s = ic.rest_stats(rs, configured_bias=-0.90)
     assert s["reads"] == 201 and s["rate_hz"] == 100.0 and s["read_errors"] == 1
     assert s["bias_dps"] == pytest.approx(-1.0, abs=0.001) and s["noise_dps"] == pytest.approx(0.1, abs=0.001)
-    assert s["drift_deg"] == pytest.approx(0.2, abs=0.01)             # 0.1 deg/s over 2 s
+    assert s["drift_deg"] == pytest.approx(-0.2, abs=0.01)            # -0.1 deg/s off -0.90, over 2 s
     assert s["read_ms_p95"] == 3.0
 
 
@@ -131,10 +127,6 @@ def test_the_registry_has_it():
     assert ROUTINES["imu-check"] is ic.ImuCheck and ic.ImuCheck.trials == 10
     assert set(ic.ImuCheck.settings) == {"rest_s", "vib_s", "duty"}             # duty: read by power_profile._motors
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 @pytest.mark.software
 def test_rest_eight_alternating_turns_and_vibration_pass(tmp_path):
@@ -183,7 +175,7 @@ def test_a_redo_repeats_the_same_part_and_direction(tmp_path):
 
 @pytest.mark.software
 def test_turns_use_the_measured_rest_bias(tmp_path):
-    batches = script(rest_reads=rest(bias=-1.2), turns=[turn(d, bias=-1.2) for d in [-90.0, 90.0] * 4])
+    batches = script(rest_reads=rest(bias=-1.0), turns=[turn(d, bias=-1.0) for d in [-90.0, 90.0] * 4])
     res = go(routine(batches), everyone(), tmp_path)
     assert res["verdict"] == h.PASS, res["criteria"]
     assert results(tmp_path)["rows"][1]["heading_deg"] == -90.0
@@ -201,9 +193,9 @@ def test_a_turn_before_any_rest_uses_the_configured_bias(tmp_path):
 @pytest.mark.software
 def test_the_summary_says_the_bias_to_configure(tmp_path):
     person = everyone()
-    res = go(routine(script(rest_reads=rest(bias=-0.8))), person, tmp_path)
+    res = go(routine(script(rest_reads=rest(bias=-0.6))), person, tmp_path)
     assert [c["name"] for c in res["criteria"] if not c["passed"]][0] == "bias off the configured"
-    assert "measured bias -0.800 deg/s" in person.said() and "put GYRO_BIAS_DPS = -0.80 in config.py" in person.said()
+    assert "measured bias -0.600 deg/s" in person.said() and "put GYRO_BIAS_DPS = -0.60 in config.py" in person.said()
 
 
 @pytest.mark.software
@@ -234,10 +226,6 @@ def test_stopping_at_the_first_prompt_stops_the_hub_and_says_nothing_measured(tm
     res = go(r, person, tmp_path)
     assert res["stopped_early"] and r._hub.stopped and "measured bias" not in person.said()
 
-
-# =============================================================================
-# The criteria
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("kw, failing", [

@@ -1,29 +1,14 @@
 """Stop-line view: what the stop-line detector saw, paired and measured on the lane ROI.
 
 Purpose:
-    Lets the stop-line gates be checked on real footage, apart from the lane
-    view. The top panel is the lane ROI with every top edge the detector
-    fitted: accepted lines as the band between their paired edges, rejected
-    edges in red with the gate that stopped them. The line stop_line_distance
-    measured is outlined in white with its distance to the ROI bottom, and
-    lane candidates lane_offset skipped because they lie on a stop line are
-    boxed in amber. The bottom panel is the gradient split itself: every
-    Canny edge in gray, the kept top edges (brightness rising going down) in
-    cyan and bottom edges in magenta, with the fitted lines over them. If a
-    line is missed, the bottom panel says whether its edges survived the
-    split; the top panel says which gate refused it.
-
-    Coordinates are lane-ROI-relative. The threshold, when given, stands in
-    for stop_line_distance's min_confidence, so a line can be amber here and
-    still be a geometry candidate.
+    Checks the stop-line gates on real footage. The top panel names the gate
+    that refused a line; the bottom, the gradient split, shows whether its
+    edges reached the gates at all. The
+    threshold stands in for min_confidence, so an amber line can still be a
+    geometry candidate.
 
 Main package:
-    StopLineView: implements the view interface in debug_video.
-
-Flow:
-    1. Pull the stop-line debug, candidates, measurement and lane-offset skips from the chain.
-    2. Grade each traced top edge as pass, low or reject.
-    3. Draw both panels, the header and the footer.
+    StopLineView, a debug_video view in lane-ROI coordinates.
 """
 import re
 
@@ -41,13 +26,7 @@ _SKIP = re.compile(r"candidate at x=(-?\d+) y=(-?\d+) lies on the stop line")
 
 
 class StopLineView(dv.CandidateView):
-    """
-    Stop-line view; implements the view interface in debug_video, drawing on the lane ROI.
-
-    conf_threshold: The confidence a line needs downstream (the chain's
-        stop_line.min_confidence). None draws no threshold and no amber state.
-    zoom: Extra magnification on top of the run's scale.
-    """
+    """conf_threshold is the chain's stop_line.min_confidence; None draws no threshold and no amber."""
     name = "stopline"
     CSV_FIELDS = ("frame_id", "timestamp_ms", "top_edges", "bottom_edges", "seen",
                   "passed", "low", "rej_short", "rej_tilt", "rej_unpaired", "rej_intensity",
@@ -65,18 +44,9 @@ class StopLineView(dv.CandidateView):
         self._best_conf = []
         self._counts = {}
 
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
-
     def extract(self, chain, frame=None) -> dict:
         """
-        This frame's stop-line data from a chain result.
-
-        Reads chain.lane_debug (lane_roi, edges_raw, and "stop_line": the edge
-        maps, trace, bottoms and reject_counts), chain.geometry's stop-line
-        candidates, chain.stop_line (the measurement) and chain.offset_debug's
-        log for lane candidates skipped as part of a stop line.
+        This frame's stop-line data from chain.lane_debug, geometry, stop_line, and offset_debug's skips.
         """
         dbg = getattr(chain, "lane_debug", None) or {}
         sdbg = dbg.get("stop_line") or {}
@@ -104,7 +74,7 @@ class StopLineView(dv.CandidateView):
         }
 
     def _entries(self, data):
-        """One entry per traced top edge, or per accepted candidate if there's no trace."""
+        """One entry per traced top edge, or per accepted candidate without a trace."""
         if data["trace"] is not None:
             return [{**e, "confidence": e["candidate"].confidence if e["candidate"] else None}
                     for e in data["trace"]]
@@ -172,10 +142,6 @@ class StopLineView(dv.CandidateView):
             for gate, v in sorted(rej.items(), key=lambda kv: -kv[1]):
                 out.append(f"  {gate:<20}{v:6}")
         return out
-
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
 
     def render(self, data, scale=1):
         s, fs, th, lh, hh, fh = self._metrics(scale)
@@ -250,7 +216,6 @@ class StopLineView(dv.CandidateView):
             dv.draw_text(canvas, dist,
                          (p0[0] + 4, min(p0[1] + lh, top_y + ph - 3)), dv.C_WHITE, fs, th)
 
-        # Header
         head_color, counts = self._header(sm)
         title = f"#{data['frame_id']}  stop_line"
         dv.draw_text(canvas, title, (6, lh), head_color, fs * 1.15, th)
@@ -270,7 +235,6 @@ class StopLineView(dv.CandidateView):
             info += f"   threshold {self.conf_threshold:.2f}"
         dv.draw_text(canvas, info, (6, 2 * lh + 2), dv.C_WHITE, fs, th)
 
-        # Footer
         rc, (n_top, n_bottom) = data["counts"], data["edge_counts"]
         foot = (f"edges top {n_top} bottom {n_bottom}   seen {rc.get('seen', 0)}  "
                 + "  ".join(f"{GATE_SHORT[g]} {rc.get(g, 0)}" for g in GATES)
@@ -282,7 +246,7 @@ class StopLineView(dv.CandidateView):
 
     @staticmethod
     def _band(c, s: int, y0: int) -> np.ndarray:
-        """The candidate's band, top and bottom edges across its span, as a canvas polygon."""
+        """The candidate's band as a canvas polygon."""
         slope = np.tan(np.radians(c.tilt_deg))
         mid = (c.x_left + c.x_right) / 2.0
         top = lambda x: c.y_top_px + (x - mid) * slope
@@ -292,7 +256,7 @@ class StopLineView(dv.CandidateView):
         return np.array([(round(x * s), round(y0 + y * s)) for x, y in pts], np.int32).reshape(-1, 1, 2)
 
     def _split_panel(self, data, size, out_size) -> np.ndarray:
-        """All Canny edges in gray, the kept top edges in cyan and bottom edges in magenta."""
+        """Canny edges gray, kept top edges cyan, bottom edges magenta."""
         W, H = size
         panel = np.zeros((H, W, 3), np.uint8)
         if data["edges"] is not None:

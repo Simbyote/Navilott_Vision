@@ -1,22 +1,18 @@
-"""
-test_drive.py  --  src/peripherals/drive.py
+"""test_drive.py  --  src/peripherals/drive.py
 
 drive.py imports pigpio at module load, so software tests swap in a fake
-before importing it; a fake clock steps a simple wheel model that injects
-the motion as encoder edges, so nothing waits.
+before importing it; a fake clock steps a wheel model that injects the
+motion as encoder edges, so nothing waits.
 
---software  Quadrature decoding, cps, TB6612 direction/PWM commands, brake
-            and stop, against a fake pigpio and a simple wheel model. No GPIO.
-            The watchdog on a fake clock: braking a quiet loop, never a
-            steady one, disarmed by brake and stop, re-armed by drive; and
-            its thread in real time.
---hardware  Skips unless pigpio is up and a short nudge makes an encoder
-            count, so the motorless chassis skips here. Then spins each
-            wheel alone, both forward, reverse and in place, checks the
-            counts hold when stopped, and drives 3 s straight open loop,
-            recording counts per leg and the motors' natural mismatch. A
-            second test drives once and goes quiet: the watchdog must stop
-            the wheels. WHEELS OFF THE GROUND: about 12 s of motor time.
+--software  Quadrature decoding, cps, TB6612 commands, brake and stop; the
+            watchdog on a fake clock and on its thread; the pigpiod
+            watchdog's script, run by a small interpreter of pigpio's script
+            language, and its heartbeat and fallback.
+--hardware  Skips unless a short nudge makes an encoder count. Each wheel
+            alone, both, in place; counts held when stopped; 3 s straight
+            open loop. Then drive once and go quiet: the watchdog must stop
+            the wheels, and pigpiod's script alone must too. WHEELS OFF THE
+            GROUND: about 14 s of motor time.
 """
 import importlib
 import subprocess
@@ -72,6 +68,37 @@ class FakePi:
     def stop(self):
         self.connected = False
 
+    # Scripts: off unless a test turns them on (scripts_on), as a pigpiod that refuses them
+    scripts_on, script_fails = False, False
+
+    def store_script(self, text):
+        if not self.scripts_on:
+            raise RuntimeError("scripts not supported")
+        self.scripts = getattr(self, "scripts", {})
+        sid = len(self.scripts)
+        self.scripts[sid] = {"text": text.decode(), "status": 0, "params": None, "deleted": False, "updates": []}
+        return sid
+
+    def script_status(self, sid):
+        sc = self.scripts[sid]
+        if sc["status"] == 0:                                   # INITING once, then ready (or failed)
+            sc["status"] = 4 if self.script_fails else 1
+            return 0, []
+        return sc["status"], sc["params"]
+
+    def run_script(self, sid, params):
+        self.scripts[sid].update(status=2, params=list(params))
+
+    def update_script(self, sid, params):
+        self.scripts[sid]["params"] = list(params)
+        self.scripts[sid]["updates"].append(list(params))
+
+    def stop_script(self, sid):
+        self.scripts[sid]["status"] = 1
+
+    def delete_script(self, sid):
+        self.scripts[sid]["deleted"] = True
+
     def edge(self, gpio, level):
         self._tick += 1
         for cb in self.callbacks:
@@ -109,6 +136,8 @@ def env(monkeypatch):
     pigpio = types.ModuleType("pigpio")
     pigpio.INPUT, pigpio.OUTPUT = "INPUT", "OUTPUT"
     pigpio.PUD_UP, pigpio.EITHER_EDGE = "PUD_UP", "EITHER_EDGE"
+    (pigpio.PI_SCRIPT_INITING, pigpio.PI_SCRIPT_HALTED, pigpio.PI_SCRIPT_RUNNING,
+     pigpio.PI_SCRIPT_WAITING, pigpio.PI_SCRIPT_FAILED) = range(5)
     pigpio.pi = lambda: pi
     monkeypatch.setitem(sys.modules, "pigpio", pigpio)
     monkeypatch.delitem(sys.modules, DRIVE_MODULE, raising=False)
@@ -159,9 +188,6 @@ def _wheel_model(mod, pi, motor, right_gain=1.0, cps_at_full=400):
     return step
 
 
-# -----------------------------------------------------------------------------
-# EncoderReader
-# -----------------------------------------------------------------------------
 @pytest.mark.software
 def test_encoder_missing_pigpio_daemon_raises_with_the_fix(env):
     mod, pi, _ = env
@@ -397,9 +423,6 @@ def test_motor_probe_counts_a_chassis_with_one_dead_encoder_as_fitted(env):
     assert _motors_respond(enc, m, clock.sleep)
 
 
-# -----------------------------------------------------------------------------
-# Hardware
-# -----------------------------------------------------------------------------
 @pytest.mark.hardware
 def test_drive_characterization(artifacts):
     pi = pigpio_or_skip("drive")
@@ -455,10 +478,11 @@ def test_drive_characterization(artifacts):
     # A crossed pairing puts the driven motor's counts on the OTHER encoder, so
     # compare the two sides rather than demand zero: driving one wheel pivots
     # the chassis and nudges the idle one (2026-10-12: 24 counts against 1770)
-    assert left_only["left"] > 20 and abs(left_only["right"]) <= CROSSTALK * left_only["left"], \
-        "left motor moved the right encoder: pairing crossed"
-    assert right_only["right"] > 20 and abs(right_only["left"]) <= CROSSTALK * right_only["right"], \
-        "right motor moved the left encoder: pairing crossed"
+    # A dead side says so first: with no counts of its own, any nudge on the other reads as "crossed"
+    for side, other, leg_ in (("left", "right", left_only), ("right", "left", right_only)):
+        assert leg_[side] > 20, (f"{side} motor alone: {leg_[side]} {side} counts, {leg_[other]} {other} "
+                                 f"(motor, its driver channel or its encoder isn't working)")
+        assert abs(leg_[other]) <= CROSSTALK * leg_[side], f"{side} motor moved the {other} encoder: pairing crossed"
     assert forward["left"] > 20 and forward["right"] > 20, "forward: a wheel has no counts or counts backward"
     assert reverse["left"] < -20 and reverse["right"] < -20, "reverse: a wheel has no counts or counts forward"
     assert spin["left"] > 20 and spin["right"] < -20, "spin: sides don't turn opposite ways"
@@ -466,6 +490,7 @@ def test_drive_characterization(artifacts):
     # straight_3s's mismatch is recorded, not asserted: open loop, the motors
     # never match exactly; lane keeping and the gyro heading hold correct for it
     assert straight.left_count > 20 and straight.right_count > 20, "straight: a wheel stopped counting"
+
 
 @pytest.mark.software
 def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monkeypatch):
@@ -479,11 +504,9 @@ def test_opening_the_encoders_or_motors_names_pigpios_callback_threads(env, monk
 
 @pytest.mark.software
 def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
-    """
-    The physical wiring, by raw pin (test_drive_characterization proves it on the robot):
-    the left command's wheel carries the encoder on 19/16, the right's the one on 21/20,
-    and driving forward 19 leads 16 and 21 leads 20 (signs measured by hand 2026-09-29).
-    """
+    # The physical wiring, by raw pin (test_drive_characterization proves it on the robot):
+    # the left command's wheel carries the encoder on 19/16, the right's the one on 21/20,
+    # and driving forward 19 leads 16 and 21 leads 20 (signs measured by hand 2026-09-29).
     mod, pi, _ = env
     enc = mod.EncoderReader(pi)
     pi.quad(19, 16, 25, c1_leads=True)          # the left wheel forward
@@ -493,9 +516,6 @@ def test_each_encoder_belongs_to_the_wheel_its_motor_command_turns(env):
     assert enc.counts() == (20, 10)
 
 
-# -----------------------------------------------------------------------------
-# Watchdog
-# -----------------------------------------------------------------------------
 def _braked(pi, m):
     return all(pi.levels[p] == 1 for p in (m.ain1, m.ain2, m.bin1, m.bin2, m.stby)) and \
         pi.pwm[m.pwma][1] == pi.pwm[m.pwmb][1] == FULL_DUTY
@@ -616,11 +636,9 @@ def test_a_failing_brake_is_logged_and_the_watching_goes_on(env, caplog):
 
 @pytest.mark.hardware
 def test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet():
-    """
-    As when the camera stops mid-run: one drive(), then silence. The wheels
-    turn, the watchdog brakes them within watchdog_s (+ one check period),
-    and they stay stopped. WHEELS OFF THE GROUND.
-    """
+    # As when the camera stops mid-run: one drive(), then silence. The wheels
+    # turn, the watchdog brakes them within watchdog_s (+ one check period),
+    # and they stay stopped. WHEELS OFF THE GROUND.
     pi = pigpio_or_skip("drive")
     try:
         mod = importlib.import_module(DRIVE_MODULE)
@@ -647,3 +665,200 @@ def test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet():
     assert moving.left_count > 10 and moving.right_count > 10, "the wheels never turned: nothing to stop"
     assert trips == 1, f"watchdog tripped {trips} times, want 1"
     assert abs(after.left_count) <= 2 and abs(after.right_count) <= 2, "wheels still turning after the watchdog"
+
+
+@pytest.mark.hardware
+def test_the_pigpiod_watchdog_alone_stops_the_real_wheels():
+    # As when the whole process stalls: one drive(), then the Python watchdog
+    # can't run (its check is stubbed out), so only the script in pigpiod can
+    # brake. It must, within watchdog_s plus one look. WHEELS OFF THE GROUND.
+    pi = pigpio_or_skip("drive")
+    try:
+        mod = importlib.import_module(DRIVE_MODULE)
+        enc, m = mod.EncoderReader(pi), mod.MotorController(pi)
+    except BaseException:
+        pi.stop()
+        raise
+    try:
+        assert m.watchdog_status == "python + pigpiod", m.watchdog_status
+        if not _motors_respond(enc, m, time.sleep):
+            pytest.skip("drive not found on this chassis: a 0.3 s nudge at 40% duty gave no encoder counts")
+        m.check = lambda: False                 # the process is "stalled": its own watchdog never looks
+        enc.reset()
+        m.drive(0.4, 0.4)
+        time.sleep(0.3)
+        moving = _counted(enc)
+        time.sleep(m.watchdog_s + mod.DAEMON_CHECK_MS / 1000.0 + 0.3)        # the script's trip, then spin-down
+        enc.reset()
+        time.sleep(0.5)
+        after = _counted(enc)
+    finally:
+        m.stop()
+        enc.cancel()
+        pi.stop()
+    assert moving.left_count > 10 and moving.right_count > 10, "the wheels never turned: nothing to stop"
+    assert abs(after.left_count) <= 2 and abs(after.right_count) <= 2, "wheels still turning: pigpiod didn't brake"
+
+
+class ScriptSim:
+    """
+    pigpio's script language, the commands the watchdog script uses, run on
+    simulated milliseconds against FakePi. Any other command fails the test,
+    so the script can't quietly grow one this doesn't model. CMP sets
+    F = A - x; JZ / JNZ / JM test F (pigpio's semantics).
+    """
+    ARITY = {"ld": 2, "lda": 1, "cmp": 1, "jz": 1, "jnz": 1, "jm": 1, "jmp": 1, "tag": 1, "inr": 1,
+             "mils": 1, "w": 2, "hp": 3}
+
+    def __init__(self, text, pi, params):
+        tokens, self.code = text.split(), []
+        while tokens:
+            cmd = tokens.pop(0).lower()
+            assert cmd in self.ARITY, f"command the simulator doesn't model: {cmd}"
+            self.code.append((cmd, [tokens.pop(0) for _ in range(self.ARITY[cmd])]))
+        self.tags = {int(a[0]): i for i, (c, a) in enumerate(self.code) if c == "tag"}
+        self.pi, self.p, self.v = pi, list(params) + [0] * (10 - len(params)), [0] * 150
+        self.a = self.f = self.pc = self.t = 0
+
+    def val(self, x):
+        return self.p[int(x[1:])] if x[0] == "p" else self.v[int(x[1:])] if x[0] == "v" else int(x)
+
+    def run_until(self, t_ms):
+        steps = 0
+        while self.t < t_ms:
+            steps += 1
+            assert steps < 100_000, "the script loops without waiting"
+            cmd, a = self.code[self.pc]
+            self.pc += 1
+            if cmd == "ld":
+                self.v[int(a[0][1:])] = self.val(a[1])
+            elif cmd == "lda":
+                self.a = self.val(a[0])
+            elif cmd == "cmp":
+                self.f = self.a - self.val(a[0])
+            elif cmd == "inr":
+                self.v[int(a[0][1:])] += 1
+                self.f = self.v[int(a[0][1:])]
+            elif cmd in ("jz", "jnz", "jm", "jmp"):
+                go = {"jz": self.f == 0, "jnz": self.f != 0, "jm": self.f < 0, "jmp": True}[cmd]
+                if go:
+                    self.pc = self.tags[int(a[0])]
+            elif cmd == "mils":
+                self.t += int(a[0])
+            elif cmd == "w":
+                self.pi.write(int(a[0]), int(a[1]))
+            elif cmd == "hp":
+                self.pi.hardware_PWM(int(a[0]), int(a[1]), int(a[2]))
+
+
+def _daemon_pins(m):
+    return {"stby": m.stby, "ain1": m.ain1, "ain2": m.ain2, "bin1": m.bin1, "bin2": m.bin2,
+            "pwma": m.pwma, "pwmb": m.pwmb}
+
+
+def _sim(env, timeout_s=0.5):
+    """The script for a default MotorController's pins, armed, on a fresh FakePi; and that controller."""
+    mod, pi, clock = env
+    m = mod.MotorController(pi, daemon_watchdog=False)
+    pi.levels, pi.pwm = {}, {}
+    return ScriptSim(mod.daemon_script(_daemon_pins(m), m.pwm_freq, timeout_s), pi, [0, 1]), pi, m
+
+
+@pytest.mark.software
+def test_the_script_never_brakes_while_the_heartbeat_moves(env):
+    sim, pi, m = _sim(env)
+    for t in range(50, 3000, 50):                 # a drive() every 50 ms, as a frame loop
+        sim.p[0] += 1
+        sim.run_until(t)
+    assert pi.levels == {} and pi.pwm == {}
+
+
+@pytest.mark.software
+def test_the_script_brakes_once_the_heartbeat_stops_for_the_timeout(env):
+    sim, pi, m = _sim(env)
+    for t in range(50, 1001, 50):
+        sim.p[0] += 1
+        sim.run_until(t)
+    sim.run_until(1500)
+    assert pi.levels == {}, "not before the timeout"
+    sim.run_until(1601)
+    assert _braked(pi, m), "within one look after it"
+
+
+@pytest.mark.software
+def test_a_disarmed_script_never_brakes_however_long_it_is_quiet(env):
+    sim, pi, m = _sim(env)
+    sim.p[1] = 0                                  # brake() / stop(): safe however long the loop is gone
+    sim.run_until(10_000)
+    assert pi.levels == {} and pi.pwm == {}
+
+
+@pytest.mark.software
+def test_after_a_brake_a_new_heartbeat_starts_the_watch_again(env):
+    sim, pi, m = _sim(env)
+    sim.run_until(700)
+    assert _braked(pi, m)
+    pi.levels, pi.pwm = {}, {}
+    sim.run_until(3000)
+    assert pi.levels == {}, "it brakes once, then waits for the heartbeat to move"
+    for t in range(3050, 4001, 50):
+        sim.p[0] += 1
+        sim.run_until(t)
+    assert pi.levels == {}
+    sim.run_until(4700)
+    assert _braked(pi, m), "quiet again: braked again"
+
+
+@pytest.mark.software
+def test_the_controller_beats_on_drive_and_disarms_on_brake(env):
+    mod, pi, clock = env
+    pi.scripts_on = True
+    m = mod.MotorController(pi, clock=lambda: clock.now)
+    assert m.watchdog_status == "python + pigpiod" and m.daemon.status == "running"
+    sc = pi.scripts[0]
+    assert sc["status"] == 2 and sc["params"] == [0, 0], "running, disarmed until the first drive()"
+    assert sc["text"] == mod.daemon_script(_daemon_pins(m), m.pwm_freq, mod.MOTOR_WATCHDOG_S)
+    m.drive(0.5, 0.5)
+    m.drive(0.4, 0.6)
+    m.brake()
+    assert sc["updates"] == [[1, 1], [2, 1], [2, 0]]
+    m.stop()
+    assert sc["deleted"] and m.daemon is None
+    m.drive(0.3, 0.3)                             # stop() ended it; the next drive() starts a fresh one
+    assert pi.scripts[1]["updates"] == [[1, 1]] and m.watchdog_status == "python + pigpiod"
+    m.stop()
+
+
+@pytest.mark.software
+def test_a_python_watchdog_trip_disarms_the_daemon(env):
+    mod, pi, clock = env
+    pi.scripts_on = True
+    m = mod.MotorController(pi, watchdog_s=0.5, clock=lambda: clock.now)
+    m.drive(0.5, 0.5)
+    clock.now += 0.6
+    assert m.check()
+    assert pi.scripts[0]["updates"][-1] == [1, 0]
+    m.stop()
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("fails, why", [(False, "scripts not supported"), (True, "pigpiod failed the script")])
+def test_a_daemon_that_wont_run_the_script_leaves_the_python_watchdog(env, fails, why):
+    mod, pi, clock = env
+    pi.scripts_on, pi.script_fails = fails, fails
+    m = mod.MotorController(pi, clock=lambda: clock.now)
+    assert m.daemon is None and m.watchdog_status == f"python (pigpiod: off ({why}))"
+    m.drive(0.5, 0.5)                             # still drives; a refusal isn't retried every frame
+    assert m.daemon is None and pi.levels[m.ain2] == 1
+    if fails:
+        assert pi.scripts[0]["deleted"] and len(pi.scripts) == 1
+    m.stop()
+
+
+@pytest.mark.software
+def test_no_daemon_when_asked_not_or_with_the_watchdog_off(env):
+    mod, pi, clock = env
+    pi.scripts_on = True
+    assert mod.MotorController(pi, daemon_watchdog=False).watchdog_status == "python"
+    assert mod.MotorController(pi, watchdog_s=None).watchdog_status == "off"
+    assert not getattr(pi, "scripts", {})

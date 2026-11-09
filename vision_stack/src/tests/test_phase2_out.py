@@ -333,11 +333,6 @@ def _jsonable(out: Phase2Output) -> dict:
     }
 
 
-
-# =============================================================================
-# Stop-line results: the same rules as lane offset results
-# =============================================================================
-
 def stop_result(frame_id=1, ts=2, detected=True, distance=30.0):
     return StopLineResult(detected, distance if detected else None, 50.0 if detected else None,
                           100.0, 300.0, 0.0, False, 0.8 if detected else 0.0, 1, frame_id, ts)
@@ -421,10 +416,6 @@ def test_phase2_out_characterization(request, frames, artifacts):
     for fid, out in samples.items():
         artifacts.json(f"{fid:06d}_phase2_output.json", _jsonable(out))
 
-
-# =============================================================================
-# Obstacle results: the same rules again
-# =============================================================================
 
 def obstacle_result(frame_id=1, ts=2, detected=True, distance=20.0):
     return ObstacleResult(detected, distance if detected else None, 11.5 if detected else None, False,

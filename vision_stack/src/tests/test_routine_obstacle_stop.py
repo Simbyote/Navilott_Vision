@@ -49,10 +49,6 @@ def lane(seconds, start=0.0, **kw):
     return [row(start + k * 0.05, **kw) for k in range(int(seconds / 0.05) + 1)]
 
 
-# =============================================================================
-# ObstacleWatch
-# =============================================================================
-
 @pytest.mark.software
 def test_the_watch_follows_a_stop_the_wait_and_driving_on():
     w = os_.ObstacleWatch(True)
@@ -88,10 +84,6 @@ def test_a_clear_lane_counts_every_obstacle_brake_and_ends_after_clear_s():
     assert feed(w, rows) == os_.CLEAR_DONE and w.brakes == 2
     assert w._last_t == pytest.approx(3.0)
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 def fake_run(scripts, log):
     attempts = iter(scripts)

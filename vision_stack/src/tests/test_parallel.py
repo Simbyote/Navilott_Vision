@@ -118,10 +118,6 @@ def test_the_command_line_sets_the_runs_choice(argv, choice, monkeypatch):
         ap.parse_args(["--parallel", "--serial"])
 
 
-# =============================================================================
-# The comparison tool
-# =============================================================================
-
 @pytest.mark.software
 def test_the_comparison_runs_every_mode_on_every_frame_and_reports_the_gain():
     from src.analysis import parallel_compare as pc

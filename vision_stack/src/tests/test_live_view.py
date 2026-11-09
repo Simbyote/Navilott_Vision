@@ -92,6 +92,16 @@ def test_directory_source_reads_images_in_filename_order_and_ignores_other_files
 
 
 @pytest.mark.software
+def test_recorded_frames_keep_their_own_ids_so_a_replay_lines_up_with_the_run(tmp_path):
+    # the recorder's names; a subsample (every 3rd) keeps its gaps, and its times follow the ids
+    d = write_frames(tmp_path / "frames", names=["000003.jpg", "000006.jpg", "000009.jpg"])
+    assert [(fid, ts) for _, fid, ts in drain(lv.DirectoryFrameSource(str(d), fps=20))] == \
+        [(3, 150), (6, 300), (9, 450)]
+    mixed = write_frames(tmp_path / "mixed", names=["000003.jpg", "cover.jpg"])
+    assert [fid for _, fid, _ in drain(lv.DirectoryFrameSource(str(mixed)))] == [0, 1]
+
+
+@pytest.mark.software
 def test_directory_source_skips_unreadable_images_without_using_a_frame_id(tmp_path):
     d = write_frames(tmp_path / "f", names=["a.png", "c.png"])
     (d / "b.png").write_bytes(b"corrupt")
@@ -319,3 +329,17 @@ def test_stage_timing_report_totals_medians_leaving_out_excluded_stages():
     assert "med  0.005" in lines[2]                      # sub-0.1 ms stages keep three decimals
     assert lines[3].endswith("(not in total)")
     assert "TOTAL (median)" in lines[-1] and " 2.0  ->" in lines[-1]
+
+
+@pytest.mark.software
+def test_a_stages_parts_print_under_it_and_stay_out_of_the_total():
+    lines = lv.stage_timing_report({"preprocess": [10.0], "geometry": [20.0], "color": [5.0],
+                                    "geometry.edges": [3.0], "geometry.lanes": [9.0], "geometry.sign": [6.0]})
+    names = [line.split(" med")[0].strip() for line in lines[1:-1]]
+    assert names == ["preprocess", "geometry", "geometry.edges", "geometry.lanes", "geometry.sign", "color"]
+    assert lines[3].startswith("   geometry.edges")                          # indented under geometry
+    assert " 35.0  ->" in lines[-1]                                          # 10 + 20 + 5: the parts aren't added
+    # A parser that reads "<name> med" lines as stages (the report project's) still sees only the stages
+    import re
+    stages = re.findall(r"^\s*(\w+)\s+med", "\n".join(lines), re.M)
+    assert stages == ["preprocess", "geometry", "color"]

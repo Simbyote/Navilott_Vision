@@ -1,10 +1,11 @@
-"""
-test_route.py  --  src/navigation/route.py
+"""test_route.py  --  src/navigation/route.py
 
 The route file: a good one loads (names case-insensitive, finish optional),
 every bad one is refused with a message saying what's wrong; the startup
 description; RouteProgress through the plan: each maneuver in order, the
 finish line after the plan, straight past it, done, labels, reset.
+
+--software  Route files written to a temp folder. No camera or Pi.
 """
 import json
 
@@ -21,10 +22,6 @@ def write(tmp_path, data, raw=None):
     path.write_text(raw if raw is not None else json.dumps(data))
     return path
 
-
-# =============================================================================
-# The file
-# =============================================================================
 
 @pytest.mark.software
 def test_the_names():
@@ -91,10 +88,6 @@ def test_the_startup_description_lists_every_step_and_the_finish():
     one = Route((RIGHT,)).describe()
     assert one[0] == "Route: 1 maneuver" and "mat's edge" in one[-1]
 
-
-# =============================================================================
-# Progress
-# =============================================================================
 
 @pytest.mark.software
 def test_each_intersection_takes_the_next_maneuver_then_straight_past_the_plan():

@@ -1,21 +1,17 @@
 """Tape check: how repeatable the tester's own hand measurement is.
 
 Purpose:
-    Every accuracy routine compares the robot with a hand measurement (a
-    tape from the stop line, a ruler from the lane center). That
-    measurement has its own spread, and a routine can't judge the robot
-    more finely than it: a 0.5 cm tolerance means nothing if the tape reads
-    differ by 1 cm. So, before accuracy routines, each tester measures the
-    same fixed distance a few times, taking the tape away in between. The
-    spread is their measurement floor, recorded with their name. It also
-    rehearses a routine's prompts with no hardware involved.
+    Accuracy routines can't judge finer than the hand measurement's spread.
+    The tester measures one fixed distance a few times, tape away in between,
+    and the spread is recorded with their name. It also rehearses the prompts
+    with no hardware.
 
 Main package:
-    TapeCheck: the routine. Pass: the readings span at most MAX_SPREAD_CM.
+    TapeCheck. Pass: readings span at most MAX_SPREAD_CM.
 """
 from src.routines.harness import Routine, criterion, stats
 
-MAX_SPREAD_CM = 0.5         # a reading spread over this is coarser than the tightest tolerance in requirements.md
+MAX_SPREAD_CM = 0.5         # requirements.md's tightest tolerance
 
 
 class TapeCheck(Routine):

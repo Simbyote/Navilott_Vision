@@ -9,7 +9,7 @@
 #     VIDEO=clip.mp4 / FRAMES=dir   replay instead of the camera (linkers)
 #     RUN=runs/<folder>             which run an analysis reads (default: the newest)
 #     ARGS="..."                    anything else, passed straight to the command
-# Each target's comment names the guide in docs/guides/ that explains it.
+# docs/README.md says where each part of the system is described.
 #
 # Session start and the Pi's install live in ../session.mk and ../setup.mk; this
 # file runs the robot's code. `make session TIME="YYYY-MM-DD HH:MM"` here is
@@ -46,6 +46,9 @@ BASE      ?=
 NEW       ?=
 # soak length
 MINUTES   ?= 15
+# ab-parallel: runs in all (alternating serial, parallel) and each one's seconds
+RUNS      ?= 4
+SECONDS   ?= 60
 # frames per hardware test
 HW_FRAMES ?= 100
 # calib-lamps / sweep-lamps: "red=runs/lamp_red green=runs/nav_X:0-86 ..."
@@ -55,6 +58,10 @@ LAMPS     ?=
 TIME      ?=
 # monitor-attach: watch the newest process matching this
 MATCH     ?= src.
+# camera controls for this run, over params.CAMERA_CONTROLS: CAM="awb-mode=daylight saturation=1.5"
+CAM       ?=
+# sweep-camera: settings to try, split by |; empty = the backlight set
+CAM_TRY   ?=
 # extra arguments for the command
 ARGS      ?=
 
@@ -63,13 +70,15 @@ SOURCE  = $(if $(VIDEO),--video $(VIDEO),$(if $(FRAMES),--frames $(FRAMES),--cam
 RUNCAP  = $(if $(strip $(MAX_RUN_S)),--max-run-s $(strip $(MAX_RUN_S)))
 # The camera needs pigpiod (the encoders, motors, button); a replay doesn't
 HW      = $(if $(VIDEO)$(FRAMES),,pigpiod)
+# CAM as --camera-control flags, for the live camera only
+CAMFLAGS = $(if $(VIDEO)$(FRAMES),,$(foreach c,$(CAM),--camera-control $(c)))
 NEWEST  = $(shell ls -dt runs/$(1)*/ 2>/dev/null | head -1)
 RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
-        intersection-dry render routines diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-odometry compare-parallel \
+        intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map range-compare line-replay approach-log light-clips gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -87,42 +96,49 @@ session: ## every boot on the Pi: set the clock, start pigpiod, open a venv shel
 pigpiod: ## start the GPIO daemon if it isn't running (motors, encoders, button, display)
 	@$(MAKE) --no-print-directory -f $(SESSION_MK) pigpiod-start
 
-##@ Race day (production_run.md)
+##@ Race day
 run: $(HW) ## the course: route, St N, button, countdown, time on the display; nothing recorded
 	$(PY) -m src.main --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
 
-##@ Linkers: the chain up to one point, recorded (phase2_linker.md ... intersection_linker.md)
+##@ Linkers: the chain up to one point, recorded
 phase2: ## Phases 1-2 live with video (VIDEO= / FRAMES= to replay, VIEWS=lanegeo,stop,traffic,stopline,obstacle)
-	$(PY) -m src.phase2_linker $(SOURCE) $(if $(strip $(VIEWS)),--views $(strip $(VIEWS))) $(ARGS)
+	$(PY) -m src.phase2_linker $(SOURCE) $(if $(strip $(VIEWS)),--views $(strip $(VIEWS))) $(CAMFLAGS) $(ARGS)
 
 phase3: $(HW) ## Phases 1-3 with the IMU and encoders: is the packet right across frames?
-	$(PY) -m src.phase3_linker $(SOURCE) $(if $(VIDEO)$(FRAMES),,--imu --encoders) $(ARGS)
+	$(PY) -m src.phase3_linker $(SOURCE) $(if $(VIDEO)$(FRAMES),,--imu --encoders) $(CAMFLAGS) $(ARGS)
 
 maneuver: $(HW) ## drive trial: yaw-sign spins, a leg, a 180 turn, back (motors on)
-	$(PY) -m src.maneuver_linker $(RUNCAP) $(ARGS)
+	$(PY) -m src.maneuver_linker $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 maneuver-dry: $(HW) ## the drive trial with the motors off, started from the console
-	$(PY) -m src.maneuver_linker --no-motors --no-button $(RUNCAP) $(ARGS)
+	$(PY) -m src.maneuver_linker --no-motors --no-button $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 navigate: $(HW) ## the whole chain driving the route, recorded (motors on, start button)
-	$(PY) -m src.navigation_linker $(SOURCE) --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
+	$(PY) -m src.navigation_linker $(SOURCE) --route $(strip $(ROUTE)) $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 nav-dry: $(HW) ## the whole chain on the bench: motors off, console start (or a replay with VIDEO=)
 	$(PY) -m src.navigation_linker $(SOURCE) $(if $(VIDEO)$(FRAMES),,--no-motors --no-button) \
-	    --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
+	    --route $(strip $(ROUTE)) $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 intersection: $(HW) ## one intersection per run, judged PASS/CHECK (MANEUVER=straight|left|right|all)
-	$(PY) -m src.intersection_linker $(SOURCE) $(strip $(MANEUVER)) $(RUNCAP) $(ARGS)
+	$(PY) -m src.intersection_linker $(SOURCE) $(strip $(MANEUVER)) $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 intersection-dry: $(HW) ## the intersection sequences with the motors off, Enter starts each
 	$(PY) -m src.intersection_linker $(SOURCE) $(strip $(MANEUVER)) \
-	    $(if $(VIDEO)$(FRAMES),,--no-motors --no-button) $(RUNCAP) $(ARGS)
+	    $(if $(VIDEO)$(FRAMES),,--no-motors --no-button) $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 render: ## render an earlier navigation run's video (RUN=runs/nav_..., default the newest)
 	@test -n "$(RENDER_RUN)" || (echo "no runs/nav_* folder: make render RUN=<run folder>"; exit 2)
 	$(PY) -m src.navigation_linker --render $(RENDER_RUN) $(ARGS)
 
-##@ Routines: prompted hardware tests, judged PASS / FAIL (routines.md)
+##@ Camera: what the camera's own controls do to the picture
+camera-controls: ## every camera control, its values, and what params.CAMERA_CONTROLS sets
+	$(PY) -m src.scripts.sweep_camera --list
+
+sweep-camera: ## try camera settings one after another on the live view and score sign, light, lane (CAM_TRY="a=1|b=2 c=3")
+	$(PY) -m src.scripts.sweep_camera $(if $(strip $(CAM_TRY)),--try "$(strip $(CAM_TRY))") $(ARGS)
+
+##@ Routines: prompted hardware tests, judged PASS / FAIL
 routines: ## list the routines; run one with make routine-<name> (ARGS="--trials 10 --notes ...")
 	$(PY) -m src.routines --list
 
@@ -130,10 +146,10 @@ routines: ## list the routines; run one with make routine-<name> (ARGS="--trials
 routine-%:
 	$(PY) -m src.routines $* $(ARGS)
 
-##@ Diagnostics: how the run uses the Pi (diagnostics.md)
+##@ Diagnostics: how the run uses the Pi
 diag-nav: $(HW) ## record threads, cores, heat while nav-dry runs; then: make pi-load
 	$(PY) -m src.diagnostics.monitor -- $(PY) -m src.navigation_linker --camera --no-motors --no-button \
-	    --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
+	    --route $(strip $(ROUTE)) $(RUNCAP) $(CAMFLAGS) $(ARGS)
 
 diag-run: $(HW) ## record the course run itself (motors on, start button); then: make pi-load
 	$(PY) -m src.diagnostics.monitor -- $(PY) -m src.main --route $(strip $(ROUTE)) $(RUNCAP) $(ARGS)
@@ -142,10 +158,10 @@ monitor-attach: ## record a process already running (MATCH=navigation_linker); C
 	$(PY) -m src.diagnostics.monitor --match $(strip $(MATCH)) $(ARGS)
 
 capture-anatomy: ## the camera path once: media graph, ISP caps, ms per element, VideoCore (camera free)
-	$(PY) -m src.diagnostics.capture_anatomy $(ARGS)
+	$(PY) -m src.diagnostics.capture_anatomy $(CAMFLAGS) $(ARGS)
 
 frame-meta: ## every frame's exposure, gains, sensor-to-Python time and traffic label (camera free; Picamera2)
-	$(PY) -m src.diagnostics.frame_meta $(ARGS)
+	$(PY) -m src.diagnostics.frame_meta $(CAMFLAGS) $(ARGS)
 
 i2c-trace: ## every I2C transfer from the kernel for 10 s (sudo; start a run first): bus load, IMU timing, errors
 	sudo $(PY) -m src.diagnostics.i2c_trace $(ARGS)
@@ -153,7 +169,7 @@ i2c-trace: ## every I2C transfer from the kernel for 10 s (sudo; start a run fir
 sched-latency: ## how late Linux wakes a thread vs the 50 ms / 10 ms deadlines (sudo; ARGS="--label idle", then loaded)
 	sudo $(PY) -m src.diagnostics.sched_latency $(ARGS)
 
-##@ Analysis: graphs and findings from a run (analysis.md); RUN= picks the run, default the newest
+##@ Analysis: graphs and findings from a run; RUN= picks the run, default the newest
 pi-load: ## threads, cores, heat, memory from a diag_ recording (NAV=runs/nav_... to judge only the run)
 	$(PY) -m src.analysis.pi_load $(strip $(RUN)) $(if $(strip $(NAV)),--run $(strip $(NAV))) $(ARGS)
 
@@ -169,8 +185,57 @@ timing: ## where each frame's time goes, against the 50 ms budget
 compare-parallel: ## serial vs parallel perception on the same frames (ARGS="--frames runs/nav_<time>/frames" or "--camera")
 	$(PY) -m src.analysis.parallel_compare $(ARGS)
 
+ab-parallel: $(HW) ## serial vs parallel over whole dry runs, alternated (RUNS=4 SECONDS=60; ARGS=--motors to drive)
+	$(PY) -m src.analysis.parallel_ab --runs $(RUNS) --seconds $(SECONDS) $(ARGS)
+
 jitter: ## frame-interval tails, over-budget streaks, periodic spikes
 	$(PY) -m src.analysis.jitter $(strip $(RUN)) $(ARGS)
+
+camera-meta: ## what auto exposure and white balance chose per frame: exposure, gain, colour, lux (RUN=runs/meta_...)
+	$(PY) -m src.analysis.camera_meta $(strip $(RUN)) $(ARGS)
+
+capture-report: ## a capture-anatomy run as graphs: frame age at the sink, ARM time, each step per frame (RUN=...)
+	$(PY) -m src.analysis.capture_report $(strip $(RUN)) $(ARGS)
+
+sched-report: ## a sched-latency run as graphs: spread, deadlines, worst vs another run (RUN=... BASE=<idle run>)
+	$(PY) -m src.analysis.sched_report $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+loop-budget: ## where a navigation run's frame goes: capture, phases, outside the timers, by lane mode
+	$(PY) -m src.analysis.loop_budget $(strip $(RUN)) $(ARGS)
+
+light-report: ## the traffic light frame by frame: each reading, the vote, when it braked (render the run first)
+	$(PY) -m src.analysis.light_report $(strip $(RUN)) $(ARGS)
+
+load-compare: ## two diag_ recordings before and after a change: threads, cores, system (BASE=before NEW=after)
+	@test -n "$(strip $(BASE))" -a -n "$(strip $(NEW))" || (echo "usage: make load-compare BASE=<diag before> NEW=<diag after>"; exit 2)
+	$(PY) -m src.analysis.load_compare $(strip $(BASE)) $(strip $(NEW)) $(ARGS)
+
+fig8-report: ## a figure-eight run's turns and laps as graphs (RUN=runs/routine_figure-eight_..., BASE= an earlier one)
+	$(PY) -m src.analysis.fig8_report $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+motor-health: ## each wheel's speed per unit duty across a run: a motor failing, a wheel driven but not turning
+	$(PY) -m src.analysis.motor_health $(strip $(RUN)) $(ARGS)
+
+eval: ## score each detector against labels.csv on a run's frames (RUN=, BASE= an earlier eval.json; a detect-range/obstacle-check/lane-offset routine labels itself)
+	$(PY) -m src.analysis.evaluate $(strip $(RUN)) $(if $(strip $(BASE)),--base $(strip $(BASE))) $(ARGS)
+
+label: ## step through a run's frames and write labels.csv for make eval (RUN=; ARGS="--conditions glare,dim" or "--template")
+	$(PY) -m src.scripts.label_frames $(strip $(RUN)) $(ARGS)
+
+obstacle-map: ## several obstacle-check runs as one object-by-gap grid, misses with their gate (RUN=<folder of runs>)
+	$(PY) -m src.analysis.obstacle_map $(strip $(RUN)) $(ARGS)
+
+line-replay: ## stop-line cm against the tape over every detect-range line run in a folder, D4b's tolerance; replays saved looks of older runs (RUN=<folder of runs>)
+	$(PY) -m src.analysis.line_replay $(strip $(RUN)) $(ARGS)
+
+approach-log: ## a driving run's nav.csv as one row per stop-line approach + shares by distance, for TP-11 Dynamic (RUN=<run folder>; ARGS="--sign-at 1,8 --light-at 4,11")
+	$(PY) -m src.analysis.approach_log $(strip $(RUN)) $(ARGS)
+
+light-clips: ## parked clips of the light cycling, labelled (make label): each colour per frame and voted, each change timed, for TP-03 (RUN=<folder of clips>; ARGS=--from-log)
+	$(PY) -m src.analysis.light_clips $(strip $(RUN)) $(ARGS)
+
+range-compare: ## several detect-range runs by condition, round and gap, the sign's redness, frame_meta beside (RUN=<folder of runs>; ARGS="--conditions c.csv --meta <folder>")
+	$(PY) -m src.analysis.range_compare $(strip $(RUN)) $(ARGS)
 
 gates: ## which detector gate refuses the most candidates
 	$(PY) -m src.analysis.gate_rejections $(strip $(RUN)) $(ARGS)
@@ -194,7 +259,7 @@ compare: ## every number that moved between two runs (BASE=... NEW=...)
 	@test -n "$(strip $(BASE))" -a -n "$(strip $(NEW))" || (echo "usage: make compare BASE=<older run> NEW=<newer run>"; exit 2)
 	$(PY) -m src.analysis.compare_runs $(strip $(BASE)) $(strip $(NEW)) $(ARGS)
 
-##@ Tests (pytest.md, tests.md)
+##@ Tests
 test: ## the software tests: any machine, no hardware
 	$(PY) -m pytest -q $(ARGS)
 
@@ -208,12 +273,15 @@ soak: ## the soak test for MINUTES (default 15), recorded with diagnostics; then
 lint: ## pyflakes over src/
 	$(PY) -m pyflakes src
 
-##@ Calibration (calibrate_*.md)
+##@ Calibration
 calib-camera: ## lens: capture checkerboard frames, solve, verify
 	$(PY) -m src.scripts.calibrate_camera $(ARGS)
 
 calib-stopline: ## stop-line distance in cm from tape marks, one at a time
 	$(PY) -m src.scripts.calibrate_stop_line $(ARGS)
+
+calib-lane: ## where a centered robot sees its lane, and its width in px: robot_x_px and the lane widths for config.py
+	$(PY) -m src.scripts.calibrate_lane $(CAMFLAGS) $(ARGS)
 
 calib-odometry: ## encoder cm per count: push a measured distance (ARGS="--cm 150" or "--drive 3")
 	$(PY) -m src.scripts.calibrate_odometry $(ARGS)

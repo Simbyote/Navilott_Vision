@@ -1,9 +1,10 @@
-"""
-test_sensing.py  --  src/peripherals/sensing.py
+"""test_sensing.py  --  src/peripherals/sensing.py
 
 SensorHub runs over fake sensors and a fake clock, with tick() called by the
 test, so the grouping, the yaw flip and the wheel-speed math are exact. The
 threaded tests only check what survives scheduling jitter.
+
+--software  Fake sensors on a fake clock. No Pi.
 """
 import sys
 import threading
@@ -12,8 +13,25 @@ import types
 
 import pytest
 
-from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_RATE_HZ
+import src.peripherals.sensing as sensing
+from src.params import IMU_YAW_SIGN, SENSOR_HISTORY_S, SENSOR_HUB_RT_PRIORITY, SENSOR_RATE_HZ
 from src.peripherals.sensing import MAX_YAW_GAP_S, SensorBatch, SensorHub, SensorReading, Sensors
+
+
+@pytest.fixture(autouse=True)
+def realtime(monkeypatch):
+    """
+    set_realtime stand-in for every test here: no test thread ever really
+    goes SCHED_FIFO. Records each priority asked for; answer is what it
+    returns ("" = granted).
+    """
+    rt = types.SimpleNamespace(asked=[], answer="")
+
+    def fake(priority):
+        rt.asked.append(priority)
+        return rt.answer
+    monkeypatch.setattr(sensing, "set_realtime", fake)
+    return rt
 
 
 class FakeIMU:
@@ -70,10 +88,6 @@ def reading(t, yaw=None, accel=None, left=None, right=None):
     return SensorReading(t, yaw, accel, left, right)
 
 
-# =============================================================================
-# Parameters
-# =============================================================================
-
 @pytest.mark.software
 def test_this_robots_yaw_sign_and_100_hz_sampling():
     # Upside-down IMU: the driver's + = left (Z-up) reads + = right here,
@@ -81,10 +95,6 @@ def test_this_robots_yaw_sign_and_100_hz_sampling():
     assert IMU_YAW_SIGN == 1
     assert SENSOR_RATE_HZ == 100.0 and SENSOR_HISTORY_S == 2.0
 
-
-# =============================================================================
-# SensorBatch
-# =============================================================================
 
 @pytest.mark.software
 def test_an_empty_batch_has_nothing_to_report():
@@ -157,10 +167,6 @@ def test_wheel_speed_is_zero_without_a_window_to_measure_over(base):
 def test_span_runs_from_the_first_reading_without_a_base():
     assert SensorBatch((reading(2.0, 0.0), reading(2.03, 0.0))).span_s == pytest.approx(0.03)
 
-
-# =============================================================================
-# SensorHub, ticked by hand
-# =============================================================================
 
 @pytest.mark.software
 def test_a_tick_reads_both_sensors_together_on_the_hub_clock_and_flips_yaw():
@@ -307,10 +313,6 @@ def test_has_sensors_needs_at_least_one():
     assert SensorHub(imu=FakeIMU()).has_sensors and SensorHub(encoders=FakeEncoders()).has_sensors
 
 
-# =============================================================================
-# SensorHub, on its thread
-# =============================================================================
-
 @pytest.mark.software
 def test_the_thread_samples_at_about_the_rate_until_stopped():
     h = SensorHub(FakeIMU(yaw=2.0), FakeEncoders(), rate_hz=200.0, yaw_sign=-1)
@@ -361,9 +363,58 @@ def test_stop_before_start_is_safe_and_closes_once():
     assert closed == [1]
 
 
-# =============================================================================
-# SensorHub.open
-# =============================================================================
+def started(hub, timeout_s=2.0):
+    """Start hub and wait until its thread has settled its priority."""
+    hub.start()
+    end = time.perf_counter() + timeout_s
+    while hub.priority == "not started" and time.perf_counter() < end:
+        time.sleep(0.005)
+    return hub
+
+
+@pytest.mark.software
+def test_a_hub_stays_at_normal_priority_unless_asked(realtime):
+    h = started(SensorHub(FakeIMU()))
+    h.stop()
+    assert h.priority == "normal" and realtime.asked == []
+
+
+@pytest.mark.software
+def test_a_hub_asked_for_real_time_gets_it_on_its_own_thread(realtime):
+    h = started(SensorHub(FakeIMU(), rt_priority=20))
+    time.sleep(0.03)
+    batch = h.drain()
+    h.stop()
+    assert h.priority == "SCHED_FIFO 20" and realtime.asked == [20]
+    assert batch.imu_attempts > 0                                  # and it reads as before
+
+
+@pytest.mark.software
+def test_a_hub_refused_real_time_says_why_and_keeps_reading(realtime):
+    realtime.answer = "not permitted: Operation not permitted (rtprio limit 0)"
+    h = started(SensorHub(FakeIMU(), rt_priority=20))
+    time.sleep(0.03)
+    batch = h.drain()
+    h.stop()
+    assert h.priority == "normal (not permitted: Operation not permitted (rtprio limit 0))"
+    assert batch.imu_attempts > 0
+
+
+@pytest.mark.software
+def test_the_real_sensors_ask_for_the_configured_priority_and_sensors_report_it(realtime, monkeypatch):
+    assert SensorHub.open()._rt_priority == SENSOR_HUB_RT_PRIORITY
+    assert SensorHub.open(rt_priority=None)._rt_priority is None
+    imu_mod = types.ModuleType("src.peripherals.imu")
+    imu_mod.IMUReader = FakeIMU
+    monkeypatch.setitem(sys.modules, "src.peripherals.imu", imu_mod)
+    sensors = Sensors(imu=True)
+    end = time.perf_counter() + 2.0
+    while sensors.priority == "not started" and time.perf_counter() < end:
+        time.sleep(0.005)
+    sensors.stop()
+    assert sensors.priority == f"SCHED_FIFO {SENSOR_HUB_RT_PRIORITY}"
+    assert realtime.asked == [SENSOR_HUB_RT_PRIORITY]
+
 
 @pytest.mark.software
 def test_open_with_nothing_opens_nothing():
@@ -395,10 +446,6 @@ def test_open_uses_the_real_drivers_and_stop_releases_the_encoders(monkeypatch):
     finally:
         sys.modules.pop(DRIVE_MODULE, None)
 
-
-# =============================================================================
-# Sensors: what a frame loop uses
-# =============================================================================
 
 @pytest.mark.software
 def test_encoder_counts_per_second_reach_the_sample_and_stopped_reads_zero(fake_encoders):
@@ -485,7 +532,7 @@ def test_a_given_hub_is_used_and_started_only_with_sensors():
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads the real /proc")
 @pytest.mark.software
 def test_the_hub_thread_carries_its_name_into_the_kernel():
-    from src.tests.test_threads import comm_of
+    from src.tests.test_os_threads import comm_of
     h, *_ = hub()
     h.start()
     try:
@@ -493,10 +540,6 @@ def test_the_hub_thread_carries_its_name_into_the_kernel():
     finally:
         h.stop()
 
-
-# =============================================================================
-# IMU read timing
-# =============================================================================
 
 @pytest.mark.software
 def test_each_tick_times_its_imu_read_failed_or_not_and_none_without_an_imu():
@@ -520,3 +563,122 @@ def test_a_batch_counts_its_imu_reads_failures_and_the_slowest():
     assert (b.imu_attempts, b.imu_failed, b.imu_read_ms_max, b.imu_count) == (4, 1, 4.0, 3)
     empty = h.drain()
     assert (empty.imu_attempts, empty.imu_failed, empty.imu_read_ms_max) == (1 - 1, 0, None)
+
+
+class FifoIMU:
+    """IMUReader in FIFO mode, stand-in: push() samples (raw yaw, accel); read_fifo() takes them all."""
+    fifo, period_s = True, 0.01
+
+    def __init__(self):
+        self.samples, self.resets, self.fail, self.fifo_overflows = [], 0, False, 0
+
+    def push(self, yaw, n=1, accel=0.0):
+        self.samples += [(yaw, accel)] * n
+
+    def read_fifo(self):
+        if self.fail:
+            raise OSError("simulated I2C error")
+        out, self.samples = self.samples, []
+        return out
+
+    def fifo_reset(self):
+        self.resets += 1
+        self.samples = []
+
+
+def clock_at(now):
+    clock = Clock()
+    clock.now = now
+    return clock
+
+
+@pytest.mark.software
+def test_a_fifo_hub_starts_no_thread_and_empties_the_fifo_first():
+    imu = FifoIMU()
+    imu.push(5.0, n=40)                           # built up since open: stale
+    h = SensorHub(imu, rt_priority=20)
+    h.start()
+    assert h._thread is None and imu.resets == 1 and not imu.samples
+    assert h.priority == "no thread (the IMU's FIFO)" and h.fifo_overflows == 0
+    h.stop()
+
+
+@pytest.mark.software
+def test_fifo_samples_are_spread_over_the_time_that_passed_and_the_windows_tile():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(30.0, n=5)
+    first = h.drain()                             # the first window: a nominal period apart, back from now
+    assert [round(r.t, 3) for r in first.readings] == [9.96, 9.97, 9.98, 9.99, 10.0]
+    assert {r.yaw_dps for r in first.readings} == {IMU_YAW_SIGN * 30.0}
+    clock.now = 10.05
+    imu.push(30.0, n=5)
+    second = h.drain()
+    assert [round(r.t, 3) for r in second.readings] == [10.01, 10.02, 10.03, 10.04, 10.05]
+    assert second.yaw_deg == pytest.approx(IMU_YAW_SIGN * 30.0 * 0.05)      # 5 periods, nothing lost
+    assert second.imu_attempts == 5 and second.imu_failed == 0
+    clock.now = 10.102                            # read 2 ms late: the 5 samples share the 52 ms
+    imu.push(30.0, n=5)
+    late = h.drain()
+    assert [round(r.t, 4) for r in late.readings] == [10.0604, 10.0708, 10.0812, 10.0916, 10.102]
+
+
+@pytest.mark.software
+def test_a_chip_clock_running_fast_doesnt_drift_the_stamps_or_the_heading():
+    # The chip samples 4% fast: 104 samples a second, read every 50 ms. Stamped a nominal 10 ms apart,
+    # the stamps would run ahead of real time and a turn would read 4% long
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    made = 0.0
+    turned = span = 0.0
+    for k in range(1, 201):                       # 10 s of frames
+        clock.now = 10.0 + 0.05 * k
+        due = int(5.2 * k) - int(made)
+        made = 5.2 * k
+        imu.push(90.0, n=due)
+        b = h.drain()
+        assert b.readings[-1].t <= clock.now + 1e-9, "stamped in the future"
+        if b.yaw_deg is not None:
+            turned += b.yaw_deg
+            span += b.yaw_span_s
+    assert span == pytest.approx(10.0, abs=0.06)                         # the time that passed
+    assert turned == pytest.approx(IMU_YAW_SIGN * 90.0 * 10.0, rel=0.006)  # 900 deg, not 936
+
+
+@pytest.mark.software
+def test_a_stall_shorter_than_the_fifo_loses_no_yaw():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(0.0, n=5)
+    h.drain()
+    clock.now = 10.6                              # a 600 ms frame: 60 samples waited in the FIFO
+    imu.push(90.0, n=60)
+    batch = h.drain()
+    assert batch.yaw_span_s == pytest.approx(0.6) and batch.yaw_deg == pytest.approx(IMU_YAW_SIGN * 54.0)
+
+
+@pytest.mark.software
+def test_a_failed_fifo_read_counts_once_and_its_samples_come_next_frame():
+    imu, clock = FifoIMU(), clock_at(10.0)
+    h = SensorHub(imu, clock=clock)
+    h.start()
+    imu.push(10.0, n=5)
+    imu.fail = True
+    bad = h.drain()
+    assert (bad.imu_attempts, bad.imu_failed, h.read_errors) == (1, 1, 1)
+    imu.fail, clock.now = False, 10.05
+    assert h.drain().imu_count == 5
+
+
+@pytest.mark.software
+def test_a_fifo_hub_still_measures_the_wheels_at_each_drain():
+    imu, enc, clock = FifoIMU(), FakeEncoders(), clock_at(10.0)
+    h = SensorHub(imu, enc, clock=clock)
+    h.start()
+    clock.now, enc.left, enc.right = 10.05, 50, 40
+    imu.push(0.0, n=5)
+    batch = h.drain()
+    assert (batch.left_cps, batch.right_cps) == (pytest.approx(1000.0), pytest.approx(800.0))

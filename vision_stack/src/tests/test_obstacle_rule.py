@@ -1,11 +1,12 @@
-"""
-test_obstacle_rule.py  --  src/navigation/obstacle.py
+"""test_obstacle_rule.py  --  src/navigation/obstacle.py
 
 The obstacle rule alone, then inside Navigation: what counts as within
 reach (cm, then rows without cm, clipped always), braking until the
 obstacle has been gone OBSTACLE_CLEAR_MS, not creeping toward one it
 stopped short of, its priority over every other rule, and the lane it
 hides not ending the run.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 
@@ -36,10 +37,6 @@ def drive(seq, rule=None):
     return rule, out
 
 
-# =============================================================================
-# Within reach
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("fields, near", [
     ({}, False),                                                    # nothing voted
@@ -64,13 +61,9 @@ def test_the_distances_are_settable():
 
 @pytest.mark.software
 def test_the_constants():
-    """The view's nearest floor is ~10.2 cm (the 2026-09-30 table's row 0): the stop sits just past it."""
+    # The view's nearest floor is ~10.2 cm (the 2026-09-30 table's row 0): the stop sits just past it.
     assert 10.2 < OBSTACLE_STOP_CM <= 15.0 and OBSTACLE_STOP_PX > 0 and OBSTACLE_CLEAR_MS >= 500
 
-
-# =============================================================================
-# Brake, wait, go
-# =============================================================================
 
 @pytest.mark.software
 def test_far_obstacles_and_none_say_nothing():
@@ -96,7 +89,7 @@ def test_it_releases_after_the_obstacle_has_been_gone_the_clear_time():
 
 @pytest.mark.software
 def test_one_that_stopped_it_holds_it_wherever_it_reads_until_it_is_gone():
-    """Stopped just short, the obstacle reads a little past the stop distance: no creeping into it."""
+    # Stopped just short, the obstacle reads a little past the stop distance: no creeping into it.
     rule, out = drive([seen(cm=11.0)] + [seen(cm=13.5)] * 40)
     assert all(cmd == BRAKE for cmd, _ in out) and rule.blocked
 
@@ -116,10 +109,6 @@ def test_reset_forgets_it():
     rule.reset()
     assert not rule.blocked and rule.update(packet()) is None and rule.record == {}
 
-
-# =============================================================================
-# Inside Navigation
-# =============================================================================
 
 def run(nav, case):
     nav.reset()
@@ -162,10 +151,6 @@ def test_a_given_rule_is_the_one_navigation_asks():
 def test_navigation_passes_the_obstacle_contract_check():
     assert check_brakes_for_an_obstacle_then_goes(Navigation()) == []
 
-
-# =============================================================================
-# In navigation_linker's record and video strip
-# =============================================================================
 
 @pytest.mark.software
 def test_nav_csv_carries_the_voted_obstacle():

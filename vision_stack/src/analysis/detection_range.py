@@ -1,28 +1,14 @@
-"""Detection range: how far away a stop sign or traffic light is still detected, reliably.
+"""Detection range: how far away a stop sign or traffic light is still reliably detected.
 
 Purpose:
-    Navigation needs warning: the distance at which a sign is first seen,
-    minus the robot's stopping distance, is its margin. Place the target at
-    measured distances in front of the robot, record a short still run at
-    each, and give the runs with their distances. The result is the
-    detection rate at every distance and the reliable range: the farthest
-    distance out to which every measured distance, starting from the
-    nearest, is detected in at least --threshold of frames.
+    First-seen distance less stopping distance is navigation's margin. From
+    one still run per measured distance, this gives each distance's detection
+    rate and the reliable range, out to which every distance from the nearest
+    meets --threshold.
 
 Main package:
-    analyze()              per target and distance: frames, detection rate,
-                           longest run of missed frames; reliable range,
-                           farthest distance seen at all
-    detection_range.png    detection rate against distance, per target,
-                           with the threshold and the reliable range marked
-
-Input:
-    One run per distance, p3.csv (p2_stop, p2_traffic) or test_feature_fusion's
-    fusion_timing.csv (n_stop_sign, n_traffic_light); a frame counts as
-    detected when its count is above zero. Distances come from a manifest
-    CSV with columns distance_cm,run (run relative to the manifest), or from
-    --at DISTANCE_CM RUN, repeated. Measure to the target from the same
-    point on the robot every time, such as the lens.
+    analyze(): per target and distance, rate and longest miss, the reliable
+    range and the farthest seen; detection_range.png.
 """
 
 import argparse
@@ -35,7 +21,7 @@ from src.analysis import common
 from src.analysis.common import Table, runs_of
 
 CSV_NAMES = ("p3.csv", "fusion_timing.csv")
-TARGETS = {                 # target: count columns, in order of preference
+TARGETS = {                 # target: count columns, preferred first
     "stop_sign": ("p2_stop", "n_stop_sign"),
     "traffic_light": ("p2_traffic", "n_traffic_light"),
 }
@@ -56,7 +42,6 @@ Record one still run per distance, then either list them in a manifest
 
 
 def detections(table: Table, targets) -> dict:
-    """{target: bool array, detected per frame} for each target the table has a column for."""
     out = {}
     for target in targets:
         col = table.first_with_values(*TARGETS[target])
@@ -67,20 +52,10 @@ def detections(table: Table, targets) -> dict:
 
 def analyze(points, threshold: float = THRESHOLD) -> dict:
     """
-    Inputs:
-        points: [(distance_cm, {target: detected bool array})]
-        threshold: detection rate that counts as reliable
+    points is [(distance_cm, {target: detected per frame})].
 
-    Outputs:
-        {target: {
-            "distances": [{"distance_cm", "frames", "rate", "longest_miss"}]
-                         nearest first,
-            "reliable_range_cm": farthest distance with every distance from
-                                 the nearest out to it at or above threshold;
-                                 None when the nearest already falls short,
-            "farthest_seen_cm": farthest distance detected in any frame, or None,
-            "reliable_distances_cm": every distance at or above threshold,
-        }}
+    Per target: distances nearest first, reliable_range_cm (None when the nearest
+    falls short), farthest_seen_cm, and every distance at or above threshold.
     """
     if not points:
         raise ValueError("no distances given")

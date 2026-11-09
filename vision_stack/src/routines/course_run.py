@@ -1,32 +1,12 @@
-"""Course run: the Design Day rehearsal, the whole course from the start button to the finish, judged.
+"""Course run: the Design Day rehearsal, start button to finish, judged.
 
 Purpose:
-    D2's competition is one thing: complete a predetermined course at the
-    best possible speed, keeping the lane and obeying the lights and signs.
-    Each trial is that, once: the route file (config.ROUTE_PATH unless
-    set), the start button and countdown, the motors on, the battery
-    watched (navigation_linker.run, recording every frame). CourseWatch
-    follows the run: the route steps reached, the stop sign holds and red
-    light waits, time off vision, contract brakes. Afterwards the tester
-    says what a judge would: did it complete the course as planned, how
-    many times they touched it, how many stop signs or red lights it ran,
-    and the stopwatch time from GO to the finish. The stopwatch against the
-    robot's own run time also checks the elapsed-time display.
-
-    Pass (each run): completed (the tester says so and the robot ended on
-    the route's finish); no touches; no stop sign or red light run. The
-    times are the result, not judged: the summary gives the best and mean.
+    D2 once per trial with the route file, countdown, motors and recording.
+    The tester answers as a judge would (completed, touches, signs or lights
+    run, stopwatch); the stopwatch also checks the elapsed-time display.
 
 Main package:
-    CourseWatch: navigation_linker.run's stop_when for one run (never ends it).
-    CourseRun: the routine (make routine-course-run).
-
-Flow (per trial):
-    1. Rig (camera, sensors, motors, start button) and battery opened;
-       the robot on the start; Enter arms it.
-    2. The start button, the countdown, the run until the route's finish
-       (or ended early, the cap, a critical battery, Ctrl-C).
-    3. The tester's answers; the row. The run folder is attempt_NN/.
+    CourseRun (make routine-course-run), with CourseWatch following each run.
 """
 import statistics
 from pathlib import Path
@@ -37,17 +17,15 @@ from src.routines.figure_eight import _num, _step
 from src.routines.harness import Routine, criterion
 
 MAX_S = 300.0               # main.MAX_RUN_S: the production run's cap
-FINISHED = "end of course"  # navigation_linker.END_COURSE: the navigator finished the route
+FINISHED = "end of course"  # navigation_linker.END_COURSE
 
 
 class CourseWatch:
     """
     Follows one run's nav.csv rows; never ends it.
 
-    steps: the highest route step reached. holds, reds: how many times the
-    run came to a stop sign's hold, and to a wait at a red light.
-    lane_lost_s: time in lane keeping off vision. contract: frames braked
-    because a command broke the contract. volts: the pack, per frame.
+    holds and reds count stop-sign holds and red-light waits; lane_lost_s is time
+    off vision; contract counts frames braked for a broken command contract.
     """
     def __init__(self):
         self.steps = self.holds = self.reds = self.contract = self.frames = 0
@@ -108,7 +86,7 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             from src.navigation_linker import run
             self._run = run
         if self._open_battery is None:
-            from src.diagnostics import battery_run
+            from src.peripherals import battery_run
             self._open_battery = lambda: battery_run.open_battery(say=ctx.console.say)
         ctx.options.setdefault("route", str(ROUTE_PATH))
         ctx.options.setdefault("max_s", MAX_S)
@@ -143,7 +121,7 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             report = self._run(source, sensors, motor, nav, MEASURED, MEASURED_ESTIMATION,
                                str(Path(ctx.out_dir) / f"attempt_{ctx.attempt + 1:02d}"), system,
                                max_run_s=float(ctx.options["max_s"]), motors_on=True, render=False,
-                               stop_when=watch, battery=battery)
+                               stop_when=watch, battery=battery, warmup=True)
         finally:
             if battery is not None:
                 battery.cleanup()

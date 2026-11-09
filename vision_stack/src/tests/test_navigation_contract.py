@@ -1,8 +1,9 @@
-"""
-test_navigation_contract.py  --  the Navigation contract: Command rules, the Navigator interface, and the checks
+"""test_navigation_contract.py  --  the Navigation contract: Command rules, the Navigator interface, and the checks
 
 A navigator that keeps the contract passes every check in navigation_checks;
 each broken navigator here breaks exactly one rule, and the checks must name it.
+
+--software  Hand-built packets. No camera or Pi.
 """
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from src.tests.navigation_checks import (
     check_stale_lane_slows_then_stops, check_steers_toward_center, check_stops_at_a_red_line,
     check_stops_at_a_stop_sign_line_then_goes, contract_problems, frames, forward, intersection, packet,
 )
+
 
 class GoodNavigator:
     """navigation.Navigation, counting its calls: a navigator that keeps the whole contract."""
@@ -170,10 +172,6 @@ class NeverDrives(GoodNavigator):
         return BRAKE
 
 
-# =============================================================================
-# Command
-# =============================================================================
-
 @pytest.mark.software
 @pytest.mark.parametrize("module", ["src.navigation.navigation_contract", "src.navigation.navigation", "src.config",
                                     "src.maneuver", "src.navigation.lane_keeping", "src.navigation.stop_line",
@@ -231,10 +229,6 @@ def test_anything_but_a_command_is_a_problem(bad):
     assert command_problems(bad) == [f"not a Command: {bad!r}"]
 
 
-# =============================================================================
-# Navigator
-# =============================================================================
-
 @pytest.mark.software
 def test_the_navigator_interface_is_update_and_reset():
     assert isinstance(GoodNavigator(), Navigator)
@@ -244,10 +238,6 @@ def test_the_navigator_interface_is_update_and_reset():
             return BRAKE
     assert not isinstance(NoReset(), Navigator)
 
-
-# =============================================================================
-# Packet builders
-# =============================================================================
 
 @pytest.mark.software
 def test_built_packets_are_numbered_and_spaced_a_frame_apart():
@@ -271,10 +261,6 @@ def test_the_default_packet_is_a_centered_go_on_vision():
 def test_forward_means_a_positive_mean_duty_without_a_brake(cmd, fwd):
     assert forward(cmd) == fwd
 
-
-# =============================================================================
-# The checks
-# =============================================================================
 
 @pytest.mark.software
 def test_a_navigator_that_keeps_the_contract_passes_every_check():
@@ -363,7 +349,6 @@ def test_an_intersection_is_the_line_coming_down_the_image_then_the_time_after()
     assert all(c["stop_line_detected"] and c["stop_sign_detected"] for c in case[:len(APPROACH_ROWS)])
     assert case[-1] == {"drive_state": "stop"} and case[-1] is not case[-2]
     assert APPROACH_ROWS[-1] < APPROACH_ROWS[0]           # coming nearer
-
 
 
 @pytest.mark.software

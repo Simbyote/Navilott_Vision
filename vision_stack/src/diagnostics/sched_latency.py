@@ -1,43 +1,14 @@
 """Scheduling latency: how late Linux wakes a thread, against the robot's deadlines.
 
 Purpose:
-    The robot runs on Linux, not a real-time OS. What an RTOS buys is a
-    small, bounded delay between a thread's wake-up time and when it
-    actually runs; on Linux that delay is usually small and occasionally
-    not. The robot's deadlines are soft (a 50 ms frame, a 10 ms IMU tick)
-    and its hard timing (PWM, encoder edges, pixel readout, I2C bits) is
-    done by hardware, so the question is how the worst case here compares
-    with those deadlines. This measures it three ways:
-
-    - python: a Python thread at normal priority sleeping to a 1 ms grid,
-      how late each wake-up is. This is what the robot's own threads (the
-      sensor hub, the frame loop) live with. Needs nothing.
-    - other: cyclictest at normal priority (SCHED_OTHER): the kernel's own
-      wake-up latency for an ordinary thread, without Python.
-    - fifo: cyclictest at real-time priority (SCHED_FIFO 80): the best this
-      kernel gives an RTOS-style thread.
-
-    cyclictest (apt: rt-tests) needs root; without either, only python
-    runs, and the summary says so. Run it twice, idle and while the robot's
-    pipeline loads the Pi (make nav-dry in another terminal), with --label,
-    and put them side by side with --compare.
+    An RTOS bounds the delay between a thread's wake-up time and when it
+    runs; Linux usually keeps it small, occasionally not. The robot's
+    deadlines are soft (a 50 ms frame, a 10 ms IMU tick), so the question is
+    how the worst case compares.
 
 Main package:
-    python_latency(seconds, interval_us) -> list of us late.
-    run_cyclictest(policy, seconds, interval_us) -> histogram, or None.
-    parse_cyclictest(text) -> {"hist", "min", "avg", "max", "overflows", "total"}.
-    case_stats(hist, overflows, max_us) -> n, min, p50, p99, p99.9, max.
-    findings(res), summary_lines(res), compare_lines(a, b), tail(hist),
-    figure(res, path): each case's tail, the share of wake-ups at least x late.
-    cli(): sudo python3 -m src.diagnostics.sched_latency [--seconds S] [--label L]
-        | --compare DIR DIR
-
-Flow:
-    1. The kernel's preemption model (uname -v: PREEMPT, PREEMPT_RT).
-    2. Each case for --seconds: python, then cyclictest other and fifo.
-    3. Histograms to percentiles; against FRAME_BUDGET_MS and the IMU's
-       period; findings; summary.txt, sched_latency.json, histogram.csv and
-       the figure.
+    The run folder: per case (a Python thread, cyclictest normal and real-time)
+    the percentiles, findings, sched_latency.json, histogram.csv and a figure.
 """
 import argparse
 import csv
@@ -54,9 +25,9 @@ from pathlib import Path
 
 from src.params import FPS, RUNS_DIR, SENSOR_RATE_HZ
 
-SECONDS = 30.0              # per case: 30 000 wake-ups at 1 ms; rare spikes need a long run
-INTERVAL_US = 1000          # cyclictest's default period
-HIST_MAX_US = 10_000        # cyclictest's histogram reaches 10 ms; beyond is an overflow (its max is still exact)
+SECONDS = 30.0              # per case; rare spikes need a long run
+INTERVAL_US = 1000
+HIST_MAX_US = 10_000        # beyond is an overflow, though the max stays exact
 FIFO_PRIORITY = 80
 FRAME_BUDGET_US = 1e6 / FPS
 IMU_PERIOD_US = 1e6 / SENSOR_RATE_HZ
@@ -64,10 +35,9 @@ CASES = ("python", "other", "fifo")
 CASE_TEXT = {"python": "Python thread, normal priority (the robot's threads)",
              "other": "cyclictest, normal priority (SCHED_OTHER)",
              "fifo": f"cyclictest, real-time priority (SCHED_FIFO {FIFO_PRIORITY})"}
-BUDGET_SHARE = 0.10         # a worst case over this share of a deadline earns a finding
-FIFO_GAIN = 2.0             # real-time priority cutting the worst case by this factor earns a finding
-# Typical figures for comparison only, not measured here: a microcontroller RTOS
-# wakes its highest-priority task within microseconds to tens of microseconds
+BUDGET_SHARE = 0.10         # of a deadline, for a finding
+FIFO_GAIN = 2.0             # worst-case reduction, for a finding
+# For comparison only, not measured here
 RTOS_TYPICAL = "single-digit to tens of microseconds"
 
 _CLI_HELP = """\
@@ -90,16 +60,9 @@ Output (--out DIR, default <root>/runs/sched_<label>_<timestamp>):
 """
 
 
-# =============================================================================
-# Measuring
-# =============================================================================
-
 def python_latency(seconds: float, interval_us: int = INTERVAL_US, clock=time.perf_counter,
                    sleep=time.sleep) -> list[float]:
-    """
-    A thread sleeping to a fixed grid, as the sensor hub does: how many us
-    late each wake-up was. Runs on its own thread, like the robot's.
-    """
+    """How many us late each wake-up of a thread sleeping to a fixed grid was, as the sensor hub sleeps."""
     out = []
 
     def run():
@@ -119,10 +82,7 @@ def python_latency(seconds: float, interval_us: int = INTERVAL_US, clock=time.pe
 
 
 def cyclictest_argv(policy: str, seconds: float, interval_us: int = INTERVAL_US) -> list[str]:
-    """
-    cyclictest on every core (-S), memory locked (-m), quiet (-q), with a
-    1 us histogram to HIST_MAX_US (-h), for seconds at interval_us.
-    """
+    """Every core, memory locked, quiet, a 1 us histogram to HIST_MAX_US."""
     argv = ["cyclictest", "-m", "-q", "-S", f"-i{interval_us}", f"-D{int(seconds)}s", f"-h{HIST_MAX_US}"]
     if policy == "fifo":
         argv += [f"-p{FIFO_PRIORITY}", "--policy=fifo"]
@@ -132,11 +92,7 @@ def cyclictest_argv(policy: str, seconds: float, interval_us: int = INTERVAL_US)
 
 
 def parse_cyclictest(text: str) -> dict | None:
-    """
-    cyclictest -h's output, summed over its threads: {"hist": {us: count},
-    "min", "avg", "max", "overflows", "total"}; None when there's no
-    histogram (it failed).
-    """
+    """{hist, min, avg, max, overflows, total} summed over its threads; None if it failed."""
     hist = Counter()
     rows = {}
     for line in text.splitlines():
@@ -165,7 +121,7 @@ def parse_cyclictest(text: str) -> dict | None:
 
 
 def run_cyclictest(policy: str, seconds: float, interval_us: int = INTERVAL_US, run=subprocess.run) -> tuple[dict | None, str]:
-    """(parsed histogram or None, why not / the raw output). run is injectable for tests."""
+    """(parsed histogram or None, why not)."""
     argv = cyclictest_argv(policy, seconds, interval_us)
     try:
         p = run(argv, capture_output=True, text=True, timeout=seconds + 30)
@@ -180,7 +136,7 @@ def run_cyclictest(policy: str, seconds: float, interval_us: int = INTERVAL_US, 
 
 
 def preemption_model(version: str | None = None) -> str:
-    """The kernel's preemption model from uname -v: PREEMPT_RT, PREEMPT, PREEMPT_DYNAMIC, or none."""
+    """PREEMPT_RT, PREEMPT, PREEMPT_DYNAMIC or none, from uname -v."""
     v = platform.version() if version is None else version
     for model in ("PREEMPT_RT", "PREEMPT_DYNAMIC", "PREEMPT"):
         if model in v.split():
@@ -188,21 +144,13 @@ def preemption_model(version: str | None = None) -> str:
     return "none (voluntary or server)"
 
 
-# =============================================================================
-# Statistics
-# =============================================================================
-
 def hist_of(values_us: list[float]) -> dict:
-    """Wake-ups per whole microsecond late (rounded down), as cyclictest bins them."""
+    """Wake-ups per whole microsecond late, as cyclictest bins them."""
     return dict(Counter(int(v) for v in values_us))
 
 
 def case_stats(hist: dict, overflows: int = 0, max_us: float | None = None) -> dict | None:
-    """
-    n, min, p50, p99, p99.9 and max in us from a histogram. Overflows (past
-    the histogram) count as late as the max, so a percentile that lands
-    among them reads the max.
-    """
+    """Percentiles in us. Overflows count as late as the max."""
     n = sum(hist.values()) + overflows
     if not n:
         return None
@@ -221,7 +169,6 @@ def case_stats(hist: dict, overflows: int = 0, max_us: float | None = None) -> d
 
 
 def findings(res: dict) -> list[str]:
-    """What the measurement says, in words, against the robot's deadlines."""
     out = []
     cases = res["cases"]
     for name in CASES:
@@ -248,10 +195,6 @@ def findings(res: dict) -> list[str]:
     return out
 
 
-# =============================================================================
-# Output
-# =============================================================================
-
 def _row(name: str, s: dict | None) -> str:
     if not s:
         return f"  {name:<7} not measured"
@@ -275,7 +218,7 @@ def summary_lines(res: dict) -> list[str]:
 
 
 def compare_lines(a: dict, b: dict) -> list[str]:
-    """Two runs side by side (idle against loaded): each case's p99 and max."""
+    """Two runs side by side (idle against loaded)."""
     la, lb = a.get("label") or "A", b.get("label") or "B"
     lines = [f"scheduling latency: {la} vs {lb} (us)",
              f"  {'case':<7} {la + ' p99':>12} {lb + ' p99':>12} {la + ' max':>12} {lb + ' max':>12}"]
@@ -288,17 +231,12 @@ def compare_lines(a: dict, b: dict) -> list[str]:
     return lines
 
 
-# Categorical slots 1-3 of the validated default palette (dataviz skill), the cases
-# in fixed order; the legend names each, so color is never the only identity
+# The legend names each case, so color is never the only identity
 CASE_COLORS = {"python": "#2a78d6", "other": "#eb6834", "fifo": "#1baf7a"}
 
 
 def tail(hist: dict) -> tuple[list[float], list[float]]:
-    """
-    The share of wake-ups at least x us late, for each x in the histogram:
-    the tail (CCDF) a latency plot shows, where p99 crosses 0.01 and p99.9
-    0.001. x is at least 1, for a log axis.
-    """
+    """The share of wake-ups at least x us late (the CCDF); x at least 1, for a log axis."""
     n = sum(hist.values())
     xs, ys, later = [], [], n
     for k in sorted(hist):
@@ -309,10 +247,7 @@ def tail(hist: dict) -> tuple[list[float], list[float]]:
 
 
 def figure(res: dict, path) -> Path | None:
-    """
-    Each case's tail on log-log axes, the p99 / p99.9 levels and the IMU
-    period marked; None without matplotlib or data.
-    """
+    """Each case's tail on log-log axes; None without matplotlib or data."""
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -335,7 +270,7 @@ def figure(res: dict, path) -> Path | None:
     ax.set_xlabel(f"us late (dashed: the IMU's {IMU_PERIOD_US / 1000:.0f} ms period)", color="#6b6b6b")
     ax.set_ylabel("share of wake-ups at least this late", color="#6b6b6b")
     ax.set_title(f"Scheduling latency{' (' + res['label'] + ')' if res.get('label') else ''}", loc="left", fontsize=11)
-    ax.legend(frameon=False, fontsize=9, loc="upper right")         # the tails fall away from it
+    ax.legend(frameon=False, fontsize=9, loc="upper right")
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
     fig.tight_layout()
@@ -364,7 +299,6 @@ def write(out_dir, res: dict, draw: bool = True) -> list[str]:
 
 def measure(seconds: float, label: str = "", interval_us: int = INTERVAL_US, root: bool | None = None,
             python_fn=python_latency, cyclic_fn=run_cyclictest) -> dict:
-    """Every case it can run; the result write() takes."""
     root = (os.geteuid() == 0) if root is None else root
     res = {"label": label, "started": time.strftime("%Y-%m-%d %H:%M:%S"), "seconds": seconds,
            "interval_us": interval_us, "kernel": platform.release(), "preemption": preemption_model(),
@@ -392,7 +326,6 @@ def measure(seconds: float, label: str = "", interval_us: int = INTERVAL_US, roo
 
 
 def cli(argv: list[str] | None = None) -> int:
-    """sudo python3 -m src.diagnostics.sched_latency [--seconds S] [--label L] [--out DIR] | --compare DIR DIR"""
     ap = argparse.ArgumentParser(prog="python3 -m src.diagnostics.sched_latency", description=_CLI_HELP,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--seconds", type=float, default=SECONDS, metavar="S", help=f"per case (default {SECONDS:.0f})")

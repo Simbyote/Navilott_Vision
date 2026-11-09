@@ -37,10 +37,6 @@ def feed(watch, rs):
     return None
 
 
-# =============================================================================
-# The numbers
-# =============================================================================
-
 @pytest.mark.software
 def test_p95_nearest_rank():
     assert fb.p95(list(range(1, 101))) == 95 and fb.p95([3.0]) == 3.0 and fb.p95([]) is None
@@ -125,10 +121,6 @@ def test_throttling_new_during_the_run(before, after, throttled, under):
     out = fb.Sampler(read=Reader([{}]), throttled=flags(before, after), period_s=60.0).start().stop()
     assert (out["throttled"], out["under_voltage"]) == (throttled, under)
 
-
-# =============================================================================
-# The routine
-# =============================================================================
 
 class Rig:
     def __init__(self, log):
@@ -216,10 +208,6 @@ def test_registered():
     assert ROUTINES["frame-budget"] is fb.FrameBudget and fb.FrameBudget.trials == 3
     assert (fb.TARGET_FPS, fb.BUDGET_MS, fb.LATENCY_MS, fb.CPU_MAX_PCT, fb.RSS_MAX_MB) == (20.0, 50.0, 50.0, 70.0, 400.0)
 
-
-# =============================================================================
-# The criteria
-# =============================================================================
 
 def one(tmp_path, script, result=GOOD):
     res = go([script], Person("", ""), tmp_path, result=result, seconds=10)

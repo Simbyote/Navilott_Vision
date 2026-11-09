@@ -1,11 +1,12 @@
-"""
-test_traffic_light.py  --  src/navigation/traffic_light.py
+"""test_traffic_light.py  --  src/navigation/traffic_light.py
 
 The traffic-light rule against a real tracker: red or yellow at the line
 waits until the light has been green or nothing for RELEASE_MS; green drives
 on; red misread as yellow keeps the wait; red with no line, or a light that turns red after the line, says
 nothing; red seen within RED_MEMORY_MS before the line counts, older red
 doesn't; a dropped frame neither runs the light nor releases the wait; reset.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 

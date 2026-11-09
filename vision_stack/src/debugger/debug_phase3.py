@@ -1,33 +1,13 @@
 """Phase 3 view: what Phase 2 handed to Phase 3, and what Phase 3 did with it, frame by frame.
 
 Purpose:
-    phase3_linker's video. Phase 3 only acts across frames (EMA, jump gate,
-    hold, votes), so a wrong packet is either bad input or a filter doing
-    what it was told. This view puts both on one picture: the Phase 2 lane
-    overlay (debug_lane.annotate, as in run.avi) with each traffic light and
-    stop sign re-colored by its Phase 3 fate, then the lane filter's decision,
-    the three votes and a scrolling timeline where "output held while the
-    input moved" shows as a flat filtered trace over a moving raw one.
-    It reads the records TracedPhase3Processor leaves in the debug dict;
-    nothing here re-derives a decision.
+    Phase 3 acts only across frames (EMA, jump gate, hold, votes), so a wrong
+    packet is bad input or a filter doing what it was told; this shows both.
+    It reads TracedPhase3Processor's records, re-deriving nothing.
 
 Main package:
-    Phase3View: implements the view interface in debug_video, on a
-    phase3_linker.Phase3Result instead of a chain result.
-
-    Top        camera frame under the lane overlay's header (padded, so the
-               header hides nothing), lane overlay; traffic / sign boxes green when
-               they passed the gate, amber below it, labeled "conf >= gate"
-    Lane bar   [-1, 1]: raw offset (hollow; red when gated), filtered offset
-               (filled); background by status; hold counter n/max and reason
-    Votes      traffic, stop sign, stop line: the vote buffer as cells
-               (oldest left), this frame's raw vote and the state
-    Timeline   the last ~5 s: status band, raw and filtered offset, then
-               drive state, stop sign and stop line tracks
-
-Flow:
-    extract() pulls the Phase3Result apart, observe() adds the frame to the
-    timeline and the run statistics, render() draws the four panels.
+    Phase3View, a debug_video view on a Phase3Result: the lane overlay with
+    lights and signs by fate, the lane filter bar, the votes, and a ~5 s timeline.
 """
 from collections import Counter, deque
 
@@ -48,11 +28,11 @@ C_OBSTACLE = (255, 120, 0)      # blue, as the obstacle view tints "not floor"
 
 
 def _raw_measured(lane: dict) -> bool:
-    """True when this frame's raw offset is a measurement (a usable mode), gated or not."""
+    """This frame's raw offset is a measurement (a usable mode), gated or not."""
     return lane["reason"] not in (NO_RESULT, UNUSABLE_MODE)
 
+
 def _cell_color(kind: str, value) -> tuple[int, int, int]:
-    
     if kind == "traffic":
         return DRIVE_COLORS.get(value, dv.C_GRAY)
     if kind == "stop_sign":
@@ -63,15 +43,7 @@ def _cell_color(kind: str, value) -> tuple[int, int, int]:
 
 
 class Phase3View:
-    """
-    Phase 3 view; implements the view interface in debug_video.
-
-    lane_config: The LaneOffsetConfig the chain ran with, for the lane
-        overlay's candidate gates (debug_lane.candidate_gates).
-    fps: The run's frame rate; sizes the timeline to TIMELINE_S.
-    last_render_ms: Set by the caller after each render; the next frame's
-        corner shows it, since a frame can't show its own render time.
-    """
+    """fps sizes the timeline. last_render_ms is set by the caller and shown on the next frame."""
     name = "phase3"
     CSV_FIELDS = (
         "frame_id", "timestamp_ms",
@@ -100,20 +72,8 @@ class Phase3View:
         self._obstacle_frames = 0
         self._obstacle_held = 0
 
-    # -------------------------------------------------------------------------
-    # Data
-    # -------------------------------------------------------------------------
-
     def extract(self, res, frame=None) -> dict:
-        """
-        This frame's data from a Phase3Result.
-
-        Inputs:
-            res: phase3_linker.Phase3Result; p3_debug must come from
-                TracedPhase3Processor (the lane, heading, traffic, stop_sign
-                and stop_line records).
-            frame: The source frame; None uses the chain's own.
-        """
+        """This frame's data; p3_debug must come from TracedPhase3Processor. frame None uses the chain's."""
         chain, dbg = res.chain, res.p3_debug
         frame = chain.frame.frame if frame is None else frame
         return {
@@ -127,7 +87,6 @@ class Phase3View:
         }
 
     def observe(self, data) -> None:
-        """Add the frame to the timeline and the run statistics."""
         dbg, pk = data["dbg"], data["packet"]
         lane = dbg["lane"]
         self.history.append({
@@ -153,7 +112,6 @@ class Phase3View:
         self._obstacle_held += bool((dbg.get("obstacle") or {}).get("held"))
 
     def row(self, data) -> list:
-        """One CSV row, in CSV_FIELDS order."""
         d, pk = data["dbg"], data["packet"]
         lane, hd, tr, sg, sl = d["lane"], d["heading"], d["traffic"], d["stop_sign"], d["stop_line"]
         opt = lambda v: "" if v is None else v
@@ -175,7 +133,7 @@ class Phase3View:
 
     @staticmethod
     def _obstacle_row(ob, opt, buf) -> list:
-        """The obstacle columns; blank for a record from before the obstacle vote existed."""
+        """Obstacle columns; blank for records from before the obstacle vote."""
         if ob is None:
             return [""] * 8
         return [int(ob["seen"]), opt(ob["measured_px"]), int(ob["held"]), buf(ob), int(ob["state"]),
@@ -198,12 +156,7 @@ class Phase3View:
         out.append(f" frames with an obstacle in the path     {self._obstacle_frames}  (held {self._obstacle_held})")
         return out
 
-    # -------------------------------------------------------------------------
-    # Drawing
-    # -------------------------------------------------------------------------
-
     def render(self, data, scale: int = 1) -> np.ndarray:
-        """The four panels stacked, as wide as the frame at this scale."""
         s = max(1, int(scale))
         fs, th, lh = 0.38 * s, max(1, s // 2), 16 * s
         top = self._top(data, s, fs, th, lh)
@@ -213,10 +166,9 @@ class Phase3View:
         return np.vstack(panels)
 
     def _top(self, data, s, fs, th, lh) -> np.ndarray:
-        """The lane overlay from run.avi, traffic and sign boxes by fate, and the corner timings."""
+        """The lane overlay, traffic and sign boxes by fate, and corner timings."""
         chain, frame = data["chain"], data["frame"]
-        # annotate() draws its header over the frame's top rows, where the
-        # traffic ROI is; pad the frame so the header covers nothing
+        # Pad so annotate()'s header doesn't cover the traffic ROI
         pad = HEADER_H
         framed = np.vstack([np.zeros((pad, frame.shape[1], 3), np.uint8), frame])
         lx, ly, lw, lh_ = chain.roi.lane_rect
@@ -232,8 +184,7 @@ class Phase3View:
                 label = f"{d['label'] or kind} {d['confidence']:.2f} {'>=' if d['passed'] else '<'} {d['gate']:.2f}"
                 dv.draw_text(img, label, (p0[0], p1[1] + lh - 3 * s), color, fs, th)
 
-        # This frame's obstacle, as Phase 2 measured it (a run recorded before
-        # the obstacle detector has none)
+        # Phase 2's obstacle; absent in older recordings
         ob, rect = getattr(chain, "obstacle", None), getattr(chain.roi, "obstacle_rect", None)
         if ob is not None and ob.detected and rect is not None:
             (rx, ry), (bx, by, bw, bh) = rect[:2], ob.bbox
@@ -247,7 +198,7 @@ class Phase3View:
         pk, t = data["packet"], data["timings"]
         ms = lambda k: f"{t[k]:.1f}" if k in t else "--"
         render = "--" if self.last_render_ms is None else f"{self.last_render_ms:.1f}"
-        # The header's third line, right side: annotate's tags fill it from the left
+        # Header line 3, right side; annotate's tags fill from the left
         text = (f"t={pk.timestamp_ms / 1000.0:.2f}s P1 {ms('capture')} P2 {ms('phase2')} "
                 f"P3 {ms('phase3')} rend(prev) {render} ms  wheels {pk.left_wheel_cps:.0f}/{pk.right_wheel_cps:.0f}")
         (tw, _), _ = cv2.getTextSize(text, dv.FONT, fs, th)
@@ -255,7 +206,7 @@ class Phase3View:
         return img
 
     def _lane_bar(self, data, W, s, fs, th, lh) -> np.ndarray:
-        """Raw and filtered offset on [-1, 1] over the status color, with the hold counter and reason."""
+        """Raw and filtered offset over the status color, with the hold counter and reason."""
         lane = data["dbg"]["lane"]
         H = 4 * lh
         img = np.full((H, W, 3), STATUS_BG.get(lane["status"], C_DARK), np.uint8)
@@ -282,10 +233,10 @@ class Phase3View:
         return img
 
     def _votes(self, data, W, s, fs, th, lh) -> np.ndarray:
-        """One row per vote: its buffer as cells, oldest left, then the raw vote and the state."""
+        """One row per vote: buffer cells oldest left, then the raw vote and state."""
         d = data["dbg"]
         rows = (("traffic", "traffic"), ("stop_sign", "sign"), ("stop_line", "line"), ("obstacle", "obst"))
-        rows = tuple(r for r in rows if r[0] in d)        # records from before the obstacle vote have none
+        rows = tuple(r for r in rows if r[0] in d)        # older records lack the obstacle vote
         rh = lh + 4 * s
         img = np.zeros((rh * len(rows) + 4 * s, W, 3), np.uint8)
         cw, ch, gap, label_w = 14 * s, 11 * s, 3 * s, 52 * s
@@ -327,7 +278,7 @@ class Phase3View:
         return img
 
     def _timeline(self, W, s, fs, th, lh) -> np.ndarray:
-        """The last TIMELINE_S: status band with raw and filtered offset, then the three state tracks."""
+        """The last TIMELINE_S: status band with offsets, then the three state tracks."""
         bh, tk = 64 * s, 7 * s
         H = bh + 4 * (tk + 2 * s) + lh                    # four state tracks
         img = np.zeros((H, W, 3), np.uint8)

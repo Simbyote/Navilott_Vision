@@ -1,25 +1,16 @@
-"""
-navigation_checks.py  --  the Navigation contract as checks any Navigator can be run against
+"""The Navigation contract as checks any Navigator can be run against.
 
 Purpose:
     docs/vision_pipeline/navigation_contract.md in code: each check feeds a
     Navigator a packet sequence and returns every way its commands break the
     contract ([] when it passes), so a navigator's test prints all of them at
-    once. No robot, camera or sensors: packets are built by packet().
+    once. Packets are built by packet(), with contract-neutral defaults.
 
 Main package:
-    packet(): an EstimationPacket with contract-neutral defaults.
-    frames(): numbered, 50 ms-spaced packets from a list of overrides.
-    intersection(): frames approaching a stop line, the line passing under
-    the view, then the time after.
-    check_commands, check_stale_lane_slows_then_stops, check_steers_toward_center,
-    and the intersection checks (decided 2026-10-01: a stop line stops the
-    robot only with a stop sign or a red light, once the robot reaches it):
-    check_stops_at_a_red_line, check_crosses_a_green_line,
-    check_ignores_a_red_light_without_a_line,
-    check_stops_at_a_stop_sign_line_then_goes, check_goes_when_the_light_turns_green.
-    check_brakes_for_an_obstacle_then_goes (decided 2026-10-12: brake for
-    something in the path within reach, wait until it's gone, drive on).
+    The check_* functions, each returning a list of broken rules: commands,
+    the stale lane, steering toward center, the intersection cases (a stop
+    line stops the robot only with a stop sign or a red light, once it
+    reaches it) and the obstacle (brake within reach, wait, drive on).
 
 Flow:
     Each check resets the navigator, warms it on centered vision frames so

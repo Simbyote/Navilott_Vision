@@ -1,29 +1,12 @@
 """System monitor: SoC temperature, CPU clock, throttle flags and memory, sampled in the background.
 
 Purpose:
-    A soak run needs the Pi's condition recorded next to its frame timings,
-    on one clock, so a slowdown can be matched to the heat or memory growth
-    behind it. Watching vcgencmd or top in another terminal leaves nothing
-    to line up afterwards. SystemMonitor samples once a second on a daemon
-    thread and keeps the rows in memory, so no file I/O happens during the
-    run.
+    A soak run needs the Pi's condition beside its frame timings, on one
+    clock. Sampled once a second on a thread and kept in memory, so no file
+    I/O lands in the run; every source is optional, so it runs anywhere.
 
 Main package:
-    SystemMonitor   start() / stop(); rows() returns every sample as a dict
-                    in FIELDS order. elapsed_s is time.perf_counter() since
-                    start(), the same clock the frame loop uses.
-    read_*()        one reading each, None where the source doesn't exist
-                    (a laptop has no vcgencmd and may have no thermal zone),
-                    so the monitor runs anywhere and records what it can.
-    decode_throttled()
-                    vcgencmd get_throttled's bit field as named flags.
-
-Sources, no extra dependencies:
-    /sys/class/thermal/thermal_zone0/temp                  millidegrees C
-    /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq  kHz
-    vcgencmd get_throttled                                 "throttled=0x50005"
-    /proc/self/status VmRSS                                this process, kB
-    /proc/meminfo MemAvailable                             whole system, kB
+    SystemMonitor.rows(): every sample, elapsed_s on the frame loop's clock.
 """
 
 import os
@@ -32,15 +15,14 @@ import threading
 import time
 from pathlib import Path
 
-from src.diagnostics.threads import name_os_thread
+from src.os_threads import name_os_thread
 
 THERMAL_PATH = Path("/sys/class/thermal/thermal_zone0/temp")
 CPUFREQ_PATH = Path("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq")
 STATUS_PATH = Path("/proc/self/status")
 MEMINFO_PATH = Path("/proc/meminfo")
 
-# vcgencmd get_throttled: bits 0-3 are the state now, bits 16-19 the same
-# conditions latched since boot
+# Bits 0-3 are now; bits 16-19 the same, latched since boot
 THROTTLE_BITS = {
     "under_voltage": 0,
     "freq_capped": 1,
@@ -52,10 +34,6 @@ OCCURRED_SHIFT = 16
 FIELDS = ("elapsed_s", "temp_c", "cpu_mhz", "throttled_raw",
           *THROTTLE_BITS, "rss_mb", "mem_available_mb", "load_1m")
 
-
-# =============================================================================
-# Readings
-# =============================================================================
 
 def _read_number(path: Path) -> float | None:
     try:
@@ -75,7 +53,7 @@ def read_cpu_mhz(path: Path = CPUFREQ_PATH) -> float | None:
 
 
 def _read_kb_field(path: Path, field: str) -> float | None:
-    """A 'Field:   1234 kB' line from a /proc file, in MB."""
+    """A 'Field:   1234 kB' line, in MB."""
     try:
         for line in Path(path).read_text().splitlines():
             if line.startswith(field + ":"):
@@ -103,7 +81,6 @@ def parse_throttled(text: str) -> int | None:
 
 
 def read_throttled(run=subprocess.run) -> int | None:
-    """vcgencmd get_throttled, or None without vcgencmd. run is injectable for tests."""
     try:
         out = run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=1)
     except (OSError, subprocess.SubprocessError):
@@ -112,10 +89,7 @@ def read_throttled(run=subprocess.run) -> int | None:
 
 
 def decode_throttled(value: int | None) -> dict:
-    """
-    {flag: 1/0 now} plus {flag_occurred: 1/0 since boot}; every value None
-    when value is None.
-    """
+    """{flag: now} and {flag_occurred: since boot}; all None when value is None."""
     out = {}
     for name, bit in THROTTLE_BITS.items():
         out[name] = None if value is None else (value >> bit) & 1
@@ -130,18 +104,8 @@ def read_load_1m() -> float | None:
         return None
 
 
-# =============================================================================
-# Monitor
-# =============================================================================
-
 class SystemMonitor:
-    """
-    Background sampler. Use as a context manager, or start() and stop().
-
-    interval_s: seconds between samples
-    reader:     callable returning one sample dict (without elapsed_s);
-                injectable for tests, defaults to sample()
-    """
+    """A context manager, or start() and stop(). reader is injectable for tests."""
 
     def __init__(self, interval_s: float = 1.0, reader=None):
         self.interval_s = interval_s
@@ -162,7 +126,7 @@ class SystemMonitor:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5 * self.interval_s + 1)
-        self._take()                        # a final sample at the end of the run
+        self._take()                        # a final sample
 
     @property
     def t0(self) -> float | None:
@@ -190,13 +154,7 @@ class SystemMonitor:
 
 
 def sample(status_path: Path = STATUS_PATH) -> dict:
-    """
-    One reading of everything; see FIELDS.
-
-    Inputs:
-        status_path: Whose memory rss_mb is: this process's by default, or
-            /proc/<pid>/status for another (diagnostics.monitor).
-    """
+    """One reading of everything (FIELDS); status_path picks whose memory rss_mb is."""
     raw = read_throttled()
     flags = decode_throttled(raw)
     return {

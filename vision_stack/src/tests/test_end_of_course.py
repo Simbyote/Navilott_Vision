@@ -1,10 +1,11 @@
-"""
-test_end_of_course.py  --  src/navigation/end_of_course.py
+"""test_end_of_course.py  --  src/navigation/end_of_course.py
 
 The end-of-course rule: nothing to say while the lane is fine; on a stale
 lane, creep at SLOW_DUTY steering by heading; still stale after
 END_STALE_MS, brake and finish for good; the lane coming back resets the
 count; held frames (a crossing, a stop) don't count; reset.
+
+--software  Hand-built packets on a fake clock. No camera or Pi.
 """
 import pytest
 
@@ -113,10 +114,6 @@ def test_reset_starts_over():
     assert rule.update(packet(lane_status="stale", timestamp_ms=99_000)).brake is False
 
 
-# =============================================================================
-# The route: finished or ended early
-# =============================================================================
-
 def progress(maneuvers=(), finish="edge", entered=0):
     p = RouteProgress(Route(tuple(maneuvers), finish))
     for _ in range(entered):
@@ -169,4 +166,3 @@ def test_reaching_a_line_that_is_not_the_finish_does_nothing():
     rule = EndOfCourseRule(LaneKeepingNavigator(), progress((LEFT, LEFT), FINISH_STOP_LINE, entered=1), tracker)
     tracker.reached = True
     assert rule.update(packet(timestamp_ms=0)) is None and not rule.finished
-

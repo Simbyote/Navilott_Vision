@@ -38,8 +38,10 @@ def line(y_near, confidence=0.8, clipped=False, x=(100.0, 300.0), tilt=0.0):
         clipped=clipped, confidence=confidence, frame_id=7, timestamp_ms=350,
         proximity=round(y_near / ROI_H, 4))
 
+
 def geometry(*lines, frame_id=7, ts=350):
     return GeometryBranchResult([], [], frame_id, ts, list(lines))
+
 
 def both(geo, cfg=StopLineDistanceConfig(), ground=None, roi=ROI, table=None):
     """The debug and production results, checked equal."""
@@ -47,10 +49,6 @@ def both(geo, cfg=StopLineDistanceConfig(), ground=None, roi=ROI, table=None):
     same(debug, estimate_stop_line_distance(geo, roi, cfg, ground, table))
     return debug, summary
 
-
-# =============================================================================
-# Measurement
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("y_near, distance", [(40.0, 41.0), (80.5, 0.5), (0.0, 81.0)])
@@ -101,10 +99,6 @@ def test_a_mismatched_frame_stamp_is_refused(fn):
         fn(geometry(line(40.0), frame_id=8), ROI)
 
 
-# =============================================================================
-# Chained from drawn frames
-# =============================================================================
-
 @pytest.mark.software
 def test_a_nearer_line_measures_a_smaller_distance_through_the_chain():
     from src.tests.scenes import scene
@@ -141,10 +135,6 @@ def test_phase3_linker_logs_the_stop_line_columns(tmp_path, monkeypatch):
     assert float(last["stop_line_distance_px"]) == float(last["p2_stop_line_px"])
 
 
-# =============================================================================
-# Floor distance through the ground homography
-# =============================================================================
-
 def floor_y(frame_row):
     """What SYNTHETIC_GROUND says is Y at the robot's centerline for a frame row (its rows are level)."""
     return float(SYNTHETIC_GROUND.to_floor([[240.0, frame_row]])[0][1])
@@ -160,7 +150,7 @@ def test_distance_cm_is_the_floor_distance_to_the_near_edge_at_the_centerline(y_
 
 @pytest.mark.software
 def test_a_tilted_line_is_measured_where_it_crosses_the_robots_centerline():
-    """Not at its nearest pixel: the right end is nearer, the centerline crossing further."""
+    # Not at its nearest pixel: the right end is nearer, the centerline crossing further.
     c = line(50.0, x=(150.0, 350.0), tilt=6.0)
     r, _ = both(geometry(c), ground=SYNTHETIC_GROUND)
     slope = np.tan(np.radians(6.0))
@@ -173,7 +163,7 @@ def test_a_tilted_line_is_measured_where_it_crosses_the_robots_centerline():
 @pytest.mark.software
 @pytest.mark.parametrize("tilt", [0.0, 8.0, -8.0])
 def test_a_line_the_robot_is_on_is_at_zero_cm_however_it_is_tilted(tilt):
-    """Its near edge is below the frame; the ROI bottom stands in for it, not the tilted edge extended."""
+    # Its near edge is below the frame; the ROI bottom stands in for it, not the tilted edge extended.
     r, _ = both(geometry(line(float(ROI_H), clipped=True, tilt=tilt)), ground=SYNTHETIC_GROUND)
     assert r.distance_cm == 0.0 and r.distance_px == 0.0 and r.proximity == 1.0
 
@@ -188,7 +178,7 @@ def test_without_a_ground_plane_or_at_another_frame_size_there_is_no_cm():
 
 @pytest.mark.software
 def test_the_lane_roi_origin_is_added_before_projecting():
-    """The same lane-ROI row sits lower in the frame when the ROI starts lower, so it is nearer."""
+    # The same lane-ROI row sits lower in the frame when the ROI starts lower, so it is nearer.
     higher = SimpleNamespace(**{**vars(ROI), "lane_rect": (24, 150, 432, ROI_H)})
     a, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND)
     b, _ = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND, roi=higher)
@@ -200,10 +190,6 @@ def test_the_log_reports_cm_when_there_is_a_ground_plane():
     _, s = both(geometry(line(40.0)), ground=SYNTHETIC_GROUND)
     assert any("cm ahead" in e for e in s["log"])
 
-
-# =============================================================================
-# The stop-line table
-# =============================================================================
 
 @pytest.mark.software
 @pytest.mark.parametrize("y_near", [10.0, 40.0, 72.5])

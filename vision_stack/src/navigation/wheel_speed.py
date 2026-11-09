@@ -1,38 +1,13 @@
 """Wheel speed: drive each wheel at counts per second instead of a duty, whatever the battery reads.
 
 Purpose:
-    A duty is a share of the battery's voltage, so the same duty turns the
-    N20s slower as the pack drains (12.6 V full, 9.9 V critical): a turn
-    tuned as duties on a fresh pack draws a smaller, slower arc on a tired
-    one, and its inner wheel stalls sooner. The encoders measure what the
-    wheels actually do, so this asks for a speed and finds the duty:
-
-        duty = target / gain  +  kp * error  +  integral of ki * error
-
-    gain (counts/s per unit duty) is the feedforward, and it's learned while
-    the robot drives: on every steady frame of lane keeping the measured
-    speed over the commanded duty updates it, so by the time a turn starts it
-    already reflects today's voltage and the floor. The PI trim then takes
-    out what's left. Without encoders (every reading 0.0 while driving) it's
-    the feedforward alone at the configured gain: the same duties as before.
-
-    The measured speed in a packet is over the frame window that ends with
-    it, so it answers the command sent the frame before; observe() is given
-    that command.
+    A duty is a share of the battery's voltage, so a turn tuned on a fresh
+    pack draws a slower, smaller arc on a tired one. This asks for a speed
+    and finds the duty: a learned feedforward plus a PI trim from the
+    encoders, or the feedforward alone without them.
 
 Main package:
-    WheelSpeed: observe(previous command, packet) every frame; start() at the
-        start of a controlled stretch; drive(left_cps, right_cps, packet) ->
-        Command. gains, encoders, record.
-    CPS_PER_DUTY: the starting gain, measured.
-
-Flow, each frame:
-    1. observe(): encoders seen? a steady frame? then each wheel's gain moves
-       LEARN_ALPHA toward measured / duty, kept within GAIN_LIMITS.
-    2. drive(): per wheel, feedforward at the learned gain, plus the PI trim
-       when there are encoders; the integral only runs once the error is
-       within INTEGRATE_BAND of the target (no wind-up while the wheel spins
-       up); a driven wheel gets at least STALL_DUTY.
+    WheelSpeed.drive(left_cps, right_cps, packet) -> Command.
 """
 from dataclasses import dataclass
 
@@ -40,27 +15,26 @@ from src.estimation.estimation import EstimationPacket
 from src.navigation.navigation_contract import STALL_DUTY, Command
 from src.utils import clamp
 
-# Counts/s per unit duty: the three 2026-10-12 nav runs, 1511 steady frames at
-# 11.6-11.8 V, fit cps = 3083 * duty + 59 (0.25 duty ~815 counts/s, 0.40
-# ~1300, 0.73 ~2300). Only the starting point: observe() learns it per run
+# Starting gain, counts/s per duty: fit over the 2026-10-12 runs at 11.6-11.8 V.
+# observe() learns it per run
 CPS_PER_DUTY = 3000.0
-# PI trim, as duty per (counts/s) and per (counts/s x s), written per gain so
-# they read as "duty per full-scale error". Simulated against a first-order
-# motor (0.12 s) at 16-20 FPS with a frame's delay: a 15% weaker motor is
-# back on target in ~0.5 s, with no overshoot to speak of. Tune on the mat
+# Simulated on a 0.12 s motor at 16-20 FPS: a 15% weaker motor is back on
+# target in ~0.5 s without overshoot. Not yet tuned on the mat
 KP = 0.3 / CPS_PER_DUTY
 KI = 3.0 / CPS_PER_DUTY
-INTEGRAL_LIMIT = 0.25           # the most duty the integral can add or take
-INTEGRATE_BAND = 0.3            # integrate only when |error| < this share of the target
-# Learning the gain: a frame counts when both its command and the one before
-# drove the wheel at least LEARN_MIN_DUTY, within LEARN_STEADY of each other.
-# 0.05 per frame is ~1 s at 20 FPS. The gain stays within these limits of
-# CPS_PER_DUTY: a spinning-up wheel or a lifted robot can't run it away
+INTEGRAL_LIMIT = 0.25           # duty
+INTEGRATE_BAND = 0.3            # integrate only when |error| is under this share of the target
+# The gain learns only on steady frames (two commands within LEARN_STEADY,
+# both at least LEARN_MIN_DUTY), over ~1 s, and stays within GAIN_LIMITS of
+# CPS_PER_DUTY so a lifted robot can't run it away
 LEARN_MIN_DUTY = 0.30
 LEARN_STEADY = 0.02
 LEARN_ALPHA = 0.05
 GAIN_LIMITS = (0.6, 1.4)
-MAX_DT_MS = 500                 # longest frame gap integrated as one step, as Phase 3's max_dt_s
+MAX_DT_MS = 500
+# The PI never asks more: a weakening motor read as slow got pushed to full duty
+# (2026-10-28). The turns need ~0.6-0.8 at 11.7 V, ~0.9 near the 9.9 V cutoff
+MAX_DUTY = 0.9
 
 
 @dataclass
@@ -70,24 +44,12 @@ class _Wheel:
 
 
 class WheelSpeed:
-    """
-    Both wheels' speed control; see the module docstring.
-
-    Inputs:
-        cps_per_duty, kp, ki: See the constants above.
-
-    gains: (left, right) learned counts/s per duty.
-    encoders: True once a wheel has read moving while driven; until then
-        drive() is feedforward only.
-    record: drive()'s last: {"target", "measured", "duty", "gain"} as
-        (left, right) pairs, and "closed" (the PI ran).
-    """
+    """encoders turns True once a driven wheel reads moving; until then drive() is feedforward only."""
     def __init__(self, cps_per_duty: float = CPS_PER_DUTY, kp: float = KP, ki: float = KI) -> None:
         self.cps_per_duty, self.kp, self.ki = cps_per_duty, kp, ki
         self.reset()
 
     def reset(self) -> None:
-        """Forget the learned gains, the encoders and the PI state, as at the start of a run."""
         self._wheels = (_Wheel(self.cps_per_duty), _Wheel(self.cps_per_duty))
         self.encoders = False
         self._before: Command | None = None     # the command before the one observe() was last given
@@ -99,10 +61,7 @@ class WheelSpeed:
         return self._wheels[0].gain, self._wheels[1].gain
 
     def observe(self, cmd: Command | None, packet: EstimationPacket) -> None:
-        """
-        Learn from this packet's wheel speeds, which answer cmd (the command
-        sent the frame before). None or a brake teaches nothing.
-        """
+        """Learn the gain from this packet's speeds, which answer cmd, the previous frame's command."""
         before, self._before = self._before, cmd
         if cmd is None or cmd.brake:
             return
@@ -117,19 +76,13 @@ class WheelSpeed:
                 wheel.gain += LEARN_ALPHA * (clamp(cps / duty, lo, hi) - wheel.gain)
 
     def start(self) -> None:
-        """Clear the PI's integral and clock: a new controlled stretch (a turn) starts."""
+        """Clear the PI state at the start of a turn."""
         for w in self._wheels:
             w.integral = 0.0
         self._last_ms = None
 
     def drive(self, left_cps: float, right_cps: float, packet: EstimationPacket) -> Command:
-        """
-        This frame's duties for the target speeds (counts/s, + = forward).
-
-        Outputs:
-            A Command within [-1, 1]; a wheel with a nonzero target gets at
-            least STALL_DUTY, and a zero target drives nothing.
-        """
+        """Duties for the target counts/s, within MAX_DUTY. A nonzero target gets at least STALL_DUTY; zero drives nothing."""
         now = packet.timestamp_ms
         dt_s = 0.0 if self._last_ms is None else min(max(now - self._last_ms, 0), MAX_DT_MS) / 1000.0
         self._last_ms = now
@@ -146,7 +99,7 @@ class WheelSpeed:
                 if abs(err) < INTEGRATE_BAND * abs(target):
                     wheel.integral = clamp(wheel.integral + self.ki * err * dt_s, -INTEGRAL_LIMIT, INTEGRAL_LIMIT)
                 duty += self.kp * err + wheel.integral
-            duty = clamp(duty, -1.0, 1.0)
+            duty = clamp(duty, -MAX_DUTY, MAX_DUTY)
             if abs(duty) < STALL_DUTY:
                 duty = STALL_DUTY if target > 0 else -STALL_DUTY
             duties.append(round(duty, 4))
