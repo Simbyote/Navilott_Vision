@@ -17,7 +17,7 @@ from src.perception.roi_crop import ROICropResult
 from src.perception.geometry_shared import (
     CannyParams, GeometryBranchResult, GeometryConfig, LaneCandidate, LaneContourFilter, SignCandidate,
     SignContourFilter, StopLineCandidate, StopLineFilter, _canny, _close_edges, _contours, _horizontal_edges,
-    _mean_contour_intensity, contour_foot_x,
+    _horizontal_edges_at, _mean_contour_intensity, contour_foot_x,
 )
 from src.perception.geometry_lanes import (
     _extract_lane_candidates, _extreme_points, _filter_lane_contours, _lane_confidence, _merge_collinear,
@@ -36,7 +36,7 @@ from src.perception.geometry_sign import (
 __all__ = [
     "CannyParams", "GeometryBranchResult", "GeometryConfig", "LaneCandidate", "LaneContourFilter",
     "SignCandidate", "SignContourFilter", "StopLineCandidate", "StopLineFilter", "_canny", "_close_edges",
-    "_contours", "_horizontal_edges", "_mean_contour_intensity", "contour_foot_x", "_extract_lane_candidates",
+    "_contours", "_horizontal_edges", "_horizontal_edges_at", "_mean_contour_intensity", "contour_foot_x", "_extract_lane_candidates",
     "_extreme_points", "_filter_lane_contours", "_lane_confidence", "_merge_collinear",
     "_strip_horizontal_lines", "extract_lane_candidates", "find_lane_candidates", "_EdgeSegment",
     "_edge_segments", "_fit_segment", "_stop_line_confidence", "_stop_line_from",
@@ -69,10 +69,14 @@ class _PartClock:
 
 def _splits(lane_roi, lane_edges, lane_filter: LaneContourFilter, stop_filter: StopLineFilter):
     """
-    (stop-line split, lane split), computed once when their angles agree; lane split None when it needs its own.
+    (stop-line split, lane split) from one gradient pass; the same split when their angles
+    agree, and lane split None when the lane detector strips no lines (horizontal_edge_deg None).
     """
-    stop_split = _horizontal_edges(lane_roi, lane_edges, stop_filter.max_tilt_deg)
-    lane_split = stop_split if lane_filter.horizontal_edge_deg == stop_filter.max_tilt_deg else None
+    lane_deg, stop_deg = lane_filter.horizontal_edge_deg, stop_filter.max_tilt_deg
+    if lane_deg is None or lane_deg == stop_deg:
+        stop_split = _horizontal_edges(lane_roi, lane_edges, stop_deg)
+        return stop_split, (stop_split if lane_deg is not None else None)
+    stop_split, lane_split = _horizontal_edges_at(lane_roi, lane_edges, (stop_deg, lane_deg))
     return stop_split, lane_split
 
 

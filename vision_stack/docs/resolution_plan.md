@@ -236,6 +236,8 @@ Order matters: measure, then change the scale, then the gain.
 3. `make ab-parallel RUNS=4 SECONDS=60`, then `make routine-frame-budget` (the bench diagnostic).
 4. If Phase 2 median is still over ~35 ms on the bench: **F5** blur only what's read; repeat 3.
 
+   **F4b, found while sizing F5, done 2026-11-12.** Profiling geometry on the 4 Nov run's 836 frames showed the gradient split (`_horizontal_edges`: two Sobel passes and a gather of the edge pixels) computed twice per frame, because `MEASURED`'s stop line (4°) and lane detector (20°) use different angles and only equal angles shared it. Both splits now come from one pass (`_horizontal_edges_at`). Geometry's results are identical on all 836 frames, and geometry runs 16% faster on the review machine; at the Pi's 26 ms that would be ~4 ms, on the main path. With F4's ~3 ms, Phase 2's median ~39.5 → ~33 ms and the 4 Nov p95 of 52.2 → ~45 ms, if the shares hold. **F5 sized:** preprocessing is ~63% undistortion, which every ROI reads (~88% of the frame), so blurring only the rows read would save ~1–2 ms; left until the Pi's numbers after F4 and F4b say it is needed.
+
 **Gate:** bench `frame-budget` PASS on all criteria, and the main thread's `branch_wait` > 0 on most frames (the side thread is now the longer path, or they're balanced).
 
 ### Phase 3: detections the course relies on (1 bench session + 1 mat session)

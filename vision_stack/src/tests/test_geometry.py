@@ -1201,8 +1201,25 @@ def test_the_lane_filter_is_the_same_whether_it_shares_the_stop_line_split_or_no
     shared = geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED, geo._horizontal_edges(lane, edges, 20.0))
     own = geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED)
     assert np.array_equal(shared, own)
-    split = geo._splits(lane, edges, TEST_LANE_FILTERED, replace(TEST_STOP, max_tilt_deg=15.0))
-    assert split[1] is None
+    stop, lane_split = geo._splits(lane, edges, TEST_LANE_FILTERED, replace(TEST_STOP, max_tilt_deg=15.0))
+    # Another angle: both splits from one gradient pass, each the same as computed alone (2026-11-12)
+    for got, deg in ((stop, 15.0), (lane_split, 20.0)):
+        alone = geo._horizontal_edges(lane, edges, deg)
+        assert np.array_equal(got[0], alone[0]) and np.array_equal(got[1], alone[1])
+    assert np.array_equal(geo._strip_horizontal_lines(lane, edges, TEST_LANE_FILTERED, lane_split), own)
+    off = replace(TEST_LANE_FILTERED, horizontal_edge_deg=None)
+    assert geo._splits(lane, edges, off, TEST_STOP)[1] is None          # no lines to strip: no lane split
+
+
+@pytest.mark.software
+def test_one_gradient_pass_gives_every_angles_split():
+    lane = stop_bar(100, 340, 40, 10, marks=(150, 290), mark_width=20)
+    edges = geo._canny(lane, TEST_CANNY)
+    many = geo._horizontal_edges_at(lane, edges, (4.0, 20.0, 45.0))
+    for (top, bottom), deg in zip(many, (4.0, 20.0, 45.0)):
+        alone = geo._horizontal_edges(lane, edges, deg)
+        assert np.array_equal(top, alone[0]) and np.array_equal(bottom, alone[1])
+    assert np.count_nonzero(many[0][0]) <= np.count_nonzero(many[1][0]) <= np.count_nonzero(many[2][0])
 
 
 def _jsonable_trace(trace):

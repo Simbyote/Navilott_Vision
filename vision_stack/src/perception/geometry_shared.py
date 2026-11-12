@@ -259,19 +259,36 @@ def _horizontal_edges(
     going down, and falling. Separates a stop line from the lane lines it touches before
     any contour joins them.
     """
+    return _horizontal_edges_at(lane_roi, edges_raw, (max_tilt_deg,))[0]
+
+
+def _horizontal_edges_at(
+        lane_roi: np.ndarray,
+        edges_raw: np.ndarray,
+        tilts_deg: tuple[float, ...],
+    ) -> list[tuple[np.ndarray, np.ndarray]]:
+    """
+    _horizontal_edges() for each tilt, from one Sobel pass and one gather of the edge
+    pixels: the stop line (4 deg in MEASURED) and the lane detector (20) each need a
+    split, and until 2026-11-12 each paid for its own (~a fifth of geometry's time).
+    """
     gx = cv2.Sobel(lane_roi, cv2.CV_16S, 1, 0, ksize=3)
     gy = cv2.Sobel(lane_roi, cv2.CV_16S, 0, 1, ksize=3)
     # Only the few hundred edge pixels, not the ROI's ~35k
     ys, xs = np.nonzero(edges_raw)
     ex = np.abs(gx[ys, xs].astype(np.int32))
     ey = gy[ys, xs].astype(np.int32)
+    aey, up, down = np.abs(ey), ey > 0, ey < 0
     # |gx| <= |gy| tan(tilt), in integers: the edge's line is within tilt of horizontal
     scale = 1024
-    horizontal = ex * scale <= np.abs(ey) * int(round(math.tan(math.radians(max_tilt_deg)) * scale))
-    top = np.zeros_like(edges_raw)
-    bottom = np.zeros_like(edges_raw)
-    rising = horizontal & (ey > 0)
-    falling = horizontal & (ey < 0)
-    top[ys[rising], xs[rising]] = 255
-    bottom[ys[falling], xs[falling]] = 255
-    return top, bottom
+    out = []
+    for tilt in tilts_deg:
+        horizontal = ex * scale <= aey * int(round(math.tan(math.radians(tilt)) * scale))
+        top = np.zeros_like(edges_raw)
+        bottom = np.zeros_like(edges_raw)
+        rising = horizontal & up
+        falling = horizontal & down
+        top[ys[rising], xs[rising]] = 255
+        bottom[ys[falling], xs[falling]] = 255
+        out.append((top, bottom))
+    return out
