@@ -1,6 +1,6 @@
 # Phases 1 and 2 on the Robot: Lane Offset, Lane Keeping, the Frame Budget and the Stop Sign
 
-> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6). The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
+> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6), and the stop-line table's re-fit with D4b and D6 (step 7). The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
 
 **Time:** about 1.5 h with two people. **Needs:** the practice arena or any straight lane ≥ 1.5 m, a ruler, a charged pack (≥ 11.5 V at rest), someone to walk beside the robot in steps 3–4.
 
@@ -252,6 +252,54 @@ Keep the run folder **with its frames** for the review: `nav-replay` and `approa
 
 ---
 
+## Step 7: Re-fit the stop-line table, then D4b and D6 (bench, ~1 h)
+
+**Why:** the stop line read 1.7 cm long on 2 Nov (D4b), and the team chose to re-fit the table rather than shift it (decision 8). The obstacle's cm come from **the same curve** (there is no ground homography), and D6 passed with the old one, so D6 is measured again after.
+
+Keep the old table for comparison:
+
+```bash
+cp calibration/stop_line_table.json calibration/stop_line_table_20261028.json
+```
+
+1. **Fit.** Lay a strip of the course's stop-line tape across a straight lane, square to the robot, and measure from the **robot's front edge** to the tape's near edge (the reference D4b and D6 use). Run:
+
+   ```bash
+   make calib-stopline
+   ```
+
+   At each prompt, type the distance you measured. Use 5–6 marks from where the line first shows at the view's bottom out to ~20 cm, for example 9, 11, 13, 15, 17, 20. It prints each mark's error and a verdict: **GOOD** (worst under 0.5 cm) or **OK** (under 1.0) is acceptable; **POOR** means remeasure a mark.
+
+2. **D4b, the stop line's distance.** New placements, not the marks just fitted:
+
+   ```bash
+   make routine-detect-range ARGS="--set target=line --set gaps=8,10,12,14,16 --set angles=-10,0,10"
+   ```
+
+   ```bash
+   make line-replay RUN=runs
+   ```
+
+   **Pass:** every look within **±2 cm** of the tape with a frame-to-frame SD under 0.5 cm (`line-replay` judges D4b's revised rule and counts the original beside it). Its findings print the table's `C` against the median error: after a good re-fit that shift should be under 0.5 cm.
+
+3. **D6, the obstacle's distance with the new curve.** For the yellow cube and the solder box (the classes D6 judges):
+
+   ```bash
+   make routine-obstacle-check ARGS="--set object=cube --set gaps=15,20,25 --set tolerance_cm=2.5"
+   ```
+
+   ```bash
+   make routine-obstacle-check ARGS="--set object=box --set gaps=15,20,25 --set tolerance_cm=2.5"
+   ```
+
+   **Pass (D6):** at 15, 20 and 25 cm, each object **seen in ≥ 90% of frames** (the `seen` column: the routine's own floor is 50%, so read it) and the reported distance within **±2.5 cm**; clear-lane trials with no false frames.
+
+If D6 now fails where it passed, the re-fit moved the far rows: compare `stop_line_table.json`'s marks with the old file's, and send both back.
+
+Commit the new table with the fit's verdict in the message.
+
+---
+
 ## Results sheet
 
 Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.md`'s P3 status.
@@ -269,6 +317,7 @@ Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.m
 | **Step 5** geometry / side_sign / TOTAL median | / / |
 | **Step 6** signs stopped for / false sign stops / lowest real votes | / / |
 | **Step 6** FPS / over budget / total p95 | / / |
+| **Step 7** fit verdict / D4b looks within ±2 cm / median error / D6 cube, box | / / / , |
 | Run folders | |
 
 **P3 is Met** when step 2 passes on both straights; update `requirements.md` P3's status with the numbers and the commit, and its "Changes to pass rules" table needs no entry (the rule didn't change).
