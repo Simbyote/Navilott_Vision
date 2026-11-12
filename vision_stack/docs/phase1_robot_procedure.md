@@ -1,6 +1,6 @@
-# Phase 1 on the Robot: Lane Offset and Lane Keeping
+# Phases 1 and 2 on the Robot: Lane Offset, Lane Keeping, the Frame Budget and the Stop Sign
 
-> The robot-side steps that close Phase 1 of `resolution_plan.md`. The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
+> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6). The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
 
 **Time:** about 1.5 h with two people. **Needs:** the practice arena or any straight lane ≥ 1.5 m, a ruler, a charged pack (≥ 11.5 V at rest), someone to walk beside the robot in steps 3–4.
 
@@ -198,6 +198,60 @@ Each writes its own `runs/` folder. At the ±2 and ±4 cm looks, the old run sho
 
 ---
 
+## Step 5: Phase 2, the frame budget (bench, motors off; ~30 min)
+
+**Why:** F4 (the stop sign on the side thread) and F4b (one gradient pass for both splits) should take ~3 and ~4 ms off the main thread. From the 28 Oct and 4 Nov runs: Phase 2 median ~39.5 ms, `total` p95 52.2 ms; the expectation is ~33 and ~45. Nothing drives, so this can run before steps 3–4.
+
+```bash
+make routine-frame-budget
+```
+
+Read each attempt's `summary.txt` `[TIMING]` block and compare with the 4 Nov run's (below). The geometry parts no longer include `sign`; it shows as `side_sign`.
+
+| Line | 4 Nov (driving) | Expect |
+| --- | --- | --- |
+| `geometry` median | 26.4 ms | ~19–20 |
+| `geometry.edges` | 5.8 | ~5 (one split, not two) |
+| `geometry.lanes` | 14.0 | ~11–12 (no split of its own) |
+| `side_sign` | (inside geometry, 2.9) | ~3, on the side thread |
+| `branch_wait` | 0.04 | still near 0: the side thread (~16 ms) shorter than the main path |
+| `TOTAL (median)` | 53.1 | ~46 |
+
+**Pass (the bench diagnostic, not P1/P2):** frame-budget's own `PASS`. If `geometry` hasn't dropped by at least 4 ms, send the `summary.txt` files back: the shares on the Pi differ from the review machine's.
+
+---
+
+## Step 6: One course run with F6, then the replay (motors on; 10 min + 10 min of analysis)
+
+**Why:** F6 (a stop sign counts after 6 votes in one sighting) removed every ghost sign stop and kept every real one when replayed over 28 Oct and 4 Nov; a real run confirms it, and gives P1/P2 their driving numbers. **Place every stop sign before the lap starts:** on 4 Nov the lap-1 "miss" was a sign set down as the robot arrived.
+
+```bash
+make routine-figure-eight
+```
+
+Then, with the run's folder:
+
+```bash
+make nav-replay RUN=runs/routine_figure-eight_<time>/attempt_01
+```
+
+```bash
+make approach-log RUN=runs/routine_figure-eight_<time> ARGS="--lap-len 14"
+```
+
+| Check | Where | Pass |
+| --- | --- | --- |
+| Every sign in place stopped for | `approach-log`: positions with a sign, `stopped_for` = stop sign every lap | All (D2) |
+| False sign stops | `approach-log`: `stopped_for` = stop sign at a position without one | ≤ 1 per 10 min (D2); expected 0 |
+| Real signs' votes | `approach-log`'s `sign_frames` at sign positions | All ≥ 6 (F6's threshold); report the lowest |
+| The replay agrees with the robot | `nav-replay`: `0 removed, 0 added` | Today's code drove it, so it should; anything else is a replay limit to report |
+| P1, P2 | the attempt's `summary.txt` | ≥ 20.0 FPS effective, ≤ 5% over 50 ms; `total` p95 ≤ 50 ms |
+| D1 (proposed) | `make nav-report`: lane keeping's `vision` share | ≥ 90%, no stale stretch over 1 s |
+
+Keep the run folder **with its frames** for the review: `nav-replay` and `approach-log` need only `nav.csv` and `p3.csv`, but a ghost or a miss needs its frames.
+
+---
+
 ## Results sheet
 
 Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.md`'s P3 status.
@@ -212,6 +266,9 @@ Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.m
 | **Step 3** recovered up to / straight run max / worst overshoot / PASS-FAIL | / / / |
 | **Step 3** gains after (if changed) | `KP_CM` / `GAIN_SCALE` |
 | **Step 4** run folder; `vision` share; new findings | |
+| **Step 5** geometry / side_sign / TOTAL median | / / |
+| **Step 6** signs stopped for / false sign stops / lowest real votes | / / |
+| **Step 6** FPS / over budget / total p95 | / / |
 | Run folders | |
 
 **P3 is Met** when step 2 passes on both straights; update `requirements.md` P3's status with the numbers and the commit, and its "Changes to pass rules" table needs no entry (the rule didn't change).
