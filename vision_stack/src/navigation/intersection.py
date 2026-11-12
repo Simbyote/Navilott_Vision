@@ -24,10 +24,10 @@ from src.navigation.wheel_speed import CPS_PER_DUTY, WheelSpeed
 
 # Two boundaries this many frames (~0.5 s) ends the crossing. 3 ended it as
 # soon as the far side's lines showed (2026-10-05)
-TWO_BOUNDARY_FRAMES = 15
+TWO_BOUNDARY_FRAMES = 10
 # ...or at least one for this many (~1 s): past some intersections only one
 # line shows, and the crossing never ended (2026-10-01; 40 until 2026-10-26)
-ONE_BOUNDARY_FRAMES = 30
+ONE_BOUNDARY_FRAMES = 20
 BOUNDARY_MODES = (MODE_TWO_BOUNDARY, MODE_LEFT_ONLY, MODE_RIGHT_ONLY)
 # ...or this much exit driving (tuned on the mat, 2026-10-19)
 MAX_CROSS_MS = 5500
@@ -43,8 +43,8 @@ ADVANCE_MS = 2500
 ADVANCE_CM: float | None = 25.0
 # Tuned on the mat at ~11.7 V (2026-10-19; left 0.48 -> 0.50, 2026-10-26). With encoders, WheelSpeed holds
 # these duties' wheel speeds at any voltage
-LEFT_TURN = Command(0.50, 0.76)
-RIGHT_TURN = Command(0.77, 0.26)
+LEFT_TURN = Command(0.48, 0.68)
+RIGHT_TURN = Command(0.78, 0.27)
 # The left turn's speed, as a share of the tuned one. Its outer (right) wheel ran
 # 4 s at ~2190 counts/s, the robot's fastest, twice the high-duty time the left
 # motor got, and the right N20 failed there (2026-10-28: weakest at speed, 20%
