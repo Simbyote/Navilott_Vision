@@ -14,13 +14,15 @@ import pytest
 from src.navigation.navigation_contract import BRAKE
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import (
-    REASON_HOLD, REASON_STOPPING, SIGN_LEAD_MS, SIGN_MEMORY_MS, STOP_SETTLE_MAX_MS, STOP_SIGN_HOLD_TIME_MS,
-    STOPPED_CPS, StopSignRule,
+    REASON_HOLD, REASON_STOPPING, SIGN_LEAD_MS, SIGN_MEMORY_MS, SIGN_MIN_FRAMES, STOP_SETTLE_MAX_MS,
+    STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS, StopSignRule,
 )
 from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
-LINE = [30.0, 15.0, 5.0]            # a stop line coming down the view, then gone
+LINE = [40.0, 32.0, 24.0, 15.0, 5.0]      # a stop line coming down the view, then gone
+assert len(LINE) >= SIGN_MIN_FRAMES        # a sign voted on every line frame counts
+SIGN = [{"stop_sign_detected": True}] * SIGN_MIN_FRAMES     # the shortest sign that counts
 REACHED = len(LINE) + reach_frames(frame_ms=MS)
 
 
@@ -53,6 +55,7 @@ def braked(out):
 def test_the_constants():
     assert (STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS, STOP_SETTLE_MAX_MS, SIGN_MEMORY_MS) == (2000, 20.0, 1000, 5000)
     assert SIGN_LEAD_MS == 2000 < SIGN_MEMORY_MS
+    assert SIGN_MIN_FRAMES == 4            # the 5 Nov ghosts were voted 1-3 frames (D2)
 
 
 @pytest.mark.software
@@ -97,7 +100,7 @@ def test_wheels_that_never_read_stopped_still_hold_after_the_settle_time():
 
 @pytest.mark.software
 def test_a_sign_seen_before_the_line_counts_within_the_memory():
-    early = [{"stop_sign_detected": True}] + [{}] * 20     # the sign, then 1 s before the line shows
+    early = SIGN + [{}] * 20                               # the sign, then 1 s before the line shows
     _, out = drive(early + line(sign=False))
     assert braked(out)
 
@@ -105,7 +108,7 @@ def test_a_sign_seen_before_the_line_counts_within_the_memory():
 @pytest.mark.software
 def test_a_sign_seen_too_long_before_does_not():
     gap = SIGN_MEMORY_MS // MS
-    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False))
+    _, out = drive(SIGN + [{}] * gap + line(sign=False))
     assert not braked(out)
 
 
@@ -140,15 +143,38 @@ def test_both_wheels_must_read_stopped(left, right):
 def test_a_sign_seen_well_before_the_line_came_into_view_is_a_ghost():
     gap = SIGN_LEAD_MS // MS + 5                             # within the memory, but before the lead
     assert (gap + len(LINE) + reach_frames(frame_ms=MS)) * MS < SIGN_MEMORY_MS
-    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False))
+    _, out = drive(SIGN + [{}] * gap + line(sign=False))
     assert not braked(out)
     no_lead = StopSignRule(StopLineTracker(), sign_lead_ms=None)      # the old rule: memory alone
-    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False), rule=no_lead)
+    _, out = drive(SIGN + [{}] * gap + line(sign=False), rule=no_lead)
     assert braked(out)
 
 
 @pytest.mark.software
 def test_a_sign_seen_within_the_lead_before_the_line_still_counts():
     gap = SIGN_LEAD_MS // MS - 2
-    _, out = drive([{"stop_sign_detected": True}] + [{}] * gap + line(sign=False))
+    _, out = drive(SIGN + [{}] * gap + line(sign=False))
+    assert braked(out)
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("frames", range(1, SIGN_MIN_FRAMES))
+def test_a_sign_voted_only_briefly_at_the_line_is_a_ghost(frames):
+    # D2, 5 Nov: three false stops, each a sign voted 1-3 frames beside a red lamp, right at the line
+    _, out = drive(line(sign_frames=range(len(LINE) - frames, len(LINE))))
+    assert not braked(out)
+
+
+@pytest.mark.software
+def test_a_sign_voted_the_minimum_in_a_row_stops_but_not_split_up():
+    _, out = drive(line(sign_frames=range(len(LINE) - SIGN_MIN_FRAMES, len(LINE))))
+    assert braked(out)
+    split = [i for i in range(len(LINE)) if i != 2]          # four sign frames, never more than two in a row
+    _, out = drive(line(sign_frames=split))
+    assert not braked(out)
+
+
+@pytest.mark.software
+def test_a_minimum_of_one_is_the_rule_before_2026_11_12():
+    _, out = drive(line(sign_frames=[len(LINE) - 1]), rule=StopSignRule(StopLineTracker(), sign_min_frames=1))
     assert braked(out)

@@ -74,19 +74,22 @@ def test_replayed_and_live_looks_judged_on_the_tolerance(folder):
     assert by[("161713", 8, 0)]["result"] == lr.CLIPPED and by[("161713", 8, 0)]["reported_cm"] is None
     ten = by[("161713", 10, 0)]
     assert (ten["source"], ten["reported_cm"], ten["error_cm"], ten["tolerance_cm"], ten["result"]) == \
-        (lr.REPLAY, 11.5, 1.5, 0.5, "fail")
+        (lr.REPLAY, 11.5, 1.5, 2.0, "pass")                  # D4b since 2026-11-05: +-2 cm
+    assert ten["result_original"] == "fail", "the original rule was +-0.5 cm up to 10 cm"
+    assert res["all"]["pass_original"] < res["all"]["pass"]
     assert by[("161713", 20, 0)]["result"] == lr.NOT_SEEN
     assert by[("161713", 14, 10)]["tilt_deg"] == -2.0, "the routine's own tilt is kept"
     assert by[("180000", 12, 0)]["source"] == lr.LIVE and by[("180000", 12, 0)]["result"] == "pass"
     assert by[("180000", 16, 0)]["result"] == "fail", "inside 1 cm but its SD is over 0.5"
     assert res["all"]["clipped"] == 1 and res["all"]["not_seen"] == 1 and res["all"]["judged"] == 5
     assert any("steady offset" in f for f in res["findings"])
+    assert any("within D4b's +-2 cm" in f and "within the original" in f for f in res["findings"])
     assert res["tilt_fit"]["tilt_to_heading"] == -4.0
 
 
 def test_main_writes_the_table(folder, tmp_path, monkeypatch):
     monkeypatch.setattr(lr, "default_chain", chain)
-    monkeypatch.setattr(lr.analyze, "__defaults__", (chain,))
+    monkeypatch.setattr(lr.analyze, "__defaults__", (chain, None))          # the chain; table_c stays MEASURED's
     out = tmp_path / "out"
     assert lr.main([str(folder), "--out", str(out)]) == 0
     with open(out / "line_replay.csv") as f:
@@ -98,3 +101,18 @@ def test_no_line_run_is_an_error(tmp_path):
     run(tmp_path, "190000", [(10, 0)], target="light")
     with pytest.raises(FileNotFoundError):
         lr.run_folders([str(tmp_path)])
+
+
+def test_the_table_correction_centres_the_median_and_warns_about_the_obstacle(folder):
+    res = lr.analyze(lr.run_folders([str(folder)]), chain=chain, table_c=-0.4383)
+    m = res["all"]["median_error_cm"]
+    fix = res["table_c"]
+    assert fix["c"] == -0.4383 and fix["c_centred"] == pytest.approx(-0.4383 - m, abs=1e-4)
+    assert fix["shift_cm"] == pytest.approx(-m, abs=0.01)
+    text = " ".join(res["findings"])
+    assert "curve[2]" in text and "obstacle" in text and "D6" in text
+
+
+def test_no_correction_without_an_error_or_a_table():
+    assert lr.table_correction(None, -0.4) is None and lr.table_correction(1.7, None) is None
+    assert lr.table_correction(1.7, -0.4383) == {"c": -0.4383, "c_centred": -2.1383, "shift_cm": -1.7}

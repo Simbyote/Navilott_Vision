@@ -28,18 +28,23 @@ from src.analysis import common
 from src.analysis.common import Table
 
 RUN_GLOB = "routine_detect-range_*"
-NEAR_CM, TOL_NEAR_CM, TOL_FAR_CM, SD_MAX_CM = 10.0, 0.5, 1.0, 0.5     # requirements.md D4b
+# requirements.md D4b, revised 2026-11-05: +-2 cm at every gap (the stop is ~9 cm before the line,
+# and +-2 keeps it clear of the line with the light in view). Results go against both rules,
+# so the original (+-0.5 cm up to 10 cm, +-1.0 beyond) is counted beside it
+TOL_CM, SD_MAX_CM = 2.0, 0.5
+NEAR_CM, TOL_NEAR_CM, TOL_FAR_CM = 10.0, 0.5, 1.0         # the original rule
 LIVE, REPLAY = "live", "replay"
 CLIPPED, NOT_SEEN = "clipped", "not seen"
 FIELDS = ("run", "time", "gap_cm", "angle_deg", "offset_cm", "seen_pct", "voted", "source", "reported_cm",
-          "error_cm", "tolerance_cm", "cm_sd", "clipped", "tilt_deg", "result")
+          "error_cm", "tolerance_cm", "cm_sd", "clipped", "tilt_deg", "result", "result_original")
 SHADES = {-10.0: "#1E63B5", -5.0: "#2A9A88", 0.0: "#1F2933", 5.0: "#E0A100", 10.0: "#C62828"}
 
 _CLI_HELP = """\
 Every detect-range line run (target=line) in the folders given: each look's
 reported stop-line cm against its taped gap, judged on D4b's tolerance
-(+-0.5 cm up to 10 cm, +-1.0 cm beyond; SD under 0.5 cm where the look logged
-one). Runs from before 2026-11-03 have no logged distance: the look's saved
+(+-2 cm since 2026-11-05; SD under 0.5 cm where the look logged one), with the
+original rule (+-0.5 cm up to 10 cm, +-1.0 cm beyond) counted beside it. The
+findings give the stop-line table's C that would centre the median error. Runs from before 2026-11-03 have no logged distance: the look's saved
 picture is replayed through Phase 2 (one frame, so no SD). Gaps are from the
 robot's front edge to the line's near edge, the stop-line table's reference.
 
@@ -109,15 +114,21 @@ def replay(path: Path | None, chain) -> dict:
 
 
 def tolerance(gap: float) -> float:
+    return TOL_CM
+
+
+def tolerance_original(gap: float) -> float:
     return TOL_NEAR_CM if gap <= NEAR_CM else TOL_FAR_CM
 
 
-def judge(row: dict) -> str:
+def judge(row: dict, tol: float | None = None) -> str:
+    """pass / fail against tol (default the row's tolerance_cm), or CLIPPED / NOT_SEEN."""
     if row["clipped"]:
         return CLIPPED
     if row["reported_cm"] is None:
         return NOT_SEEN
-    ok = abs(row["error_cm"]) <= row["tolerance_cm"] and (row["cm_sd"] is None or row["cm_sd"] < SD_MAX_CM)
+    tol = row["tolerance_cm"] if tol is None else tol
+    ok = abs(row["error_cm"]) <= tol and (row["cm_sd"] is None or row["cm_sd"] < SD_MAX_CM)
     return "pass" if ok else "fail"
 
 
@@ -156,6 +167,7 @@ def looks(folder: Path, chain=default_chain) -> list[dict]:
             row["reported_cm"] = None
         row["error_cm"] = None if row["reported_cm"] is None else round(row["reported_cm"] - gap, 2)
         row["result"] = judge(row)
+        row["result_original"] = judge(row, tolerance_original(row["gap_cm"]))
         out.append(row)
     return out
 
@@ -166,13 +178,21 @@ def summarize(rows: list[dict]) -> dict:
     return {"looks": len(rows), "measured": len(errs), "clipped": sum(r["result"] == CLIPPED for r in rows),
             "not_seen": sum(r["result"] == NOT_SEEN for r in rows),
             "pass": sum(r["result"] == "pass" for r in judged), "judged": len(judged),
+            "pass_original": sum(r.get("result_original") == "pass" for r in judged),
             "median_error_cm": round(statistics.median(errs), 2) if errs else None,
             "mean_error_cm": round(statistics.fmean(errs), 2) if errs else None,
             "spread_sd_cm": round(statistics.stdev(errs), 2) if len(errs) > 1 else None,
             "worst_cm": round(max(errs, key=abs), 2) if errs else None}
 
 
-def analyze(folders: list[Path], chain=default_chain) -> dict:
+def _measured_table_c() -> float | None:
+    from src.config import MEASURED
+    return None if MEASURED.stop_line_table is None else MEASURED.stop_line_table.c
+
+
+def analyze(folders: list[Path], chain=default_chain, table_c: float | None = None) -> dict:
+    """table_c: the stop-line table's C to correct (default: the one MEASURED loaded)."""
+    table_c = _measured_table_c() if table_c is None else table_c
     from src.routines.detect_range import tilt_fit
     rows = []
     for f in folders:
@@ -180,22 +200,42 @@ def analyze(folders: list[Path], chain=default_chain) -> dict:
     gaps = sorted({r["gap_cm"] for r in rows})
     angles = sorted({r["angle_deg"] for r in rows})
     res = {"runs": [f.name for f in folders], "gaps": gaps, "angles": angles,
-           "rule": {"near_cm": NEAR_CM, "tol_near_cm": TOL_NEAR_CM, "tol_far_cm": TOL_FAR_CM, "sd_max_cm": SD_MAX_CM},
+           "rule": {"tol_cm": TOL_CM, "sd_max_cm": SD_MAX_CM,
+                    "original": {"near_cm": NEAR_CM, "tol_near_cm": TOL_NEAR_CM, "tol_far_cm": TOL_FAR_CM}},
            "sources": sorted({r["source"] for r in rows}),
            "all": summarize(rows),
            "by_gap": {g: summarize([r for r in rows if r["gap_cm"] == g]) for g in gaps},
            "by_angle": {a: summarize([r for r in rows if r["angle_deg"] == a]) for a in angles},
            "tilt_fit": tilt_fit(rows), "rows": rows}
+    res["table_c"] = table_correction(res["all"]["median_error_cm"], table_c)
     res["findings"] = findings(res)
     return res
+
+
+def table_correction(median_error_cm: float | None, table_c: float | None) -> dict | None:
+    """
+    The stop-line table's C that would centre the median error: the curve is A / (B - rows) + C,
+    so C moves every reading by the same cm. None without an error or a table.
+    """
+    if median_error_cm is None or table_c is None:
+        return None
+    return {"c": round(table_c, 4), "c_centred": round(table_c - median_error_cm, 4),
+            "shift_cm": round(-median_error_cm, 2)}
 
 
 def findings(res: dict) -> list[str]:
     a, out = res["all"], []
     if a["judged"]:
-        out.append(f"{a['pass']} of {a['judged']} measured looks within tolerance; median error "
+        out.append(f"{a['pass']} of {a['judged']} measured looks within D4b's +-{TOL_CM:g} cm "
+                   f"({a['pass_original']} within the original +-{TOL_NEAR_CM:g} / +-{TOL_FAR_CM:g} cm); median error "
                    f"{a['median_error_cm']:+.2f} cm, spread (SD between looks) {common.fmt(a['spread_sd_cm'])} cm")
     m = a["median_error_cm"]
+    fix = res.get("table_c")
+    if fix is not None and abs(fix["shift_cm"]) >= 0.5:
+        out.append(f"stop-line table: C {fix['c']:+.4f} -> {fix['c_centred']:+.4f} (calibration/stop_line_table.json, "
+                   f"curve[2]) moves every reading {fix['shift_cm']:+.2f} cm and centres this median; the obstacle's "
+                   "cm come from the same curve and move with it, so re-check D6 (make routine-obstacle-check) "
+                   "after, or re-fit both with make calib-stopline")
     if m is not None and abs(m) > 1.0 and a["spread_sd_cm"] is not None and a["spread_sd_cm"] < abs(m):
         out.append(f"the error is mostly a steady offset ({m:+.1f} cm), larger than its spread: check the tape's "
                    "reference (the robot's front edge, as the stop-line table) before blaming the fit")
@@ -232,10 +272,10 @@ def figure(res: dict, out_path):
             ax[0].scatter(*zip(*cl), s=22, color=col, marker="x")
     xs = np.array([min(gaps) - 1, max(gaps) + 1])
     ax[0].plot(xs, xs, color="#5F6B76", lw=1)
-    ax[0].fill_between(xs, xs - TOL_FAR_CM, xs + TOL_FAR_CM, color="#E8EDF1")
+    ax[0].fill_between(xs, xs - TOL_CM, xs + TOL_CM, color="#E8EDF1")
     ax[0].set_xlabel("tape gap, front edge to the line (cm)", fontsize=8)
     ax[0].set_ylabel("reported cm", fontsize=8)
-    ax[0].set_title("Reported vs tape (band +-1 cm; x = at the view's bottom)", loc="left", fontsize=10)
+    ax[0].set_title(f"Reported vs tape (band +-{TOL_CM:g} cm, D4b; x = at the view's bottom)", loc="left", fontsize=10)
     ax[0].legend(fontsize=7, frameon=False)
     for k, g in enumerate(gaps):
         e = [r["error_cm"] for r in rows if r["gap_cm"] == g and r["error_cm"] is not None]
