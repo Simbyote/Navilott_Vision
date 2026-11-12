@@ -66,7 +66,7 @@ MAX_APPROACH_DEG = 10.0
 # left turn took ~3.9 s on 2026-10-28 (4 of 38 met the old 4.1 s limit); eased, ~4.9 s
 LEFT_TURN_MAX_MS = 7300
 RIGHT_TURN_MAX_MS = 2400
-# What the left turn drives: (0.40, 0.608), ~1200 and ~1820 counts/s
+# What the left turn drives: (0.384, 0.544), ~1150 and ~1630 counts/s (2026-11-10)
 LEFT_TURN_DRIVEN = Command(round(LEFT_TURN.left * LEFT_TURN_SPEED, 4), round(LEFT_TURN.right * LEFT_TURN_SPEED, 4))
 TURNS = {LEFT: (LEFT_TURN_DRIVEN, -1, LEFT_TURN_MAX_MS),        # (duties, heading sign, time limit); + heading = right
          RIGHT: (RIGHT_TURN, +1, RIGHT_TURN_MAX_MS)}
