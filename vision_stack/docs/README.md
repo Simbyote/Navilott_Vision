@@ -101,11 +101,11 @@ wheel encoders       │                  heading, votes, odometry
 
 ## Current status
 
-The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. On the IMX290, no requirement is formally verified on the course yet, apart from P4 by design; the routines are how each gets verified. `requirements.md` has the per-requirement status, and each `vision_pipeline/` doc ends with its open items. The most important:
+The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. Every requirement has been verified against its pass rule (bench runs 2–4 Nov, the course run 4 Nov) except D1, whose target is still pending; `requirements.md` has each result, and each `vision_pipeline/` doc ends with its open items. What the results leave to work on:
 
-- The frame rate and latency while driving: 19.3 FPS and 51.8 ms p95 against 20 FPS and 50 ms (P1, P2, 2026-10-28); Phase 2 is the main thread's cost
-- The ground scale and lane offset accuracy against ±2 cm (P3): `make routine-lane-offset`
-- Stop-sign false stops on the red traffic lamp and red objects (D2), and yellow read as red (D3): `make routine-detect-range`
-- Dark obstacles aren't seen (D6): `make routine-obstacle-check` per object class
-- Several pass rules are proposed and wait on the team: `requirements.md`, Open decisions
-- The whole course, timed: `make routine-course-run`
+- The frame rate and latency while driving: 19.2 FPS and 52.2 ms p95 against 20 FPS and 50 ms (P1, P2, course run 2026-11-04); Phase 2's geometry step is the main thread's cost
+- The lane offset reads about 63% of the true offset (P3, slope 0.63): the pixel-to-cm scale
+- Stop-sign false stops beside a red traffic lamp, 3 in 9.3 min (D2), and lit yellow missed facing a window (D3): `make routine-detect-range`
+- The stop-line distance reads about 1.7 cm long (D4b): the stop-line table
+- Dark obstacles aren't seen (D6), a known limitation of the brightness and color test: `make routine-obstacle-check` per object class
+- D1's pass rule waits on the team: `requirements.md`, Open decisions

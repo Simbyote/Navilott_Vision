@@ -58,6 +58,12 @@ A rectangle cut out of the frame so a detector only looks where its target can b
 
 Another way to write a color: **hue** (which color, as an angle around the color wheel; 0–179 in OpenCV), **saturation** (how vivid, 0–255) and **value** (how bright, 0–255). It suits color detection because "red" is a range of hue whatever the brightness, where in BGR red's three numbers all shift as the light changes. Red sits at both ends of the hue wheel, so it takes two bands: `red_low` and `red_high` in `calibration/hsv_ranges.json`. Calibrated from the real lamps by `make calib-lamps` (`scripts/calibrate_lamps.py`).
 
+### Lab color and chroma
+
+A third way to write a color, built so equal steps look like equal changes to the eye: **L** is lightness, **a** runs from green to red, and **b** from blue to yellow. A gray, white or black pixel sits near the middle of a and b whatever its lightness, so how far a pixel is from that middle says how colored it is. That distance is its **chroma**.
+
+The obstacle detector measures chroma against the scene, not against a fixed gray: |a − a_ref| + |b − b_ref|, where a_ref and b_ref are the whole frame's median a and b, its neutral. A warm cast from the windows shifts the whole frame, floor included, so a fixed reference read the entire floor as colored. A pixel 15 or more from the neutral is colored (`min_chroma`), provided its brightest channel (HSV's V) is at least 50 (`min_value`): color in the dark is noise, and V rather than L because a dark blue can is bright in blue alone (`perception/obstacle.py`).
+
 ### Blur
 
 Replacing each pixel with a weighted average of its neighbors (a **Gaussian blur**: nearer neighbors weigh more). It smooths out sensor noise and mat texture so edges and thresholds respond to real shapes, not specks. The kernel is the size of the neighborhood: `PreprocessParams.gray_kernel` and `color_kernel` (`perception/preprocess.py`).
@@ -82,6 +88,8 @@ A wide lens bends straight lines near the edges of the image (**barrel distortio
 
 Its catch: **it always splits**, even an image with only one population. On a sign ROI with no sign, Otsu still finds a threshold in the noise, often around 1, and outlines specks as "red". That's why the stop sign's redness threshold is floored: `min_redness` (20) is the lowest Otsu is allowed to go (`SignContourFilter`, `perception/geometry_shared.py`). The dimmest synthetic sign measured needed 22.
 
+A threshold can also be **relative**, set from the scene each frame. The obstacle detector takes the floor's level as the **25th percentile** of the lane ROI's brightness (a quarter of its pixels are darker), then calls any pixel at least 60 gray levels above it "not floor" (`floor_percentile`, `min_contrast`). The course's floor runs from dark mats to light gray, and a fixed level read the light floor as an obstacle.
+
 ### Edges: Canny and Sobel
 
 An **edge** is where brightness changes sharply, such as the side of a tape line. **Sobel** measures that change, the **gradient**, at each pixel, and its direction: a lane line's sides change left to right, a stop line's change top to bottom (the gradient split in `geometry_shared.py` uses that to tell them apart).
@@ -91,6 +99,12 @@ An **edge** is where brightness changes sharply, such as the side of a tape line
 ### Morphological close
 
 An operation on a mask: grow the white areas (**dilate**), then shrink them back (**erode**). Small gaps and holes inside a shape fill in, while the shape's outline stays about where it was. The kernel's shape sets which gaps close: `close (9×3)` on lane edges bridges gaps along a line, `close (15×1)` joins a stop line's broken edge horizontally, `close (5×5)` fills a sign's mask.
+
+### Morphological open
+
+The same two steps in the other order: shrink the white areas first (**erode**), then grow them back (**dilate**). Anything thinner than the kernel disappears in the shrink and has nothing to grow back from; anything wider survives at about its own size. So a close fills gaps, and an open removes thin things.
+
+The obstacle detector uses an open to remove the course's markings from its not-floor mask: `open (47×47)` is wider than any lane tape (45 px is the widest the lane gate allows) and taller than any stop line (40 px), so lane lines, dashes and stop lines vanish and only something large and solid is left (`perception/obstacle.py`). It runs on every second pixel, so the kernel there is 25 samples, the size halved and made odd so the open doesn't shift edges: about 50 full-resolution px. The traffic light uses a dilate on its own: grown 2 px around a bright spot, it marks the **ring** where the lamp's color should be.
 
 ### Contours and the gates
 
@@ -104,6 +118,10 @@ A **contour** is the outline of one white blob in a mask, as a list of points (O
 A blob that passes every gate gets a **confidence** from 0 to 1, and Phase 3 only counts it above a gate (0.40 for a light, 0.45 for a sign).
 
 ---
+
+### Connected components
+
+Another way to find blobs in a mask: label every separate white region and report each one's bounding box and area in one pass (OpenCV's `connectedComponentsWithStats`, 8-connected, so diagonal neighbors join). The obstacle detector uses it instead of contours because it needs only each blob's box and size, not its outline. Each blob is then gated (area ≥ 2500 px, width and height ≥ 60 px, its base no more than 90 rows ahead), and of those that pass, the one whose base is lowest in the image, the nearest, wins.
 
 ## Geometry
 

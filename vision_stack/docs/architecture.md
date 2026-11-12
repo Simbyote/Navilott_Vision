@@ -129,7 +129,7 @@ python process
 ├── GStreamer's capture thread (task0): C only, never takes the GIL
 ├── battery monitor: one ADS1115 read a second, smoothed (src/peripherals/battery.py)
 ├── motor watchdog: brakes after MOTOR_WATCHDOG_S without a command (src/peripherals/drive.py)
-├── p2-side: color and obstacle beside geometry, only with PARALLEL_PERCEPTION (off)
+├── p2-side: color and obstacle beside geometry, with PARALLEL_PERCEPTION (on since 2026-11-02)
 └── pigpio's callback thread (pigpio-cb): encoder counting
 ```
 
