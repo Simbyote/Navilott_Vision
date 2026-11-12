@@ -195,6 +195,8 @@ Each phase ends with a gate: the named check passes on the robot (or on replays 
 ### Phase 0: facts straight (no hardware; half a day)
 
 1. `requirements.md`: status summary and README status corrected (decision 7); P1 wording (decision 8) recorded under "Changes to pass rules".
+
+   **Status summary and README done 2026-11-12,** in the document's own verdicts (Met, Not met, Not verified) and from its rows; no result or rule changed. Decision 8 (P1's wording) is still the team's.
 2. The three checks in §4, with their results written into this document.
 3. `course.md`: add the lane's lateral margin in the lane ROI to "Values that come from these measurements", with F1/F2 as what depends on it.
 4. `navigation_contract.md`: say which offset path lane keeping runs today (the normalized one) until F3 lands.

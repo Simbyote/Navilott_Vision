@@ -103,11 +103,11 @@ wheel encoders       │                  heading, votes, odometry
 
 ## Current status
 
-The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. Every requirement has been verified against its pass rule (bench runs 2–4 Nov, the course run 4 Nov) except D1, whose target is still pending; `requirements.md` has each result, and each `vision_pipeline/` doc ends with its open items. What the results leave to work on:
+The whole chain runs on the robot, from the start button to the finish: lane keeping, stop lines, stop signs, traffic lights, obstacles, intersections and the route. The software tests pass. Every requirement's check has been run (bench runs 2–4 Nov, the course runs 28 Oct and 4 Nov) except where `requirements.md`'s status summary says Not verified; it has each verdict. Met: P4, D1, D4a, R1–R4. Not met on those runs: P1, P2, P3, D2, D4b. In part: D3, D5, D6, R5.
 
-- The frame rate and latency while driving: 19.2 FPS and 52.2 ms p95 against 20 FPS and 50 ms (P1, P2, course run 2026-11-04); Phase 2's geometry step is the main thread's cost
-- The lane offset reads about 63% of the true offset (P3, slope 0.63): the pixel-to-cm scale
-- Stop-sign false stops beside a red traffic lamp, 3 in 9.3 min (D2), and lit yellow missed facing a window (D3): `make routine-detect-range`
-- The stop-line distance reads about 1.7 cm long (D4b): the stop-line table
-- Dark obstacles aren't seen (D6), a known limitation of the brightness and color test: `make routine-obstacle-check` per object class
-- D1's pass rule waits on the team: `requirements.md`, Open decisions
+`resolution_plan.md` (12 Nov) is the work since: what each miss traced to, the fixes made in software (lane offset and steering, the frame budget, the stop sign's false stops), and what's left. `phase1_robot_procedure.md` is the next track session's steps, with each pass rule. Still open there:
+
+- P1, P2, P3 and D2 to re-run on the robot with the 12 Nov software
+- The stop-line table to re-fit (D4b), then D6 again, since obstacles share its curve
+- A false "caution" from a bystander's clothing, and other non-lamp white spots read as lights (D3, F9 in the plan): a cap on the glow's white spot, its value to come from labelled frames
+- Dark obstacles aren't seen (D6), a known limitation; the blue can's class to decide

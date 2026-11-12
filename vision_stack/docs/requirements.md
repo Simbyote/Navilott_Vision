@@ -169,8 +169,12 @@ The proposed values below are what the plans and test sheets use. Agree them wit
 
 ## Status summary
 
-| | Verified | Target Pending|
-| --- | --- | --- |
-| Performance | P1, P2, P3, P4 | |
-| Detection |  D1, D2, D3, D4, D5, D6 | |
-| Robustness | R1, R2, R3, R4, R5 (software + hardware) | |
+Each row's own verdict, as defined at the top (Met, Not met, Not verified), on the current hardware. *Checked* is not *met*: every requirement has had its check run except where marked Not verified. Updated 2026-11-12 from the rows above; no result or rule changed.
+
+| | Met | Not met | Not verified, or in part |
+| --- | --- | --- | --- |
+| Performance | P4 (by design) | P1 (19.2 FPS), P2 (p95 52.2 ms), P3 (slope 0.63) | |
+| Detection | D1 (from two runs' logs, 98.6% / 96.4%), D4a (pooled 98%) | D2 (3 false stops in 9.3 min), D4b (+1.7 cm) | D3 (one of two lighting setups), D4a's plain-lane check, D5 (one run of two), D6 (met for the cube and box; the blue can not, its scope to decide) |
+| Robustness | R1, R2, R3 (software), R4 (driving, 2.2 min) | | R4's memory trend (needs ≥ 5 min), R5 on hardware (written, not recorded) |
+
+**Changed since those results, in software, not yet run on the robot** (`resolution_plan.md`): P3 (the foot point, the full-width lane ROI, steering in cm), P1/P2 (the sign on the side thread, one gradient pass), D2 (a sign counts after 6 votes a sighting: replayed over the 28 Oct and 4 Nov runs it removes every false sign stop and keeps every real one). The steps to verify them are `phase1_robot_procedure.md`.
