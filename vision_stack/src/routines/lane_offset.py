@@ -7,7 +7,7 @@ Purpose:
     the robot's offset.
 
 Main package:
-    LaneOffset (make routine-lane-offset); its summary gives config.py's cm_per_px.
+    LaneOffset (make routine-lane-offset); its summary sets the scale it measured beside config.CM_PER_PX.
 """
 import statistics
 
@@ -98,9 +98,10 @@ at every position; only slide it sideways."""
             self._eyes.close()
         scale = ctx.state.get("cm_per_px")
         if scale is not None:
-            ctx.console.say(f"\nground scale {scale:.5f} cm/px (lane {ctx.options['lane_cm']:g} cm = "
-                            f"{ctx.state['lane_width_px']:g} px): set cm_per_px={scale:.5f} in "
-                            "MEASURED_ESTIMATION (config.py) for lane_offset_cm in every run")
+            from src.config import CM_PER_PX
+            ctx.console.say(f"\nground scale {scale:.5f} cm/px here (lane {ctx.options['lane_cm']:g} cm = "
+                            f"{ctx.state['lane_width_px']:g} px); the robot runs {CM_PER_PX:.5f} (config.CM_PER_PX, "
+                            f"from expected_half_lane_px: make calib-lane sets it)")
 
     def trial(self, ctx, i):
         planned = parse_numbers(ctx.options["positions"])[i]

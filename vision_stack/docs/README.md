@@ -31,6 +31,8 @@ docs/
     concepts.md                 the ideas the docs use, explained once
     requirements.md             requirements, how each is checked, status
     course.md                   course dimensions and camera geometry
+    resolution_plan.md          the review of 12 Nov: each requirement's gap, the fixes, the phases
+    phase1_robot_procedure.md   the robot steps that close Phase 1 (lane offset, lane keeping)
     vision_pipeline/
         phase1_capture.md       camera → timestamped frames
         phase2_perception.md    frame → detections and lane offset
