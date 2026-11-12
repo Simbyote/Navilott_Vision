@@ -162,6 +162,16 @@ Two archives of the 28 Oct runs were shared: the bench `routine_frame-budget_202
 
 **Frames that would answer the rest** (attempt 2's frame ids; ~1,500 images): the lap-1 miss 1380–1514; the ghosts 820–905, 4530–4714, 5940–6032; the lights read red or yellow without a sign 524–638, 4376–4427, 4963–5134, 9063–9232, 9793–9820, 10080–10114 (to label lit or unlit for F9 and D3); the early end 10560–10664.
 
+**What 836 picked frames answered** (every 30th frame, the intersections, transitions and slips; attempt 2 up to frame 4231; replayed through today's Phase 2 under `MEASURED`, and looked at):
+
+| Question | Answer |
+| --- | --- |
+| **D2's lap-1 miss** (step 6) | **Not a detector miss: the sign wasn't there.** Frame 1441 shows the intersection with no sign; 1471 and 1501 a hand placing the sign's stand as the robot approached; 1514 the sign still held at the frame's right edge as the robot reached the line. `sign-check`'s "red blob" of 24,000 px² at 1501 is the hand (skin passes R − max(G, B)). So on the signs that were in place, the run confirmed **4 of 4**; with F6 the false stops go from 3 to 0, and **D2 would be met on this run's evidence** (a replay, not a run: still to be shown on the robot). Ask whoever places signs to do it before the robot's lap starts. 28 Oct's lap-1 miss has no frames to check |
+| **The ghost signs** (step 4) | Frame 885: the light's gantry, green lit in the middle, and a red lamp at its right end (~x 295) inside the sign ROI (x ≥ 264). The ghost is that lamp, as D2's status says. Today's Phase 2 refuses it (5 vertices on the replayed JPEG; the robot voted it live) |
+| **A real sign** (step 12), for comparison | An octagon right of the lane, detected far out (111–502 px², 8 vertices, solidity 0.94–0.98) and lost close in as it leaves the ROI's right edge |
+| **D3's "caution" at step 3** | **No traffic light in view** (frame 617). Glow mode took a small clipped white spot in a bystander's tan jacket at (165, 59) for a yellow lamp: 4 of 39 ring pixels yellow, 10.3% against the 10% gate (lit LEDs read 18–20%) |
+| **F9, more broadly** | 83 lamps accepted in the 470 frames. Ring share alone doesn't separate them: real lamps close up also read 0.11–0.16. The false ones seen have **large white spots**: 244 px at frame 3241 (a person's white shirt behind the far gantry, ringed by skin and tan, read yellow), 276 and 411 px under the gantry (most likely the white banner above it, read green). A lit LED's white centre is 2–35 px, and glow mode has **no upper bound on the white spot**: `GlowFilter.max_white_px` is the candidate gate. Its value needs these frames labelled lit / unlit (`make label`, then `make eval`), which is F9's measurement |
+
 ## 5. Decisions the team has to take (before the phase that needs them)
 
 | # | Decision | Needed by | Recommendation |
