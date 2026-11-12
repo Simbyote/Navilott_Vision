@@ -116,7 +116,7 @@ def test_five_positions_against_the_ruler_pass(tmp_path):
     assert eyes.asked == [lo.FRAMES] * 5 and eyes.closed
     state = json.loads((tmp_path / "out" / "results.json").read_text())["state"]
     assert state["cm_per_px"] == pytest.approx(SCALE)
-    assert "set cm_per_px=0.05000 in MEASURED_ESTIMATION" in person.said() and "14 cm = 280 px" in person.said()
+    assert "ground scale 0.05000 cm/px here" in person.said() and "14 cm = 280 px" in person.said()
     prompts = "\n".join(person.prompts)
     assert "centered in the lane" in prompts
     assert prompts.index("2 cm RIGHT") < prompts.index("2 cm LEFT") < prompts.index("4 cm RIGHT") < prompts.index("4 cm LEFT")
