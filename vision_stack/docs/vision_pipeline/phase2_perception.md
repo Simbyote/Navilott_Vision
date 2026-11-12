@@ -424,7 +424,7 @@ Checked on construction, so a malformed handoff fails loudly instead of reaching
 pytest --hardware --replay=src/tests/data/frames
 ```
 
-Each stage's test writes a timing CSV and histogram. Geometry, the longest stage, is also timed per part: `geometry.edges` (Canny and the gradient split every lane-ROI detector reads), `geometry.lanes`, `geometry.stop_line` and `geometry.sign` (`GEOMETRY_PARTS`). The parts print indented under `geometry` in `summary.txt`'s `[TIMING]` and aren't added to the total, since geometry's own time holds them.
+Each stage's test writes a timing CSV and histogram. Geometry, the longest stage, is also timed per part: `geometry.edges` (Canny and the gradient split every lane-ROI detector reads), `geometry.lanes`, `geometry.stop_line` and `geometry.sign` (`GEOMETRY_PARTS`); with parallel perception (the robot's default) the sign's time is the side thread's, `side_sign`, and not among geometry's parts. The parts print indented under `geometry` in `summary.txt`'s `[TIMING]` and aren't added to the total, since geometry's own time holds them.
 
 The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 FPS (P1). On a run, `nav.csv`'s `phase2_ms` and `src.analysis.stage_timing` show where the time goes, and `make routine-frame-budget` judges it.
 
@@ -434,11 +434,11 @@ The target is the full chain plus Phase 3 inside one frame period: 50 ms at 20 F
 
 **File:** `parallel.py` · **Switch:** `params.PARALLEL_PERCEPTION` (on since 2026-11-02), or `--parallel` / `--serial` on a linker for one run
 
-Phase 2 ran every stage on the main thread, one after another: on the 2026-10-14 diag run the main thread sat at 70% of a core on average (99.7% peak) while the Pi as a whole was at 43%. Three stages read only the cropped ROIs and nothing of each other's: geometry (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With parallel perception on, color and obstacle run on one side thread (`p2-side`) while the main thread runs geometry, then the lane offset and the stop line (which need geometry), and only then waits for the side thread.
+Phase 2 ran every stage on the main thread, one after another: on the 2026-10-14 diag run the main thread sat at 70% of a core on average (99.7% peak) while the Pi as a whole was at 43%. Three stages read only the cropped ROIs and nothing of each other's: geometry (~20.6 ms on the course), color (~5.2) and obstacle (~5.9). With parallel perception on, color, obstacle and the stop sign run on one side thread (`p2-side`) while the main thread runs the rest of geometry (the lane ROI's edges, lanes and stop lines), then the lane offset and the stop line distance (which need geometry), and only then waits for the side thread. The sign joined the side thread on 2026-11-12: it reads only the colour sign ROI and never geometry's edges, and it was about a quarter of geometry's time on the main thread, the frame's longer path (P1, P2). Its candidates rejoin geometry's result after the wait, before fusion.
 
 ```
-main:  preprocess → roi ─┬─ geometry → lane_offset → stop_line ─┬─ branch_wait → fusion → package
-side:                    └─ color → obstacle ────────────────────┘
+main:  preprocess → roi ─┬─ geometry (no sign) → lane_offset → stop_line ─┬─ branch_wait → fusion → package
+side:                    └─ color → obstacle → sign ───────────────────────┘
 ```
 
 It's a thread, not a process: the heavy work is inside OpenCV calls, which release the GIL, so the two run on two cores without copying a frame. The Python between those calls still takes turns on the GIL, which is why the gain is measured rather than assumed. Stage timing reports `branch_wait`, the main thread's time waiting for the side (0 when the side finished first), and the side thread's own color and obstacle times (`side_timings_ms`). The frame waits on the longer path, which is geometry: splitting color and obstacle onto separate threads would not shorten it. `make compare-parallel` times Phase 2 alone on the same frames both ways; `make ab-parallel` alternates whole runs.

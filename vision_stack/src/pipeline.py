@@ -9,12 +9,13 @@ Main package:
     Pipeline.step(frame, frame_id, timestamp_ms, sensors) -> Command.
 
 Flow:
-    1. Phase 2: preprocess, ROIs, the detectors (color and obstacle on a side
-       thread when parallel), lane offset, stop line, fusion, package.
+    1. Phase 2: preprocess, ROIs, the detectors (color, obstacle and the stop
+       sign on a side thread when parallel), lane offset, stop line, fusion, package.
     2. Phase 3: Phase3Processor.process -> EstimationPacket.
     3. Navigation.update -> enforce -> Command; the caller drives the motors.
 """
 import time
+from dataclasses import replace
 
 import numpy as np
 
@@ -27,7 +28,7 @@ from src.params import FRAME_H, FRAME_W
 from src.perception.parallel import enabled as parallel_enabled, run_side, side_pool
 from src.perception.color_branch import detect_color
 from src.perception.feature_fusion import fuse
-from src.perception.geometry import detect_geometry
+from src.perception.geometry import detect_geometry, find_sign_candidates
 from src.perception.lane_offset import estimate_lane_offset
 from src.perception.obstacle import estimate_obstacle
 from src.perception.phase2_out import Phase2Output, package_phase2
@@ -145,11 +146,15 @@ class Pipeline:
         return self.last_geometry_ms
 
     def _perceive_parallel(self, roi, cfg: PipelineConfig, laps) -> Phase2Output:
+        # The sign reads only the colour sign ROI, never geometry's edges, so it runs beside them
+        # (2026-11-12; until then it was a quarter of geometry's time on the main thread)
         side = side_pool().submit(run_side, [
             ("color", lambda: detect_color(roi, cfg.color)),
             ("obstacle", lambda: estimate_obstacle(roi, cfg.obstacle, cfg.ground, cfg.stop_line_table)),
+            ("sign", lambda: find_sign_candidates(roi.sign_color_roi, cfg.geometry.sign, roi.frame_id,
+                                                  roi.timestamp_ms)),
         ])
-        geo = detect_geometry(roi, cfg.geometry, self._geometry_timings(laps))
+        geo = detect_geometry(roi, cfg.geometry, self._geometry_timings(laps), sign=False)
         if laps:
             laps.lap("geometry")
         offset = estimate_lane_offset(geo, roi, cfg.lane_offset)
@@ -161,6 +166,7 @@ class Pipeline:
         results, self.last_side_ms = side.result()
         if laps:
             laps.lap("branch_wait")
+        geo = replace(geo, sign_candidates=results["sign"])
         fusion = fuse(geo, results["color"], roi)
         if laps:
             laps.lap("fusion")

@@ -100,11 +100,14 @@ def run_geometry_branch(
     trace: bool = False,
     stop_filter: StopLineFilter = StopLineFilter(),
     timings: dict | None = None,
+    sign: bool = True,
 ) -> tuple[GeometryBranchResult, dict, dict]:
     """
     Geometry on loose ROI arrays, for tuning work; the pipeline calls run_geometry_stage().
     Returns (result, lane_debug, sign_debug). draw_overlays=False skips the debug images;
-    timings, a dict, gets each GEOMETRY_PARTS' wall ms. ValueError or TypeError names a malformed ROI.
+    timings, a dict, gets each GEOMETRY_PARTS' wall ms. sign=False leaves the sign out
+    (no candidates, an empty sign_debug, no "sign" part): parallel perception runs it on the
+    side thread. ValueError or TypeError names a malformed ROI.
     """
     _validate_rois("run_geometry_branch", lane_roi, sign_color_roi)
     clock = _PartClock(timings)
@@ -136,15 +139,17 @@ def run_geometry_branch(
     )
     clock.lap("stop_line")
 
-    sign_candidates, sign_debug = extract_sign_candidates(
-        sign_color_roi,
-        sign_filter,
-        frame_id,
-        timestamp_ms,
-        draw_overlays,
-        trace
-    )
-    clock.lap("sign")
+    sign_candidates, sign_debug = [], {}
+    if sign:
+        sign_candidates, sign_debug = extract_sign_candidates(
+            sign_color_roi,
+            sign_filter,
+            frame_id,
+            timestamp_ms,
+            draw_overlays,
+            trace
+        )
+        clock.lap("sign")
 
     result = GeometryBranchResult(
         lane_candidates,
@@ -163,6 +168,7 @@ def run_geometry_stage(
         draw_overlays: bool = False,
         trace: bool = False,
         timings: dict | None = None,
+        sign: bool = True,
     ) -> tuple[GeometryBranchResult, dict, dict]:
     """run_geometry_branch() on one ROICropResult, carrying its frame identity."""
     return run_geometry_branch(
@@ -177,6 +183,7 @@ def run_geometry_stage(
         trace = trace,
         stop_filter = config.stop_line,
         timings = timings,
+        sign = sign,
     )
 
 
@@ -184,8 +191,9 @@ def detect_geometry(
         roi: ROICropResult,
         config: GeometryConfig = GeometryConfig(),
         timings: dict | None = None,
+        sign: bool = True,
     ) -> GeometryBranchResult:
-    """Production twin of run_geometry_stage(): the result only."""
+    """Production twin of run_geometry_stage(): the result only. sign=False leaves the sign out."""
     _validate_rois("detect_geometry", roi.lane_roi, roi.sign_color_roi)
     clock = _PartClock(timings)
 
@@ -214,13 +222,15 @@ def detect_geometry(
     )
     clock.lap("stop_line")
 
-    sign_candidates = find_sign_candidates(
-        roi.sign_color_roi,
-        config.sign,
-        roi.frame_id,
-        roi.timestamp_ms,
-    )
-    clock.lap("sign")
+    sign_candidates = []
+    if sign:
+        sign_candidates = find_sign_candidates(
+            roi.sign_color_roi,
+            config.sign,
+            roi.frame_id,
+            roi.timestamp_ms,
+        )
+        clock.lap("sign")
 
     return GeometryBranchResult(
         lane_candidates,

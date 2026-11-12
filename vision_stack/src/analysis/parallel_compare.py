@@ -61,7 +61,7 @@ def measure(frames: list, modes: list[tuple[str, bool, int]], block: int = BLOCK
     pipes = {label: Pipeline(config, timing=True, parallel=par) for label, par, _ in modes}
     walls = {label: [] for label, _, _ in modes}
     waits = {label: [] for label, _, _ in modes}
-    side = {label: {"color": [], "obstacle": []} for label, _, _ in modes}
+    side = {label: {"color": [], "obstacle": [], "sign": []} for label, _, _ in modes}
     busy = {label: [0.0, 0.0] for label, _, _ in modes}            # cpu s, wall s
     for label, _, threads in modes:                                   # first-call allocation, untimed
         cv2.setNumThreads(threads)

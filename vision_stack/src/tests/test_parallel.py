@@ -51,25 +51,26 @@ def test_the_debug_chain_matches_too_and_keeps_every_debug_dict():
 
 
 @pytest.mark.software
-def test_color_and_obstacle_run_on_the_side_thread(monkeypatch):
+def test_color_obstacle_and_the_sign_run_on_the_side_thread(monkeypatch):
     seen = {}
-    real_color, real_obstacle = pipeline_mod.detect_color, pipeline_mod.estimate_obstacle
 
-    def color(*a, **k):
-        seen["color"] = threading.current_thread().name
-        return real_color(*a, **k)
-
-    def obstacle(*a, **k):
-        seen["obstacle"] = threading.current_thread().name
-        return real_obstacle(*a, **k)
-    monkeypatch.setattr(pipeline_mod, "detect_color", color)
-    monkeypatch.setattr(pipeline_mod, "estimate_obstacle", obstacle)
-    sf = drive_sequence()[0]
-    Pipeline(SCENE_CONFIG, parallel=True).perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
-    assert all(name.startswith(par.SIDE_THREAD_NAME) for name in seen.values()) and len(seen) == 2
+    def watched(name, real):
+        def fn(*a, **k):
+            seen[name] = threading.current_thread().name
+            return real(*a, **k)
+        return fn
+    monkeypatch.setattr(pipeline_mod, "detect_color", watched("color", pipeline_mod.detect_color))
+    monkeypatch.setattr(pipeline_mod, "estimate_obstacle", watched("obstacle", pipeline_mod.estimate_obstacle))
+    monkeypatch.setattr(pipeline_mod, "find_sign_candidates", watched("sign", pipeline_mod.find_sign_candidates))
+    sf = next(sf for sf in drive_sequence() if sf.segment == "stop_sign")  # a frame with a sign to find
+    p = Pipeline(SCENE_CONFIG, parallel=True)
+    p2 = p.perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
+    assert set(seen) == {"color", "obstacle", "sign"}
+    assert all(name.startswith(par.SIDE_THREAD_NAME) for name in seen.values())
+    assert any(d.type == "stop_sign" for d in p2.detections), "the side thread's sign reaches fusion"
     seen.clear()
     Pipeline(SCENE_CONFIG, parallel=False).perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
-    assert set(seen.values()) == {threading.main_thread().name}
+    assert set(seen.values()) == {threading.main_thread().name}   # serial: the sign runs inside geometry
 
 
 @pytest.mark.software
@@ -79,10 +80,11 @@ def test_the_timings_still_add_up_and_name_the_wait():
     p.perceive(sf.frame, sf.frame_id, sf.timestamp_ms)
     assert list(p.last_timings_ms) == ["preprocess", "roi", "geometry", "lane_offset", "stop_line", "branch_wait",
                                        "fusion", "package"]
-    assert set(p.last_side_ms) == {"color", "obstacle"} and all(v >= 0 for v in p.last_side_ms.values())
+    assert set(p.last_side_ms) == {"color", "obstacle", "sign"} and all(v >= 0 for v in p.last_side_ms.values())
+    assert "sign" not in p.last_geometry_ms                  # the sign's time is the side thread's now
     chain = run_chain(sf.frame, sf.frame_id, sf.timestamp_ms, SCENE_CONFIG, parallel=True)
     assert "branch_wait" in chain.timings_ms and "color" not in chain.timings_ms
-    assert set(chain.side_timings_ms) == {"color", "obstacle"}
+    assert set(chain.side_timings_ms) == {"color", "obstacle", "sign"} and "sign" not in chain.geometry_timings_ms
     assert all(name in st.STAGE_ORDER and name not in st.EXTERNAL_STAGES for name in chain.timings_ms)
     assert run_chain(sf.frame, sf.frame_id, sf.timestamp_ms, SCENE_CONFIG, parallel=False).side_timings_ms == {}
 
@@ -126,7 +128,7 @@ def test_the_comparison_runs_every_mode_on_every_frame_and_reports_the_gain():
     res = pc.measure(frames, modes, block=4, config=SCENE_CONFIG)
     assert {r["frames"] for r in res.values()} == {12}
     assert res["serial cv1"]["branch_wait_ms"] is None and res["parallel cv1"]["branch_wait_ms"]["p50"] >= 0
-    assert set(res["parallel cv1"]["side_ms"]) == {"color", "obstacle"}
+    assert set(res["parallel cv1"]["side_ms"]) == {"color", "obstacle", "sign"}
     text = "\n".join(pc.report(res))
     assert "parallel cv1:" in text and "ms per frame at p50 against serial" in text
 

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field, replace
 from src.capture.camera import FrameData
 from src.perception.preprocess import preprocess_frame, PreprocessResult
 from src.perception.roi_crop import crop_rois, ROICropResult
-from src.perception.geometry import run_geometry_stage, GeometryBranchResult
+from src.perception.geometry import extract_sign_candidates, run_geometry_stage, GeometryBranchResult
 from src.perception.color_branch import run_color_stage, load_hsv_ranges
 from src.perception.lane_offset import compute_lane_offset, LaneOffsetResult
 from src.perception.feature_fusion import fuse_detections, FusionResult
@@ -65,7 +65,8 @@ def run_chain(
     """
     config defaults to PipelineConfig(); run_live_view() uses MEASURED. Results are the same
     parallel or not; parallel, timings_ms has branch_wait in place of color and obstacle, whose
-    own times are in side_timings_ms, so timings_ms still adds up to the frame.
+    own times are in side_timings_ms with the sign's (not among geometry's parts), so
+    timings_ms still adds up to the frame.
     """
     timings = {}
     mark = [time.perf_counter()]    # a list so lap() can update it without nonlocal
@@ -88,8 +89,10 @@ def run_chain(
         side = side_pool().submit(run_side, [
             ("color", lambda: run_color_stage(roi, config.color, trace)),
             ("obstacle", lambda: compute_obstacle(roi, config.obstacle, config.ground, config.stop_line_table)),
+            ("sign", lambda: extract_sign_candidates(roi.sign_color_roi, config.geometry.sign, roi.frame_id,
+                                                     roi.timestamp_ms, draw_overlays, trace)),
         ])
-        geo, lane_debug, sign_debug = run_geometry_stage(roi, config.geometry, draw_overlays, trace, geo_ms)
+        geo, lane_debug, _ = run_geometry_stage(roi, config.geometry, draw_overlays, trace, geo_ms, sign=False)
         lap("geometry")
         offset, offset_debug = compute_lane_offset(geo, roi, config.lane_offset)
         lap("lane_offset")
@@ -99,6 +102,8 @@ def run_chain(
         results, side_ms = side.result()
         lap("branch_wait")
         (traffic, traffic_debug), (obstacle, obstacle_debug) = results["color"], results["obstacle"]
+        signs, sign_debug = results["sign"]
+        geo = replace(geo, sign_candidates=signs)
     else:
         geo, lane_debug, sign_debug = run_geometry_stage(
             roi, config.geometry, draw_overlays, trace, geo_ms
