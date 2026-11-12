@@ -78,7 +78,7 @@ RENDER_RUN = $(or $(strip $(RUN)),$(call NEWEST,nav_))
 .DEFAULT_GOAL := help
 .PHONY: help session pigpiod run phase2 phase3 maneuver maneuver-dry navigate nav-dry intersection \
         intersection-dry render routines camera-controls sweep-camera diag-nav diag-run monitor-attach capture-anatomy frame-meta i2c-trace sched-latency pi-load nav-report timeline timing \
-        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map range-compare line-replay approach-log light-clips gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
+        jitter camera-meta capture-report sched-report loop-budget light-report load-compare fig8-report motor-health eval label obstacle-map range-compare line-replay approach-log nav-replay light-clips gates sign-check stability hw-report soak-report routine-report compare test test-hw soak lint calib-camera calib-stopline calib-lane calib-odometry compare-parallel ab-parallel \
         calib-ground calib-lamps sweep-lamps code-cards newest clean
 
 ##@ Start here
@@ -230,6 +230,9 @@ line-replay: ## stop-line cm against the tape over every detect-range line run i
 
 approach-log: ## a driving run's nav.csv as one row per stop-line approach + shares by distance, for TP-11 Dynamic (RUN=<run folder>; ARGS="--sign-at 1,8 --light-at 4,11")
 	$(PY) -m src.analysis.approach_log $(strip $(RUN)) $(ARGS)
+
+nav-replay: ## today's Navigation over a run's p3.csv: each sign, light and obstacle stop kept, added or removed against the robot's (RUN=<run or attempt folder>; ARGS="--sign-min-frames 1")
+	$(PY) -m src.analysis.nav_replay $(strip $(RUN)) $(ARGS)
 
 light-clips: ## parked clips of the light cycling, labelled (make label): each colour per frame and voted, each change timed, for TP-03 (RUN=<folder of clips>; ARGS=--from-log)
 	$(PY) -m src.analysis.light_clips $(strip $(RUN)) $(ARGS)
