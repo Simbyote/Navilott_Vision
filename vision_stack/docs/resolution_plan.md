@@ -148,6 +148,20 @@ Two archives of the 28 Oct runs were shared: the bench `routine_frame-budget_202
 | One-line lane frames (45% of the run) | In only 16% of `right_only` frames was the missing left line's foot outside the old ROI (what F1/F2 fix); in most of the rest it sat inside, often within 40 px of the edge. Likely the dashed centre line's gaps; unconfirmed without frames |
 | **Wheel-stall guard** (added after this run) | Replayed, it trips at 474 s on the right wheel (duty 0.63, 0 counts/s, 500 ms): the right N20 that `motor_health` shows weakening from 455 s and that died at 587 s. It would have braked the run ~2 min before the motor failed |
 
+### 4c. What the 4 Nov course run's logs answer (2026-11-12)
+
+`routine_figure-eight_20261104_165132`, attempt 2: the 9.3-min run `requirements.md` quotes for P1, P2, D2 and D3 (10,664 frames; it is dated 5 Nov there, corrected). Logs only, as for 28 Oct. The open-loop replay now also keeps the end-of-course rule from ending the run: without the recorded robot's holds at the ghost signs, the same lost-lane frames would count toward the end, and every rule after would stop updating. With the stall guard off, the old sign rule reproduces all 7 recorded sign stops frame for frame.
+
+| Question | Answer from the logs |
+| --- | --- |
+| **D2**, the old rule | Signs at lap positions 6 and 12. Confirmed before the line at 4 of 5 (miss: lap 1, position 6, step 6, 0 votes); **3 false** sign stops (steps 4, 18, 22, at the light intersections of positions 4 and 8, 1, 3 and 2 votes), as `requirements.md` records |
+| **D2 under F6** (a sighting of 6) | The replay keeps all 4 real stops (steps 12, 20, 26, 34; 18–89 votes) and removes all 3 false ones: **0 false in 9.3 min**, D2's false-stop rule met. "Every sign" still fails on the lap-1 miss. Both runs missed a sign on lap 1 only (28 Oct position 5, 4 Nov position 6): worth checking whether auto exposure had settled (`make frame-meta` at the start of a run) |
+| **D1** on lane-keeping frames | `vision` 96.4%, `hold` 3.6%, `stale` 0%: the proposed rule met, as on 28 Oct (98.6%) |
+| **The early end** (step 37, 9.26 of 10 min) | Lane keeping on a one-line lane (`right_only`), then no line, `hold`, `stale`, and the end-of-course rule ended it: a real lane loss, cause in the frames |
+| **Timing** | geometry 26.4 ms median (lanes 14.0, edges 5.8, stop line 3.1, **sign 2.9**), preprocess 12.0, side colour 5.6 + obstacle 7.4: the same shares as 28 Oct. F4 ~3 ms, F5 indicated (§4b) |
+
+**Frames that would answer the rest** (attempt 2's frame ids; ~1,500 images): the lap-1 miss 1380–1514; the ghosts 820–905, 4530–4714, 5940–6032; the lights read red or yellow without a sign 524–638, 4376–4427, 4963–5134, 9063–9232, 9793–9820, 10080–10114 (to label lit or unlit for F9 and D3); the early end 10560–10664.
+
 ## 5. Decisions the team has to take (before the phase that needs them)
 
 | # | Decision | Needed by | Recommendation |
