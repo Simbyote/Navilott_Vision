@@ -1,6 +1,6 @@
 # Phases 1 and 2 on the Robot: Lane Offset, Lane Keeping, the Frame Budget and the Stop Sign
 
-> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6), and the stop-line table's re-fit with D4b and D6 (step 7). The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
+> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6), the stop-line table's re-fit with D4b and D6 (step 7), and R4 and R5 (steps 8–9), which close Phase 4's first session. The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
 
 **Time:** about 1.5 h with two people. **Needs:** the practice arena or any straight lane ≥ 1.5 m, a ruler, a charged pack (≥ 11.5 V at rest), someone to walk beside the robot in steps 3–4.
 
@@ -302,6 +302,55 @@ Commit the new table with the fit's verdict in the message.
 
 ---
 
+## Step 8: R4, CPU and memory while driving (during step 6)
+
+**Why:** R4 was verified on 28 Oct from a 2.2-minute drive, too short to judge memory growth (5 minutes after a 1-minute warm-up). Step 6's ten-minute course run is long enough, so record it rather than drive again.
+
+1. Start step 6's run (`make routine-figure-eight`) and stop at its first prompt, before the robot drives.
+2. In a **second terminal**, start the recorder; it attaches to the routine's process (waits up to 30 s for it) and stops when the run ends:
+
+   ```bash
+   make monitor-attach MATCH="src.routines figure-eight"
+   ```
+
+3. Go back to the first terminal and run step 6 as written.
+4. Then, with the recorder's folder and the run's attempt folder:
+
+   ```bash
+   make pi-load RUN=runs/diag_<time> NAV=runs/routine_figure-eight_<time>/attempt_01
+   ```
+
+   `NAV` limits the judgement to the run itself, without startup and shutdown. Read the **R4** line:
+
+   ```
+   R4        MET: CPU ..% of the Pi (< 70, ok); busiest core p95 ..% (< 90, ok); RSS max .. MB (< 400, ok); growth .. MB/min (<= 0.25, ok)
+   ```
+
+**Pass:** `R4 MET`. If growth reads "drive longer", the run ended before 6 minutes: use a longer run. The busiest core is the one to watch: a 28 Oct recording of `make run` read 90.2% at p95, just over.
+
+---
+
+## Step 9: R5, the motors stop when commands stop (bench, wheels up; ~1 min)
+
+**Why:** R5 is verified in software; its hardware test is written but has never been recorded. It runs two tests: the Python watchdog brakes the wheels when commands stop, and pigpiod's own script brakes them when the whole Python process is stalled.
+
+**Lift the robot so both wheels are off the ground.** The test drives the motors for about 14 s.
+
+```bash
+make test-hw ARGS="src/tests/test_drive.py -k watchdog"
+```
+
+**Pass:** both tests pass, **not skipped**:
+
+```
+test_the_watchdog_stops_the_real_wheels_when_drive_goes_quiet PASSED
+test_the_pigpiod_watchdog_alone_stops_the_real_wheels PASSED
+```
+
+A skip ("drive not found on this chassis") means a 0.3 s nudge made no encoder count: check pigpiod (`make pigpiod`) and the encoder wiring, then run it again. Copy the two result lines into the results sheet.
+
+---
+
 ## Results sheet
 
 Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.md`'s P3 status.
@@ -320,6 +369,8 @@ Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.m
 | **Step 6** signs stopped for / false sign stops / lowest real votes | / / |
 | **Step 6** FPS / over budget / total p95 | / / |
 | **Step 7** fit verdict / D4b looks within ±2 cm / median error / D6 cube, box | / / / , |
+| **Step 8** R4: CPU % of Pi / busiest core p95 / RSS max / growth MB/min / MET? | / / / / |
+| **Step 9** R5: Python watchdog / pigpiod watchdog | / |
 | Run folders | |
 
 **P3 is Met** when step 2 passes on both straights; update `requirements.md` P3's status with the numbers and the commit, and its "Changes to pass rules" table needs no entry (the rule didn't change).

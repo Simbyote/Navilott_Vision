@@ -74,8 +74,8 @@ def test_process_load_core_load_and_the_busiest_thread(tmp_path):
     assert p["samples"] == 20 and p["total_cpu_pct"]["mean"] == pytest.approx(60.0 + 22.0)
     assert p["main_cpu_p95"] == pytest.approx(80.0) and p["busiest"] == "main"
     assert p["main_share"] == p["busiest_share"] == pytest.approx(60.0 / 82.0, abs=1e-3)
-    assert res["cores"] == {"0": {"mean": 40.0, "max": 40.0}, "1": {"mean": 30.0, "max": 30.0},
-                            "2": {"mean": 20.0, "max": 20.0}, "3": {"mean": 10.0, "max": 10.0}}
+    assert res["cores"] == {"0": {"mean": 40.0, "p95": 40.0, "max": 40.0}, "1": {"mean": 30.0, "p95": 30.0, "max": 30.0},
+                            "2": {"mean": 20.0, "p95": 20.0, "max": 20.0}, "3": {"mean": 10.0, "p95": 10.0, "max": 10.0}}
     assert [t["name"] for t in res["threads"]] == ["main", "src", "sensor-hub"]
 
 
@@ -196,7 +196,7 @@ def test_with_the_run_its_own_time_is_judged_and_startup_left_out(tmp_path):
     assert res["process"]["main_cpu_p95"] == pytest.approx(40.0)
     main = next(t for t in res["threads"] if t["name"] == "main")
     assert main["cpu_mean"] == pytest.approx(40.0) and main["samples"] == w["samples"]
-    assert res["cores"]["0"] == {"mean": 40.0, "max": 40.0}
+    assert res["cores"]["0"] == {"mean": 40.0, "p95": 40.0, "max": 40.0}
     assert res["system"]["cpu_mhz"]["min"] == 1000.0 and res["system"]["duration_s"] == pytest.approx(RUN_S, abs=1.0)
     assert res["system"]["memory"]["rss_start_mb"] >= 50.0 + RUN_START_S, "memory from the run's start, not boot"
     for words in ("CPU-bound", "clock dropped", "unevenly loaded"):
@@ -402,3 +402,28 @@ def test_a_recording_from_before_the_os_counters_has_no_os_part(tmp_path):
     assert res["os"] is None and "os        " not in report_text(res)
     d = pl.load(str(recording(tmp_path / "b")))
     assert d["irqs"] is None and d["procs"] is None                   # header-only files read as absent
+
+
+def long_system(seconds=420, rss=lambda t: 150.0):
+    return [srow(float(t), rss_mb=rss(t)) for t in range(seconds + 1)]
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("kw, failing", [
+    ({}, []),
+    ({"system": long_system(rss=lambda t: 150.0 + t / 60.0)}, ["growth"]),           # 1 MB/min, past 0.25
+    ({"cores": (95.0, 30.0, 20.0, 10.0)}, ["core"]),                                 # one core saturated
+    ({"system": long_system(rss=lambda t: 420.0)}, ["rss"]),
+    ({"system": [srow(float(t)) for t in range(120)]}, ["growth"]),                  # 2 min: growth can't be judged
+])
+def test_r4_judges_each_of_its_four_numbers(tmp_path, kw, failing):
+    kw = {"system": long_system(), **kw}
+    res = run(recording(tmp_path, **kw))
+    q = res["r4"]
+    assert [k for k, ok in q["checks"].items() if not ok] == failing
+    assert q["met"] == (not failing)
+    assert q["cpu_pi_pct"] == pytest.approx((50.0 + 2.0 + 20.0) / 4)       # the run's threads, as a share of 4 cores
+    line = next(l for l in pl.report_lines(res) if l.startswith("R4"))
+    assert ("NOT MET" in line) == bool(failing)
+    if kw["system"] and len(kw["system"]) < 300:
+        assert q["growth_mb_per_min"] is None and "drive longer" in line

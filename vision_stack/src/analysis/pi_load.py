@@ -116,7 +116,7 @@ def core_load(cores: Table | None) -> dict:
     core, busy = cores.numeric("core"), cores.numeric("busy_pct")
     for c in sorted({int(x) for x in core[~np.isnan(core)]}):
         s = stats(busy[core == c])
-        out[str(c)] = {"mean": round(s["mean"], 1), "max": round(s["max"], 1)}
+        out[str(c)] = {"mean": round(s["mean"], 1), "p95": round(s["p95"], 1), "max": round(s["max"], 1)}
     return out
 
 
@@ -237,6 +237,7 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
            "os": os_load(judged_system, judged_irqs, judged_procs)}
     if alignable:
         res["aligned"] = align(rows, system, diag_t0, nav, nav_t0)
+    res["r4"] = r4(res)
     res["findings"] = findings(res)
     # Caveats, like soak's "too short" on runs under ~6 minutes
     res["notes"] = [f for f in (res["system"] or {}).get("findings", []) if f.startswith("run too short")]
@@ -244,6 +245,33 @@ def analyze(threads: Table, cores: Table | None = None, system: Table | None = N
         res["notes"].append(f"the run covers {window['samples']} thread samples (under {MIN_WINDOW_SAMPLES}): "
                             "judged over the whole recording, startup and shutdown included")
     return res
+
+
+# requirements.md R4, while driving: the run's CPU as a share of the whole Pi (mean), the busiest
+# core's p95, peak RSS, and no memory growth past soak's leak rate after warm-up
+R4_CPU_PI_PCT, R4_CORE_P95_PCT, R4_RSS_MB = 70.0, 90.0, 400.0
+
+
+def r4(res: dict) -> dict | None:
+    """R4's four numbers and their verdicts; a value the recording can't give is None and fails."""
+    if not res["process"]:
+        return None
+    n_cores = len(res["cores"]) or 4
+    cpu_core = res["process"]["total_cpu_pct"]["mean"]
+    cpu_pi = None if cpu_core is None else round(cpu_core / n_cores, 1)
+    core_p95 = max((c["p95"] for c in res["cores"].values()), default=None)
+    mem = (res["system"] or {}).get("memory") or {}
+    rss_max, growth = mem.get("rss_max_mb"), mem.get("leak_mb_per_min")
+    if (mem.get("fit_span_s") or 0.0) < soak.MIN_FIT_S:
+        growth = None                   # soak fits a slope on any run, but judges it only past MIN_FIT_S
+    checks = {"cpu": cpu_pi is not None and cpu_pi < R4_CPU_PI_PCT,
+              "core": core_p95 is not None and core_p95 < R4_CORE_P95_PCT,
+              "rss": rss_max is not None and rss_max < R4_RSS_MB,
+              "growth": growth is not None and growth <= soak.LEAK_MB_PER_MIN}
+    return {"cpu_pi_pct": cpu_pi, "busiest_core_p95_pct": core_p95,
+            "rss_max_mb": None if rss_max is None else round(rss_max, 1),
+            "growth_mb_per_min": None if growth is None else round(growth, 3),
+            "checks": checks, "met": all(checks.values())}
 
 
 def _named(res: dict, name: str) -> list[dict]:
@@ -362,6 +390,15 @@ def report_lines(res: dict) -> list[str]:
         lines.append(f"aligned   {a['frames']} frames, {a.get('late', 0)} slow; main CPU slow {common.fmt(a.get('late_main_cpu'), 0)}%"
                      f" vs normal {common.fmt(a.get('normal_main_cpu'), 0)}%; correlation main CPU / interval "
                      f"{common.fmt(a.get('corr_main_cpu_interval'))}")
+    q = res.get("r4")
+    if q:
+        mark = lambda k: "ok" if q["checks"][k] else "FAIL"
+        lines.append(f"R4        {'MET' if q['met'] else 'NOT MET'}: CPU {common.fmt(q['cpu_pi_pct'], 1)}% of the Pi "
+                     f"(< {R4_CPU_PI_PCT:g}, {mark('cpu')}); busiest core p95 {common.fmt(q['busiest_core_p95_pct'], 1)}% "
+                     f"(< {R4_CORE_P95_PCT:g}, {mark('core')}); RSS max {common.fmt(q['rss_max_mb'], 0)} MB "
+                     f"(< {R4_RSS_MB:g}, {mark('rss')}); growth "
+                     + (f"-- (under {soak.MIN_FIT_S / 60:g} min after warm-up: drive longer)" if q["growth_mb_per_min"] is None
+                        else f"{q['growth_mb_per_min']:.2f} MB/min") + f" (<= {soak.LEAK_MB_PER_MIN:g}, {mark('growth')})")
     lines += ["", "findings"] + ([f"  - {f}" for f in res["findings"]] or ["  none: nothing past the thresholds"])
     lines += [f"  (note: {n})" for n in res.get("notes", [])]
     return lines
