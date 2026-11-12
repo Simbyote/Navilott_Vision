@@ -386,3 +386,16 @@ def test_several_runs_are_judged_each(tmp_path):
                         options={"minutes": 0.5}, conditions_fn=no_conditions)
     names = [c["name"] for c in res["criteria"]]
     assert len(names) == 12 and names[0] == "touches (run 1)" and names[6] == "touches (run 2)"      # 6 a run, D1 last
+
+
+@pytest.mark.software
+def test_the_unlogged_figure_eight_route_is_the_routines_lap_repeated():
+    # route_figure_eight.json drives the same laps with make run / make diag-run, nothing recorded:
+    # R4 measured without the recorder's load, and the demo (phase1_robot_procedure.md, step 8)
+    from src.navigation.route import FINISH_EDGE, load_route
+    from src.params import PIPELINE_ROOT
+    from src.routines.figure_eight import ROUTE_LAP
+    route = load_route(PIPELINE_ROOT / "route_figure_eight.json")
+    laps, rest = divmod(len(route.maneuvers), len(ROUTE_LAP))
+    assert rest == 0 and laps == 6 and route.maneuvers == ROUTE_LAP * laps
+    assert route.finish == FINISH_EDGE

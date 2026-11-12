@@ -302,31 +302,42 @@ Commit the new table with the fit's verdict in the message.
 
 ---
 
-## Step 8: R4, CPU and memory while driving (during step 6)
+## Step 8: R4, CPU and memory, on an unlogged figure eight (motors on; ~25 min)
 
-**Why:** R4 was verified on 28 Oct from a 2.2-minute drive, too short to judge memory growth (5 minutes after a 1-minute warm-up). Step 6's ten-minute course run is long enough, so record it rather than drive again.
+**Why:** R4 was verified on 28 Oct from a 2.2-minute drive, too short to judge memory growth (5 minutes after a 1-minute warm-up). Measuring it on step 6's logged run would measure the logging too (a JPEG a frame and a wide CSV), so this run is the production loop, `make run`, with nothing recorded, on `route_figure_eight.json`: the figure-eight routine's 14-crossing lap six times (84 maneuvers, ~20 minutes at 4 Nov's 206 s a lap). The same command is the Senior Design Day demo.
 
-1. Start step 6's run (`make routine-figure-eight`) and stop at its first prompt, before the robot drives.
-2. In a **second terminal**, start the recorder; it attaches to the routine's process (the newest whose command line contains `src.routines`; it waits up to 30 s for one) and stops when the run ends. Keep `MATCH` one word: make passes it unquoted:
-
-   ```bash
-   make monitor-attach MATCH=src.routines
-   ```
-
-3. Go back to the first terminal and run step 6 as written.
-4. Then, with the recorder's folder and the run's attempt folder:
+1. Place the robot where the figure-eight routine starts: at the lap's first stop line, in its lane, about to turn **left**. Signs and lights in place.
+2. In the first terminal:
 
    ```bash
-   make pi-load RUN=runs/diag_<time> NAV=runs/routine_figure-eight_<time>/attempt_01
+   make run ROUTE=route_figure_eight.json MAX_RUN_S=1200
    ```
 
-   `NAV` limits the judgement to the run itself, without startup and shutdown. Read the **R4** line:
+   The display shows the step count; press the start button.
+3. **After GO** (not before: the wait at the button and the countdown are idle time and would pull the CPU mean down), in a **second terminal**, start the recorder. It attaches to the run's process, the newest whose command line contains `src.main`; keep `MATCH` one word, as make passes it unquoted:
+
+   ```bash
+   make monitor-attach MATCH=src.main
+   ```
+
+4. Let it drive **at least 7 minutes** (two laps). Someone stays near the track: motors are on.
+5. **As soon as the robot halts** (the time cap, the end of the route, or a lane lost), press **Ctrl-C in the second terminal first**: the recorder writes its folder. The end screen stays up idle until the first terminal is stopped, and that idle time mustn't be recorded. Then Ctrl-C the first terminal.
+6. Note the first terminal's last line, `... after mm:ss (N frames)`: N ÷ the seconds is the run's frame rate, unlogged, beside P1 (an indication: P1 is judged on the logged run's `summary.txt`).
+7. Judge it:
+
+   ```bash
+   make pi-load RUN=runs/diag_<time>
+   ```
+
+   Read the **R4** line:
 
    ```
    R4        MET: CPU ..% of the Pi (< 70, ok); busiest core p95 ..% (< 90, ok); RSS max .. MB (< 400, ok); growth .. MB/min (<= 0.25, ok)
    ```
 
-**Pass:** `R4 MET`. If growth reads "drive longer", the run ended before 6 minutes: use a longer run. The busiest core is the one to watch: a 28 Oct recording of `make run` read 90.2% at p95, just over.
+**Pass:** `R4 MET`. If growth reads "drive longer", the recording held under 6 minutes of driving: run again and let it go longer. The busiest core is the one to watch: a 28 Oct recording of `make run` read 90.2% at p95, just over.
+
+**What this run can't give:** P2's latency, the per-stage timing, D1, D2, and anything `nav-replay` or `approach-log` reads: those come from step 6's logged run.
 
 ---
 

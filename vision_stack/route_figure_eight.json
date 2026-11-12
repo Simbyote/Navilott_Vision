@@ -1,0 +1,11 @@
+{
+  "maneuvers": [
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right",
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right",
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right",
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right",
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right",
+    "left", "left", "left", "straight", "left", "left", "left", "right", "right", "right", "straight", "right", "right", "right"
+  ],
+  "finish": "edge"
+}
