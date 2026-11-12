@@ -246,7 +246,7 @@ make approach-log RUN=runs/routine_figure-eight_<time> ARGS="--lap-len 14"
 | Real signs' votes | `approach-log`'s `sign_frames` at sign positions | All ≥ 6 (F6's threshold); report the lowest |
 | The replay agrees with the robot | `nav-replay`: `0 removed, 0 added` | Today's code drove it, so it should; anything else is a replay limit to report |
 | P1, P2 | the attempt's `summary.txt` | ≥ 20.0 FPS effective, ≤ 5% over 50 ms; `total` p95 ≤ 50 ms |
-| D1 (agreed 2026-11-12) | the routine's own criterion, "lane on vision outside crossings (D1)" | ≥ 90% |
+| D1 (agreed 2026-11-12) | the routine's own criterion, "lane on vision while lane keeping (D1)" | ≥ 90% |
 
 Keep the run folder **with its frames** for the review: `nav-replay` and `approach-log` need only `nav.csv` and `p3.csv`, but a ghost or a miss needs its frames.
 

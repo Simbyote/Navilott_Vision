@@ -155,6 +155,6 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             out += [criterion(f"completed the course{tag}", 1 if r["completed"] else 0, ">=", 1),
                     criterion(f"touches{tag}", r["touches"], "<=", 0),
                     criterion(f"stop signs or red lights run{tag}", r["violations"], "<=", 0),
-                    criterion(f"lane on vision outside crossings (D1){tag}", r.get("lane_vision_pct"), ">=",
+                    criterion(f"lane on vision while lane keeping (D1){tag}", r.get("lane_vision_pct"), ">=",
                               100 * D1_LANE_SHARE, "%")]
         return out

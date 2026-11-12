@@ -339,12 +339,15 @@ def test_the_command_line_passes_settings_and_lists_them(tmp_path, monkeypatch):
 
 
 @pytest.mark.software
-def test_d1_counts_the_lane_outside_crossing_stages_only():
+def test_d1_counts_only_the_frames_lane_keeping_decides():
     from src.routines.harness import D1_LANE_SHARE, LaneTally
     tally = LaneTally()
     assert tally.share is None and tally.pct() is None
-    rows = ([{"stage": "", "lane_status": "vision"}] * 9 + [{"stage": "", "lane_status": "stale"}]
-            + [{"stage": "turn", "lane_status": "stale"}] * 50)          # a crossing doesn't count, however long
+    lk = "lane_keeping"
+    rows = ([{"rule": lk, "lane_status": "vision"}] * 9 + [{"rule": lk, "lane_status": "stale"}]
+            # no other rule counts, however long: a maneuver, a hold at a sign or light, an obstacle, the end
+            + [{"rule": r, "lane_status": "stale"} for r in ("intersection", "stop_sign", "traffic_light",
+                                                              "obstacle", "end_of_course") for _ in range(20)])
     for n in rows:
         tally(n)
     assert (tally.frames, tally.vision, tally.pct()) == (10, 9, 90.0) and tally.share >= D1_LANE_SHARE

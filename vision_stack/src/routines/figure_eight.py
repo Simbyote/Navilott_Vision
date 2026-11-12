@@ -227,7 +227,7 @@ class FigureEight(Routine):
     name = "figure-eight"
     title = "Course laps: lefts, rights and straights, for minutes"
     question = "Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time?"
-    requirement = "course repeatability; demo-day endurance; D1 (the lane outside crossings)"
+    requirement = "course repeatability; demo-day endurance; D1 (the lane while lane keeping)"
     trials = 1
     fields = ("minutes", "ended_by", "intersections", "laps_robot", "laps_seen", "touches", "touches_logged",
               "slip_spots", "turns_off_gyro",
@@ -356,6 +356,6 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
                               "within", (0, 0)),
                     criterion(f"turns not ended on the gyro{tag}", r["turns_off_gyro"], "<=", 0),
                     criterion(f"turns off by over {HEADING_TOLERANCE_DEG:.0f} deg{tag}", r["turns_off_heading"], "<=", 0),
-                    criterion(f"lane on vision outside crossings (D1){tag}", r.get("lane_vision_pct"), ">=",
+                    criterion(f"lane on vision while lane keeping (D1){tag}", r.get("lane_vision_pct"), ">=",
                               100 * D1_LANE_SHARE, "%")]
         return out

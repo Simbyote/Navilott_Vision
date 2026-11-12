@@ -177,7 +177,7 @@ Two archives of the 28 Oct runs were shared: the bench `routine_frame-budget_202
 
 | # | Decision | Needed by | Recommendation |
 | --- | --- | --- | --- |
-| 1 | D1 target | Phase 4 (T2) | **Decided 2026-11-12:** `vision` ≥ 90% of frames outside intersection crossing stages. T2 done the same day; 28 Oct 97.7%, 4 Nov 92.2% |
+| 1 | D1 target | Phase 4 (T2) | **Decided 2026-11-12:** `vision` ≥ 90% of the frames lane keeping decides. T2 done the same day; 28 Oct 98.6%, 4 Nov 96.4% |
 | 2 | Blue can: dark-object limitation, or a gate change | Phase 3 (F8) | Follow `obstacle-map`'s answer |
 | 3 | `SIGN_MIN_FRAMES` value | Phase 3 (F6) | **Set to 6 votes a sighting from the 28 Oct run (§4b):** real stops 9–82, ghosts 1–3. Confirm with a 5 Nov `approach-log` that no real sign there had under 6 |
 | 4 | Lane-keeping gain after F1: keep the 5 Nov effective gain (port) or re-tune | Phase 1 (F3) | Port first, re-tune only if recover-offset shows overshoot |
