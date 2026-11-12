@@ -307,10 +307,10 @@ Commit the new table with the fit's verdict in the message.
 **Why:** R4 was verified on 28 Oct from a 2.2-minute drive, too short to judge memory growth (5 minutes after a 1-minute warm-up). Step 6's ten-minute course run is long enough, so record it rather than drive again.
 
 1. Start step 6's run (`make routine-figure-eight`) and stop at its first prompt, before the robot drives.
-2. In a **second terminal**, start the recorder; it attaches to the routine's process (waits up to 30 s for it) and stops when the run ends:
+2. In a **second terminal**, start the recorder; it attaches to the routine's process (the newest whose command line contains `src.routines`; it waits up to 30 s for one) and stops when the run ends. Keep `MATCH` one word: make passes it unquoted:
 
    ```bash
-   make monitor-attach MATCH="src.routines figure-eight"
+   make monitor-attach MATCH=src.routines
    ```
 
 3. Go back to the first terminal and run step 6 as written.
