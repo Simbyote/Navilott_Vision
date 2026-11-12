@@ -99,7 +99,7 @@ Cuts four regions so each branch only processes the part of the frame where its 
 
 | ROI | Bounds (fraction of frame) | At 480×270 (x, y, w, h) | Source | Why there |
 | --- | --- | --- | --- | --- |
-| lane | x 0.05–0.95, y 0.70–1.00 | (24, 189, 432, 81) | gray | Near-field road just ahead of the robot |
+| lane | x 0.00–1.00, y 0.70–1.00 | (0, 189, 480, 81) | gray | Near-field road just ahead of the robot. The frame's whole width since 2026-11-12 (5–95%, 432 px, until then): the 394 px lane had 27 and 11 px to spare, so a line left through the side past ~0.4–1 cm off centre. Undistortion at alpha 0 crops to valid pixels, so the edge columns are floor |
 | traffic | x 0.23–0.53, y 0.10–0.33 | (110, 27, 144, 62) | BGR | Around the course's light as seen from its stop line (2026-10-06; moved down on the track 2026-10-26); narrow, so a second light to the right and a red box below stay out |
 | sign | x 0.55–1.00, y 0.00–0.85 | (264, 0, 216, 230) | gray, and BGR as `sign_color_roi` (the sign detector reads the BGR one) | Signs are posted right of the lane. Tall: near the line the sign rises in the frame, and a lower edge cut it into 5–7 vertices (sign_check, 2026-10-20). Right of the traffic ROI, so the two don't overlap |
 | obstacle | x 0.25–0.75, y 0.45–1.00 | (120, 122, 240, 148) | gray and BGR (`obstacle_roi`, `obstacle_color_roi`) | The robot's own path, from the view bottom up past the lane ROI: an upright object rises above its base. Not drawn by `draw_roi_overlay`; the obstacle view draws it |
@@ -144,7 +144,7 @@ Confidence, in [0, 1]: 50% length (against a quarter of the ROI extent), 30% bri
 
 Horizontal fragments of the same line, with endpoints within 40 px, are merged into one candidate. Without that, lane offset could pick two pieces of one line as opposite boundaries.
 
-Each candidate records `foot_x`: where the marking meets the ROI's bottom. For a contour that reaches the bottom it is the mean x of its lowest 6 rows (`FOOT_BAND_PX`), where the marking is closest to the robot, which is what steering should use; for an angled line, the bbox center sits halfway up the ROI instead. A marking that leaves the ROI through its **side** ends above the bottom with its lowest rows at that side, so the band's mean read the ROI's edge: at the measured lane (394 px in the 432 px ROI, 27 and 11 px to spare) that happened past ~0.4–1 cm off centre, and the offset read ~0.6 of the truth (P3, 2026-11-03). Since 2026-11-12 such a contour's axis over its lowest 30 rows (`FOOT_FIT_ROWS`) is carried on to the band's row instead, inside or outside the ROI; contours flatter than 20° (`FOOT_MIN_SLOPE_DEG`) keep the band's mean. Contours that reach the bottom are unchanged, so centred frames read as before.
+Each candidate records `foot_x`: where the marking meets the ROI's bottom. For a contour that reaches the bottom it is the mean x of its lowest 6 rows (`FOOT_BAND_PX`), where the marking is closest to the robot, which is what steering should use; for an angled line, the bbox center sits halfway up the ROI instead. A marking that leaves the ROI through its **side** ends above the bottom with its lowest rows at that side, so the band's mean read the ROI's edge: at the measured lane (394 px in the then 432 px ROI, 27 and 11 px to spare) that happened past ~0.4–1 cm off centre; the ROI now takes the frame's whole width, 51 and 35 px, so it happens past ~1.2–1.8 cm, and the offset read ~0.6 of the truth (P3, 2026-11-03). Since 2026-11-12 such a contour's axis over its lowest 30 rows (`FOOT_FIT_ROWS`) is carried on to the band's row instead, inside or outside the ROI; contours flatter than 20° (`FOOT_MIN_SLOPE_DEG`) keep the band's mean. Contours that reach the bottom are unchanged, so centred frames read as before.
 
 ### Stop lines
 
@@ -278,7 +278,7 @@ offset      = clamp((robot_x − lane_center) / (ROI width / 2), −1, +1)     r
 
 **Sign: + means the robot is right of lane center, so steer left.** The lane center appears left of the image center when the robot has drifted right. Older docs said the opposite; the code and this doc are what count.
 
-The offset is normalized by **half the lane ROI width** (216 px at 480×270), not half the lane width. It's a steering error with a fixed scale, which is what the controller needs.
+The offset is normalized by **half the lane ROI width** (240 px at 480×270; 216 px until the ROI took the frame's whole width, 2026-11-12), not half the lane width. It's a steering error with a fixed scale, which is what the controller needs.
 
 ### Modes
 

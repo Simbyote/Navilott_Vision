@@ -580,5 +580,7 @@ def test_a_horizontal_blob_too_short_for_a_stop_line_still_moves_the_offset():
     # stop line, so no stop line is found for lane_offset to skip it by, yet
     # it passes the lane gates.
     p2 = Pipeline(SCENE_CONFIG).perceive(SCENES["horizontal_blob"], 1, 50)
+    clean = Pipeline(SCENE_CONFIG).perceive(SCENES["two_boundary"], 1, 50).lane_offset_results[0]
     assert not p2.stop_line_results[0].detected
-    assert p2.lane_offset_results[0].right_x != 289.5
+    blob = p2.lane_offset_results[0]
+    assert (blob.left_x, blob.right_x) != (clean.left_x, clean.right_x) and blob.offset != clean.offset

@@ -37,7 +37,10 @@ class ROIBounds:
         if self.y0 >= self.y1:
             raise ValueError(f"ROIBounds: y0 must be < y1, got {self.y0} >= {self.y1}")
 
-LANE = ROIBounds(x0=0.05, y0=0.70, x1=0.95, y1=1.00)
+# The whole width (5-95% until 2026-11-12): the 394 px lane in a 432 px ROI had 27 and 11 px to
+# spare, so past ~0.4-1 cm off centre a line left through the side. Undistortion at alpha 0
+# crops to valid pixels, so the frame's edge columns are floor, not border
+LANE = ROIBounds(x0=0.00, y0=0.70, x1=1.00, y1=1.00)
 # Around the course's light from its stop line (2026-10-06). Narrow, to keep
 # out a second light to the right and a red box below. Moved down on the track
 # (2026-10-26); the light rises in view when the robot stops further forward

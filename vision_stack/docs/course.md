@@ -66,12 +66,12 @@ Moving the mount changes the height, tilt or position, which invalidates the len
 
 | Setting | Current value | Where it should come from |
 | --- | --- | --- |
-| Lane ROI | Bottom 30% of the frame, 5–95% across | The rows showing the road just ahead of the robot at this height and tilt |
+| Lane ROI | Bottom 30% of the frame, the whole width (5–95% until 2026-11-12) | The rows showing the road just ahead of the robot at this height and tilt |
 | Minimum plausible lane width | 260 px (MEASURED, 2026-11-05; 300 until then; 60 the default) | Under every real lane, which reads ~270–300 px with the robot 3–4 cm off centre: pairs 61–65 px apart (a line and something beside it) were taken for a lane and flipped the estimate's sign (2026-10-20) |
 | Maximum plausible lane width | 450 px (MEASURED, 2026-11-12; 400 until then) | Over the lane at any placement (~394 px, now also off centre), under a full street (~590 px at the bottom row) |
-| Room beside the lane in the lane ROI | 27 px left, 11 px right (the 394 px lane at `robot_x_px` 224 in the 432 px ROI): 0.96 and 0.39 cm | A line past the ROI's side is seen only higher up; its foot is carried on to the bottom (`geometry_shared.contour_foot_x`, 2026-11-12). Widening the lane ROI to the frame's full width would give 51 and 35 px |
+| Room beside the lane in the lane ROI | 51 px left, 35 px right (the 394 px lane at `robot_x_px` 248 in the 480 px ROI): 1.8 and 1.2 cm. 27 and 11 px in the 5–95% ROI until 2026-11-12 | A line past the ROI's side is seen only higher up; its foot is carried on to the bottom (`geometry_shared.contour_foot_x`, 2026-11-12) |
 | Lane center from one visible line | 197.1 px (MEASURED, 2026-11-02; 178 until then, 228 hand-set until 2026-10-12) | Half the lane width in px: ~394 px measured 2026-11-02 |
-| Robot's centre in the lane ROI | 224 px (MEASURED, 2026-11-05; the ROI's middle, 216, when unset) | `make calib-lane` with the robot parked centred on a straight |
+| Robot's centre in the lane ROI | 248 px (MEASURED, 2026-11-12: `make calib-lane`'s 224 of 2026-11-05 moved with the ROI's left edge, 24 px; the ROI's middle, 240, when unset) | `make calib-lane` with the robot parked centred on a straight; due again to confirm 248 |
 | Ground scale | Not set | 14 cm ÷ lane width in px, measured at the bottom of the lane ROI |
 
 Once the ground scale is measured, the three px values above can be checked against it. For example, at a scale of 0.05 cm/px, one lane (14 cm) is about 280 px and a full street (29–30 cm) is about 590 px. The 400 px maximum would sit correctly between them, and a 228 px half-lane value would be too high (140 px expected). The numbers are only an example; use the measured scale.

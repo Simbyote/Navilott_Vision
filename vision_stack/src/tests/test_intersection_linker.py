@@ -24,7 +24,12 @@ from src.navigation.intersection import (
 )
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
 from src.tests.navigation_checks import reach_frames
-from src.tests.scenes import SCENE_CONFIG, scene
+from src.tests.scenes import ROI_CENTER, SCENE_CONFIG, scene
+
+# A 140 px lane centred on the lane ROI's middle, where SCENE_CONFIG's robot sits (scene()'s default
+# lane, 150-290, was drawn about the 5-95% ROI's middle, 216; the ROI is the frame's width since 2026-11-12)
+MIDDLE = int(ROI_CENTER)
+LANE = (MIDDLE - 70, MIDDLE + 70)
 from src.tests.sim_robot import FakeClock
 
 DT = 0.05
@@ -35,15 +40,15 @@ ADVANCE = ADVANCE_MS // round(DT * 1000)            # a turn's frames on into th
 
 def sequence(maneuver):
     """(frame, yaw) per frame: lane, a stop line coming down to the view bottom, the intersection, the lane back."""
-    out = [(scene(), 0.0)] * 6
+    out = [(scene(LANE), 0.0)] * 6
     for y in (10, 30, 60, 70):
-        out += [(scene(stop_line=(120, 320, y)), 0.0)] * 3
+        out += [(scene(LANE, stop_line=(MIDDLE - 100, MIDDLE + 100, y)), 0.0)] * 3
     out += [(scene(marks=()), 0.0)] * REACH                             # to the line
     yaw = {LEFT: -YAW_DPS, RIGHT: YAW_DPS}.get(maneuver)
     if yaw:
         out += [(scene(marks=()), 0.0)] * ADVANCE                      # on into the intersection
         out += [(scene(marks=()), yaw)] * 30                           # the turn: 90 deg on the gyro
-    return out + [(scene(), 0.0)] * 60                                 # the lane back
+    return out + [(scene(LANE), 0.0)] * 60                                 # the lane back
 
 
 class Source:
@@ -138,7 +143,7 @@ def test_the_sequence_folder_holds_the_run_and_its_findings(tmp_path):
 def test_a_turn_the_gyro_never_sees_is_a_check(tmp_path):
     clock = FakeClock()
     frames = [(f, 0.0) for f, _ in sequence(LEFT)]                     # the robot "turns" but the gyro reads nothing
-    frames += [(scene(), 0.0)] * 100                                  # past the left turn's 7.3 s limit
+    frames += [(scene(LANE), 0.0)] * 100                                  # past the left turn's 7.3 s limit
     source = Source(clock, frames)
     findings = il.run_sequence(LEFT, source, Sensors(source), Motor(), SCENE_CONFIG,
                                out_dir=str(tmp_path / "left"), clock=clock, render=False)

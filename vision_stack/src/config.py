@@ -91,9 +91,11 @@ MEASURED = PipelineConfig(
         # 400 until 2026-11-12: with a line that leaves the ROI's side now carried on to the
         # bottom, a pair off centre reads the lane's ~394 px again instead of 270-300
         max_lane_width_px = 450.0,
-        # Where the centered robot sees its lane's middle: make calib-lane gave 224
-        # (2026-11-05); TP-01's centered looks 221-222 (2026-11-03). The ROI's middle is 216
-        robot_x_px = 224.0,
+        # Where the centered robot sees its lane's middle: make calib-lane gave 224 in the
+        # 5-95% lane ROI (2026-11-05; TP-01's centered looks 221-222, 2026-11-03), 248 once the
+        # ROI starts at the frame's edge, 24 px further left (2026-11-12). The ROI's middle is
+        # 240. Measure it again with make calib-lane
+        robot_x_px = 248.0,
     ),
 )
 

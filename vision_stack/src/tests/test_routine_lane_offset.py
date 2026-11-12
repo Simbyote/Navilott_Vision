@@ -206,8 +206,8 @@ def test_p3s_two_cm(tmp_path, off, verdict):
 def test_the_real_eyes_lane_roi_width():
     from src.routines.camera_look import Eyes
     eyes = Eyes(source=object()).open()
-    assert eyes.roi_width_px(np.zeros((270, 480, 3), np.uint8)) == 432       # course.md: 5-95% across
-    assert eyes.roi_width_px(np.zeros((360, 640, 3), np.uint8)) == 576
+    assert eyes.roi_width_px(np.zeros((270, 480, 3), np.uint8)) == 480       # course.md: the frame's whole width
+    assert eyes.roi_width_px(np.zeros((360, 640, 3), np.uint8)) == 640
     from types import SimpleNamespace
     from src.perception.roi_crop import ROIBounds
     half = Eyes(source=object(), config=SimpleNamespace(roi=SimpleNamespace(lane=ROIBounds(0.25, 0.7, 0.75, 1.0))))
