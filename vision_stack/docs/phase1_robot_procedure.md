@@ -277,8 +277,10 @@ cp calibration/stop_line_table.json calibration/stop_line_table_20261028.json
    ```
 
    ```bash
-   make line-replay RUN=runs
+   make line-replay RUN=runs/routine_detect-range_<time>
    ```
+
+   Name the new run's folder: `RUN=runs` would pool it with the 2 Nov runs, measured on the old table.
 
    **Pass:** every look within **±2 cm** of the tape with a frame-to-frame SD under 0.5 cm (`line-replay` judges D4b's revised rule and counts the original beside it). Its findings print the table's `C` against the median error: after a good re-fit that shift should be under 0.5 cm.
 
