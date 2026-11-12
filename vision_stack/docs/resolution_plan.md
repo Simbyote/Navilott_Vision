@@ -89,7 +89,7 @@ No new make targets are needed. Three existing commands gain a criterion or a li
 | # | Where | Addition | Why |
 | --- | --- | --- | --- |
 | **T1** ✅ | `routines/lane_offset.py` `judge()` | A second criterion: best-fit slope of `reported_cm` against `measured_cm` within 0.8–1.2 (the 5 Nov P3 rule). `analysis/offset_accuracy.py` already computes the fit; call it or copy the two-line least squares | The routine currently judges only the worst error, so it would print PASS on a run the rule fails |
-| **T2** | `routines/course_run.py` `judge()` (and `figure_eight.py`) | D1's criteria on lane-keeping frames only: `vision` share ≥ 90% while `rule == lane_keeping`, longest `stale` run ≤ 1.0 s. `analysis/nav_run.lane_keeping()` already computes the shares by rule; the watch can count the longest stale stretch | Once decision #1 is taken, D1 is judged by the same run that judges D2 and D5, with no new tool |
+| **T2** ✅ | `routines/course_run.py` `judge()` (and `figure_eight.py`) | D1's criteria on lane-keeping frames only: `vision` share ≥ 90% while `rule == lane_keeping`, longest `stale` run ≤ 1.0 s. `analysis/nav_run.lane_keeping()` already computes the shares by rule; the watch can count the longest stale stretch | Once decision #1 is taken, D1 is judged by the same run that judges D2 and D5, with no new tool |
 | **T3** ✅ | `analysis/line_replay.py` | Print the corrected `C` beside the median error (see F7) | Turns a measurement into the one number to set |
 | **T5** ✅ (added 2026-11-12) | `analysis/nav_replay.py`, `make nav-replay` | Today's `Navigation` replayed over a recorded run's `p3.csv` (every packet field per frame), each sign, light and obstacle stop marked kept, added or removed against the robot's `nav.csv`. Open loop, with the wheel-stall guard and the end of course off (the module says why). On 4 Nov and 28 Oct it reproduces all 17 and 12 recorded stops under the old sign rule | The one new tool in this plan: it validated F6 on two real runs before the robot drove it, and checks any later rule change the same way |
 | **T4** ✅ | `tests/test_settings.py` | Invariants between the course facts and the tuning: (a) `MEASURED_ESTIMATION.cm_per_px` is set; (b) at the measured lane width, a ±4 cm placement keeps both feet reconstructable (F1) and the two-boundary width under `max_lane_width_px`; (c) the normalized and cm steering paths agree at 2 cm, or the normalized path is gone | Makes §1 items 1–2 impossible to reintroduce silently |
@@ -177,12 +177,12 @@ Two archives of the 28 Oct runs were shared: the bench `routine_frame-budget_202
 
 | # | Decision | Needed by | Recommendation |
 | --- | --- | --- | --- |
-| 1 | D1 target (`vision` ≥ 90% on lane-keeping frames, `stale` ≤ 1 s, flicker ≤ 5% parked) | Phase 4 (T2) | Adopt as proposed; judge on `rule == lane_keeping` frames only; on 28 Oct that is 98.6% `vision` and no stale stretch (§4b) |
+| 1 | D1 target | Phase 4 (T2) | **Decided 2026-11-12:** `vision` ≥ 90% of frames outside intersection crossing stages. T2 done the same day; 28 Oct 97.7%, 4 Nov 92.2% |
 | 2 | Blue can: dark-object limitation, or a gate change | Phase 3 (F8) | Follow `obstacle-map`'s answer |
 | 3 | `SIGN_MIN_FRAMES` value | Phase 3 (F6) | **Set to 6 votes a sighting from the 28 Oct run (§4b):** real stops 9–82, ghosts 1–3. Confirm with a 5 Nov `approach-log` that no real sign there had under 6 |
 | 4 | Lane-keeping gain after F1: keep the 5 Nov effective gain (port) or re-tune | Phase 1 (F3) | Port first, re-tune only if recover-offset shows overshoot |
 | 5 | Whether the D3 driving case (false wait beside a neighbour lamp) becomes a rule or stays "recorded" | Phase 3 (F9) | Make it a rule only if F9's measurement yields a gate with margin; a false wait is safe |
-| 6 | D4b: re-fit the table or shift `C` (the obstacle's cm share the curve, so D6 re-runs either way) | Phase 3 (F7) | Re-fit if the robot is available for 15 min; shift otherwise, and re-fit before Design Day |
+| 6 | D4b: re-fit the table or shift `C` | Phase 3 (F7) | **Decided 2026-11-12: re-fit on the track** (`make calib-stopline`), then D4b (`detect-range` target=line, `line-replay`) and D6 (`obstacle-check`) again |
 | 7 | `requirements.md` status summary: rename the columns to *Checked* / *Met* / *Not met* / *Pending* | Phase 0 | Yes; and `README.md`'s "Current status" to match |
 | 8 | P1's wording: "≥ 20.0 effective FPS" with a 20 FPS source | Phase 0 | Judge P1 by the over-budget share (≤ 5%, or tighter) and report effective FPS beside it; or set the source to 21 FPS if the sensor mode allows it, which also gives P2's clock 2 ms more. Record in "Changes to pass rules" |
 

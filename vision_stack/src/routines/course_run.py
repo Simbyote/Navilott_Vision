@@ -14,7 +14,7 @@ from pathlib import Path
 from src.navigation.stop_sign import REASON_HOLD
 from src.navigation.traffic_light import REASON_RED
 from src.routines.figure_eight import _num, _step
-from src.routines.harness import Routine, criterion
+from src.routines.harness import D1_LANE_SHARE, LaneTally, Routine, criterion
 
 MAX_S = 300.0               # main.MAX_RUN_S: the production run's cap
 FINISHED = "end of course"  # navigation_linker.END_COURSE
@@ -30,6 +30,7 @@ class CourseWatch:
     def __init__(self):
         self.steps = self.holds = self.reds = self.contract = self.frames = 0
         self.lane_lost_s = 0.0
+        self.lane = LaneTally()                 # D1
         self.volts: list[float] = []
         self._last_t = self._last_reason = None
 
@@ -38,6 +39,7 @@ class CourseWatch:
         dt = 0.0 if self._last_t is None else max(t - self._last_t, 0.0)
         self._last_t = t
         self.frames += 1
+        self.lane(n)
         self.steps = max(self.steps, _step(n.get("step")))
         reason = n.get("reason")
         if reason != self._last_reason:
@@ -57,10 +59,10 @@ class CourseRun(Routine):
     name = "course-run"
     title = "Course run: the Design Day rehearsal"
     question = "Does the robot complete the course, in its lane and obeying the lights and signs, and how fast?"
-    requirement = "D2 (Senior Design Day: the course at best speed, lane and traffic adherence)"
+    requirement = "D2 (Senior Design Day: the course at best speed, lane and traffic adherence); D1"
     trials = 3
     fields = ("completed", "ended_by", "stopwatch_s", "robot_s", "clock_diff_s", "steps_done", "steps_planned",
-              "touches", "violations", "holds", "reds", "lane_lost_s", "contract", "fps",
+              "touches", "violations", "holds", "reds", "lane_lost_s", "lane_vision_pct", "contract", "fps",
               "battery_start_v", "battery_end_v")
     needs = ("pigpiod",)
     settings = {"route": "the route file (default config.ROUTE_PATH)",
@@ -140,7 +142,8 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
                 "clock_diff_s": None if robot_s is None or not stopwatch else round(robot_s - stopwatch, 2),
                 "steps_done": watch.steps, "steps_planned": len(self._route.maneuvers), "touches": touches,
                 "violations": violations, "holds": watch.holds, "reds": watch.reds,
-                "lane_lost_s": round(watch.lane_lost_s, 2), "contract": watch.contract,
+                "lane_lost_s": round(watch.lane_lost_s, 2), "lane_vision_pct": watch.lane.pct(),
+                "contract": watch.contract,
                 "fps": round(watch.frames / wall, 1) if wall else None,
                 "battery_start_v": watch.volts[0] if watch.volts else None,
                 "battery_end_v": watch.volts[-1] if watch.volts else None}
@@ -151,5 +154,7 @@ or red light it doesn't stop for. Ctrl-C stops it at once."""
             tag = f" (run {k})" if len(rows) > 1 else ""
             out += [criterion(f"completed the course{tag}", 1 if r["completed"] else 0, ">=", 1),
                     criterion(f"touches{tag}", r["touches"], "<=", 0),
-                    criterion(f"stop signs or red lights run{tag}", r["violations"], "<=", 0)]
+                    criterion(f"stop signs or red lights run{tag}", r["violations"], "<=", 0),
+                    criterion(f"lane on vision outside crossings (D1){tag}", r.get("lane_vision_pct"), ">=",
+                              100 * D1_LANE_SHARE, "%")]
         return out

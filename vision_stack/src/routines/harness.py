@@ -167,6 +167,33 @@ class Context:
     attempt: int = 0
 
 
+# requirements.md D1 (agreed 2026-11-12): the lane detected (Phase 3's lane_status vision)
+# in at least this share of frames, outside intersection crossing stages
+D1_LANE_SHARE = 0.90
+
+
+class LaneTally:
+    """
+    D1's count over a run's nav.csv rows: frames outside an intersection crossing stage (nav.csv's
+    stage column empty) and how many of them had the lane on vision. share is None before any.
+    """
+    def __init__(self) -> None:
+        self.frames = self.vision = 0
+
+    def __call__(self, n: dict) -> None:
+        if n.get("stage"):
+            return
+        self.frames += 1
+        self.vision += n.get("lane_status") == "vision"
+
+    @property
+    def share(self) -> float | None:
+        return None if not self.frames else self.vision / self.frames
+
+    def pct(self) -> float | None:
+        return None if self.share is None else round(100.0 * self.share, 1)
+
+
 def read_battery_volts() -> float | None:
     """One resting pack reading, or None without the ADC."""
     from src.peripherals import battery_run

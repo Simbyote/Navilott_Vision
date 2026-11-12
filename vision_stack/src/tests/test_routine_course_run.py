@@ -176,7 +176,7 @@ def test_three_clean_runs_pass(tmp_path, route_file):
     state = results(tmp_path)["state"]
     assert (state["best_s"], state["mean_s"]) == (1.3, 1.5)
     assert "route " in person.said() and "right, left, straight (3 steps), finish edge" in person.said()
-    assert "best 1.3 s, mean 1.5 s" in person.said() and len(res["criteria"]) == 9
+    assert "best 1.3 s, mean 1.5 s" in person.said() and len(res["criteria"]) == 12      # 4 a run, D1 among them
 
 
 @pytest.mark.software

@@ -22,7 +22,7 @@ from src.intersection_linker import HEADING_TOLERANCE_DEG
 from src.navigation.intersection import STAGE_EXIT, TURN_END_GYRO
 from src.navigation.navigation import RULE_INTERSECTION, RULE_LANE_KEEPING
 from src.navigation.route import LEFT, RIGHT, STRAIGHT
-from src.routines.harness import Routine, criterion
+from src.routines.harness import D1_LANE_SHARE, LaneTally, Routine, criterion
 
 ROUTE_LAP = (LEFT,) * 3 + (STRAIGHT,) * 1 + (LEFT,) * 3 + (RIGHT,) * 3 + (STRAIGHT,) * 1 + (RIGHT,) * 3
 MINUTES = 10.0
@@ -125,6 +125,7 @@ class EightWatch:
         self.intersections: list[dict] = []
         self._motion: list[tuple] = []          # (t, intersection index, stage, wheel cps difference, gyro dps)
         self.lane_lost_s = 0.0
+        self.lane = LaneTally()                 # D1
         self.contract = 0
         self.frames = 0
         self.t = 0.0
@@ -135,6 +136,7 @@ class EightWatch:
         dt = 0.0 if self._last_t is None else max(t - self._last_t, 0.0)
         self._last_t, self.t = t, t
         self.frames += 1
+        self.lane(n)
         step = _step(n.get("step"))
         if step > len(self.intersections):
             m = ROUTE_LAP[(step - 1) % len(ROUTE_LAP)]
@@ -225,12 +227,12 @@ class FigureEight(Routine):
     name = "figure-eight"
     title = "Course laps: lefts, rights and straights, for minutes"
     question = "Does the robot keep driving the course correctly, left and right, lap after lap, for the whole time?"
-    requirement = "course repeatability; demo-day endurance"
+    requirement = "course repeatability; demo-day endurance; D1 (the lane outside crossings)"
     trials = 1
     fields = ("minutes", "ended_by", "intersections", "laps_robot", "laps_seen", "touches", "touches_logged",
               "slip_spots", "turns_off_gyro",
-              "turns_off_heading", "left_mean_deg", "right_mean_deg", "lap_s_mean", "lane_lost_s", "contract",
-              "fps", "battery_start_v", "battery_end_v")
+              "turns_off_heading", "left_mean_deg", "right_mean_deg", "lap_s_mean", "lane_lost_s", "lane_vision_pct",
+              "contract", "fps", "battery_start_v", "battery_end_v")
     needs = ("pigpiod",)
     settings = {"minutes": f"how long the run lasts (default {MINUTES:.0f})",
                 "record": "1 saves every frame (the default), 0 saves none: the recorder-off A/B for stalls.csv"}
@@ -339,7 +341,8 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
                                          or abs(i["heading_off_deg"]) > HEADING_TOLERANCE_DEG),
                 "left_mean_deg": mean(LEFT), "right_mean_deg": mean(RIGHT),
                 "lap_s_mean": round(statistics.fmean(x["seconds"] for x in laps), 1) if laps else None,
-                "lane_lost_s": round(watch.lane_lost_s, 2), "contract": watch.contract,
+                "lane_lost_s": round(watch.lane_lost_s, 2), "lane_vision_pct": watch.lane.pct(),
+                "contract": watch.contract,
                 "fps": round(watch.frames / wall, 1) if wall else None,
                 "battery_start_v": volts[0] if volts else None, "battery_end_v": volts[-1] if volts else None}
 
@@ -352,5 +355,7 @@ Frames are recorded as in any run: about 30 MB a minute on the SD card."""
                     criterion(f"laps counted minus laps seen{tag}", r["laps_robot"] - r["laps_seen"],
                               "within", (0, 0)),
                     criterion(f"turns not ended on the gyro{tag}", r["turns_off_gyro"], "<=", 0),
-                    criterion(f"turns off by over {HEADING_TOLERANCE_DEG:.0f} deg{tag}", r["turns_off_heading"], "<=", 0)]
+                    criterion(f"turns off by over {HEADING_TOLERANCE_DEG:.0f} deg{tag}", r["turns_off_heading"], "<=", 0),
+                    criterion(f"lane on vision outside crossings (D1){tag}", r.get("lane_vision_pct"), ">=",
+                              100 * D1_LANE_SHARE, "%")]
         return out

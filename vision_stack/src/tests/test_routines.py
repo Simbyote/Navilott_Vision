@@ -336,3 +336,15 @@ def test_the_command_line_passes_settings_and_lists_them(tmp_path, monkeypatch):
     p = Person()
     main(["--list"], p.console())
     assert "--set stage_s=..." in p.said() and "--set max_s=..." in p.said()
+
+
+@pytest.mark.software
+def test_d1_counts_the_lane_outside_crossing_stages_only():
+    from src.routines.harness import D1_LANE_SHARE, LaneTally
+    tally = LaneTally()
+    assert tally.share is None and tally.pct() is None
+    rows = ([{"stage": "", "lane_status": "vision"}] * 9 + [{"stage": "", "lane_status": "stale"}]
+            + [{"stage": "turn", "lane_status": "stale"}] * 50)          # a crossing doesn't count, however long
+    for n in rows:
+        tally(n)
+    assert (tally.frames, tally.vision, tally.pct()) == (10, 9, 90.0) and tally.share >= D1_LANE_SHARE

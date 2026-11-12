@@ -385,4 +385,4 @@ def test_several_runs_are_judged_each(tmp_path):
     res = h.run_routine(r, Person("", "0", "3", "", "", "0", "3", "").console(), tmp_path / "out", trials=2,
                         options={"minutes": 0.5}, conditions_fn=no_conditions)
     names = [c["name"] for c in res["criteria"]]
-    assert len(names) == 10 and names[0] == "touches (run 1)" and names[5] == "touches (run 2)"
+    assert len(names) == 12 and names[0] == "touches (run 1)" and names[6] == "touches (run 2)"      # 6 a run, D1 last
