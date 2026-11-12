@@ -32,7 +32,7 @@ from src.perception.lane_offset import (
 )
 from src.perception.preprocess import preprocess_frame
 from src.perception.roi_crop import ROIConfig, crop_rois
-from src.params import FRAME_H, FRAME_W
+from src.params import FRAME_H, FRAME_W, MODE_LEFT_ONLY, MODE_RIGHT_ONLY, MODE_TWO_BOUNDARY
 from src.tests.artifacts import summarize
 
 # Explicit rather than the shipped defaults, so retuning never breaks these tests
@@ -58,15 +58,18 @@ def make_roi(lane_rect=(0, 0, ROI_W, 50), frame_id=1, ts=2):
         frame_id=frame_id, timestamp_ms=ts, source_shape=(FRAME_H, FRAME_W))
 
 
+STORED = object()       # cand()'s default: the foot is fx
+
+
 def cand(fx, confidence=0.9, proximity=0.9, length_px=100.0, width_px=8.0,
-        mean_intensity=200.0, contour=None, foot=None, frame_id=1, ts=2):
-    """Hand-built LaneCandidate. foot defaults to fx, so foot_x() reads the stored value."""
+        mean_intensity=200.0, contour=None, foot=STORED, frame_id=1, ts=2):
+    """Hand-built LaneCandidate. foot defaults to fx, so foot_x() reads the stored value; None leaves it unstored."""
     x = int(round(fx - 4))
     return LaneCandidate(
         label="lane_boundary", bbox=(x, 20, 8, 20), contour=contour,
         confidence=confidence, frame_id=frame_id, timestamp_ms=ts,
         proximity=proximity, width_px=width_px, length_px=length_px,
-        mean_intensity=mean_intensity, foot_x=fx if foot is None else foot)
+        mean_intensity=mean_intensity, foot_x=fx if foot is STORED else foot)
 
 
 def geo(cands, frame_id=1, ts=2, signs=()):
@@ -106,26 +109,29 @@ def test_foot_x_prefers_the_stored_value():
 @pytest.mark.software
 def test_foot_x_falls_back_to_the_contour_when_unstored():
     contour = np.array([[10, 10], [13, 10], [13, 90], [10, 90]], np.int32).reshape(-1, 1, 2)
-    c = cand(0.0, contour=contour, foot=-1.0)
+    c = cand(0.0, contour=contour, foot=None)
     assert foot_x(c, band_px=6) == 11.5          # mean x of the two lowest-row points
 
 
 @pytest.mark.software
 @pytest.mark.parametrize("contour", [None, np.empty((0, 1, 2), np.int32)])
 def test_foot_x_falls_back_to_bbox_center_with_no_contour(contour):
-    c = cand(0.0, contour=contour, foot=-1.0)     # bbox is (x=6, y=20, w=8, h=20) for fx=10
+    c = cand(0.0, contour=contour, foot=None)     # bbox is (x=6, y=20, w=8, h=20) for fx=10
     assert foot_x(c) == c.bbox[0] + c.bbox[2] / 2.0
 
 
 @pytest.mark.software
-def test_foot_x_ignores_a_stored_negative_sentinel_not_just_exactly_minus_one():
+def test_foot_x_stored_negative_is_a_value_a_line_past_the_rois_left_side():
+    # -1.0 was the unstored sentinel until 2026-11-12; geometry now carries a marking that left
+    # through the ROI's side on to the bottom, where its foot is negative or past the ROI's width
     contour = np.array([[0, 0], [4, 0], [4, 4], [0, 4]], np.int32).reshape(-1, 1, 2)
-    assert foot_x(cand(0.0, contour=contour, foot=-0.5)) == 2.0
+    assert foot_x(cand(0.0, contour=contour, foot=-0.5)) == -0.5
+    assert foot_x(cand(0.0, contour=contour, foot=-1.0)) == -1.0
 
 
 @pytest.mark.software
 def test_foot_x_stored_at_exactly_zero_is_a_real_value_not_the_sentinel():
-    # 0.0 is a legitimate anchor x (the left ROI edge); only < 0.0 means unset.
+    # 0.0 is a legitimate anchor x (the left ROI edge); only None means unset.
     # fx=200 puts the bbox center far from 0, so a fallback would be caught.
     assert foot_x(cand(200.0, foot=0.0)) == 0.0
 
@@ -611,3 +617,50 @@ def test_lane_offset_characterization(request, frames, artifacts):
     for fid, (roi, dbg, res) in samples.items():
         artifacts.image(f"{fid:06d}_anchors.png", draw_anchor_overlay(roi.lane_roi, dbg, res))
         artifacts.json(f"{fid:06d}_debug.json", dbg)
+
+
+@pytest.mark.software
+def test_a_lane_at_the_measured_geometry_keeps_its_width_and_scale_off_centre():
+    """
+    P3's slope (0.63 on 2026-11-03): past ~0.4-1 cm off centre one lane line leaves the lane ROI
+    through its side, and its foot read the ROI's edge. The lane is drawn as the robot measured
+    it (394 px at the ROI bottom, centred on robot_x_px, converging toward the stop-line table's
+    horizon), shifted -4 to +4 cm, and run through the robot's own detector and this stage.
+    """
+    from src.config import MEASURED
+    from src.perception.roi_crop import resolve
+    from src.perception.geometry import detect_geometry
+
+    cfg = replace(MEASURED, preprocess=replace(MEASURED.preprocess, calibration_path=None))   # drawn undistorted
+    lo = cfg.lane_offset
+    rx, ry, rw, rh = resolve(cfg.roi.lane, (FRAME_H, FRAME_W))
+    robot, half, horizon = lo.robot_x_px, lo.expected_half_lane_px, 137.2
+    cm_per_px = 14.0 / (2 * half)
+
+    def frame_for(shift_cm):
+        f = np.full((FRAME_H, FRAME_W, 3), 60, np.uint8)
+        dx = -shift_cm / cm_per_px                                      # robot right: the lane appears left
+        for side in (-1, 1):
+            xb = robot + side * half + dx
+            pts = [(int(round(rx + robot + (xb - robot) * (horizon - row) / horizon)), int(round(ry + rh - row)))
+                   for row in range(0, int(horizon - 5))]
+            cv2.polylines(f, [np.array(pts, np.int32)], False, (240, 240, 240), 6)
+        return f
+
+    true_cm, reported_cm, widths = [], [], {}
+    for cm in range(-4, 5):
+        roi = crop_rois(preprocess_frame(FrameData(frame_for(cm), 0, 0), cfg.preprocess), cfg.roi)
+        r = estimate_lane_offset(detect_geometry(roi, cfg.geometry), roi, lo)
+        if r.mode == MODE_TWO_BOUNDARY:
+            widths[cm] = r.lane_width_px
+        else:
+            # A tape lying along the ROI's side border traces as an open edge of ~0 area and fails
+            # geometry's area gate; the one-line projection carries that placement (expected_half_lane_px)
+            assert abs(cm) <= 1 and r.mode in (MODE_LEFT_ONLY, MODE_RIGHT_ONLY), (cm, r.mode)
+        true_cm.append(cm)
+        reported_cm.append(r.offset * (rw / 2.0) * cm_per_px)
+    assert len(widths) >= 7 and widths[0] == pytest.approx(2 * half, abs=12)
+    for cm, w in widths.items():
+        assert w == pytest.approx(widths[0], rel=0.06), (cm, w, widths[0])      # the pair's spacing doesn't shrink
+    slope, intercept = np.polyfit(true_cm, reported_cm, 1)
+    assert 0.9 <= slope <= 1.1 and abs(intercept) <= 0.5, (slope, intercept)    # P3's 0.8-1.2, with margin

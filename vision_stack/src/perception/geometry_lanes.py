@@ -90,7 +90,7 @@ def _merge_collinear(
             timestamp_ms = g[0].timestamp_ms,
             proximity = round(clamp((y + h) / max(roi_h, 1), 0.0, 1.0), 4),
             mean_intensity = mean_intensity,
-            foot_x = contour_foot_x(pts.reshape(-1, 1, 2)),
+            foot_x = contour_foot_x(pts.reshape(-1, 1, 2), roi_h = roi_h),
         ))
 
     return merged + other
@@ -211,7 +211,7 @@ def _extract_lane_candidates(
             timestamp_ms = timestamp_ms,
             proximity = round(proximity, 4),
             mean_intensity = mean_intensity,
-            foot_x = contour_foot_x(contour),
+            foot_x = contour_foot_x(contour, roi_h = roi_h),
         ))
 
     return candidates
@@ -281,7 +281,7 @@ def _filter_lane_contours(
             timestamp_ms = timestamp_ms,
             proximity = round(proximity, 4),
             mean_intensity = mean_intensity,
-            foot_x = contour_foot_x(contour),
+            foot_x = contour_foot_x(contour, roi_h = roi_h),
         ))
 
     return candidates

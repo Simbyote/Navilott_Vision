@@ -181,7 +181,8 @@ def assert_lane_candidates_ok(cands, shape, frame_id, ts):
         assert 0.0 <= c.confidence <= 1.0 and 0.0 <= c.proximity <= 1.0
         assert c.length_px >= c.width_px >= 0.0
         assert 0.0 <= c.mean_intensity <= 255.0
-        assert 0.0 <= c.foot_x <= w, f"foot_x {c.foot_x} (-1.0 means never computed)"
+        # A marking that leaves through the ROI's side has its foot carried on past the edge
+        assert c.foot_x is not None and -w <= c.foot_x <= 2 * w, f"foot_x {c.foot_x} (None means never computed)"
         assert (c.frame_id, c.timestamp_ms) == (frame_id, ts)
         assert c.contour.ndim == 3 and c.contour.shape[1:] == (1, 2)
 
@@ -283,8 +284,8 @@ def build_scene(roi_cfg, frame_id=11, ts=222, H=FRAME_H, W=FRAME_W):
 
 @pytest.mark.software
 @pytest.mark.parametrize("bad", [None, np.empty((0, 1, 2), np.int32)])
-def test_foot_x_of_nothing_is_the_sentinel(bad):
-    assert contour_foot_x(bad) == -1.0
+def test_foot_x_of_nothing_is_none(bad):
+    assert contour_foot_x(bad) is None
 
 
 @pytest.mark.software
@@ -301,6 +302,41 @@ def test_foot_x_takes_only_the_lowest_rows():
 @pytest.mark.parametrize("band", [0, -5])
 def test_foot_x_band_of_zero_or_less_uses_only_the_lowest_row(band):
     assert contour_foot_x(cont([(0, 10), (4, 10), (2, 0)]), band_px=band) == 2.0
+
+
+def strip(x_top, x_bot, y_top, y_bot, width=4):
+    """A dense outline of a straight strip, one point per row on each side, as a contour."""
+    ys = np.arange(y_top, y_bot + 1)
+    xs = x_top + (x_bot - x_top) * (ys - y_top) / max(y_bot - y_top, 1)
+    left = np.stack([xs, ys], 1)
+    right = np.stack([xs + width, ys], 1)[::-1]
+    return np.round(np.vstack([left, right])).astype(np.int32).reshape(-1, 1, 2)
+
+
+@pytest.mark.software
+def test_foot_x_of_a_marking_reaching_the_bottom_is_the_band_mean_whatever_the_roi():
+    c = strip(120, 0, 0, 80)                          # down and to the left, ending on the ROI's last row
+    assert contour_foot_x(c, roi_h=81) == contour_foot_x(c)
+
+
+@pytest.mark.software
+def test_foot_x_of_a_marking_leaving_through_the_side_is_carried_on_to_the_bottom():
+    # Down and to the left at 2 px/row (axis x = 122 - 2 y), cut off at the ROI's edge on row 60 of an
+    # 81-row ROI: the band's mean reads ~8, the edge; the axis meets the band's row, 77, at 122 - 154 = -32
+    c = strip(120, 0, 0, 60)
+    assert contour_foot_x(c) == pytest.approx(8.0, abs=1.0)
+    assert contour_foot_x(c, roi_h=81) == pytest.approx(-32.0, abs=2.0)
+
+
+@pytest.mark.software
+def test_foot_x_of_a_vertical_marking_ending_early_is_its_base_center():
+    assert contour_foot_x(cont([(10, 0), (10, 50), (14, 50), (14, 0)]), roi_h=81) == 12.0
+
+
+@pytest.mark.software
+def test_foot_x_of_a_flat_marking_ending_early_keeps_the_band_mean():
+    c = strip(0, 200, 40, 50)                         # 20 px across for each row down: flatter than 20 deg
+    assert contour_foot_x(c, roi_h=81) == contour_foot_x(c)
 
 
 @pytest.mark.software
@@ -427,10 +463,12 @@ def test_near_vertical_marking_foot_is_at_its_base_center():
 
 @pytest.mark.software
 def test_diagonal_marking_foot_is_where_it_reaches_the_near_edge_not_the_bbox_middle():
-    img = line_tape((50, 10), (150, 90))                       # runs down and to the right
+    img = line_tape((50, 10), (150, 90))                       # runs down and to the right, ending 18 rows up
     (c,), _ = extract_lane_candidates(img, TEST_CANNY, TEST_LANE, 1, 2, False)
     x, y, w, h = c.bbox
-    assert abs(c.foot_x - 150) <= 10
+    # The stroke stops short of the bottom, so its axis is carried on to the band's row (104 of 108):
+    # 50 + 100 * (104 - 10) / 80 = 167.5. Until 2026-11-12 the foot was its last rows' mean, ~150
+    assert abs(c.foot_x - 167.5) <= 6
     assert c.foot_x > (x + w / 2) + 25               # the bbox middle sits ~50 px left of the foot; 25 is half that
 
 
@@ -533,7 +571,7 @@ def test_close_fragments_merge_into_one_candidate():
     assert m.length_px == pytest.approx(150.0, abs=1.0)
     assert m.contour.ndim == 3 and m.contour.shape[1:] == (1, 2)
     assert (m.frame_id, m.timestamp_ms) == (1, 2)
-    assert 0.0 <= m.confidence <= 1.0 and 0.0 <= m.proximity <= 1.0 and m.foot_x >= 0
+    assert 0.0 <= m.confidence <= 1.0 and 0.0 <= m.proximity <= 1.0 and m.foot_x is not None
 
 
 @pytest.mark.software

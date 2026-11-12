@@ -99,20 +99,45 @@ class GeometryConfig:
     stop_line: StopLineFilter = field(default_factory=StopLineFilter)   # reads the lane ROI's Canny edges
 
 
+# A marking that leaves the ROI through its side ends above the bottom with its lowest
+# rows at that side, so the band's mean read the ROI's edge: up to ~110 px (4 cm) from
+# where the line meets the bottom, and the offset read ~0.6 of the truth (P3, 2026-11-03).
+# Its axis over the lowest FOOT_FIT_ROWS rows, carried on to the band's row, says where
+# it would meet it (2026-11-12)
+FOOT_FIT_ROWS = 30
+# Flatter than this the axis meets the bottom far away or never: the band's mean stands.
+# The lane detector strips lines this flat from its edges anyway (horizontal_edge_deg)
+FOOT_MIN_SLOPE_DEG = 20.0
+
+
 def contour_foot_x(
         contour: np.ndarray,
         band_px: int = FOOT_BAND_PX,
-    ) -> float:
+        roi_h: int | None = None,
+    ) -> float | None:
     """
-    Mean x of the contour's lowest band_px rows: where a diagonal marking meets the near
-    edge, which its bbox center misses by up to half its width. -1.0 for an empty contour.
+    Where the marking meets the ROI's bottom, in ROI px: the mean x of the contour's
+    lowest band_px rows when it reaches the bottom, within half a band (where a diagonal
+    marking meets the near edge, which its bbox center misses by up to half its width);
+    with roi_h, a contour ending higher has its lower axis carried on to the band's row
+    instead, inside or outside the ROI. None for an empty contour.
     """
     if contour is None or len(contour) == 0:
-        return -1.0
+        return None
     pts = np.asarray(contour).reshape(-1, 2)
     y_max = pts[:, 1].max()
-    band = pts[pts[:, 1] >= y_max - max(band_px, 0)]
-    return round(float(band[:, 0].mean()), 2)
+    band_px = max(band_px, 0)
+    x_band = float(pts[pts[:, 1] >= y_max - band_px][:, 0].mean())
+    if roi_h is None or y_max >= roi_h - 1 - band_px // 2:
+        return round(x_band, 2)
+    target = roi_h - 1 - band_px / 2.0              # the band's centre row, as a line that reaches it reads
+    low = pts[pts[:, 1] >= y_max - FOOT_FIT_ROWS].astype(np.float32)
+    if len(low) < 2:
+        return round(x_band, 2)
+    vx, vy, x0, y0 = cv2.fitLine(low, cv2.DIST_L2, 0, 0.01, 0.01).ravel()
+    if abs(vy) < math.sin(math.radians(FOOT_MIN_SLOPE_DEG)):
+        return round(x_band, 2)
+    return round(float(x0 + (target - y0) * vx / vy), 2)
 
 
 @dataclass
@@ -127,7 +152,9 @@ class LaneCandidate:
     width_px: float = 0.0               # minAreaRect short side, px; raw, not floored to 1 like the aspect gate
     length_px: float = 0.0              # minAreaRect long side, px
     mean_intensity: float = 10.0         # 0-255 inside the filled contour; length-weighted when merged
-    foot_x: float = -1.0                # see contour_foot_x; -1.0 = not computed
+    # See contour_foot_x; None = not computed. Negative, or past the ROI's width, for a
+    # marking that left through the ROI's side (2026-11-12; -1.0 was the sentinel until then)
+    foot_x: float | None = None
 
 
 @dataclass

@@ -144,7 +144,7 @@ Confidence, in [0, 1]: 50% length (against a quarter of the ROI extent), 30% bri
 
 Horizontal fragments of the same line, with endpoints within 40 px, are merged into one candidate. Without that, lane offset could pick two pieces of one line as opposite boundaries.
 
-Each candidate records `foot_x`: the mean x of the contour's lowest 6 rows (`FOOT_BAND_PX`). That's where the marking is closest to the robot, which is what steering should use. For an angled line, the bbox center sits halfway up the ROI instead.
+Each candidate records `foot_x`: where the marking meets the ROI's bottom. For a contour that reaches the bottom it is the mean x of its lowest 6 rows (`FOOT_BAND_PX`), where the marking is closest to the robot, which is what steering should use; for an angled line, the bbox center sits halfway up the ROI instead. A marking that leaves the ROI through its **side** ends above the bottom with its lowest rows at that side, so the band's mean read the ROI's edge: at the measured lane (394 px in the 432 px ROI, 27 and 11 px to spare) that happened past ~0.4–1 cm off centre, and the offset read ~0.6 of the truth (P3, 2026-11-03). Since 2026-11-12 such a contour's axis over its lowest 30 rows (`FOOT_FIT_ROWS`) is carried on to the band's row instead, inside or outside the ROI; contours flatter than 20° (`FOOT_MIN_SLOPE_DEG`) keep the band's mean. Contours that reach the bottom are unchanged, so centred frames read as before.
 
 ### Stop lines
 

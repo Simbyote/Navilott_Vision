@@ -87,6 +87,10 @@ MEASURED = PipelineConfig(
         # the estimate's sign and the robot veered off (2026-10-20); 331 (0.84 x 394)
         # dropped ~10% of real two-line frames to one line
         min_lane_width_px = 260.0,
+        # Over the lane at any placement, under a full street (~590 px at the bottom row).
+        # 400 until 2026-11-12: with a line that leaves the ROI's side now carried on to the
+        # bottom, a pair off centre reads the lane's ~394 px again instead of 270-300
+        max_lane_width_px = 450.0,
         # Where the centered robot sees its lane's middle: make calib-lane gave 224
         # (2026-11-05); TP-01's centered looks 221-222 (2026-11-03). The ROI's middle is 216
         robot_x_px = 224.0,

@@ -64,7 +64,8 @@ def test_measured_keeps_the_swept_lane_gates():
 def test_measured_takes_a_pair_as_a_lane_only_near_the_measured_width():
     # Pairs 61-65 px apart (a line and something beside it) and 250-300 px (a stray left anchor) fall to one line.
     lo = MEASURED.lane_offset
-    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (260.0, 400.0, 197.1)   # 2026-11-05
+    assert (lo.min_lane_width_px, lo.max_lane_width_px, lo.expected_half_lane_px) == (260.0, 450.0, 197.1)   # 2026-11-05; cap 2026-11-12
+    assert 2 * lo.expected_half_lane_px * 1.1 < lo.max_lane_width_px < 590        # room over the lane, under a street
     assert lo.min_lane_width_px < 2 * lo.expected_half_lane_px < lo.max_lane_width_px
 
 

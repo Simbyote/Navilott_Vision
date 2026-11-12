@@ -70,12 +70,14 @@ def foot_x(
         band_px: int = FOOT_BAND_PX
     ) -> float:
     """
-    Where the marking meets the near edge, in lane-ROI px: the stored foot_x, else the
-    contour's lowest band, else the bbox center. An angled line's centroid sits halfway up the ROI.
+    Where the marking meets the near edge, in lane-ROI px: the stored foot_x (geometry's,
+    which lies outside the ROI for a line that left through its side), else the contour's
+    lowest band, else the bbox center. An angled line's centroid sits halfway up the ROI.
     """
-    # Also covers CSV replays, whose candidates have no contour
-    stored = getattr(candidate, "foot_x", -1.0)
-    if stored is not None and stored >= 0.0:
+    # Also covers CSV replays, whose candidates have no contour. A negative foot is a
+    # value (a line past the ROI's left side), not the old -1.0 sentinel
+    stored = getattr(candidate, "foot_x", None)
+    if stored is not None:
         return float(stored)
 
     contour = candidate.contour
