@@ -1,6 +1,6 @@
 # Phases 1 and 2 on the Robot: Lane Offset, Lane Keeping, the Frame Budget and the Stop Sign
 
-> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6), the stop-line table's re-fit with D4b and D6 (step 7), and R4 and R5 (steps 8–9), which close Phase 4's first session. The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
+> The robot-side steps that close Phase 1 of `resolution_plan.md`, then Phase 2's frame budget and a course run that checks F6 (steps 5–6), the stop-line table's re-fit with D4b and D6 (step 7), and R4 and R5 (steps 8–9), which close Phase 4's first session; then the second session and the update of `requirements.md` that finish Phase 4. The software (F1 foot point, F2 full-width lane ROI, F3 steering in cm) is on `claude/wonderful-pasteur-htu1fa` since 2026-11-12; nothing here changes code except the values step 1 measures.
 
 **Time:** about 1.5 h with two people. **Needs:** the practice arena or any straight lane ≥ 1.5 m, a ruler, a charged pack (≥ 11.5 V at rest), someone to walk beside the robot in steps 3–4.
 
@@ -362,6 +362,42 @@ A skip ("drive not found on this chassis") means a 0.3 s nudge made no encoder c
 
 ---
 
+## Session 2, another day: the second course run (motors on; ~1 h)
+
+**Why:** D5 asks for every crossing right over **two separate runs**, and every driving result is stronger repeated. Nothing is re-calibrated: this is session 1's software and settings, on another day's battery, light and room.
+
+1. Step 0 (session), then step 6 again: `make routine-figure-eight`, every sign in place before the lap, then `nav-replay`, `approach-log --lap-len 14` and `nav-report` on the new run.
+2. Step 8 again if session 1's R4 read "drive longer", or failed on the busiest core.
+3. For D5, both runs' crossings:
+
+   ```bash
+   make fig8-report RUN=runs/routine_figure-eight_<session 2 time>/attempt_01 BASE=runs/routine_figure-eight_<session 1 time>/attempt_01
+   ```
+
+   **Pass (D5):** in each run, the routine's "laps counted minus laps seen" is 0 (no crossing missed or counted twice) and "turns off by over 20 deg" is 0.
+
+---
+
+## Updating `requirements.md` after the sessions
+
+Each row's status takes the verdict, the numbers and the run folder from the step below; a row whose rule didn't change needs no "Changes to pass rules" entry. Phase 4's gate is every row Met, or carrying an agreed scope note.
+
+| Row | From | Met when |
+| --- | --- | --- |
+| P1, P2 | Step 6 and session 2: the attempt's `summary.txt` | ≥ 20.0 FPS effective (decision 8 may reword it), ≤ 5% over 50 ms; `total` p95 ≤ 50 ms |
+| P3 | Step 2, two straights | Every placement within ±2 cm and slope 0.8–1.2 |
+| D1 | Step 6 and session 2: the routine's D1 criterion | ≥ 90% on lane keeping's frames |
+| D2 | Step 6 and session 2: `approach-log` | Every sign in place stopped for; ≤ 1 false sign stop per 10 min |
+| D3 | The second lighting setup: `make routine-detect-range ARGS="--set target=light"` | Within 20 cm all right; never go for a lit red or yellow |
+| D4a | Step 7's `detect-range`, and 300 frames of plain lane (`make phase3 ARGS="--limit 300"` on a straight, then `make stability`) | ≥ 95% pooled at 8–16 cm; 0 line frames on plain lane |
+| D4b | Step 7, `line-replay` | Within ±2 cm, SD < 0.5 cm |
+| D5 | Session 2, step 3 | Both runs, every crossing |
+| D6 | Step 7, `obstacle-check` per object | ≥ 90% seen, ±2.5 cm at 15–25 cm; the blue can's class decided (decision 2) |
+| R4 | Step 8 | `R4 MET` |
+| R5 | Step 9 | Both watchdog tests pass on the hardware |
+
+---
+
 ## Results sheet
 
 Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.md`'s P3 status.
@@ -382,6 +418,7 @@ Fill in, commit as `docs/phase1_results_<date>.md` or paste into `requirements.m
 | **Step 7** fit verdict / D4b looks within ±2 cm / median error / D6 cube, box | / / / , |
 | **Step 8** R4: CPU % of Pi / busiest core p95 / RSS max / growth MB/min / MET? | / / / / |
 | **Step 9** R5: Python watchdog / pigpiod watchdog | / |
+| **Session 2** run folder / D1 / D2 signs and false stops / D5 both runs | / / / |
 | Run folders | |
 
 **P3 is Met** when step 2 passes on both straights; update `requirements.md` P3's status with the numbers and the commit, and its "Changes to pass rules" table needs no entry (the rule didn't change).

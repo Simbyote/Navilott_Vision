@@ -264,6 +264,8 @@ Order matters: measure, then change the scale, then the gain.
 4. Course run 2, another day (**P1** for D5's second run), same reports.
 5. `requirements.md` status columns updated from the two runs; "Changes to pass rules" for anything that moved.
 
+**Where each item is in `phase1_robot_procedure.md` (2026-11-12):** 1, T2, done in software; 2, R4 on an unlogged figure eight (step 8) and R5 (step 9); 3, step 6; 4, "Session 2"; 5, "Updating `requirements.md` after the sessions", a table of each row's step and pass rule.
+
 **Gate:** every row of `requirements.md` reads *Met* or carries an agreed scope note (D6 dark objects), with the run folder and date beside it.
 
 ### What is deliberately not in this plan
