@@ -199,7 +199,7 @@ def test_a_centered_lane_drives_and_the_log_says_why(tmp_path):
 def test_a_stop_sign_line_stops_the_robot_and_the_log_says_which_rule(tmp_path):
     # The synthetic scenes can't raise a voted stop sign through Phase 3 yet (the
     # sign gate is uncalibrated), so frames 2-4 carry a stop line coming down the
-    # view, with a sign voted from frame 0 (SIGN_MIN_FRAMES in a row, as a real one
+    # view, with a sign voted from the first frame (SIGN_MIN_FRAMES of them, as a real one
     # is seen before its line); from frame 5 both are gone. At 50 ms a frame the robot reaches
     # the line STOP_DELAY_MS later (at least a frame) and holds
     # STOP_SIGN_HOLD_TIME_MS (no encoders: the wheels read stopped at once)
@@ -208,7 +208,7 @@ def test_a_stop_sign_line_stops_the_robot_and_the_log_says_which_rule(tmp_path):
     class SignAndLine(Spy):
         def update(self, packet):
             rows = lines.get(packet.frame_id)
-            return super().update(replace(packet, stop_sign_detected=packet.frame_id < 5,
+            return super().update(replace(packet, stop_sign_detected=packet.frame_id <= 6,  # frames 1-6: SIGN_MIN_FRAMES by the reach
                                           stop_line_detected=rows is not None, stop_line_distance_px=rows))
     rep, out, motor, nav, _ = go(tmp_path, nav=SignAndLine(), cam={"end_at": 85})
     logged = rows(out / "nav.csv")

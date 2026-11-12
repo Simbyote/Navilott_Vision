@@ -14,13 +14,13 @@ import pytest
 from src.navigation.navigation_contract import BRAKE
 from src.navigation.stop_line import StopLineTracker
 from src.navigation.stop_sign import (
-    REASON_HOLD, REASON_STOPPING, SIGN_LEAD_MS, SIGN_MEMORY_MS, SIGN_MIN_FRAMES, STOP_SETTLE_MAX_MS,
+    REASON_HOLD, REASON_STOPPING, SIGN_GAP_MS, SIGN_LEAD_MS, SIGN_MEMORY_MS, SIGN_MIN_FRAMES, STOP_SETTLE_MAX_MS,
     STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS, StopSignRule,
 )
 from src.tests.navigation_checks import packet, reach_frames
 
 MS = 50
-LINE = [40.0, 32.0, 24.0, 15.0, 5.0]      # a stop line coming down the view, then gone
+LINE = [48.0, 40.0, 32.0, 24.0, 15.0, 5.0]      # a stop line coming down the view, then gone
 assert len(LINE) >= SIGN_MIN_FRAMES        # a sign voted on every line frame counts
 SIGN = [{"stop_sign_detected": True}] * SIGN_MIN_FRAMES     # the shortest sign that counts
 REACHED = len(LINE) + reach_frames(frame_ms=MS)
@@ -55,7 +55,9 @@ def braked(out):
 def test_the_constants():
     assert (STOP_SIGN_HOLD_TIME_MS, STOPPED_CPS, STOP_SETTLE_MAX_MS, SIGN_MEMORY_MS) == (2000, 20.0, 1000, 5000)
     assert SIGN_LEAD_MS == 2000 < SIGN_MEMORY_MS
-    assert SIGN_MIN_FRAMES == 4            # the 5 Nov ghosts were voted 1-3 frames (D2)
+    # The 5 Nov ghosts were voted 1-3 frames (D2); the 28 Oct figure eight's 8 real sign stops
+    # 9-82 frames a sighting, and replayed they all still stop at any minimum up to 9
+    assert (SIGN_MIN_FRAMES, SIGN_GAP_MS) == (6, 1000)
 
 
 @pytest.mark.software
@@ -166,12 +168,22 @@ def test_a_sign_voted_only_briefly_at_the_line_is_a_ghost(frames):
 
 
 @pytest.mark.software
-def test_a_sign_voted_the_minimum_in_a_row_stops_but_not_split_up():
-    _, out = drive(line(sign_frames=range(len(LINE) - SIGN_MIN_FRAMES, len(LINE))))
+def test_the_minimum_counts_across_the_votes_gaps_within_a_sighting():
+    # The 2-of-3 vote breaks a real sign into short runs (as short as 4 frames on 28 Oct)
+    broken = [{"stop_sign_detected": k % 3 != 2} for k in range(3 * SIGN_MIN_FRAMES // 2)]   # 2 on, 1 off
+    assert sum(f["stop_sign_detected"] for f in broken) == SIGN_MIN_FRAMES
+    _, out = drive(broken + line(sign=False))
     assert braked(out)
-    split = [i for i in range(len(LINE)) if i != 2]          # four sign frames, never more than two in a row
-    _, out = drive(line(sign_frames=split))
-    assert not braked(out)
+
+
+@pytest.mark.software
+def test_a_gap_longer_than_the_sighting_gap_starts_over():
+    half = SIGN_MIN_FRAMES // 2
+    gap = [{}] * (SIGN_GAP_MS // MS + 2)
+    _, out = drive(SIGN[:half] + gap + SIGN[:SIGN_MIN_FRAMES - half] + line(sign=False))
+    assert not braked(out), "two short sightings aren't one long one"
+    _, out = drive(SIGN[:half] + [{}] * 3 + SIGN[:SIGN_MIN_FRAMES - half] + line(sign=False))
+    assert braked(out)
 
 
 @pytest.mark.software
