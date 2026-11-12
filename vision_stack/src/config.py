@@ -17,7 +17,7 @@ from src.estimation.odometry import load_odometry
 from src.maneuver import ManeuverConfig
 from src.params import (
     CAMERA_CALIB_PATH, FRAME_H, FRAME_W, GROUND_HOMOGRAPHY_PATH, HSV_RANGES_PATH, PIPELINE_ROOT,
-    NOMINAL_CM_PER_COUNT, ODOMETRY_PATH, STOP_LINE_TABLE_PATH,
+    LANE_WIDTH_CM, NOMINAL_CM_PER_COUNT, ODOMETRY_PATH, STOP_LINE_TABLE_PATH,
 )
 from src.perception.color_branch import BlobFilter, ColorConfig, GlowFilter, load_color_config
 from src.perception.geometry import GeometryConfig, SignContourFilter, StopLineFilter
@@ -107,9 +107,15 @@ if MEASURED.ground is None and MEASURED.stop_line_table is None:
 # (2026-09-29 phase3_linker run). maneuver_linker and test_imu --hardware re-measure it
 GYRO_BIAS_DPS = -0.90
 
-# Phase3Config's defaults, with this robot's bias and odometry scale (the
-# nominal scale without calibration/odometry.json)
-MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS,
+# The ground scale at the lane ROI's bottom: the lane's 14 cm over its measured width in px
+# (2 x expected_half_lane_px, from make calib-lane), so re-measuring the lane moves both.
+# Unset until 2026-11-12: lane_offset_cm was None on every run and lane keeping steered by the
+# normalized offset
+CM_PER_PX = round(LANE_WIDTH_CM / (2.0 * MEASURED.lane_offset.expected_half_lane_px), 6)
+
+# Phase3Config's defaults, with this robot's bias, ground scale and odometry scale (the
+# nominal odometry scale without calibration/odometry.json)
+MEASURED_ESTIMATION = Phase3Config(gyro_bias_dps=GYRO_BIAS_DPS, cm_per_px=CM_PER_PX,
                                    cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
 
 # The drive trial's placeholders; leg_counts is a guess. Its flags override any field

@@ -260,7 +260,7 @@ def test_measured_estimation_is_the_defaults_plus_the_gyro_bias_and_the_odometry
     from src.estimation.estimation import Phase3Config
     from src.estimation.odometry import load_odometry
     from src.params import NOMINAL_CM_PER_COUNT, ODOMETRY_PATH
-    assert config.MEASURED_ESTIMATION == Phase3Config(gyro_bias_dps=config.GYRO_BIAS_DPS,
+    assert config.MEASURED_ESTIMATION == Phase3Config(gyro_bias_dps=config.GYRO_BIAS_DPS, cm_per_px=config.CM_PER_PX,
                                                       cm_per_count=load_odometry(ODOMETRY_PATH, NOMINAL_CM_PER_COUNT))
     # Uncalibrated, distances run on the wheel and gearbox's nominal scale; the
     # distance rules stay timed until their *_CM settings are set

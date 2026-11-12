@@ -212,3 +212,16 @@ def test_the_real_eyes_lane_roi_width():
     from src.perception.roi_crop import ROIBounds
     half = Eyes(source=object(), config=SimpleNamespace(roi=SimpleNamespace(lane=ROIBounds(0.25, 0.7, 0.75, 1.0))))
     assert half.roi_width_px(np.zeros((270, 480, 3), np.uint8)) == 240         # read from the config
+
+
+@pytest.mark.software
+def test_p3_is_judged_on_the_slope_too():
+    from src.routines.lane_offset import LaneOffset, slope
+    rows = [{"measured_cm": m, "reported_cm": round(0.63 * m - 1.15 + 1.15, 2), "error_cm": round(0.63 * m - m, 2)}
+            for m in (0.0, 2.0, -2.0, 4.0, -4.0)]
+    assert slope(rows) == pytest.approx(0.63)
+    worst, fit = LaneOffset().judge(rows)
+    assert worst["passed"] and not fit["passed"], "every placement inside 2 cm, but compressed: P3 fails"
+    good = [{**r, "reported_cm": r["measured_cm"] * 1.02} for r in rows]
+    assert all(c["passed"] for c in LaneOffset().judge([{**r, "error_cm": 0.02 * r["measured_cm"]} for r in good]))
+    assert slope([{**rows[0], "reported_cm": None}, rows[1]]) is None

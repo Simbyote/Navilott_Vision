@@ -214,6 +214,7 @@ def test_pipeline_imports_no_linker_or_debugger():
 # derived lane ROI width; alt moves every field of both
 PACKET_CASES = {
     "measured": (SCENE_CONFIG, MEASURED_ESTIMATION),
+    "no_scale": (SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=None)),      # lane_offset_cm None, as until 2026-11-12
     "cm_scale": (SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=0.05)),
     "alt": (ALT_CONFIG, ALT_ESTIMATION),
     "ground": (replace(SCENE_CONFIG, ground=SYNTHETIC_GROUND), MEASURED_ESTIMATION),
@@ -343,7 +344,8 @@ def test_cm_scale_refuses_a_frame_of_another_size():
     small = np.zeros((240, 320, 3), np.uint8)
     with pytest.raises(ValueError, match="cm scale"):
         Pipeline(SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=0.05)).perceive(small, 1, 50)
-    Pipeline(SCENE_CONFIG).perceive(small, 1, 50)          # no cm scale: no size to hold it to
+    Pipeline(SCENE_CONFIG).perceive(np.zeros((270, 480, 3), np.uint8), 1, 50)      # MEASURED's scale, its size
+    Pipeline(SCENE_CONFIG, replace(MEASURED_ESTIMATION, cm_per_px=None)).perceive(small, 1, 50)   # no scale: no size
 
 
 @pytest.mark.software
@@ -351,7 +353,9 @@ def test_phase3_state_is_built_once_and_kept():
     pipeline = Pipeline(SCENE_CONFIG)
     processor = pipeline.processor
     assert isinstance(processor, Phase3Processor) and pipeline.last_estimation_debug is None
-    assert pipeline.estimation is MEASURED_ESTIMATION and Pipeline().estimation is MEASURED_ESTIMATION
+    # MEASURED_ESTIMATION has a ground scale (2026-11-12), so the lane ROI's width is derived once, here
+    for p in (pipeline, Pipeline()):
+        assert p.estimation.lane_roi_width_px == 480 and replace(p.estimation, lane_roi_width_px=None) == MEASURED_ESTIMATION
     _packets(pipeline, DRIVE[:3])
     assert pipeline.processor is processor
     assert pipeline.last_estimation_debug["frame_id"] == DRIVE[2].frame_id

@@ -444,8 +444,9 @@ def cli(argv: list[str] | None = None) -> int:
     ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
                     help=f"gyro Z at rest, + = right, subtracted before integrating "
                          f"(default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
-    ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
-                    help="hand-measured ground scale; fills lane_offset_cm")
+    ap.add_argument("--cm-per-px", type=float, default=MEASURED_ESTIMATION.cm_per_px, metavar="S",
+                    help=f"ground scale at the lane ROI's bottom; fills lane_offset_cm, which lane keeping "
+                         f"steers by (default {MEASURED_ESTIMATION.cm_per_px}, config.CM_PER_PX; 0 for none, to replay frames of another size)")
     ap.add_argument("--print-every", type=int, default=None, metavar="N",
                     help="status line every N frames (default: once a second); "
                          "0 prints events only")
@@ -487,7 +488,7 @@ def cli(argv: list[str] | None = None) -> int:
     config = MEASURED
     if args.hsv:
         config = replace(config, color=replace(config.color, hsv_ranges=load_hsv_ranges(args.hsv)))
-    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
+    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px or None)
 
     out_dir = args.out or str(RUNS_DIR / ("p3_" + time.strftime("%Y%m%d_%H%M%S")))
     print_every = args.print_every if args.print_every is not None \

@@ -105,6 +105,9 @@ MODE_RIGHT_ONLY = "right_only"
 MODE_SINGLE_UNCALIBRATED = "single_uncalibrated"
 MODE_NONE = "none"
 
+# The lane's width, line centre to line centre (course.md); the ground scale is this over its width in px
+LANE_WIDTH_CM = 14.0
+
 # Geometry and lane_offset must compute foot_x over the same band
 FOOT_BAND_PX = 6
 

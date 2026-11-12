@@ -15,7 +15,10 @@ from src.peripherals.battery import Power
 from src.peripherals.battery_state import BatteryStateMachine
 from src.estimation.estimation import Phase3Config
 from src.navigation import end_of_course, intersection, wheel_speed
+from src import config
+from src.navigation import lane_keeping
 from src.navigation.lane_keeping import BASE_SPEED
+from src.perception.roi_crop import resolve
 from src.scripts import calibrate_odometry
 from src.tests.sim_robot import FakeBattery
 
@@ -65,3 +68,27 @@ def test_the_battery_thresholds_are_one_pair():
         (Power.HYSTERESIS_V, Power.CONFIRM_SAMPLES)
     # the linkers' fake battery reports against the same thresholds
     assert (FakeBattery.VOLTAGE_WARNING, FakeBattery.VOLTAGE_CRITICAL) == (Power.VOLTAGE_WARNING, Power.VOLTAGE_CRITICAL)
+
+
+def test_lane_keeping_steers_in_cm_on_the_measured_scale():
+    # Until 2026-11-12 no cm_per_px was set, so every run steered by the normalized offset on a
+    # scale (NORM_TO_CM 30) nobody had measured; P3 measured a number the robot never used
+    assert config.MEASURED_ESTIMATION.cm_per_px == config.CM_PER_PX
+    lane_px = 2 * config.MEASURED.lane_offset.expected_half_lane_px
+    assert config.CM_PER_PX == pytest.approx(params.LANE_WIDTH_CM / lane_px, rel=1e-4)
+
+
+def test_a_packet_without_cm_steers_like_one_with_them():
+    # The fallback converts the normalized offset with NORM_TO_CM: half the lane ROI's width x the scale
+    half_roi = resolve(config.MEASURED.roi.lane, (params.FRAME_H, params.FRAME_W))[2] / 2.0
+    assert lane_keeping.NORM_TO_CM == pytest.approx(half_roi * config.CM_PER_PX, rel=0.01)
+
+
+def test_the_measured_lane_fits_its_roi_and_its_width_gates():
+    # A lane centred on robot_x_px keeps both lines inside the lane ROI at the bottom row, and its
+    # width sits between the pair gates with room either side (a pair off centre now reads it too)
+    lo = config.MEASURED.lane_offset
+    roi_w = resolve(config.MEASURED.roi.lane, (params.FRAME_H, params.FRAME_W))[2]
+    half = lo.expected_half_lane_px
+    assert 0 < lo.robot_x_px - half and lo.robot_x_px + half < roi_w
+    assert lo.min_lane_width_px < 0.9 * 2 * half and 1.1 * 2 * half < lo.max_lane_width_px

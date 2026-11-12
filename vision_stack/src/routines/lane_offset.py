@@ -12,13 +12,28 @@ Main package:
 import statistics
 
 from src.estimation.estimation import LANE_VISION
+from src.params import LANE_WIDTH_CM
 from src.routines.camera_look import Eyes, parse_numbers, save_frame
 from src.routines.harness import Routine, criterion
 
 POSITIONS_CM = "0,2,-2,4,-4"    # requirements.md P3: 0, +-2, +-4; + = robot right of the lane's center
-LANE_CM = 14.0                  # course.md: lane width, line center to line center
+LANE_CM = LANE_WIDTH_CM         # course.md: lane width, line center to line center
 FRAMES = 100                    # the procedure's --limit 100
 TOLERANCE_CM = 2.0              # P3
+# P3 (revised 2026-11-05): lane keeping steers on this number, so a compressed scale
+# weakens every correction even when each placement is inside the tolerance
+SLOPE_RANGE = (0.8, 1.2)
+
+
+def slope(rows: list[dict]) -> float | None:
+    """Least-squares slope of reported_cm against measured_cm; None with a missing reading or no spread."""
+    pts = [(r["measured_cm"], r["reported_cm"]) for r in rows]
+    if len(pts) < 2 or any(y is None for _, y in pts):
+        return None
+    mx = statistics.fmean(x for x, _ in pts)
+    my = statistics.fmean(y for _, y in pts)
+    sxx = sum((x - mx) ** 2 for x, _ in pts)
+    return None if sxx == 0 else sum((x - mx) * (y - my) for x, y in pts) / sxx
 
 
 def to_cm(offset: float | None, roi_width_px: int | None, cm_per_px: float | None) -> float | None:
@@ -115,4 +130,7 @@ at every position; only slide it sideways."""
     def judge(self, rows):
         errors = [r["error_cm"] for r in rows]
         worst = None if any(e is None for e in errors) else max(abs(e) for e in errors)
-        return [criterion("worst |reported - measured|", worst, "<=", TOLERANCE_CM, "cm")]
+        fit = slope(rows)
+        return [criterion("worst |reported - measured|", worst, "<=", TOLERANCE_CM, "cm"),
+                criterion("slope of reported against measured", None if fit is None else round(fit, 3),
+                          "within", SLOPE_RANGE)]

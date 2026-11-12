@@ -479,8 +479,9 @@ def cli(argv: list[str] | None = None) -> int:
                     help="the course plan (JSON: maneuvers, finish); default config.ROUTE_PATH")
     ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
                     help=f"gyro Z at rest, + = right frame (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
-    ap.add_argument("--cm-per-px", type=float, default=None, metavar="S",
-                    help="hand-measured ground scale; fills lane_offset_cm, which the navigator prefers")
+    ap.add_argument("--cm-per-px", type=float, default=MEASURED_ESTIMATION.cm_per_px, metavar="S",
+                    help=f"ground scale at the lane ROI's bottom; fills lane_offset_cm, which lane keeping "
+                         f"steers by (default {MEASURED_ESTIMATION.cm_per_px}, config.CM_PER_PX; 0 for none, to replay frames of another size)")
     ap.add_argument("--hsv", default=None, metavar="PATH", help="HSV ranges instead of MEASURED's")
     ap.add_argument("--no-render", action="store_true", help="skip the video; render later with --render")
     ap.add_argument("--no-record", action="store_true",
@@ -525,7 +526,7 @@ def cli(argv: list[str] | None = None) -> int:
         print(f"route error: {exc}")
         return 2
     out_dir = args.out or str(RUNS_DIR / ("nav_" + time.strftime("%Y%m%d_%H%M%S")))
-    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
+    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px or None)
     motors_on = bool(args.camera and not args.no_motors)
     try:
         source, sensors, motor, system = open_rig(args.camera, args.video, args.frames, args.fps,

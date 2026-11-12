@@ -154,7 +154,9 @@ def cli(argv: list[str] | None = None) -> int:
                     help=f"lane kept on vision this long after the crossing ends a sequence (default {SETTLE_S})")
     ap.add_argument("--gyro-bias", type=float, default=MEASURED_ESTIMATION.gyro_bias_dps, metavar="DPS",
                     help=f"gyro Z at rest, + = right (default {MEASURED_ESTIMATION.gyro_bias_dps}, config.GYRO_BIAS_DPS)")
-    ap.add_argument("--cm-per-px", type=float, default=None, metavar="S")
+    ap.add_argument("--cm-per-px", type=float, default=MEASURED_ESTIMATION.cm_per_px, metavar="S",
+                    help=f"ground scale at the lane ROI's bottom; fills lane_offset_cm, which lane keeping "
+                         f"steers by (default {MEASURED_ESTIMATION.cm_per_px}, config.CM_PER_PX; 0 for none, to replay frames of another size)")
     ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--camera-control", action="append", default=None, metavar="KEY=VALUE",
                     help="a libcamerasrc control for this run, over params.CAMERA_CONTROLS; repeatable, e.g. --camera-control ae-constraint-mode=highlight --camera-control exposure-value=-1")
@@ -173,7 +175,7 @@ def cli(argv: list[str] | None = None) -> int:
     if len(maneuvers) > 1 and not args.camera:
         print("a replay holds one intersection: name its maneuver instead of all")
         return 2
-    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px)
+    p3_config = replace(MEASURED_ESTIMATION, gyro_bias_dps=args.gyro_bias, cm_per_px=args.cm_per_px or None)
     motors_on = bool(args.camera and not args.no_motors)
     out_dir = args.out or str(RUNS_DIR / ("intersection_" + time.strftime("%Y%m%d_%H%M%S")))
     os.makedirs(out_dir, exist_ok=True)

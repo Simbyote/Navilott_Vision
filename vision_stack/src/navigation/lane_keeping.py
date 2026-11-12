@@ -11,13 +11,18 @@ Main package:
 from src.estimation.estimation import LANE_HOLD, LANE_STALE, LANE_VISION, EstimationPacket
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, command_problems
 
-# Gains set on the bench demo (2026-09-30, ae34566), not yet tuned on the course
 BASE_SPEED = 0.40               # ~1166 counts/s per wheel
-KP_CM = 0.015                   # duty per cm of offset
-KP_NORM = 0.30                  # duty per unit of normalized offset, until cm_per_px is set
-GAIN_SCALE = 0.05               # gain grows by this per cm: kp x (1 + GAIN_SCALE x |cm|)
-# Not measured, likely too large for a ~14 cm lane; unused once cm_per_px is set
-NORM_TO_CM = 30.0
+# Steering on cm since 2026-11-12, ported from what the robot drove with until then: no
+# cm_per_px was set, so every run steered by the normalized offset, offset x 0.30 x (1 + 0.05
+# x |offset| x 30), with 216 px a unit (the 5-95% lane ROI's half) and 0.0355 cm/px, 7.67 cm
+# a unit. The same steering in cm is 0.30 / 7.67 a cm, growing 0.05 x 30 / 7.67 a cm. The
+# bench demo's own cm gains (0.015, 0.05; 2026-09-30) never drove
+KP_CM = 0.039                   # duty per cm of offset
+GAIN_SCALE = 0.195              # gain grows by this per cm: kp x (1 + GAIN_SCALE x |cm|)
+# cm per unit of normalized offset, for a packet without lane_offset_cm: half the lane ROI
+# (240 px since 2026-11-12) x config.CM_PER_PX. test_settings holds it to them. 30 until
+# 2026-11-12, never measured: ~4x the real scale, so the gain grew ~4x too fast
+NORM_TO_CM = 8.52
 KP_HEADING = 0.010              # duty per degree, while vision is lost
 MAX_STEERING_ADJ = 0.40
 ZERO_DUTY_EPS = 1e-4            # below this a duty is zero, not lifted to the stall duty
@@ -34,14 +39,14 @@ class LaneKeepingNavigator:
         base_speed: float = BASE_SPEED,
         kp_cm: float = KP_CM,
         gain_scale: float = GAIN_SCALE,
-        kp_norm: float = KP_NORM,
+        norm_to_cm: float = NORM_TO_CM,
         kp_heading: float = KP_HEADING,
         max_steering_adj: float = MAX_STEERING_ADJ,
     ) -> None:
         self.base_speed = max(STALL_DUTY, min(1.0, base_speed))
         self.kp_cm = kp_cm
         self.gain_scale = gain_scale
-        self.kp_norm = kp_norm
+        self.norm_to_cm = norm_to_cm
         self.kp_heading = kp_heading
         self.max_steering_adj = max_steering_adj
         self.record: dict = {}
@@ -57,12 +62,10 @@ class LaneKeepingNavigator:
         steering_adj, source = 0.0, SOURCE_NONE
         if packet.lane_status == LANE_VISION:
             source = SOURCE_CM if packet.lane_offset_cm is not None else SOURCE_NORM
-            if packet.lane_offset_cm is not None:
-                offset_cm = packet.lane_offset_cm
-                steering_adj = offset_cm * self.kp_cm * (1.0 + self.gain_scale * abs(offset_cm))
-            else:
-                offset = packet.lane_offset
-                steering_adj = offset * self.kp_norm * (1.0 + self.gain_scale * abs(offset) * NORM_TO_CM)
+            # One formula on cm; a packet without them is converted, so the two can't drift apart
+            offset_cm = (packet.lane_offset_cm if packet.lane_offset_cm is not None
+                         else packet.lane_offset * self.norm_to_cm)
+            steering_adj = offset_cm * self.kp_cm * (1.0 + self.gain_scale * abs(offset_cm))
         elif packet.lane_status in (LANE_HOLD, LANE_STALE):
             # On a stale lane EndOfCourseRule creeps and stops ahead of this rule
             steering_adj = packet.heading_error * self.kp_heading

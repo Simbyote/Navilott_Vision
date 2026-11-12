@@ -72,7 +72,7 @@ Moving the mount changes the height, tilt or position, which invalidates the len
 | Room beside the lane in the lane ROI | 51 px left, 35 px right (the 394 px lane at `robot_x_px` 248 in the 480 px ROI): 1.8 and 1.2 cm. 27 and 11 px in the 5–95% ROI until 2026-11-12 | A line past the ROI's side is seen only higher up; its foot is carried on to the bottom (`geometry_shared.contour_foot_x`, 2026-11-12) |
 | Lane center from one visible line | 197.1 px (MEASURED, 2026-11-02; 178 until then, 228 hand-set until 2026-10-12) | Half the lane width in px: ~394 px measured 2026-11-02 |
 | Robot's centre in the lane ROI | 248 px (MEASURED, 2026-11-12: `make calib-lane`'s 224 of 2026-11-05 moved with the ROI's left edge, 24 px; the ROI's middle, 240, when unset) | `make calib-lane` with the robot parked centred on a straight; due again to confirm 248 |
-| Ground scale | Not set | 14 cm ÷ lane width in px, measured at the bottom of the lane ROI |
+| Ground scale | 0.035515 cm/px (`config.CM_PER_PX`, 2026-11-12; not set until then) | 14 cm ÷ the measured lane width in px (2 × `expected_half_lane_px`), at the bottom of the lane ROI |
 
 Once the ground scale is measured, the three px values above can be checked against it. For example, at a scale of 0.05 cm/px, one lane (14 cm) is about 280 px and a full street (29–30 cm) is about 590 px. The 400 px maximum would sit correctly between them, and a 228 px half-lane value would be too high (140 px expected). The numbers are only an example; use the measured scale.
 

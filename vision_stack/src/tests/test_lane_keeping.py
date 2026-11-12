@@ -9,7 +9,7 @@ steers by, the steering clamp and the stall-duty floor.
 import pytest
 
 from src.navigation.lane_keeping import (
-    BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, KP_NORM, NORM_TO_CM, MAX_STEERING_ADJ,
+    BASE_SPEED, GAIN_SCALE, KP_CM, KP_HEADING, NORM_TO_CM, MAX_STEERING_ADJ,
     LaneKeepingNavigator,
 )
 from src.navigation.navigation_contract import BRAKE, STALL_DUTY, Command, Navigator, command_problems
@@ -25,10 +25,22 @@ def nav(**kw):
 
 @pytest.mark.software
 def test_the_gains_the_robot_drives_with():
-    # Set on the bench demo (2026-09-30); not yet tuned on the course
+    # BASE_SPEED and the clamps from the bench demo (2026-09-30); the cm gains ported from the
+    # normalized steering every run used until 2026-11-12 (lane_keeping.py says how)
     assert BASE_SPEED == 0.40 and MAX_STEERING_ADJ == 0.40
-    assert (KP_CM, KP_NORM, GAIN_SCALE, KP_HEADING) == (0.015, 0.30, 0.05, 0.010)
-    assert NORM_TO_CM == 30.0                                      # carried over, not measured
+    assert (KP_CM, GAIN_SCALE, KP_HEADING) == (0.039, 0.195, 0.010)
+    assert NORM_TO_CM == 8.52                                      # half the lane ROI x config.CM_PER_PX
+
+
+@pytest.mark.software
+@pytest.mark.parametrize("cm", [0.5, 2.0, 4.0])
+def test_the_cm_gains_steer_as_the_robot_did_until_2026_11_12(cm):
+    # Then: offset x 0.30 x (1 + 0.05 x |offset| x 30), a unit being 216 px x 0.035515 cm/px
+    unit_cm = 216 * 0.035515
+    then = (cm / unit_cm) * 0.30 * (1 + 0.05 * (cm / unit_cm) * 30)
+    n = nav(max_steering_adj=1.0)
+    n.update(packet(lane_offset=0.0, lane_offset_cm=cm))
+    assert n.record["steer"] == pytest.approx(then, rel=0.01)     # before the stall-duty lift of a slow wheel
 
 
 @pytest.mark.software
@@ -79,9 +91,10 @@ def test_on_vision_it_steers_by_cm_when_there_is_a_scale():
 
 
 @pytest.mark.software
-def test_on_vision_without_a_scale_it_steers_by_the_normalized_offset():
+def test_on_vision_without_a_scale_it_steers_by_the_normalized_offset_converted_to_cm():
     cmd = nav().update(packet(lane_offset=-0.2))
-    steer = -0.2 * KP_NORM * (1.0 + GAIN_SCALE * 0.2 * NORM_TO_CM)
+    cm = -0.2 * NORM_TO_CM
+    steer = cm * KP_CM * (1.0 + GAIN_SCALE * abs(cm))
     assert cmd.left == pytest.approx(BASE_SPEED - steer)
     assert cmd.right == pytest.approx(BASE_SPEED + steer)
 

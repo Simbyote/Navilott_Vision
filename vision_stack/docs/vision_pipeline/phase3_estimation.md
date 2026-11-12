@@ -77,7 +77,7 @@ A frame counts as a **measurement** only if:
 - **EMA:** `α = 0.35`. Higher follows faster and smooths less. The first measurement seeds it directly. The formula and the vote's rule are in `../concepts.md` ("Across frames").
 - **Stale resets the EMA,** so the next usable frame re-seeds the estimate. Otherwise a robot that moved during a long dropout would have every new measurement rejected by the jump gate, forever.
 - **Before the first measurement** the status is `stale` and the offset is 0.0.
-- **Centimeters:** with `cm_per_px` and `lane_roi_width_px` set, `lane_offset_cm` undoes the normalization. Until a scale is measured it's `None`. `phase3_linker --cm-per-px` sets a hand-measured value.
+- **Centimeters:** with `cm_per_px` and `lane_roi_width_px` set, `lane_offset_cm` undoes the normalization. `MEASURED_ESTIMATION` sets `cm_per_px` to `config.CM_PER_PX`, the lane's 14 cm over its measured width in px (2 × `expected_half_lane_px`, 0.035515 cm/px), since 2026-11-12; before that it was `None` on every run and lane keeping steered by the normalized offset. The linkers' `--cm-per-px` defaults to the same value and overrides it for one run.
 
 The hold only repeats the last value. It doesn't dead-reckon from the IMU or encoders yet; see Open items.
 
@@ -220,7 +220,7 @@ The age of a packet is `now − timestamp_ms` on the same monotonic clock (`time
 
 ## Running it
 
-The robot's Phase 3 tuning is `MEASURED_ESTIMATION` in `src/config.py`, beside the Phase 2 `MEASURED`; it holds `Phase3Config`'s defaults until course runs tune it. The main pipeline (`src/pipeline.py`) runs Phase 3 as one stage, `Pipeline.estimate()`, with one `Phase3Processor` built when the `Pipeline` is created. When `cm_per_px` is set, the pipeline takes the lane ROI width from the config's lane ROI at 480×270 (`with_lane_roi_width()`, which `phase3_linker` uses too) and refuses frames of another size. Navigation follows as the pipeline's last stage (`Pipeline.navigate()`, `navigation_contract.md`). `test_pipeline` holds its packets to `phase3_linker`'s over a drive sequence, frame by frame.
+The robot's Phase 3 tuning is `MEASURED_ESTIMATION` in `src/config.py`, beside the Phase 2 `MEASURED`; it holds `Phase3Config`'s defaults plus this robot's gyro bias, ground scale and odometry scale. The main pipeline (`src/pipeline.py`) runs Phase 3 as one stage, `Pipeline.estimate()`, with one `Phase3Processor` built when the `Pipeline` is created. When `cm_per_px` is set, the pipeline takes the lane ROI width from the config's lane ROI at 480×270 (`with_lane_roi_width()`, which `phase3_linker` uses too) and refuses frames of another size. Navigation follows as the pipeline's last stage (`Pipeline.navigate()`, `navigation_contract.md`). `test_pipeline` holds its packets to `phase3_linker`'s over a drive sequence, frame by frame.
 
 `phase3_linker` is the debug pipeline: it runs capture, Phase 2 (`run_chain`) and Phase 3 through `TracedPhase3Processor` (`src/debugger/estimation_debug.py`) and reports each packet next to the Phase 2 input it came from, so a bad packet can be traced to bad input or bad filtering. The traced processor subclasses each production stage and calls its `update()`, so the filter and vote math exist once; it records each decision (lane: raw, reason, EMA before and after, missed count; votes: each detection's confidence against its gate, the buffer and state; stop line: seen or held; heading: reset and step) and times each stage. `pipeline.py` never imports it, and `test_estimation_debug` holds its packets to `Phase3Processor`'s. The records drive the Phase 3 video (`src/debugger/debug_phase3.py`).
 
@@ -254,5 +254,5 @@ Replays are deterministic, so Phase 3 config changes can be compared on the same
 
 - **Stop-sign gate.** The stop sign reaches the vote at `min_confidence_sign` (0.45). The sign's shape gates were fit to the course's sign on run frames (2026-10-20, `config.py`), but the gate itself hasn't been checked against course runs: `make routine-detect-range ARGS="--set target=sign"` and `make routine-stop-sign` measure it.
 - **Hold length.** 7 frames is a starting value. Check the longest hold and stale runs in `summary.txt` from the course recordings.
-- **`cm_per_px`** measured against the known lane width (about 14 cm), so `lane_offset_cm` can be checked against the ±2 cm requirement: `make routine-lane-offset` measures it and says the value to set.
+- **`cm_per_px`** follows `expected_half_lane_px` (`config.CM_PER_PX`), so `make calib-lane` sets both; `make routine-lane-offset` measures its own from its centred look and judges P3 on the error and the slope.
 - **The navigation contract** is `navigation_contract.md`. Still to agree there: stale-packet behavior and the pass-through ambiguity above.

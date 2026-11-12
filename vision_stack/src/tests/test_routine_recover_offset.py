@@ -196,10 +196,22 @@ def test_the_settings_band_need_and_times(tmp_path):
 
 
 @pytest.mark.software
-def test_no_scale_is_refused(tmp_path):
+def test_no_scale_is_refused(tmp_path, monkeypatch):
+    from dataclasses import replace
+    import src.config as config                     # the routine reads it at setup
+    monkeypatch.setattr(config, "MEASURED_ESTIMATION", replace(config.MEASURED_ESTIMATION, cm_per_px=None))
     with pytest.raises(ValueError, match="routine-lane-offset"):
         go(routine([], [], scale=None), Person(), tmp_path)
     assert results(tmp_path)["verdict"] == h.INCOMPLETE
+
+
+@pytest.mark.software
+def test_without_a_scale_given_it_uses_the_robots():
+    from src.config import CM_PER_PX
+    from src.routines.harness import Context
+    r, options = routine([], [], scale=None), {}
+    r.setup(Context(console=None, out_dir=None, options=options))
+    assert options["cm_per_px"] == CM_PER_PX
 
 
 @pytest.mark.software
